@@ -7,20 +7,22 @@
 
 import os
 
-_webui_dist = os.path.join(SPECPATH, 'webui', 'dist')
+_webui_dist = os.path.join(os.path.dirname(SPEC), 'webui', 'dist')
+_datas = [
+    ('static', 'static'),
+    ('templates', 'templates'),
+    ('sample_plugins', 'sample_plugins'),
+    ('evolutions', 'evolutions'),
+    ('app.ico', '.'),
+]
+if os.path.isdir(_webui_dist):
+    _datas.append((_webui_dist, 'webui/dist'))
 
 a = Analysis(
     ['desktop.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('static', 'static'),
-        ('templates', 'templates'),
-        ('sample_plugins', 'sample_plugins'),
-        ('evolutions', 'evolutions'),
-        ('app.ico', '.'),
-        (_webui_dist, 'webui/dist') if os.path.isdir(_webui_dist) else ('', ""),
-    ],
+    datas=_datas,
     hiddenimports=[
         'tiktoken_ext.openai_public',
         'tkinterdnd2',
