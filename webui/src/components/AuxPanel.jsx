@@ -275,10 +275,12 @@ function ParamsTab() {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { density, setDensity, fontSize, setFontSize } = React.useContext(DisplayContext);
   const [cfg, setCfg] = React.useState(PREFETCHED.cfg);
+  const [draft, setDraft] = React.useState(null);
   const [tip, setTip] = React.useState("");
   const [ctx, setCtx] = React.useState(PREFETCHED.ctx);
   const [st, setSt] = React.useState(PREFETCHED.st);
   const [customModel, setCustomModel] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
     const apply = (d, set, fn) => {
@@ -295,19 +297,37 @@ function ParamsTab() {
     });
   }, []);
 
-  const save = async (patch) => {
-    setCfg((c) => ({ ...c, ...patch }));
+  // 草稿：本地编辑不落盘，点「保存」才一次性写盘并锁定
+  const edit = (patch) => setDraft((d) => ({ ...(d || {}), ...patch }));
+
+  const save = async () => {
+    if (!draft || saving) return;
+    setSaving(true);
     try {
-      const d = await api.api("/v1/config", { method: "POST", body: JSON.stringify(patch) });
+      const d = await api.api("/v1/config", { method: "POST", body: JSON.stringify(draft) });
       if (d && d.ok) {
-        setTip("已保存");
-        setTimeout(() => setTip(""), 1500);
+        setCfg((c) => ({ ...c, ...draft }));
+        setDraft(null);
+        setTip("✅ 已保存并锁定");
+        setTimeout(() => setTip(""), 1800);
+      } else {
+        setTip("⚠️ 保存失败");
+        setTimeout(() => setTip(""), 1800);
       }
-    } catch {}
+    } catch {
+      setTip("⚠️ 保存失败");
+      setTimeout(() => setTip(""), 1800);
+    }
+    setSaving(false);
   };
+
+  // 有未保存草稿时标记（视觉提醒）
+  const dirty = draft != null;
 
   if (!cfg) return <div className="aux-tab fx-hint">加载中…</div>;
 
+  // 当前生效值 = 草稿覆盖后的值（未点保存前控件显示草稿，便于预览）
+  const cur = draft || cfg;
   const modelOptions = Array.isArray(cfg.models) && cfg.models.length ? cfg.models : [];
   const ctxTools = Array.isArray(ctx?.tools) ? ctx.tools : [];
   const ctxMemCount = ctx?.memory?.count ?? (Array.isArray(ctx?.memory) ? ctx.memory.length : 0);
@@ -348,22 +368,21 @@ function ParamsTab() {
 
       {/* ── 模型引擎：最高频切换 ── */}
       <Group title="⚙️ 模型引擎" right={hasKey ? <span className="px-key-ok">● Key 就绪</span> : <span className="px-key-warn">● 未配置 Key</span>}>
-        <Field label="模型" hint="Switch 即切换，回车自定义">
-          {customModel || !modelOptions.includes(cfg.model) ? (
+        <Field label="模型" hint="编辑后点「保存」生效">
+          {customModel || !modelOptions.includes(cur.model) ? (
             <input
               className="tf-input px-sel"
-              value={cfg.model || ""}
+              value={cur.model || ""}
               placeholder="输入任意模型名"
-              onChange={(e) => save({ model: e.target.value })}
-              onBlur={(e) => e.target.value.trim() && save({ model: e.target.value.trim() })}
+              onChange={(e) => edit({ model: e.target.value })}
             />
           ) : (
             <select
               className="set-select px-sel"
-              value={cfg.model}
+              value={cur.model}
               onChange={(e) => {
                 if (e.target.value === "__custom__") setCustomModel(true);
-                else save({ model: e.target.value });
+                else edit({ model: e.target.value });
               }}
             >
               {modelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
@@ -372,46 +391,46 @@ function ParamsTab() {
           )}
         </Field>
         <div className="px-grid2">
-          <Field label="思考档" hint={cfg.thinking === "auto" ? "按任务复杂度智能路由" : "none/low/medium/high/xhigh/max"}>
-            <select className="set-select px-sel" value={cfg.thinking} onChange={(e) => save({ thinking: e.target.value })}>
-              {(Array.isArray(cfg.thinking_modes) ? cfg.thinking_modes : []).map((t) => <option key={t} value={t}>{t}</option>)}
+          <Field label="思考档" hint={cur.thinking === "auto" ? "按任务复杂度智能路由" : "none/low/medium/high/xhigh/max"}>
+            <select className="set-select px-sel" value={cur.thinking} onChange={(e) => edit({ thinking: e.target.value })}>
+              {(Array.isArray(cur.thinking_modes) ? cur.thinking_modes : []).map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </Field>
           <Field label="场景" hint="通用/编程/Agent（预设参数）">
-            <select className="set-select px-sel" value={cfg.scenario} onChange={(e) => save({ scenario: e.target.value })}>
-              {(Array.isArray(cfg.scenarios) ? cfg.scenarios : []).map((s) => <option key={s} value={s}>{s}</option>)}
+            <select className="set-select px-sel" value={cur.scenario} onChange={(e) => edit({ scenario: e.target.value })}>
+              {(Array.isArray(cur.scenarios) ? cur.scenarios : []).map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </Field>
         </div>
         <Field label="API 网关" hint="OpenAI 兼容 base_url">
-          <input className="tf-input px-sel" value={cfg.base_url || ""} placeholder="https://api.deepseek.com" onChange={(e) => save({ base_url: e.target.value })} />
+          <input className="tf-input px-sel" value={cur.base_url || ""} placeholder="https://api.deepseek.com" onChange={(e) => edit({ base_url: e.target.value })} />
         </Field>
       </Group>
 
       {/* ── 输出采样 ── */}
-      <Group title="🌡 采样参数" right={cfg.thinking === "none" ? "无思考档时生效" : "思考档开启时由模型控制"}>
+      <Group title="🌡 采样参数" right={cur.thinking === "none" ? "无思考档时生效" : "思考档开启时由模型控制"}>
         <div className="px-grid2">
           <Field label="温度" hint="0-2">
-            <input className="tf-input px-num" type="number" step="0.1" min="0" max="2" value={cfg.temperature} onChange={(e) => save({ temperature: Number(e.target.value) })} />
+            <input className="tf-input px-num" type="number" step="0.1" min="0" max="2" value={cur.temperature} onChange={(e) => edit({ temperature: Number(e.target.value) })} />
           </Field>
           <Field label="Top-P" hint="0-1">
-            <input className="tf-input px-num" type="number" step="0.05" min="0" max="1" value={cfg.top_p} onChange={(e) => save({ top_p: Number(e.target.value) })} />
+            <input className="tf-input px-num" type="number" step="0.05" min="0" max="1" value={cur.top_p} onChange={(e) => edit({ top_p: Number(e.target.value) })} />
           </Field>
           <Field label="输出上限" hint="单次回复 tokens">
-            <input className="tf-input px-num" type="number" step="1024" min="1024" max="393216" value={cfg.max_tokens} onChange={(e) => save({ max_tokens: Number(e.target.value) })} />
+            <input className="tf-input px-num" type="number" step="1024" min="1024" max="393216" value={cur.max_tokens} onChange={(e) => edit({ max_tokens: Number(e.target.value) })} />
           </Field>
           <Field label="Seed" hint="0=随机">
-            <input className="tf-input px-num" type="number" value={cfg.seed} onChange={(e) => save({ seed: Number(e.target.value) })} />
+            <input className="tf-input px-num" type="number" value={cur.seed} onChange={(e) => edit({ seed: Number(e.target.value) })} />
           </Field>
         </div>
       </Group>
 
       {/* ── 功能开关 ── */}
       <Group title="🧩 功能开关">
-        <TglRow label="JSON 输出" hint="response_format，失败自动重试" on={!!cfg.json_output} onClick={() => save({ json_output: !cfg.json_output })} />
-        <TglRow label="Beta API" hint="前缀续写 / FIM 补全" on={!!cfg.beta_api} onClick={() => save({ beta_api: !cfg.beta_api })} />
-        <TglRow label="strict 工具" hint="严格遵循 JSON Schema（自动 Beta）" on={!!cfg.strict_tools} onClick={() => save({ strict_tools: !cfg.strict_tools })} />
-        <TglRow label="工具开关" hint="向模型暴露工具定义" on={!!cfg.tools_enabled} onClick={() => save({ tools_enabled: !cfg.tools_enabled })} />
+        <TglRow label="JSON 输出" hint="response_format，失败自动重试" on={!!cur.json_output} onClick={() => edit({ json_output: !cur.json_output })} />
+        <TglRow label="Beta API" hint="前缀续写 / FIM 补全" on={!!cur.beta_api} onClick={() => edit({ beta_api: !cur.beta_api })} />
+        <TglRow label="strict 工具" hint="严格遵循 JSON Schema（自动 Beta）" on={!!cur.strict_tools} onClick={() => edit({ strict_tools: !cur.strict_tools })} />
+        <TglRow label="工具开关" hint="向模型暴露工具定义" on={!!cur.tools_enabled} onClick={() => edit({ tools_enabled: !cur.tools_enabled })} />
       </Group>
 
       {/* ── 外观 ── */}
@@ -444,6 +463,23 @@ function ParamsTab() {
           </Field>
         </div>
       </Group>
+
+      {/* ── 保存栏：点保存一次性写盘并锁定 ── */}
+      <div className="px-savebar">
+        <button
+          className={`confirm-btn confirm-primary px-save ${dirty ? "px-save-dirty" : ""}`}
+          onClick={save}
+          disabled={!dirty || saving}
+          title={dirty ? "保存全部修改并锁定" : "暂无未保存修改"}
+        >
+          {saving ? "保存中…" : dirty ? "💾 保存并锁定" : "🔒 已锁定"}
+        </button>
+        {dirty && (
+          <button className="confirm-btn" onClick={() => setDraft(null)} title="放弃未保存修改">
+            取消
+          </button>
+        )}
+      </div>
 
       {tip && <div className="px-tip">{tip}</div>}
     </div>

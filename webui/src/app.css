@@ -1342,6 +1342,30 @@ button {
 .px-theme-dot[data-t="deepsea"] { background: linear-gradient(135deg, #02101f, #082542 55%, #22c8ff); }
 .px-theme-dot[data-t="arctic"] { background: linear-gradient(135deg, #edf2f9, #ffffff 55%, #0284c7); }
 
+/* 参数保存栏（草稿 + 保存锁定） */
+.px-savebar {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+  position: sticky; bottom: 0;
+  background: var(--bg-1); padding-bottom: 4px;
+}
+.px-savebar .confirm-btn { flex: 1; justify-content: center; }
+.px-save {
+  font-size: var(--fs-xs); padding: 6px 10px;
+  transition: all .15s var(--ease);
+}
+.px-save:not(:disabled) { border-color: var(--brand); color: var(--brand-strong); }
+.px-save.px-save-dirty:not(:disabled) {
+  background: var(--brand); color: #fff; border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+  animation: px-save-pulse 1.2s var(--ease) infinite;
+}
+@keyframes px-save-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px var(--brand-soft); }
+  50% { box-shadow: 0 0 0 6px var(--brand-soft); }
+}
+
 /* ═══ Toast / Flash / 美化细节 ═════════════════════ */
 
 /* 产物直达条（助手消息内提取的产物路径） */

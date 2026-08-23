@@ -116,3 +116,89 @@ class TestConfigShape:
     def test_status_has_cost_field(self):
         st = self._get("/v1/status")
         assert "monthly_cost" in st, "/v1/status 缺少 monthly_cost（成本统计卡依赖）"
+
+
+class TestFrozenPaths:
+    """打包（PyInstaller）后路径解析：config.json 必须落在 exe 旁（持久），
+    静态资源必须落在 _MEIPASS 内（捆绑资源）。
+
+    回归背景：此前 api_server 用 __file__ 推导 BASE_DIR，打包后 __file__ 指向
+    _MEIPASS 临时解压目录 → config.json 每次启动都被清空 → 设置每次启动都丢。
+    """
+
+    def test_runtime_dir_source_mode(self, monkeypatch):
+        """源码运行：runtime_dir = 模块所在目录（仓库根）。"""
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        expected = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        assert api_server._runtime_dir() == expected
+
+    def test_runtime_dir_frozen_mode(self, monkeypatch):
+        """打包运行：runtime_dir = exe 所在目录（持久化 config.json）。"""
+        fake_exe = os.path.join(os.sep, "Program Files", "WhaleTalk", "WhaleTalk.exe")
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "executable", fake_exe, raising=False)
+        assert api_server._runtime_dir() == os.path.dirname(os.path.abspath(fake_exe))
+
+    def test_config_path_not_under_meipass(self, monkeypatch):
+        """config.json 路径不得指向 _MEIPASS 临时目录。"""
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(
+            sys, "executable",
+            os.path.join(os.path.dirname(api_server.BASE_DIR), "WhaleTalk.exe"), raising=False)
+        assert os.path.basename(api_server.CONFIG_PATH) == "config.json"
+        assert "config.json" in api_server.CONFIG_PATH
+
+    def test_dist_dir_uses_orig(self):
+        """DIST_DIR 指向原始模块 webui/dist（打包时位于 _MEIPASS 内）。"""
+        assert api_server.DIST_DIR.endswith(os.path.join("webui", "dist"))
+
+
+class TestConfigPersistence:
+    """配置持久化：POST 部分字段不应覆盖其它已保存设置（回归「参数一直变」）。"""
+
+    @classmethod
+    def setup_class(cls):
+        cls.port, cls.token, err = api_server.start_server(8747, "persist-secret")
+        assert err is None
+        cls.base = f"http://127.0.0.1:{cls.port}"
+
+    @classmethod
+    def teardown_class(cls):
+        api_server.stop_server()
+
+    def _post(self, payload):
+        import json
+        req = urllib.request.Request(
+            f"{self.base}/v1/config",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    def test_partial_update_preserves_other_fields(self):
+        """只改 model，其它已保存字段（thinking/scenario）不被重置。"""
+        # 先写入一组完整设定
+        self._post({"model": "deepseek-v4-pro", "thinking": "max", "scenario": "编程"})
+        # 再只改 model（模拟用户只改一个字段后保存）
+        self._post({"model": "deepseek-v4-flash"})
+        import config_utils
+        cfg = config_utils.load_config()
+        assert cfg.get("model") == "deepseek-v4-flash"
+        assert cfg.get("thinking") == "max", f"thinking 被意外重置: {cfg.get('thinking')}"
+        assert cfg.get("scenario") == "编程", f"scenario 被意外重置: {cfg.get('scenario')}"
+
+    def test_full_save_is_locked(self):
+        """保存后配置稳定：连续两次 GET 返回相同值（无漂移）。"""
+        self._post({"model": "deepseek-v4-pro", "thinking": "high", "scenario": "通用", "max_tokens": 16384})
+        a = self._get_cfg()
+        b = self._get_cfg()
+        assert a["model"] == b["model"] == "deepseek-v4-pro"
+        assert a["thinking"] == b["thinking"] == "high"
+
+    def _get_cfg(self):
+        req = urllib.request.Request(
+            f"{self.base}/v1/config",
+            headers={"Authorization": f"Bearer {self.token}"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read().decode("utf-8"))

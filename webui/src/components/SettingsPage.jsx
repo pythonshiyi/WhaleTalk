@@ -535,6 +535,8 @@ export default function SettingsPage() {
   const [roles, setRoles] = React.useState([]);
   const [customModel, setCustomModel] = React.useState(false);
   const [tip, setTip] = React.useState("");
+  const [modelDraft, setModelDraft] = React.useState(null);
+  const [baseUrlDraft, setBaseUrlDraft] = React.useState(null);
 
   React.useEffect(() => {
     let alive = true;
@@ -553,6 +555,20 @@ export default function SettingsPage() {
       alive = false;
     };
   }, []);
+
+  // 文本输入本地草稿：编辑不落盘，失焦/回车才保存（避免打字过程写半截模型名）
+  const modelText = modelDraft ?? cfg?.model ?? "";
+  const baseUrlText = baseUrlDraft ?? cfg?.base_url ?? "";
+  const commitModel = (v) => {
+    const clean = String(v).trim();
+    if (clean) saveField({ model: clean });
+    setModelDraft(null);
+  };
+  const commitBaseUrl = (v) => {
+    const clean = String(v).trim();
+    if (clean) saveField({ base_url: clean });
+    setBaseUrlDraft(null);
+  };
 
   const modelOptions = Array.isArray(cfg?.models) && cfg.models.length ? cfg.models : models.map((m) => m.name);
   const activeModelMeta = models.find((m) => m.name === cfg?.model);
@@ -627,7 +643,7 @@ export default function SettingsPage() {
           <div className="set-card">
             <Row label="模型" desc="官方三模型 + 任意 OpenAI 兼容">
               {customModel ? (
-                <input className="set-select set-combo" value={cfg.model || ""} placeholder="输入任意模型名" onChange={(e) => saveField({ model: e.target.value })} onBlur={(e) => e.target.value.trim() && saveField({ model: e.target.value.trim() })} />
+                <input className="set-select set-combo" value={modelText} placeholder="输入任意模型名" onChange={(e) => setModelDraft(e.target.value)} onBlur={(e) => commitModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
               ) : (
                 <select className="set-select" value={modelOptions.includes(cfg.model) ? cfg.model : "__custom__"} onChange={(e) => {
                   if (e.target.value === "__custom__") setCustomModel(true);
@@ -644,7 +660,7 @@ export default function SettingsPage() {
               </select>
             </Row>
             <Row label="API 网关" desc="OpenAI 兼容 base_url">
-              <input className="set-select set-combo" value={cfg.base_url || ""} placeholder="https://api.deepseek.com" onChange={(e) => saveField({ base_url: e.target.value })} />
+              <input className="set-select set-combo" value={baseUrlText} placeholder="https://api.deepseek.com" onChange={(e) => setBaseUrlDraft(e.target.value)} onBlur={(e) => commitBaseUrl(e.target.value)} />
             </Row>
             <Row label="API Key" desc={cfg.has_key ? "✅ 已配置（加密存储）" : "⚠️ 未配置"}>
               <span className="set-badge">{cfg.has_key ? "已配置" : "未配置"}</span>
@@ -668,11 +684,11 @@ export default function SettingsPage() {
                   <span className="set-badge">{cfg.has_key ? "已配置" : "未配置"}</span>
                 </Row>
                 <Row label="🌐 API 网关地址" desc="支持任意 OpenAI 兼容网关（/beta、中转站）">
-                  <input className="set-select set-combo" value={cfg.base_url || ""} placeholder="https://api.deepseek.com" onChange={(e) => saveField({ base_url: e.target.value })} onBlur={(e) => e.target.value.trim() && saveField({ base_url: e.target.value.trim() })} />
+                  <input className="set-select set-combo" value={baseUrlText} placeholder="https://api.deepseek.com" onChange={(e) => setBaseUrlDraft(e.target.value)} onBlur={(e) => commitBaseUrl(e.target.value)} />
                 </Row>
                 <Row label="模型" desc={activeModelMeta ? `${activeModelMeta.label} · 上下文 ${(activeModelMeta.max_context_tokens / 1000000).toFixed(1)}M · 输出 ${(activeModelMeta.max_output_tokens / 1024).toFixed(0)}K` : "可输入任意兼容模型"}>
                   {customModel ? (
-                    <input className="set-select set-combo" value={cfg.model || ""} placeholder="输入任意模型名" onChange={(e) => saveField({ model: e.target.value })} onBlur={(e) => e.target.value.trim() && saveField({ model: e.target.value.trim() })} />
+                    <input className="set-select set-combo" value={modelText} placeholder="输入任意模型名" onChange={(e) => setModelDraft(e.target.value)} onBlur={(e) => commitModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
                   ) : (
                     <select className="set-select" value={modelOptions.includes(cfg.model) ? cfg.model : "__custom__"} onChange={(e) => {
                       if (e.target.value === "__custom__") setCustomModel(true);

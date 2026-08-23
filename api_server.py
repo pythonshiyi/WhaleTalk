@@ -267,7 +267,7 @@ def _plugins():
     except Exception:
         logger.exception("读取已装插件失败")
     gallery = []
-    sample_dir = os.path.join(BASE_DIR, "sample_plugins")
+    sample_dir = os.path.join(_ORIG_DIR, "sample_plugins")
     installed_names = {p["name"] for p in installed}
     if os.path.isdir(sample_dir):
         for fn in sorted(os.listdir(sample_dir)):
@@ -298,7 +298,7 @@ def _plugins_action(body):
     if action == "install":
         if target:
             return None, "插件已安装"
-        sample_dir = os.path.join(BASE_DIR, "sample_plugins")
+        sample_dir = os.path.join(_ORIG_DIR, "sample_plugins")
         src = None
         if os.path.isdir(sample_dir):
             for fn in os.listdir(sample_dir):
@@ -1377,7 +1377,7 @@ def _evolution_apply(name):
             if not fn.endswith(EXTS):
                 continue
             src = os.path.join(branch, fn)
-            dst = os.path.join(BASE_DIR, fn)
+            dst = os.path.join(_ORIG_DIR, fn)
             if os.path.exists(dst):
                 bak = dst + ".evobak"
                 try:
@@ -1399,7 +1399,7 @@ def _evolution_apply(name):
         # 回滚
         for fn in applied:
             try:
-                dst = os.path.join(BASE_DIR, fn)
+                dst = os.path.join(_ORIG_DIR, fn)
                 bak = dst + ".evobak"
                 if os.path.exists(bak):
                     os.replace(bak, dst)
@@ -1439,7 +1439,7 @@ def _evolution_detail(name):
                 content = f.read(20000)
         except Exception:
             continue
-        original_exists = os.path.exists(os.path.join(BASE_DIR, fn))
+        original_exists = os.path.exists(os.path.join(_ORIG_DIR, fn))
         files.append({"name": fn, "content": content, "original_exists": original_exists})
     return {"name": name, "files": files}
 
@@ -1942,7 +1942,7 @@ def _apply_autostart(enabled):
         import winreg
         import sys
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
-        path = os.path.join(BASE_DIR, "webui", "start.py")
+        path = os.path.join(_ORIG_DIR, "webui", "start.py")
         cmd = f'"{sys.executable}" "{path}"'
         if enabled:
             winreg.SetValueEx(key, "WhaleTalk", 0, winreg.REG_SZ, cmd)
@@ -1990,7 +1990,7 @@ def _plugin_detail(name):
             target = p
             break
     if target is None:
-        sample_dir = os.path.join(BASE_DIR, "sample_plugins")
+        sample_dir = os.path.join(_ORIG_DIR, "sample_plugins")
         if os.path.isdir(sample_dir):
             for fn in os.listdir(sample_dir):
                 if not fn.endswith(plugins_mod.PLUGIN_EXT):
@@ -2167,7 +2167,20 @@ MAX_ROUNDS = 10
 MAX_MESSAGES = 200
 MAX_MSG_CHARS = 100_000
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 打包（PyInstaller）时 __file__ 指向 _MEIPASS 临时解压目录，会随进程退出被清空，
+# 不可作为配置/静态资源根目录；改用 exe 所在目录持久化（源码运行不受影响）。
+def _runtime_dir():
+    import sys
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+BASE_DIR = _runtime_dir()
+# 前端静态资源 / 捆绑的只读资源（sample_plugins / evolutions / webui/start.py）：
+# 源码运行在仓库；打包运行时这些被捆绑在 _MEIPASS 临时目录内（进程生命周期内有效），
+# 须用原始模块路径，而不能用 exe 所在目录（那里没有这些资源）。
+_ORIG_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 try:
     import config_utils as _cu
@@ -2184,13 +2197,13 @@ PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
 SCHEDULES_PATH = os.path.join(DATA_DIR, "schedules.json")
 RECENT_PATH = os.path.join(DATA_DIR, "recent_outputs.json")
 WORKSPACE_DIR = os.path.join(DATA_DIR, "workspace")
-EVOLUTIONS_DIR = os.path.join(BASE_DIR, "evolutions")
+EVOLUTIONS_DIR = os.path.join(_ORIG_DIR, "evolutions")
 ARCHIVES_DIR = os.path.join(DATA_DIR, "archives")
 FAILURES_PATH = os.path.join(DATA_DIR, "failures.json")
 PATTERNS_PATH = os.path.join(DATA_DIR, "patterns.json")
 WORKFLOWS_PATH = os.path.join(DATA_DIR, "workflows.json")
 CHECKPOINT_PATH = os.path.join(DATA_DIR, "task_checkpoint.json")
-DIST_DIR = os.path.join(BASE_DIR, "webui", "dist")
+DIST_DIR = os.path.join(_ORIG_DIR, "webui", "dist")
 
 _MIME = {
     ".html": "text/html; charset=utf-8",
