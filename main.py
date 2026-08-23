@@ -173,10 +173,20 @@ _dc.WORKFLOWS_FILE = os.path.join(DATA_DIR, "workflows.json")
 _dc.CHECKPOINT_FILE = os.path.join(DATA_DIR, "task_checkpoint.json")
 _dc.STATS_FILE = STATS_PATH
 _dc.PATTERNS_FILE = PATTERNS_PATH
+os.environ.setdefault("WHALETALK_DATA_DIR", DATA_DIR)  # 应用型插件数据目录（智能飞侠 flybot.db 等）
 # 文档 / RSS / KV / WebDAV 数据文件
 _dc.RSS_SOURCES_FILE = os.path.join(DATA_DIR, "rss_sources.json")
 _dc.KV_CACHE_DIR = os.path.join(DATA_DIR, "kv_cache")
 _dc.WEBDAV_CONFIG_FILE = os.path.join(DATA_DIR, "webdav_config.json")
+
+def _list_app_plugins_safe():
+    """模块级：已启用应用型插件清单（供静态提示注入）。"""
+    try:
+        import plugin_app as _pa
+        return _pa.list_app_plugins(PLUGINS_DIR)
+    except Exception:
+        return []
+
 _dc.PLUGIN_PATHS = {
     "plugins_dir": PLUGINS_DIR,
     "user_tools": USER_TOOLS_PATH,
@@ -199,7 +209,7 @@ logging.basicConfig(
 )
 # DEFAULT_SYSTEM_PROMPT / DIALOG_SYSTEM_PROMPT / BUILTIN_TOOL_NAMES / DEFAULT_CONFIG
 # 已移至 config_defaults.py
-VERSION = "2.26.2"
+VERSION = "2.27.0"
 
 # ROLES 已移至 roles.py
 # PLAYGROUND_TASKS / TASK_TEMPLATES 已移至 templates.py
@@ -6883,13 +6893,25 @@ class AssistantApp:
         try:
             items = prompts.load_prompts(PROMPTS_PATH)
             plugin_skills = [p for p in items if str(p.get("_source") or "").startswith("plugin:")]
-            if not plugin_skills:
-                return ""
-            names = "、".join(str(p["name"]) for p in plugin_skills[:8])
-            return (
-                f"[已安装插件技能] 用户装有技能模板：{names}（输入框「⚡ 指令」可一键插入）。"
-                "相关任务请直接完成，或建议用户使用对应模板。"
-            )
+            parts = []
+            if plugin_skills:
+                names = "、".join(str(p["name"]) for p in plugin_skills[:8])
+                parts.append(
+                    f"[已安装插件技能] 用户装有技能模板：{names}（输入框「⚡ 指令」可一键插入）。"
+                    "相关任务请直接完成，或建议用户使用对应模板。"
+                )
+            apps = _list_app_plugins_safe()
+            if apps:
+                app_line = "、".join(
+                    f"{a.get('triggers', [a.get('name', '')])[0] or a.get('name', '')}"
+                    f"（{a.get('name', '')}）" for a in apps[:6]
+                )
+                parts.append(
+                    f"[已安装插件应用] 用户装有可独立调用的应用型插件：{app_line}。"
+                    "用户说「帮我飞侠巡航」「用飞侠看看」等时，应引导用户直接输入触发词"
+                    "（或告知触发词用法）；涉及插件专属功能时优先建议用插件完成，不要用底层工具硬凑。"
+                )
+            return "\n".join(parts)
         except Exception:
             return ""
 
@@ -8168,6 +8190,10 @@ class AssistantApp:
             parts.append(f"{len(c['tools'])} 个工具")
         if c.get("skills"):
             parts.append(f"{len(c['skills'])} 个技能")
+        if c.get("app"):
+            meta = plugin.get("meta") or {}
+            trig = meta.get("trigger") or ((meta.get("triggers") or [None])[0]) or "应用"
+            parts.append(f"应用：{trig} 触发")
         wf = c.get("workflows")
         if wf:
             parts.append(f"{len(wf)} 个流程")
@@ -8191,6 +8217,7 @@ class AssistantApp:
         skills = c.get("skills") or []
         wf = c.get("workflows") or {}
         sc = c.get("scenario")
+        app = c.get("app")
         for t in tools:
             fn = t.get("function") or {}
             lines.append(f"🔧 工具：{fn.get('name', '?')} — {str(fn.get('description', ''))[:60]}")
@@ -8201,10 +8228,17 @@ class AssistantApp:
             lines.append(f"🔁 流程：{wname}（{len(steps)} 步）")
         if sc:
             lines.append(f"🎭 场景：{sc.get('name', '')}")
+        if isinstance(app, dict):
+            trigs = meta.get("triggers") or []
+            if meta.get("trigger"):
+                trigs = [meta["trigger"]] + [t for t in trigs if t != meta["trigger"]]
+            lines.append(f"🧩 应用：本地插件应用（入口 {app.get('entry', '?')}）")
+            lines.append(f"   🔑 触发词：{' '.join(str(t) for t in trigs[:4]) or '未设置'}"
+                         f"{'（可带参数，如 /名称 参数）' if app.get('param') else ''}")
         missing = plugins_mod.missing_requires(plugin)
         if missing:
             lines.append(f"\n⚠ 缺失依赖：{'、'.join(missing)}（pip install …）")
-        lines.append("\n使用方式：工具=AI 自动调用 · 技能=⚡指令 · 流程=AI/手动运行 · 场景=应用配置")
+        lines.append("\n使用方式：工具=AI 自动调用 · 技能=⚡指令 · 应用=/触发词 直接调用 · 流程=AI/手动运行 · 场景=应用配置")
         return "\n".join(lines)
 
     def _show_plugin_guide(self, plugin):
@@ -10700,6 +10734,9 @@ class AssistantApp:
         if not text:
             self._flash_status("输入为空，未发送")
             return
+        # 应用型插件触发：/插件名 或 @插件名（+ 可选参数）→ 直接执行插件，不走 AI
+        if self._try_trigger_plugin(text):
+            return
         if self.busy:
             self._pending_sends.append((text, list(self._pending_images)))
             self._pending_images = []
@@ -11237,6 +11274,8 @@ class AssistantApp:
             self._show_plan_dialog(*payload)
         elif kind == "ocr":
             self._ocr_result(payload)
+        elif kind == "plugin_result":
+            self._show_plugin_result(*payload)
         elif kind == "timer_task":
             self.send(text=payload, silent=True)
         elif kind == "schedule_notify":
@@ -15377,6 +15416,13 @@ class AssistantApp:
                 ("search", "搜索会话", lambda: self.toggle_search()),
                 ("clear", "清空输入", lambda: text.delete("1.0", "end")),
             ]
+            # 应用型插件：/触发词 直接调用
+            for ap in self._installed_app_plugins():
+                for trig in ap.get("triggers") or []:
+                    if trig.startswith("/"):
+                        commands.append((trig.lstrip("/"), ap.get("name", trig),
+                                         lambda t=trig: self._insert_plugin_trigger(t)))
+                        break
             for key, label, fn in commands:
                 menu.add_command(label=f"/{key}   {label}", command=fn)
             try:
@@ -15388,6 +15434,87 @@ class AssistantApp:
 
     def _hide_slash_menu(self):
         pass  # tk_popup 会自动处理；这里保留接口便于后续扩展
+
+    def _insert_plugin_trigger(self, trig):
+        """把插件触发词插入输入框（slash 菜单选择入口）。
+
+        菜单弹出时用户已输入 / 前缀：先清掉当前 "/cmd"（无空格），
+        再插入完整触发词，避免出现 // 双斜杠导致插件执行失败。
+        """
+        try:
+            self._clear_placeholder()
+            text = self.input_text
+            cur = text.get("1.0", "end-1c")
+            if cur.startswith("/") and " " not in cur:
+                text.delete("1.0", "end-1c")
+            text.insert("insert", trig + " ")
+            text.focus_set()
+            self._flash_status(f"已插入插件触发词 {trig}，可补充参数后 Enter 执行")
+        except tk.TclError:
+            pass
+
+    # ---- 应用型插件（.wtplugin v2 · app）：/插件名 或 @插件名 直接调用 ----
+    def _installed_app_plugins(self):
+        """当前已启用的应用型插件清单（供触发匹配 / slash 菜单 / AI 注入）。"""
+        try:
+            import plugin_app as _pa
+
+            return _pa.list_app_plugins(PLUGINS_DIR)
+        except Exception:
+            return []
+
+    def _try_trigger_plugin(self, text):
+        """输入 /插件名 或 @插件名（可带参数文本）→ 直接执行插件应用，不走 AI。
+
+        返回 True 表示已作为插件指令处理（本消息不再进入 AI 对话）。
+        """
+        try:
+            import plugin_app as _pa
+
+            p, arg = _pa._match_trigger(text, PLUGINS_DIR)
+        except Exception:
+            logging.exception("插件触发匹配失败")
+            return False
+        if p is None:
+            return False
+        self._append_message_block("我", text, "user")
+        self.messages.append({
+            "role": "user",
+            "content": text,
+            "time": datetime.now().strftime("%H:%M:%S"),
+        })
+        note = f"🧩 正在执行插件「{p.get('name', '')}」…\n"
+        self._append(note, "time")
+        self.blocks.append(("note", note))
+        name = p.get("name", "插件")
+
+        def _run():
+            try:
+                ok, out = _pa.run_app_plugin(p, PLUGINS_DIR, arg_text=arg)
+                if ok:
+                    self._record_recent_output(out)
+                self._ui_queue.put(("plugin_result", (name, ok, out)))
+            except Exception as e:
+                self._ui_queue.put(("plugin_result", (name, False, f"插件执行异常: {e}")))
+
+        threading.Thread(target=_run, daemon=True).start()
+        return True
+
+    def _show_plugin_result(self, name, ok, out):
+        """插件执行结果回显到聊天区。"""
+        try:
+            out = str(out or "").strip() or "（无输出）"
+            header = f"[插件「{name}」执行完成]\n" if ok else f"[插件「{name}」执行失败]\n"
+            self._append(header, "time" if ok else "error")
+            self.blocks.append(("note", header, "time" if ok else "error"))
+            self._append(out.rstrip() + "\n", "content" if ok else "error")
+            self.blocks.append(("content", out.rstrip() + "\n") if ok else ("error", out.rstrip() + "\n"))
+            self._append("\n")
+            self.blocks.append(("plain", "\n"))
+            if not ok:
+                self._flash_status(f"插件「{name}」执行失败", 4000)
+        except tk.TclError:
+            pass
 
     # ---- 图片附件（视觉模型输入）----
     def _ensure_pending_images(self):

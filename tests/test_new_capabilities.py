@@ -17,6 +17,9 @@ import permissions
 import stats
 import tokens
 from uiutils import CappedList
+import shutil
+import plugin_app as pa
+import plugins as plugins_mod
 
 
 class TestCronMatch(unittest.TestCase):
@@ -1021,6 +1024,25 @@ class TestChatViewOptimization(unittest.TestCase):
         self.assertEqual(app.btn_send.winfo_manager(), "pack")
         self.assertIsNone(app._stop_pulse_after)
 
+    def test_insert_plugin_trigger_no_double_slash(self):
+        """slash 菜单选择插件：清掉已输入的 / 前缀，不出现 // 双斜杠。"""
+        app = self.app
+        # 用户已输入 "/"（菜单弹出态）→ 选择 /飞侠 → 结果必须是单斜杠
+        app.input_text.delete("1.0", "end")
+        app.input_text.insert("1.0", "/")
+        app._insert_plugin_trigger("/飞侠")
+        self.assertEqual(app.input_text.get("1.0", "end-1c"), "/飞侠 ")
+        # 已输入部分命令 "/飞" → 同样替换为完整触发词
+        app.input_text.delete("1.0", "end")
+        app.input_text.insert("1.0", "/飞")
+        app._insert_plugin_trigger("/巡航")
+        self.assertEqual(app.input_text.get("1.0", "end-1c"), "/巡航 ")
+        # 无 / 前缀（直接插入）不受影响
+        app.input_text.delete("1.0", "end")
+        app.input_text.insert("1.0", "你好")
+        app._insert_plugin_trigger("/飞侠")
+        self.assertEqual(app.input_text.get("1.0", "end-1c"), "你好/飞侠 ")
+
     # ---- 文件面板：跟踪最新产物 ----
     def test_files_panel_retracks_new_files(self):
         """展开目录能见到最新文件；新文件生成后再次展开可见（修复懒加载不刷新）。"""
@@ -1126,6 +1148,175 @@ class TestChatViewOptimization(unittest.TestCase):
         self.assertEqual(app._relevant_files_text(f"请看这个 [文件] {p} 的内容"), "")
         r = app._relevant_files_text(f"帮我看看 {p} 的问题")
         self.assertIn("a.md", r)
+
+
+class _FlyItem:
+    def __init__(self, title, url, summary="", source="测试源"):
+        self.title = title
+        self.url = url
+        self.summary = summary
+        self.source = source
+
+
+class TestFlyBot(unittest.TestCase):
+    """智能飞侠（World Cruiser）应用型插件：安装/触发/执行/记忆/报告。"""
+
+    @classmethod
+    def setUpClass(cls):
+        # 从 sample_plugins 安装智能飞侠到临时插件目录（真实插件化路径）
+        cls.plug_dir = tempfile.mkdtemp(prefix="dsa_xfb_plug_")
+        sample = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "sample_plugins", "智能飞侠.wtplugin")
+        with open(sample, encoding="utf-8") as f:
+            cls.plugin = json.load(f)
+        cls.slug = plugins_mod._slug(cls.plugin["meta"]["name"])
+        plugins_mod.apply_plugin(json.loads(json.dumps(cls.plugin)), {
+            "plugins_dir": cls.plug_dir,
+            "user_tools": os.path.join(cls.plug_dir, "ut.json"),
+            "prompts": os.path.join(cls.plug_dir, "prompts.json"),
+            "workflows": os.path.join(cls.plug_dir, "wf.json"),
+        })
+        cls.code_dir = plugins_mod.code_dir(cls.plug_dir, cls.slug)
+        sys.path.insert(0, cls.code_dir)  # 模拟插件包可导入
+        cls.db = os.path.join(cls.plug_dir, "flybot.db")
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            sys.path.remove(cls.code_dir)
+        except ValueError:
+            pass
+        shutil.rmtree(cls.plug_dir, ignore_errors=True)
+
+    def setUp(self):
+        import flybot.memory as _mem
+        _mem.reset_memory()
+
+    def tearDown(self):
+        import flybot.memory as _mem
+        _mem.reset_memory()
+
+    # ---- 插件机制 ----
+    def test_plugin_app_registered(self):
+        apps = pa.list_app_plugins(self.plug_dir)
+        self.assertTrue(any(a["slug"] == self.slug and "/飞侠" in a["triggers"] for a in apps))
+        # 工具中心不再有 flybot 工具（已迁移为插件）
+        for n in ("flybot_cruise", "flybot_set_pref", "flybot_prefs"):
+            self.assertNotIn(n, dc.TOOL_CALL_MAP)
+
+    def test_trigger_match(self):
+        p, arg = pa._match_trigger("/飞侠 帮我看看AI芯片", self.plug_dir)
+        self.assertIsNotNone(p)
+        self.assertEqual(arg, "帮我看看AI芯片")
+        p2, arg2 = pa._match_trigger("@飞侠", self.plug_dir)
+        self.assertIsNotNone(p2)
+        self.assertEqual(arg2, "")
+        p3, _ = pa._match_trigger("你好", self.plug_dir)
+        self.assertIsNone(p3)
+
+    def test_memory_trail_lifecycle(self):
+        from flybot import memory as _mem
+
+        m = _mem.get_memory(self.db)
+        self.assertTrue(m.ok)
+        tid = m.add_trail("OpenAI Astra 发布进展", "内部评估网络安全能力")
+        self.assertIsNotNone(tid)
+        self.assertEqual(m.get_active_trails()[0]["status"], "open")
+        m.update_trail(tid, "业界猜测与监管沟通有关")
+        self.assertEqual(m.get_active_trails()[0]["status"], "watching")
+        m.update_trail(tid, "暂无新动态")
+        self.assertEqual(len(m.get_active_trails()), 0)  # 连续 3 次无进展 → dormant
+
+    def test_memory_prefs_and_log(self):
+        from flybot import memory as _mem
+
+        m = _mem.get_memory(self.db)
+        self.assertTrue(m.set_pref("tone", "犀利但有分寸"))
+        self.assertEqual(m.get_pref("tone"), "犀利但有分寸")
+        cid = m.log_cruise("manual", ["全球脉搏"], 5, {"brief": "x"}, "a.md", "a.html")
+        self.assertIsNotNone(cid)
+        self.assertEqual(m.last_cruise()["report"], "a.md")
+
+    def test_report_brief_truncation(self):
+        from flybot import report as _r
+
+        body = "第一站 · 全球脉搏\n- 某事件（来源链接）\n\n✍️ 飞侠手记\n这是我的判断：值得关注。"
+        brief = _r.render_brief(body, max_len=30)
+        self.assertLessEqual(len(brief), 31)
+        self.assertTrue(brief.endswith("…"))
+        md = _r.render_md(body, "202608220900", 10, focus="AI")
+        self.assertIn("智能飞侠世界巡游报告", md)
+        self.assertIn("起飞宣言", md)
+        html = _r.render_html(md, "202608220900", 10)
+        self.assertIn("<html", html)
+
+    # ---- 插件执行（mock 采集与 LLM）----
+    def test_run_app_plugin_full_flow(self):
+        from flybot import cruise as _cruise
+        from flybot import memory as _mem
+
+        m = _mem.get_memory(self.db)
+        m.add_trail("旧线索A", "上次判断：可能会发布")
+        workdir = os.path.join(self.plug_dir, "ws")
+        os.makedirs(workdir, exist_ok=True)
+        fake_body = "\n".join([
+            "第一站 · 全球脉搏",
+            "- 国际大事 X（https://ex.com/1）这意味着…",
+            "", "第二站 · 科技前线",
+            "- AI 模型 Y 发布（https://ex.com/2）",
+            "", "第三站 · 经济数据",
+            "- 宏观指标 Z（来源：测试）",
+            "", "第四站 · 人间烟火",
+            "- 人文故事 W",
+            "", "✍️ 飞侠手记",
+            "这是我的判断：X 值得持续关注。",
+            "", "续报：",
+            "- 续报：旧线索A｜有重大进展，发布在即",
+            "📡 明日雷达",
+            "- 线索：新线索B｜继续跟进",
+            "- 线索：新线索C｜观察变化",
+        ])
+        fake_client = mock.MagicMock()
+        fake_client.model = "deepseek-v4-flash"
+        fake_client.client.chat.completions.create.return_value = type(
+            "R", (), {
+                "choices": [type("C", (), {"message": type("M", (), {"content": fake_body})()})()],
+            }
+        )()
+        # 找到已安装插件对象（带 slug/_file）
+        plugin = next(p for p in plugins_mod.list_plugins(self.plug_dir)
+                      if p["slug"] == self.slug)
+        dc.set_active_client(fake_client)  # 复用程序客户端（插件通过 _CLIENT_HOLDER 访问）
+        with mock.patch("deepseek_client.search_web", return_value="搜索素材"), \
+             mock.patch("deepseek_client.search_realtime", return_value="HN 热点"), \
+             mock.patch("wechat_writer.sources.collect_all", return_value=[
+                 _FlyItem("标题1", "https://ex.com/1", "摘要1"),
+                 _FlyItem("标题2", "https://ex.com/2", "摘要2"),
+             ]), \
+             mock.patch("deepseek_client.permissions.WORKSPACE_DIR", workdir), \
+             mock.patch.dict(os.environ, {"WHALETALK_DATA_DIR": self.plug_dir}):
+            ok, result = pa.run_app_plugin(plugin, self.plug_dir, arg_text="帮我看看AI")
+        self.assertTrue(ok, result)
+        self.assertIn("巡航完成", result)
+        self.assertIn("新线索 2 条", result)
+        files = os.listdir(os.path.join(workdir, "flybot_reports"))
+        self.assertTrue(any(f.endswith(".md") for f in files))
+        self.assertTrue(any(f.endswith(".html") for f in files))
+        m2 = _mem.get_memory(self.db)
+        trails = m2.get_active_trails()
+        titles = {t["title"] for t in trails}
+        self.assertIn("新线索B", titles)
+        self.assertIn("新线索C", titles)
+
+    def test_set_pref_validation(self):
+        from flybot import cruise as _cruise
+
+        self.assertIn("已设置偏好", _cruise.set_pref("tone", "犀利", db_path=self.db))
+        self.assertIn("已设置偏好", _cruise.set_pref("focus_areas", "[\"AI\",\"经济\"]", db_path=self.db))
+        r = _cruise.set_pref("unknown_key", "x", db_path=self.db)
+        self.assertIn("不支持", r)
+        r = _cruise.set_pref("max_active_trails", "9999", db_path=self.db)
+        self.assertIn("= 50", r)  # 超限自动钳制
 
 
 if __name__ == "__main__":

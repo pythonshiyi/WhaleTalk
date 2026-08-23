@@ -399,10 +399,13 @@ class TestPluginSkillsHint(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="dsa_hint_")
         self.old_prompts = m.PROMPTS_PATH
+        self.old_plugins = m.PLUGINS_DIR
         m.PROMPTS_PATH = os.path.join(self.tmp, "prompts.json")
+        m.PLUGINS_DIR = os.path.join(self.tmp, "plugins")  # 隔离：不读真实已装插件
 
     def tearDown(self):
         m.PROMPTS_PATH = self.old_prompts
+        m.PLUGINS_DIR = self.old_plugins
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_hint_lists_plugin_skills(self):
@@ -419,6 +422,99 @@ class TestPluginSkillsHint(unittest.TestCase):
         with open(m.PROMPTS_PATH, "w", encoding="utf-8") as f:
             json.dump([{"name": "中译英", "text": "y"}], f, ensure_ascii=False)
         self.assertEqual(m.AssistantApp._plugin_skills_hint(), "")
+
+
+class TestPluginAppV2(unittest.TestCase):
+    """应用型插件（.wtplugin v2 · app + files）：校验 / 安装写码 / 卸载零残留 / 执行。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="dsa_appv2_")
+        self.paths = {
+            "plugins_dir": os.path.join(self.tmp, "plugins"),
+            "user_tools": os.path.join(self.tmp, "ut.json"),
+            "prompts": os.path.join(self.tmp, "prompts.json"),
+            "workflows": os.path.join(self.tmp, "wf.json"),
+        }
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _app_plugin(self):
+        return {
+            "format": "wtplugin",
+            "version": 2,
+            "meta": {
+                "name": "迷你应用",
+                "description": "测试应用型插件",
+                "author": "tester",
+                "version": "1.0.0",
+                "trigger": "/mini",
+                "triggers": ["/mini", "@mini"],
+            },
+            "requires": [],
+            "contents": {
+                "app": {
+                    "type": "local",
+                    "entry": "mini:run",
+                    "param": "msg",
+                    "description": "迷你应用",
+                },
+                "files": {
+                    "mini.py": "def run(msg=\"\"):\n    return \"迷你应用收到：\" + str(msg or \"空\")\n",
+                },
+            },
+        }
+
+    def test_validate_v2_ok(self):
+        ok, err = plugins_mod.validate_plugin(self._app_plugin())
+        self.assertTrue(ok, err)
+
+    def test_validate_app_requires_entry(self):
+        p = self._app_plugin()
+        p["contents"]["app"]["entry"] = "bad"
+        ok, err = plugins_mod.validate_plugin(p)
+        self.assertFalse(ok)
+        self.assertIn("entry", err)
+
+    def test_validate_files_must_have_py(self):
+        p = self._app_plugin()
+        p["contents"]["files"] = {"readme.txt": "x"}
+        ok, err = plugins_mod.validate_plugin(p)
+        self.assertFalse(ok)
+        self.assertIn(".py", err)
+
+    def test_apply_writes_code_unapply_removes(self):
+        p = self._app_plugin()
+        r = plugins_mod.apply_plugin(json.loads(json.dumps(p)), self.paths)
+        self.assertTrue(r["ok"], r.get("error"))
+        slug = plugins_mod._slug(p["meta"]["name"])
+        code_dir = plugins_mod.code_dir(self.paths["plugins_dir"], slug)
+        self.assertTrue(os.path.isfile(os.path.join(code_dir, "mini.py")))
+        # 执行：加载入口并调用
+        import plugin_app as pa_mod
+
+        installed = next(x for x in plugins_mod.list_plugins(self.paths["plugins_dir"])
+                         if x["slug"] == slug)
+        ok, out = pa_mod.run_app_plugin(installed, self.paths["plugins_dir"], arg_text="你好")
+        self.assertTrue(ok, out)
+        self.assertIn("你好", out)
+        # 触发词匹配
+        mp, arg = pa_mod._match_trigger("/mini 测试", self.paths["plugins_dir"])
+        self.assertIsNotNone(mp)
+        self.assertEqual(arg, "测试")
+        # 卸载 → 代码目录零残留（.wtplugin 文件由 UI 层删除）
+        r2 = plugins_mod.unapply_plugin(installed, self.paths)
+        self.assertTrue(r2["ok"])
+        self.assertFalse(os.path.exists(code_dir))
+
+    def test_run_requires_installed_code(self):
+        import plugin_app as pa_mod
+
+        p = self._app_plugin()
+        p["slug"] = plugins_mod._slug(p["meta"]["name"])
+        ok, out = pa_mod.run_app_plugin(p, self.paths["plugins_dir"], arg_text="x")
+        self.assertFalse(ok)
+        self.assertIn("代码目录不存在", out)
 
 
 if __name__ == "__main__":

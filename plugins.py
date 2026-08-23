@@ -4,16 +4,24 @@
 插件格式（单文件 JSON，.wtplugin 后缀）：
 {
   "format": "wtplugin",
-  "version": 1,
-  "meta": {"name", "description", "author", "version"},
+  "version": 1 | 2,
+  "meta": {"name", "description", "author", "version", "icon", "trigger", "triggers"},
   "requires": ["playwright"],        # 可选：依赖的 pip 包（安装时自检）
   "contents": {
     "tools": [...],                  # 自定义 HTTP 工具（user_tools.json 格式）
     "skills": [...],                 # 技能/提示词模板（prompts.json 格式）
     "workflows": {...},              # 流程（workflows.json 格式）
-    "scenario": {...}                # 可选：一键场景（name/thinking/system_prompt/enabled_tools）
+    "scenario": {...},               # 可选：一键场景（name/thinking/system_prompt/enabled_tools）
+    "app": {...},                    # v2：应用型插件（本地 Python 应用，/触发词 调用）
+    "files": {...}                   # v2：应用型插件的自带代码（{相对路径: 源码}，安装到 plugins/<slug>/）
   }
 }
+
+v2 应用型插件（app）：
+- type: "local"：本地 Python 应用。entry 形如 "module:func" 或 "module:class:func"，
+  从 plugins/<slug>/ 目录按文件加载执行（不污染 sys.path，卸载零残留）。
+- meta.trigger / meta.triggers：触发词（/名称 或 @名称），输入框命中即执行。
+- files：插件自带代码（相对路径 → 源码），安装时写盘，卸载时整目录删除。
 
 安装 = 写入 plugins/ 目录 + 合并进各数据文件（条目带 _source: plugin:<slug> 标记）；
 卸载 = 仅移除本插件标记的条目（用户手动添加的同名条目保留）；
@@ -43,6 +51,46 @@ def _source(slug):
     return _SOURCE_PREFIX + slug
 
 
+def code_dir(plugins_dir, slug):
+    """应用型插件的代码目录（安装时写入 files，卸载时整目录删除）。"""
+    return os.path.join(plugins_dir or "", slug)
+
+
+def _write_files(files, plugins_dir, slug):
+    """把应用型插件的自带代码写入 plugins/<slug>/。返回 (ok, error)。"""
+    if not files:
+        return True, ""
+    base = code_dir(plugins_dir, slug)
+    try:
+        os.makedirs(base, exist_ok=True)
+        for rel, code in files.items():
+            rel = str(rel).strip().replace("\\", "/")
+            if not rel or ".." in rel.split("/"):
+                return False, f"非法文件路径：{rel}"
+            target = os.path.join(base, *rel.split("/"))
+            os.makedirs(os.path.dirname(target) or base, exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(str(code))
+        return True, ""
+    except Exception as e:
+        logger.exception("写入插件代码失败")
+        return False, str(e)
+
+
+def _remove_files(plugins_dir, slug):
+    """删除应用型插件的代码目录（卸载/停用时，零残留）。"""
+    base = code_dir(plugins_dir, slug)
+    try:
+        if base and os.path.isdir(base):
+            import shutil
+
+            shutil.rmtree(base, ignore_errors=True)
+            return True
+    except Exception:
+        logger.exception("删除插件代码目录失败")
+    return False
+
+
 def validate_plugin(data):
     """校验插件结构。返回 (ok, error)。"""
     if not isinstance(data, dict):
@@ -55,8 +103,8 @@ def validate_plugin(data):
     contents = data.get("contents") or {}
     if not isinstance(contents, dict):
         return False, "contents 必须是对象"
-    if not any(k in contents for k in ("tools", "skills", "workflows", "scenario")):
-        return False, "插件未包含任何能力（tools / skills / workflows / scenario）"
+    if not any(k in contents for k in ("tools", "skills", "workflows", "scenario", "app")):
+        return False, "插件未包含任何能力（tools / skills / workflows / scenario / app）"
     for t in contents.get("tools") or []:
         fn = t.get("function") if isinstance(t, dict) else None
         if not isinstance(fn, dict) or not fn.get("name") or not fn.get("endpoint"):
@@ -67,6 +115,20 @@ def validate_plugin(data):
     wf = contents.get("workflows")
     if wf is not None and not isinstance(wf, dict):
         return False, "workflows 必须是 {名称: {steps: [...]}}"
+    app = contents.get("app")
+    if app is not None:
+        if not isinstance(app, dict):
+            return False, "app 必须是对象"
+        if app.get("type") != "local":
+            return False, "app.type 仅支持 local（本地 Python 应用）"
+        entry = str(app.get("entry") or "").strip()
+        if not entry or entry.count(":") not in (1, 2):
+            return False, "app.entry 格式应为 module:func 或 module:class:func"
+        files = contents.get("files")
+        if files is not None and not isinstance(files, dict):
+            return False, "files 必须是 {相对路径: 源码}"
+        if files and not any(str(k).endswith(".py") for k in files):
+            return False, "files 至少需要一个 .py 文件"
     return True, ""
 
 
@@ -203,6 +265,11 @@ def apply_plugin(plugin, paths):
 
         plugin["applied"] = applied
         path = save_plugin_file(plugin, paths.get("plugins_dir"))
+        # 应用型插件：附带代码写入 plugins/<slug>/（卸载时整目录删除）
+        if contents.get("files"):
+            ok_f, err_f = _write_files(contents["files"], paths.get("plugins_dir"), slug)
+            if not ok_f:
+                return {"ok": False, "error": f"插件代码写入失败：{err_f}", "added": added}
         return {"ok": True, "path": path, "added": added}
     except Exception as e:
         logger.exception("安装插件失败")
@@ -250,6 +317,9 @@ def unapply_plugin(plugin, paths):
             if rn:
                 _write_json(paths.get("workflows"), existing)
                 removed["workflows"] = rn
+        # 应用型插件：删除自带代码目录（零残留）
+        if (plugin.get("contents") or {}).get("files"):
+            _remove_files(paths.get("plugins_dir"), slug)
         return {"ok": True, "removed": removed}
     except Exception as e:
         logger.exception("卸载插件失败")

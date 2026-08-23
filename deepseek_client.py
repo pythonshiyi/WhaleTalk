@@ -8872,7 +8872,7 @@ def daily_brief(topic="", max_items=8):
 
 
 # ============================================================================
-# 插件工坊：AI 生成并安装 .wtplugin 插件（零代码能力扩展）
+# 插件工坊：AI 生成并安装插件（零代码能力扩展）
 # ============================================================================
 def _to_tool_schema(t):
     """把简化工具描述转成 user_tools.json 完整 schema（兼容已完整 schema 的输入）。"""
@@ -9280,7 +9280,7 @@ _TOOL_ACTION_PHRASES = {
     "send_webhook": "Webhook 推送（钉钉/ServerChan/Slack）",
     "publish_draft": "发布草稿",
     "run_wechat_writer": "公众号文章生成/排版",
-    "daily_brief": "每日简报",
+    "daily_brief": "每日简报（采集当日资讯→提炼点评）",
     "image_process": "图像处理（缩放/裁剪/滤镜/格式转换）",
     "image_understand": "多模态看图理解",
     "screen_see": "截图并让视觉模型解读当前屏幕",
