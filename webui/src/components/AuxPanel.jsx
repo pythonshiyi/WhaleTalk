@@ -2,6 +2,23 @@ import React from "react";
 import * as api from "../api.js";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 
+// ── 启动即预取（不等打开面板才加载）──────────────────
+const PREFETCHED = {
+  cfg: null,
+  ctx: null,
+  st: null,
+};
+const prefetchPromise = (() => {
+  const grab = (name, fn) =>
+    api
+      [fn]()
+      .then((d) => {
+        if (d) PREFETCHED[name] = d;
+      })
+      .catch(() => {});
+  return Promise.all([grab("cfg", "getConfig"), grab("ctx", "getContext"), grab("st", "getStatus")]);
+})();
+
 // ═══ 第四栏 · 控制台（参数 / 文件 / 进程）══════
 
 // ── 常用小组件 ─────────────────────────────────────
@@ -257,16 +274,25 @@ const THEME_CHOICES = [
 function ParamsTab() {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { density, setDensity, fontSize, setFontSize } = React.useContext(DisplayContext);
-  const [cfg, setCfg] = React.useState(null);
+  const [cfg, setCfg] = React.useState(PREFETCHED.cfg);
   const [tip, setTip] = React.useState("");
-  const [ctx, setCtx] = React.useState(null);
-  const [st, setSt] = React.useState(null);
+  const [ctx, setCtx] = React.useState(PREFETCHED.ctx);
+  const [st, setSt] = React.useState(PREFETCHED.st);
   const [customModel, setCustomModel] = React.useState(false);
 
   React.useEffect(() => {
-    api.getConfig().then((d) => d && setCfg(d)).catch(() => {});
-    api.getContext().then((d) => d && setCtx(d)).catch(() => {});
-    api.getStatus().then((d) => d && setSt(d)).catch(() => {});
+    const apply = (d, set, fn) => {
+      if (d) {
+        set(d);
+      } else {
+        api[fn]().then((d) => d && set(d)).catch(() => {});
+      }
+    };
+    prefetchPromise.then(() => {
+      apply(PREFETCHED.cfg, setCfg, "getConfig");
+      apply(PREFETCHED.ctx, setCtx, "getContext");
+      apply(PREFETCHED.st, setSt, "getStatus");
+    });
   }, []);
 
   const save = async (patch) => {

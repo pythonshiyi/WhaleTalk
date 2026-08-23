@@ -73,14 +73,26 @@ export async function checkBackend() {
 }
 
 async function api(path, opts = {}) {
-  const r = await fetch(`${getBase()}${path}`, {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${getToken()}`,
-      ...(opts.headers || {}),
-    },
-  });
+  const attempt = async (token) => {
+    const r = await fetch(`${getBase()}${path}`, {
+      ...opts,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(opts.headers || {}),
+      },
+    });
+    return r;
+  };
+  let r = await attempt(getToken());
+  if (r.status === 401) {
+    // token 缺失/失效（如启动时预取早于 checkBackend 拿到 token）：自取后重试一次
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+    } catch {}
+    const token = await _selfFetchToken();
+    if (token) r = await attempt(token);
+  }
   if (!r.ok) throw new Error(`API ${path} → ${r.status}`);
   return r.json();
 }
