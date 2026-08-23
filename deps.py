@@ -7,6 +7,7 @@
 
 OPTIONAL_DEPS = [
     ("PIL", "Pillow", "图片处理/应用内图片预览/OCR/图表/图标", "pip install pillow"),
+    ("pyautogui", "pyautogui", "桌面 RPA（鼠标/键盘/屏幕坐标）", "pip install pyautogui"),
     ("pystray", "pystray", "系统托盘常驻", "pip install pystray"),
     ("playwright", "playwright", "浏览器操作/网页截图", "pip install playwright && playwright install chromium"),
     ("faster_whisper", "faster-whisper", "语音转文字", "pip install faster-whisper"),

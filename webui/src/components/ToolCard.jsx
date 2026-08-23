@@ -1,0 +1,79 @@
+import React from "react";
+import { toolCallDefs } from "../mock.js";
+
+// 工具图标（内联 SVG，无图标库依赖）
+const ICONS = {
+  search: (
+    <path d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" />
+  ),
+  globe: (
+    <path d="M12 21a9 9 0 100-18 9 9 0 000 18zM3.6 9h16.8M3.6 15h16.8M12 3a13.5 13.5 0 010 18M12 3a13.5 13.5 0 000 18" />
+  ),
+  doc: (
+    <path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9l-6-6zM14 3v6h6M9 13h6M9 17h6" />
+  ),
+  code: (
+    <path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13 4l-2 16" />
+  ),
+};
+
+export default function ToolCard({ tool, status, args, result, cost, duration }) {
+  const def = toolCallDefs[tool] || { icon: "code", color: "var(--ai)" };
+  const Icon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {ICONS[def.icon] || ICONS.code}
+    </svg>
+  );
+
+  const [open, setOpen] = React.useState(status === "failed");
+  const running = status === "running";
+  const done = status === "done";
+
+  return (
+    <div className={`tool-card tool-${status} ${open ? "tool-open" : ""}`}>
+      <div className="tool-card-head" onClick={() => status !== "running" && setOpen(!open)}>
+        <span className="tool-icon" style={{ color: def.color, background: `${def.color}1f` }}>
+          <Icon />
+        </span>
+        <span className="tool-name">{tool}</span>
+        <span className="tool-args">
+          {args && Object.entries(args).map(([k, v]) => (
+            <span className="tool-arg" key={k}>
+              {k}=<em>{String(v).length > 26 ? String(v).slice(0, 26) + "…" : v}</em>
+            </span>
+          ))}
+        </span>
+        <span className="tool-right">
+          {running ? (
+            <>
+              <span className="tool-spin" />
+              <span className="tool-status">执行中</span>
+            </>
+          ) : done ? (
+            <>
+              <span className="tool-check">✓</span>
+              <span className="tool-status tool-status-done">{duration && duration !== "—" ? `${duration}s` : "完成"}</span>
+            </>
+          ) : (
+            <>
+              <span className="tool-x">✕</span>
+              <span className="tool-status">失败</span>
+            </>
+          )}
+          {cost && <span className="tool-cost">{cost}</span>}
+          <svg className="tool-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </span>
+      </div>
+      {(open || running) && result && (
+        <div className="tool-card-body">
+          <div className="tool-result">
+            <span className="tool-result-label">结果</span>
+            {result}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

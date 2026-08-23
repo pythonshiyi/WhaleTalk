@@ -1,4 +1,4 @@
-# 🐋 鲸语 WhaleTalk · AI 桌面智能体 / AI Desktop Agent
+﻿# 🐋 鲸语 WhaleTalk · AI 全能桌面智能体 / AI Desktop Agent
 
 [![CI](https://github.com/pythonshiyi/WhaleTalk/actions/workflows/ci.yml/badge.svg)](https://github.com/pythonshiyi/WhaleTalk/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/pythonshiyi/WhaleTalk?color=blue)](https://github.com/pythonshiyi/WhaleTalk/releases)
@@ -6,250 +6,200 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
 
-> **中文为主 · English follows**（完整中文介绍 + 英文简介）
+> **中文为主 · English follows**（中文完整介绍 + 英文简版）
 
-**鲸语 WhaleTalk** 是一款为 DeepSeek V4 API 深度优化的 Windows 桌面 AI 智能体——不只是聊天窗口，而是一个**能看、能听、能干、能扩展、能自我进化**的 AI 工作台：看得见屏幕与图片（多模态），听得见语音，说得出人话（TTS），动得了鼠标键盘与浏览器，写得了代码文档，联得了数据库邮件 IM，记得住你的偏好，还会自己造插件。**鲸语是独立产品品牌，与 DeepSeek 官方无任何关联**。
+**鲸语 WhaleTalk v3.0** 是一个为 DeepSeek V4 API 深度优化的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
 
-*WhaleTalk is a Windows desktop AI agent deeply optimized for the DeepSeek V4 API — not just a chat window, but an AI workbench that sees, hears, acts, extends itself, and evolves. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
+*WhaleTalk v3.0 is a Windows AI agent deeply optimized for the DeepSeek V4 API — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
 
-> 🌐 **官网 / Website：https://whaletalk.top/**
+> 🌐 **官网 / Website：**https://whaletalk.top/
 
-## 📋 目录
+## 📑 目录
 
-- [项目介绍](#项目介绍)
-- [核心亮点](#-核心亮点)
-- [功能特性](#-功能特性)
-- [快速开始](#-快速开始)
-- [常用快捷键](#-常用快捷键)
-- [安全设计](#-安全设计)
-- [数据与隐私](#-数据与隐私)
-- [常见问题](#-常见问题)
-- [文档](#-文档)
+- [🎉 v3.0 重大更新](#-v30-重大更新)
+- [🧠 产品介绍](#-产品介绍)
+- [🖥 核心功能](#-核心功能)
+- [🏗 系统架构](#-系统架构)
+- [🔧 安装与启动](#-安装与启动)
+- [🕘 更新策略](#-更新策略)
+- [👥 关于我们](#-关于我们)
+- [🔒 安全与隐私](#-安全与隐私)
+- [📄 文档](#-文档)
 - [English Introduction](#english-introduction)
-- [品牌与关注](#-品牌与关注)
+- [⚠️ 品牌与免责](#️-品牌与免责)
 
-## 项目介绍
+---
 
-鲸语以「**深度适配 DeepSeek V4**」为设计原点，把 V4 的 Agent 能力、多模态视觉、1M 上下文、峰谷定价、前缀缓存等特性转化为真正可用的桌面体验：
+## 🎉 v3.0 重大更新
 
-- **感知层**：👁 多模态视觉（图片输入/图表解读/报错诊断/前端还原/批量分析）、🎙 语音输入输出、📋 剪贴板、🖥 屏幕截图
-- **对话层**：流式思考与回答、Markdown 实时渲染、多会话管理、上下文智能压缩
-- **执行层**：109 个内置工具（搜索/代码/文件/数据/浏览器/邮件/多媒体/桌面 RPA），权限模型与审批流
-- **扩展层**：插件体系（工具/技能/流程/场景），AI 造插件，零代码扩展能力
-- **进化层**：自我审查、改进提案、经验复盘——越用越聪明
+**从 Tkinter 桌面版重构为 Web 架构（重大版本）：**
 
-技术底座：Python + Tkinter，仅核心依赖 openai/httpx，其余能力按需可选。
+- **全新 React 前端**（`webui/`）：现代视觉三主题、消息密度/字号控制台、产物一键直达、控制台侧栏（模型/思考档/场景/外观/功能开关集中管理）
+- **统一 Web 入口**（`web_app.py` → `desktop.py` 桌面壳 / `--browser` 浏览器 / `--server` 无头）：`python web_app.py` 一键桌面窗口（pywebview + 托盘），或纯浏览器访问
+- **本地 API 服务**（`api_server.py`，127.0.0.1:8745）：REST + SSE 流式，tool 全链路保留（记忆/失败模式/成功模式/项目上下文注入）
+- **桌面能力保留**：pywebview 原生窗口、pystray 系统托盘、`--legacy` 回退旧 Tkinter 界面
+- **完整回归**：653 项测试全绿，109 工具、strict 工具模式（Beta）、文件面板、SSRF 防护等全量保留
 
-## ✨ 核心亮点
+> 详见 [CHANGELOG.md](CHANGELOG.md) v3.0.0 节。
 
-| | 亮点 | 说明 |
-|---|---|---|
-| 👁 | **多模态视觉闭环** | 支持视觉模型 `deepseek-v4-flash-vision-exp`：聊天可直接发图（按钮/拖拽/剪贴板粘贴），`screen_see` 截图看图一步完成——AI 看得见屏幕，操作后自查验证，真正"眼手并用" |
-| 🧩 | **插件体系（.wtplugin）** | 工具/技能/流程/场景组合成单个 JSON 文件，导入即用、可分享；**插件工坊**里描述需求，AI 自动生成并安装插件 |
-| 🤖 | **109 个 Agent 工具** | 联网搜索（多引擎聚合）、代码执行、文件操作、数据库、浏览器、邮件、桌面 RPA、图像生成/理解……自动编排、失败自愈 |
-| 🧬 | **自我进化** | 鲸语能阅读自己的代码、提交改进提案、自我审查并产出报告——由你决定是否采纳 |
-| ✍ | **公众号自动写作** | 多信源采集 → 选题 → 三阶段写作 → 质量门禁 → 存草稿箱（只产草稿，发布权在你） |
-| ✈️ | **智能飞侠（World Cruiser）** | 应用型插件：/飞侠 或 /巡航 一键调用——五维采集、持续记忆（线索追踪/判断验证）、有立场的五站式观察报告（md+html）——"我出去飞了一圈，带回这些" |
-| 💰 | **成本工程** | 前缀缓存命中率 ~99%、思考成本剥离、峰谷错峰执行、预算控制——用最少的钱干最多的活 |
+## 🧠 产品介绍
 
-## 📦 功能特性
+以「**Windows 本地 + DeepSeek V4 云推理**」为设计原点，把 V4 的 Agent 能力、多模态视觉、1M 长上下文、峰谷定价、前缀缓存优势转化为「开箱即用」的桌面体验：
 
-### 👁 多模态与图像理解
+- **看得见**：🖼 多模态视觉（图片理解/图表阅读/截图修复/OCR/扫码、屏幕截图）
+- **说得出**：💬 对话/思考模式/语音合成（TTS）/朗读
+- **做得了**：⚡ 109 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA），权限模型分层
+- **会进化**：🧬 自我进化（提案分支、失败模式库、成功模式复用）
+- **自疗**：🔁 失败模式沉淀 + 已知坑注入，AI 越用越聪明
 
-- **视觉模型支持**：`deepseek-v4-flash-vision-exp`（模型下拉可选，纯文本能力与 Flash 正式版持平）
-- **聊天直接发图**：输入区「🖼 图片」按钮 / 拖拽图片 / Ctrl+Alt+V 粘贴剪贴板图片，可一次附加多张（JPEG/PNG/GIF/WebP，单张 ≤32MB）；发送时自动切换视觉模型，无需手动操作
-- **看屏幕（视觉 Agent 闭环）**：`screen_see` 截图 + 看图一步完成——AI 看清界面后点击/输入/验证，桌面与浏览器自动化"看得见、能自查"；智能模式内置"操作后视觉自检"准则
-- **截图即服务**：
-  - `chart_read`：图表截图 → 结构化数据 + 解读
-  - `screenshot_to_html`：UI 截图 → HTML/CSS 前端还原
-  - `debug_screenshot`：报错截图 → 错误识别 + 诊断修复建议
-  - `scan_read`：扫描件/文档图片 → Markdown（图表/公式/手写/印刷混排）
-- **批量视觉分析**：`image_batch` 文件夹内图片小并发逐张理解 → 汇总报告
-- **自我审图（可选）**：开启 `vision_self_review` 后，AI 生成图片/图表/截图会自动"看图→审阅→修改/重生成"，形成创作自检闭环（默认关闭控成本）
-- `image_understand`：任意图片自动理解，当前模型不支持视觉时自动改用视觉模型
+技术底座：Python 3.9+ + React 前端 + 本地 API（openai/httpx）。
 
-### 💬 对话体验
+## 🖥 核心功能
 
-- 流式输出：思考过程与回答实时显示（40ms 批量渲染），思考/工具调用折叠卡片
-- 流式 Markdown 渲染：粗体/代码/链接/表格即时呈现，未闭合标记智能暂缓
-- 思考模式全档位（none/low/medium/high/xhigh/max + auto 智能路由）
-- 多会话管理：置顶/标签/搜索/收藏/分支对话/临时会话/历史会话库懒加载
-- 会话导入导出：JSON/JSONL 导入，MD/TXT/HTML/JSONL 四格式导出（含图片附件引用）
-- 回复变体、继续生成（Beta）、FIM 补全、JSON 结构化输出
-- 1M 上下文：双阈值自动压缩 + LLM 摘要 + 裁剪内容归档，长对话不卡不贵
-- 长对话体验：早期消息自动折叠为「点击展开」提示（默认最近 ~400 条全量渲染），滚动丝滑、切换即时
-- 输入体验：token 实时估算、草稿持久化、剪贴板即问、输入历史、快捷键
+### 🖼 多模态视觉 Agent
 
-### 🤖 Agent 智能体
+- **视觉模型支持**：`deepseek-v4-flash-vision-exp`（图片输入，自动切换/返回）
+- **拖拽/粘贴/按钮三方传图**（JPEG/PNG/GIF/WebP，≤32MB）
+- **屏幕视觉闭环**：`screen_see` 截图 + 图表理解，AI"看屏幕-自查-修正"
+- **图像理解**：`image_understand` / `chart_read` / `screenshot_to_html` / `scan_read` / `debug_screenshot` / `image_batch`
+- **视觉自审**：生成图片/图表后自动"看图审阅"，默认关节约成本
 
-- **109 个内置工具**，按 14 组分类管理，可单独启停
-  - 信息：多引擎联网搜索（num/翻页/时间/站点过滤，引擎健康度自动降级）、GitHub 仓库搜索（org:/language: 原生语法）、实时热点（Hacker News）、网页全文抓取（含被墙站点代理通道）、RSS 订阅（精选预置源）
-  - 执行：沙箱 Python、终端命令、进程管理、pip 安装、代码工程创建
-  - 数据：SQLite/MySQL/PostgreSQL、CSV/Excel、图表、KV 存储、WebDAV
-  - 文档：PDF 提取/生成、Word/PPT 读取、二维码、音视频处理
-  - 媒体：图像生成/理解/处理、屏幕截图与 OCR、语音转文字、TTS
-  - 桌面：RPA（点击/输入/快捷键/滚动/截图）、浏览器可视操作
-  - 通讯：邮件收发、桌面通知、Webhook 推送/接收、IM（Telegram/企业微信）
-  - 协作：并行子代理、任务检查点（断点续跑）、流程编排、工作流
-  - 环境：系统资源自检（CPU/内存/磁盘/网络连通性）
-- **通用 API 调用**（call_api）：对接任意开放 API，支持自定义请求头/JSON 体（超时 180s/响应 500KB，内网白名单配置）
-- 任务质量闭环：先计划再执行、产物核验（杜绝"声称已建但目录为空"）、失败模式库、成功模式记忆、**自动经验复盘**（任务失败自动沉淀经验到长期记忆，跨会话规避已知坑）
-- 自主模式三态：🤖 完全智能（全自动）/ 💬 纯对话（零工具）/ 标准（按配置）
-- 权限模型：默认全关，白名单 + 审批流（auto/confirm/deny）+ 审计日志，路径防穿越、命令白名单、SSRF 防护
+### 🖥 Web 界面（v3.0 新）
 
-### 🧩 插件与扩展
+- **三主题**：星空（默认）/ 深海 / 北极冰，一处切换全局生效
+- **控制台侧栏**：模型/思考档/场景/温度/Top-P/Seed/输出上限 + JSON/Beta/strict/工具开关 + 主题/密度/字号
+- **产物直达条**：AI 回复中的文件路径（md/txt/xlsx 等）一键打开/定位所在文件夹/注入输入框
+- **文件面板**：工作区树 + ⭐ 最近产物（打开/定位/注入三连），新产物实时跟出
+- **消息体验**：流式 Markdown、思考卡片、工具卡片、收藏/固定/分叉/变体/续写、多选批量导出
+- **会话管理**：多会话/标签/搜索/导入导出（JSON/JSONL）、历史库
 
-- **.wtplugin 插件格式**：工具 + 技能（提示词模板）+ 流程 + 一键场景 + **应用型插件（v2，自带代码 + /触发词 调用）**
-- **应用型插件**：/插件名 或 @插件名 直接调用（可带参数），安装写代码、卸载零残留、不改变程序本体——上层应用一律插件化，工具中心只留底层服务
-- 插件中心（Ctrl+Shift+P）：导入（拖拽/文件）、导出分享、启停、卸载（精确移除，不影响手动添加的同名能力）
-- 插件画廊：内置 3 个示例插件（小红书文案/周报生成器/会议纪要助手）
-- **插件工坊**：自然语言描述需求 → AI 生成并安装插件，立即生效
-- 依赖状态检查：17 项可选能力一键体检（已装 ✅/缺失 ⚠ + 安装命令）
-- 自定义工具 SDK：注册自己的 HTTP 工具，Agent 自动调用
+### ⚡ Agent 工具链（109 项）
 
-### ⚡ 自动化与常驻
+- **信息**：搜索（多引擎/分页/过滤/健康降级）、GitHub、实时热点（Hacker News）、网页抓取（含被墙站点代理通道）、RSS
+- **执行**：沙箱 Python、终端/进程、pip 安装、浏览器自动化
+- **数据**：SQLite/MySQL/PostgreSQL、CSV/Excel、图表、KV 存储（diskcache）、WebDAV
+- **文档**：PDF 提取/生成、Word/PPT、二维码、音视频（ffmpeg）、Markdown
+- **媒体**：图像生成/处理、语音转文字（whisper）、TTS
+- **桌面 RPA**：pyautogui 鼠标/键盘/滚轮/截屏（防误触 failsafe）
+- **自动化**：定时任务（错峰省费）、流程编排、任务检查点、知识库
 
-- 定时任务：cron 表达式 / HH:MM / 每 N 分钟，错过自动补跑，峰谷错峰执行（省一半费用）
-- 流程管理：多步骤流程模板，可引用已验证的成功工具链（配方）
-- 每日简报：一键生成当日 AI/科技资讯简报，可定时晨报
-- 系统托盘常驻 + 开机自启：24 小时无人值守，Webhook 接收端远程下达任务
-- 任务执行面板：实时显示工具进度/统计/产物，失败自动展开
+### 🧬 自我进化
 
-### 📄 文档与数据
+- 提案分支（`create_evolution`）：读代码 → 提改动建议 → 分支提案，绝不改原文件
+- 失败模式库：工具失败自动去重沉淀（≤50 条），注入上下文引导规避
+- 成功模式复用：已验证工具链注入，同类任务优先复用
 
-- 工作区机制：AI 明确的任务"家"，产物集中管理，应用内预览/打开/回滚
-- 长期记忆 + 知识库（本地 RAG 语义检索）+ 项目任务记录
-- 用量统计与预算控制：按天/模型累计 token 与费用、缓存命中省钱报告
+### ✍️ 公众号自动写作
 
-### 🎨 个性化与体验
+多信源采集（RSS+搜索+论坛）→ 选题（历史去重）→ 三阶段写作 → 质量门禁 → 草稿箱（只产草稿，发布权在你）。
 
-- 主题：浅色 / 纯黑；字号/行距/面板布局可调，屏幕自适应（1080p/2K/4K）
-- 角色库：人格预设 + 自定义角色，三层职责分离（人格/任务能力/模型参数互不干扰）
-- 命令面板（Ctrl+K）、菜单精确分类、F11 全屏、启动默认最大化
-- 隐私模式：不保存快照/统计/日志，状态栏 🔒 标识
+## 🏗 系统架构
 
-## 🚀 快速开始
-
-### 安装
-
-```bash
-# 方式一：双击 start.bat（推荐，自动创建虚拟环境并安装依赖）
-# 方式二：
-pip install -r requirements.txt
-python main.py
-# 方式三：双击 build_exe.bat 打包为 dist\WhaleTalk.exe
+```
+┌────────────── Web 前端（React / webui/）──────────────┐
+│  ChatPage · Sidebar · AuxPanel(控制台) · ContextPanel │
+│  文件面板 · 产物直达 · 主题/密度 · 设置中心            │
+└──────────────────────┬───────────────────────────────┘
+                       │ REST + SSE (http://127.0.0.1:8745)
+┌──────────────────────▼───────────────────────────────┐
+│                api_server.py （本地 API）             │
+│  会话/配置/上下文/工具调用/记忆/文件/进程/状态/etc     │
+├──────────────────────────────────────────────────────┤
+│                  deepseek_client.py                  │
+│  DeepSeek V4 客户端（thinking/多模态/tool/压缩/缓存） │
+├──────────────────────────────────────────────────────┤
+│  backend：permissions · stores · stats · crypto ·    │
+│  plugins · wechat_writer · sprint · config_utils ... │
+└──────────────────────────────────────────────────────┘
 ```
 
-要求：**Python 3.9+，Windows 10/11**。
+- **入口**：`web_app.py`（默认 pywebview 桌面窗）+ 托盘；`--browser` 用默认浏览器；`--server` 无头 API；`--legacy` 回退旧 Tkinter
+- **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置/会话/记忆/统计；API Key 加密存储）
+- **安全**：仅 127.0.0.1 监听 + Bearer token；工具权限黑白名单；SSRF 防护
+
+## 🔧 安装与启动
+
+```bash
+# 方式一：双击 start.bat（自动创建虚拟环境并安装依赖）
+# 方式二：
+pip install -r requirements.txt
+python web_app.py            # Web 桌面窗口（pywebview + 托盘）
+python web_app.py --browser  # 默认浏览器打开页面
+python web_app.py --server   # 仅启动 API 服务（终端常驻，供远程/开发）
+python main.py               # 旧版 Tkinter 界面（保底回退）
+# 方式三：双击 build_exe.bat 打包为 dist\WhaleTalk.exe（WhaleTalk.spec）
+```
+
+要求：**Python 3.9+，Windows 10/11**（Node 仅供前端开发：`cd webui && npm i && npm run dev` / `build`）。
 
 ### 配置
 
 1. 在 https://platform.deepseek.com 申请 API Key
-2. 启动后在顶部 "API Key" 输入框粘贴并保存（或编辑 `config.json`）
+2. 启动后在设置页「API Key」粘贴保存（或编辑 `config.json`）
+3. 选择 `deepseek-v4-flash-vision-exp` 启用图像输入；「strict 工具模式（Beta）」自动启用 `/beta`
 
-主要配置项（config.json）：`model`（`deepseek-v4-flash` / `deepseek-v4-pro` / `deepseek-v4-flash-vision-exp`，亦支持任意 OpenAI 兼容模型）、`scenario`、`thinking`、`max_tokens`、`system_prompt`（保持固定可最大化缓存命中）、上下文压缩阈值、`fold_early_threshold`（早期消息折叠阈值，默认 1200 块，0=关闭）、`monthly_budget`、`privacy_mode`、`theme`、`vision_self_review`（视觉自审开关）、`call_api_allowed_hosts`（内网白名单）等；权限/推送/数据库/邮件为独立配置文件（permissions.json / webhooks.json / db_config.json / email_config.json）。
+## 🕘 更新策略
 
-## ⌨️ 常用快捷键
+- **版本线**：`v3.0.0`（Web 重构重大版本）起，同步镜像 `main.py VERSION`（单一版本源）
+- **更新源**：GitHub Releases（`https://api.github.com/repos/pythonshiyi/WhaleTalk/releases/latest`，或自定义 `update_url`）
+- **更新方式**：
+  - 应用内「关于/帮助 → 检查更新」（自动检测 GitHub 最新版）
+  - 更新包支持 Ed25519 签名校验（配置 `update_public_key`）+ SHA-256 校验
+  - 更新前自动备份 `backups/WhaleTalk_v<版本>_<时间戳>.zip`（一键回滚）
+- **兼容性**：旧配置自动迁移（`migration.py`）；旧数据目录无缝升级
+- **分支**：`main`（稳定版）· CI 自动跑 653+ 测试
 
-| 快捷键 | 功能 |
-|--------|------|
-| Ctrl+N / Ctrl+W | 新会话 / 关闭会话 |
-| Ctrl+F / Ctrl+Shift+F | 对话内搜索 / 全局搜索 |
-| Ctrl+E / Ctrl+Shift+E | 导出历史 / 导出会话 JSON |
-| Ctrl+K | 命令面板 |
-| Ctrl+Shift+T / Ctrl+Shift+P | 工具中心 / 插件中心 |
-| Ctrl+Shift+Q | 剪贴板即问 |
-| **Ctrl+Alt+V** | **粘贴剪贴板图片（视觉输入）** |
-| **🖼 图片按钮** | **选择本地图片附加发送（可拖拽）** |
-| Ctrl+↑/↓ | 调整输入框高度 |
-| F11 | 全屏 |
-| Alt+F/E/V/T/A/S/H | 顶级菜单直达 |
+## 👥 关于我们
 
-## 🔒 安全设计
+鲸语 WhaleTalk 是一个**独立开发的个人作品**，关注「本地 AI 智能体」体验——
 
-- **API Key**：Windows DPAPI 加密存储（fail-closed，明文永不落盘）
-- **权限模型**：行动能力默认全关；目录白名单 + 系统目录阻止列表；路径 resolve 防穿越；命令白名单/黑名单；审批流 + 审计日志（10MB 轮转）
-- **SSRF 防护**：URL 抓取/API 调用拦截内网与云元数据地址，DNS 重绑定防护；本地服务可通过显式白名单放行（图片 URL 输入同样校验）
-- **图片安全**：图片内联单张 ≤32MB、总量受限；批量分析强制目录边界校验（防路径穿越越界读取）
-- **沙箱执行**：run_python 静态 AST 检查 + 隔离模式运行
-- **搜索结果过滤**：危险链接（javascript:/file:/回环）一律剔除
-- **隐私模式**：一键开启后不保存任何快照/统计/日志
+- **目标**：让 Windows 用户拥有一个真正"看得见、做得了、能进化"的 AI 助手，而非只是一个聊天窗口
+- **理念**：本地优先（数据不出本机）、能力为王（109 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
+- **联系**：
+  - 官网：https://whaletalk.top/
+  - GitHub Issues：https://github.com/pythonshiyi/WhaleTalk/issues
+  - 邮件：见 GitHub 仓库 Profile
+- **感谢**：DeepSeek 团队的 V4 API 与开放文档；React/Vite 生态；所有开源依赖库
 
-## 📁 数据与隐私
+> 鲸语 WhaleTalk 与 DeepSeek **无任何关联**，是独立产品品牌。
 
-- 日志：`%USERPROFILE%\Documents\WhaleTalk\logs\assistant.log`
-- 历史会话：`%USERPROFILE%\Documents\WhaleTalk\history\`
-- 归档/统计/提示词/自定义工具：`%USERPROFILE%\Documents\WhaleTalk\` 下
-- 旧版数据目录自动迁移；`config.json` 含 API Key，**切勿外传或提交**
+## 🔒 安全与隐私
 
-## ❓ 常见问题
+- **数据不出本机**：默认仅 127.0.0.1 监听；API Key 加密存储；隐私模式可关快照/会话/记忆/统计
+- **工具控制**：文件权限白名单（`permissions.json`）、SSRF 防护（内网/元数据拦截）、审批闸门（高危工具）
+- **安全承诺**：可执行文件拒绝直接打开；sandbox Python 禁用危险模块；上传/下载限额；zip 炸弹防护
+- 详见 [SECURITY.md](SECURITY.md)
 
-| 错误 | 原因与解决 |
-|------|-----------|
-| 401 认证失败 | API Key 错误，检查 key |
-| 402 余额不足 | 前往充值页面充值 |
-| 429 限流 | 工具已自动重试 3 次，仍失败请降低请求频率 |
-| 发图报"模型不支持图片" | 已自动切换视觉模型；若仍失败请检查端点是否支持 `deepseek-v4-flash-vision-exp` |
-| Agent 循环 | 同工具重复调用 3 次自动终止；可调低 max_tool_rounds |
-| 深色标题栏不变黑 | Win10 需系统「应用模式」为深色；Win11 22H2+ 自动生效 |
-| 可选功能不可用 | 工具中心 → 依赖状态查看缺失项与安装命令 |
+## 📄 文档
 
-## 📚 文档
-
-- [🌐 官方网站](https://whaletalk.top/)（产品介绍 / 下载 / 动态）
-- [更新记录](CHANGELOG.md)（完整版本历史）
-- [贡献指南](CONTRIBUTING.md)（开发环境/代码规范）
-- [安全策略](SECURITY.md)（漏洞报告）
-- [技术文档](TECH_NOTES.md)（架构与约定，面向维护者/AI）
+- [CHANGELOG.md](CHANGELOG.md)（版本历史）
+- [TECH_NOTES.md](TECH_NOTES.md)（架构笔记）
+- [MODULES.md](MODULES.md)（模块拆分清单）
+- [CONTRIBUTING.md](CONTRIBUTING.md)（贡献指南）
+- [docs/](docs/)（开发文档）
 
 ---
 
 ## English Introduction
 
-### 🐋 WhaleTalk — AI Desktop Agent (DeepSeek V4, Multimodal)
+WhaleTalk v3.0 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745) with a pywebview desktop shell and system tray.
 
-WhaleTalk (Chinese: 鲸语, "Whale Song") is a **Windows desktop AI agent** built and deeply optimized around the **DeepSeek V4 API** — an AI workbench that **sees, hears, acts, extends itself, and evolves**. **WhaleTalk is an independent product brand with no affiliation to DeepSeek.**
-
-### Highlights
-
-- **👁 Multimodal vision**: full support for the `deepseek-v4-flash-vision-exp` vision model. Attach images directly in chat (button / drag & drop / Ctrl+Alt+V clipboard paste, up to 32MB each), and the app auto-switches to the vision model for you. The **`screen_see`** tool combines screenshot + understanding in one call, closing the "see → act → verify" loop for desktop and browser automation.
-- **🖼 Screenshot-as-a-service**: `chart_read` (chart → structured data + insights), `screenshot_to_html` (UI screenshot → HTML/CSS), `debug_screenshot` (error screenshot → diagnosis + fix), `scan_read` (scanned documents → Markdown), `image_batch` (folder-level batch vision analysis). Optional `vision_self_review` lets the agent self-critique its own generated images/charts and iterate (off by default to control cost).
-- **🧩 Plugin system (`.wtplugin`)**: tools, skills, workflows, and scenarios bundled into a single shareable JSON file. The **Plugin Workshop** lets the AI generate and install a plugin from a natural-language request. Built-in gallery with 3 sample plugins.
-- **🤖 109 Agent tools**: multi-engine web search (num/paging/time/site filters, engine health auto-degradation), GitHub search (org:/language: syntax), Hacker News realtime, page fetching (incl. blocked-site proxy channel), RSS presets, sandboxed Python, terminals, files, databases, browser automation, email, desktop RPA (click/type/hotkeys/screenshots), image generation/understanding/OCR, speech-to-text, TTS, system self-check (CPU/memory/disk/network), and more — orchestrated automatically with self-healing on failure. A universal **call_api** tool connects to any public API. Auto-reflection persists failed-task lessons into long-term memory so the AI avoids known pitfalls across sessions.
-- **🧬 Self-evolution**: reads its own codebase, writes improvement proposals (never touching original files), self-review reports with one-click adoption and rollback.
-- **✍ WeChat Writer**: multi-source collection → topic selection → 3-stage writing → quality gate → local drafts (publication stays in your hands).
-- **💰 Cost engineering**: ~99% prefix-cache hit rate, thinking-cost stripping, off-peak scheduling, budget control.
-- **Plugins, automation**: cron scheduling with catch-up, workflows, system tray, auto-start, daily briefings.
-- **Security**: DPAPI-encrypted API keys, default-deny permission model with approval flow and audit logs, SSRF protection with explicit local-service whitelist, sandboxed Python, image size/boundary enforcement, privacy mode.
-- **UI**: light/pure-black themes, screen-adaptive layout, command palette, F11 fullscreen, startup maximized.
+- **v3.0 highlights**: 3 themes (starfield/deepsea/arctic), console sidebar (model/thinking/scene/appearance), artifact one-click access, unified `web_app.py` entry (desktop/browser/headless)
+- **Capabilities**: 109 Agent tools (files/browser/DB/mail/media/desktop RPA), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
+- **Stack**: Python 3.9+ + React (Vite) + local API (openai/httpx) · Windows 10/11
 
 ### Quick Start
 
 ```bash
 pip install -r requirements.txt
-python main.py
+python web_app.py          # Desktop window (pywebview + tray)
+python web_app.py --server # Headless API at http://127.0.0.1:8745/
 ```
 
-Requires **Python 3.9+ and Windows 10/11**. Get an API Key at https://platform.deepseek.com and paste it into the top field on first launch. Select `deepseek-v4-flash-vision-exp` from the model dropdown to enable image input.
+Get an API Key at https://platform.deepseek.com. Select `deepseek-v4-flash-vision-exp` for image input.
 
-### Tech Stack
+**Updates**: GitHub Releases (auto-check in-app); backups before update; migration old configs.
 
-Python (Tkinter) · DeepSeek V4 API (OpenAI-compatible streaming, multimodal) · tiktoken · PyInstaller · pystray · httpx · optional: playwright, faster-whisper, PyMuPDF, reportlab, psutil, curl_cffi
+## ⚠️ 品牌与免责
 
----
-
-## 📱 品牌与关注
-
-**鲸语 WhaleTalk** 与 **微墨 WeMark** 由 **十一AIGC** 出品——专注 AI 工具与效率应用的独立创作者。
-
-🌐 **官网：https://whaletalk.top/**
-
-更多 AI 玩法、工具教程与新品动态，欢迎关注公众号：
-
-> **📱 微信公众号：十一AIGC**
-
-*WhaleTalk and WeMark are crafted by **ShiYi AIGC (十一AIGC)**, an independent creator focused on AI tools and productivity apps. Follow our official WeChat account for more AI tips, tutorials, and product news.*
-
-如果你喜欢这个项目，欢迎 ⭐ Star、分享给朋友，或在评论区留下你的建议 —— 你的支持是我们持续更新的最大动力！
-
-*If you like this project, please ⭐ Star it, share it, and leave your feedback — your support keeps us shipping!*
+鲸语 WhaleTalk 是独立产品，与 DeepSeek 官方**无任何关联**；不基于任何官方内部接口。请遵守当地法律法规，合理使用 AI 能力。

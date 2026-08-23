@@ -304,12 +304,35 @@ class TestStrictTools(unittest.TestCase):
             },
         }
         st = dc._strictify_schema(schema)
-        # 修复后：不自动把可选属性全部设为 required，也不强制封闭自由对象
-        self.assertNotIn("required", st)
-        self.assertNotIn("additionalProperties", st)
+        # 服务端要求：required 与 properties 键集一致 + additionalProperties=false
+        self.assertEqual(st["required"], ["path", "files"])
+        self.assertIs(st["additionalProperties"], False)
         items = st["properties"]["files"]["items"]
-        self.assertNotIn("required", items)
-        self.assertNotIn("additionalProperties", items)
+        self.assertEqual(items["required"], ["path", "content"])
+        self.assertIs(items["additionalProperties"], False)
+
+    def test_strictify_schema_free_object_rejected(self):
+        # 自由对象（无 properties）无法 strict 化 → 返回 None（工具将放弃 strict 标记）
+        self.assertIsNone(dc._strictify_schema({"type": "object", "description": "任意键值对"}))
+        self.assertIsNone(dc._strictify_schema({"type": "object", "properties": {}}))
+        self.assertIsNone(dc._strictify_schema({"type": "object",
+                                                "properties": {"rows": {"type": "array", "items": {}}}}))
+        self.assertIsNone(dc._strictify_schema({"type": "object",
+                                                "properties": {"v": {"enum": ["a", "b"]}}}))
+        self.assertIsNone(dc._strictify_schema({"type": "object",
+                                                "properties": {"v": {"oneOf": [
+                                                    {"type": "string"}, {"type": "integer"}
+                                                ]}}}))
+        # 根级空 properties（无参工具）允许（chat 请求以 is_root=True 调用）
+        self.assertIsNone(dc._strictify_schema({"type": "object", "properties": {}}))
+        root = dc._strictify_schema({"type": "object", "properties": {}}, is_root=True)
+        self.assertEqual(root["required"], [])
+        self.assertIs(root["additionalProperties"], False)
+        # anyOf 嵌套 object 递归严格化
+        st = dc._strictify_schema({"type": "object", "properties": {"v": {
+            "anyOf": [{"type": "string"}, {"type": "object", "properties": {"a": {"type": "string"}}}]
+        }}})
+        self.assertEqual(st["properties"]["v"]["anyOf"][1]["required"], ["a"])
 
     def test_strictify_tools_all_strict(self):
         tools = [{
@@ -326,10 +349,30 @@ class TestStrictTools(unittest.TestCase):
         out = dc._strictify_tools(tools)
         self.assertTrue(out[0]["function"]["strict"])
         self.assertEqual(out[0]["function"]["parameters"]["required"], ["location"])
-        # 修复后：不额外强制 additionalProperties=false（原 schema 未声明则不添加）
-        self.assertNotIn("additionalProperties", out[0]["function"]["parameters"])
+        self.assertIs(out[0]["function"]["parameters"]["additionalProperties"], False)
         # 原 schema 不被修改（浅拷贝）
         self.assertNotIn("strict", tools[0]["function"])
+        self.assertNotIn("additionalProperties", tools[0]["function"]["parameters"])
+
+    def test_strictify_tools_free_object_skips_strict(self):
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": "call_api_style",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "params": {"type": "object", "description": "任意识别键值对"},
+                    },
+                    "required": ["url"],
+                },
+            },
+        }]
+        out = dc._strictify_tools(tools)
+        # 自由对象无法 strict 化：工具整体放弃 strict（服务端混合列表可接受）
+        self.assertNotIn("strict", out[0]["function"])
+        self.assertEqual(out[0]["function"]["parameters"]["required"], ["url"])
 
     def test_chat_strict_tools_applied(self):
         client = dc.DeepSeekClient("k", "https://api.deepseek.com", "deepseek-v4-flash")
@@ -346,15 +389,17 @@ class TestStrictTools(unittest.TestCase):
         })()
         client.chat([{"role": "user", "content": "hi"}], tools_enabled=True, strict_tools=True)
         tools = captured["tools"]
-        self.assertTrue(all(t["function"].get("strict") for t in tools))
         for t in tools:
-            params = t["function"]["parameters"]
-            # 修复后：不强制所有属性必填，也不强制封闭自由对象
+            fn = t["function"]
+            if not fn.get("strict"):
+                continue
+            params = fn["parameters"]
             required = params.get("required", [])
-            self.assertTrue(set(required) <= set(params.get("properties", {}).keys()))
-            # 自由对象（如 call_api.params/json_body）不应被锁成空对象
-            if "properties" not in params:
-                self.assertNotEqual(params.get("additionalProperties"), False)
+            props = params.get("properties", {})
+            # 标 strict 的必须满足服务端要求：required==properties 全量 + 封闭结构
+            self.assertEqual(set(required), set(props.keys()))
+            self.assertIs(params["additionalProperties"], False)
+            self.assertIn("call_api", {t2["function"]["name"] for t2 in tools})
 
 
 def _make_png_bytes():

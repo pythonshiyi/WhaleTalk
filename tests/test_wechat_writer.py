@@ -510,7 +510,12 @@ class TestMainRunOnce(unittest.TestCase):
     def test_success_real_writes_and_history(self):
         with mock.patch("wechat_writer.main.src_mod.collect_all", return_value=self._fake_items()), \
              mock.patch.object(llm_mod, "chat", side_effect=self._fake_llm):
-            result = ww_main.run_once(dry_run=False)
+            result = ww_main.run_once(
+                dry_run=False,
+                drafts_dir=os.path.join(self.tmp, "drafts_iso"),
+                archive_dir=os.path.join(self.tmp, "articles_iso"),
+                config_path=None,
+            )
         self.assertTrue(result["ok"], result)
         self.assertTrue(os.path.exists(result["paths"]["draft_path"]))
         self.assertTrue(os.path.exists(result["paths"]["archive_path"]))

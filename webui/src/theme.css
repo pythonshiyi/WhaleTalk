@@ -1,0 +1,173 @@
+/* ═══ Whale Wave 设计令牌 · 三主题 ═══════════════════
+   星空黑 starfield（默认）/ 深海蓝 deepsea / 北极冰 arctic
+   品牌色（--brand/--ok/--ai/--danger/--warn）跨主题统一语义，
+   仅明度微调以保证对比度。 */
+
+:root {
+  --brand: #0ea5e9;
+  --brand-strong: #38bdf8;
+  --brand-soft: rgba(14, 165, 233, 0.14);
+  --ok: #10b981;
+  --ok-soft: rgba(16, 185, 129, 0.14);
+  --ai: #8b5cf6;
+  --ai-soft: rgba(139, 92, 246, 0.16);
+  --danger: #ef4444;
+  --danger-soft: rgba(239, 68, 68, 0.14);
+  --warn: #f59e0b;
+  --warn-soft: rgba(245, 158, 11, 0.15);
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --r-full: 999px;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  --fs-xs: 11px;
+  --fs-sm: 12.5px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 26px;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --font-ui: "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+}
+
+/* ── 星空黑（默认）：极黑冷底 + 亮青点缀 ─────────── */
+:root,
+[data-theme="starfield"] {
+  --bg-0: #05070e;
+  --bg-1: #0a0e18;
+  --bg-2: #111827;
+  --bg-3: #1a2136;
+  --bg-hover: rgba(140, 165, 255, 0.07);
+  --bg-active: rgba(14, 165, 233, 0.12);
+  --border: rgba(140, 165, 255, 0.10);
+  --border-strong: rgba(140, 165, 255, 0.18);
+
+  --text-1: #e9eef8;
+  --text-2: #98a6c4;
+  --text-3: #5b6885;
+  --text-link: #38bdf8;
+
+  --brand: #0ea5e9;
+  --brand-strong: #38bdf8;
+  --brand-soft: rgba(14, 165, 233, 0.14);
+  --ai: #a78bfa;
+
+  --scroll-thumb: rgba(140, 165, 255, 0.14);
+  --scroll-thumb-hover: rgba(140, 165, 255, 0.28);
+  --header-bg: rgba(10, 14, 24, 0.85);
+  --bubble-bg: linear-gradient(135deg, rgba(14, 165, 233, 0.20), rgba(56, 189, 248, 0.12));
+  --composer-fade: linear-gradient(180deg, transparent, rgba(10, 14, 24, 0.65) 30%);
+  --code-inline-bg: rgba(140, 165, 255, 0.10);
+  --code-inline-border: rgba(140, 165, 255, 0.12);
+  --code-bg: #0d1526;
+  --code-text: #c9d8f5;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 20px 60px rgba(0, 0, 0, 0.55);
+}
+
+/* ── 深海蓝：深蓝底 + 亮湖蓝 ────────────────────── */
+[data-theme="deepsea"] {
+  --bg-0: #02101f;
+  --bg-1: #041a30;
+  --bg-2: #082542;
+  --bg-3: #0d3154;
+  --bg-hover: rgba(120, 190, 255, 0.08);
+  --bg-active: rgba(34, 200, 255, 0.13);
+  --border: rgba(120, 190, 255, 0.12);
+  --border-strong: rgba(120, 190, 255, 0.22);
+
+  --text-1: #e2f0ff;
+  --text-2: #8fb4d9;
+  --text-3: #4f7399;
+  --text-link: #5cd2ff;
+
+  --brand: #22c8ff;
+  --brand-strong: #5cd2ff;
+  --brand-soft: rgba(34, 200, 255, 0.15);
+  --ai: #b39dff;
+
+  --scroll-thumb: rgba(120, 190, 255, 0.16);
+  --scroll-thumb-hover: rgba(120, 190, 255, 0.30);
+  --header-bg: rgba(4, 26, 48, 0.85);
+  --bubble-bg: linear-gradient(135deg, rgba(34, 200, 255, 0.22), rgba(56, 189, 248, 0.12));
+  --composer-fade: linear-gradient(180deg, transparent, rgba(4, 26, 48, 0.65) 30%);
+  --code-inline-bg: rgba(120, 190, 255, 0.10);
+  --code-inline-border: rgba(120, 190, 255, 0.14);
+  --code-bg: #05263f;
+  --code-text: #bfe3ff;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+/* ── 北极冰：冰白底 + 深海蓝文字 ─────────────────── */
+[data-theme="arctic"] {
+  --bg-0: #edf2f9;
+  --bg-1: #f6f9fe;
+  --bg-2: #ffffff;
+  --bg-3: #e2ebf6;
+  --bg-hover: rgba(30, 64, 110, 0.06);
+  --bg-active: rgba(2, 132, 199, 0.09);
+  --border: rgba(30, 64, 110, 0.10);
+  --border-strong: rgba(30, 64, 110, 0.20);
+
+  --text-1: #1c2b45;
+  --text-2: #54637f;
+  --text-3: #8595b2;
+  --text-link: #0284c7;
+
+  --brand: #0284c7;
+  --brand-strong: #0369a1;
+  --brand-soft: rgba(2, 132, 199, 0.10);
+  --ai: #7c3aed;
+
+  --scroll-thumb: rgba(30, 64, 110, 0.18);
+  --scroll-thumb-hover: rgba(30, 64, 110, 0.32);
+  --header-bg: rgba(246, 249, 254, 0.88);
+  --bubble-bg: linear-gradient(135deg, rgba(2, 132, 199, 0.16), rgba(56, 189, 248, 0.10));
+  --composer-fade: linear-gradient(180deg, transparent, rgba(246, 249, 254, 0.7) 30%);
+  --code-inline-bg: rgba(2, 132, 199, 0.08);
+  --code-inline-border: rgba(2, 132, 199, 0.14);
+  --code-bg: #0f1b30;
+  --code-text: #c9d8f5;
+  --shadow-1: 0 1px 2px rgba(30, 64, 110, 0.10);
+  --shadow-2: 0 8px 24px rgba(30, 64, 110, 0.12);
+  --shadow-3: 0 20px 60px rgba(30, 64, 110, 0.16);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  color: var(--text-1);
+  background: var(--bg-0);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+  transition: background .25s var(--ease), color .25s var(--ease);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+select, input, textarea { font-family: inherit; }
+
+::selection { background: rgba(14, 165, 233, 0.35); }

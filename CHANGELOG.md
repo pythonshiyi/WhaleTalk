@@ -2,6 +2,32 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.0.0（2026-08-23）—— 🎉 Web 重构重大版本
+
+**程序形态从 Tkinter 桌面版重构为 Web 架构（本地优先）**——全新 React 前端 + 本地 API 服务，同一能力引擎（deepseek_client 复用），界面与交互全面升级。
+
+- **🖥 全新 React 前端（webui/）**：
+  - **三主题**：星空（默认）/ 深海 / 北极冰，一处切换全局生效（localStorage 持久化）
+  - **控制台侧栏**：模型/思考档/场景/温度/Top-P/Seed/输出上限 + JSON 输出/Beta API/strict 工具/工具开关 + 外观（主题/密度/字号）——侧栏即控制台，高频设置一秒可达（默认展开）
+  - **产物直达条**：AI 回复中的产物路径（md/txt/xlsx/pdf 等绝对路径）自动提取，一键打开/定位所在文件夹/注入输入框
+  - **文件面板**：工作区树 + ⭐ 最近产物「打开/⌖定位/注入」三连；新产物实时跟出；顶层条目补 path 字段（修复此前展开/操作失灵）
+  - **消息体验**：流式 Markdown、思考卡片、工具卡片（展开结果）、收藏/固定/分叉/变体/续写、多选批量导出、消息字号/密度
+  - **会话管理**：多会话/标签/搜索/导入导出（JSON/JSONL）、历史库；状态栏常显模型/模式/场景/上下文
+- **🔌 本地 API 服务（api_server.py，127.0.0.1:8745）**：
+  - REST + SSE 流式（`/v1/chat/stream`）；token 认证；同源服务前端构建产物
+  - 工具全链路保留：记忆/失败模式/成功模式/项目上下文/任务记录注入、上下文压缩、strict 工具模式（Beta）
+  - 22+ 端点：sessions/config/context/files/abilities/dir/memory/deps/models/prompts/schedules/tasks/evolutions/knowledge/roles/workflows/services/backup/update/cleanup/audit/processes
+  - 新增 `POST /v1/files/open`（系统打开，可执行类安全拦截）与 `POST /v1/files/opendir`（explorer 定位选中）
+- **🚀 统一入口（web_app.py）**：`python web_app.py`（pywebview 桌面窗 + 托盘）/ `--browser`（默认浏览器）/ `--server`（无头 API）/ `--legacy`（回退旧 Tkinter）；start.bat 与打包 spec（WhaleTalk.spec 打包 webui/dist + pywebview）同步更新
+- **🧹 工程与修复**：
+  - `create_evolution` 校验前置——非法文件类型不再留下空分支目录（防残留）
+  - `deps.py` 补录 pyautogui（依赖状态显示此前漏项）
+  - 测试隔离：`run_wechat_writer` 集成测试不再写入真实 data/drafts
+  - README 全量重写（架构图/更新策略/关于我们/双语文案）
+- **✅ 质量**：全量 653 项测试通过；环境依赖（playwright/pyautogui/pywebview 等）补齐；端到端冒烟（health/API/WebUI 同源 200）
+
+> 沿用兼容：main.py 保持原 Tkinter 版（保底），deepseek_client.py 能力引擎不变。
+
 ## v2.27.0（2026-08-22）
 
 - **插件体系升级为「应用型插件」（.wtplugin v2）——插件是应用，工具是服务**：

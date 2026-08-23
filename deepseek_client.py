@@ -235,98 +235,100 @@ def _is_image_path(p):
     return low.endswith(IMAGE_EXTENSIONS) or low.startswith(("http://", "https://"))
 
 
-def embed_message_images(messages, model, _log=None):
-    """把 user 消息中的 images（本地路径或 http(s) 图片 URL）内联为 image_url 内容块。
+def embed_message_images(messages, model, _log=None, detail="auto"):
+        """把 user 消息中的 images（本地路径或 http(s) 图片 URL）内联为 image_url 内容块。
 
-    - 仅对消息的浅拷贝生效，不修改调用方内存中的消息对象（UI/存档保持文本 content）；
-    - 模型不支持视觉时抛 ValueError（附中文提示，UI 层会切换视觉模型）；
-    - 单张 ≤32 MiB、base64 总量 ≤40 MiB，超限抛 ValueError 提示压缩；
-    - 图片仅出现在 user 消息中（官方限制：system/assistant 携带图片返回 400）。
-    """
-    import base64
+        - 仅对消息的浅拷贝生效，不修改调用方内存中的消息对象（UI/存档保持文本 content）；
+        - 模型不支持视觉时抛 ValueError（附中文提示，UI 层会切换视觉模型）；
+        - 单张 ≤32 MiB、base64 总量 ≤40 MiB，超限抛 ValueError 提示压缩；
+        - 图片仅出现在 user 消息中（官方限制：system/assistant 携带图片返回 400）；
+        - detail 控制官方图片处理级别：low（缩放 512 省 token）/ high / original / auto。
+        """
+        import base64
 
-    if _log is None:
-        _log = logger
-    has_image = any(
-        isinstance(m, dict) and m.get("images") and m.get("role") == "user"
-        for m in messages
-    )
-    if not has_image:
-        return messages
-    if not is_vision_model(model):
-        raise ValueError(
-            f"当前模型 {model} 不支持图片输入，请切换到视觉模型 {VISION_MODEL}"
+        if _log is None:
+            _log = logger
+        has_image = any(
+            isinstance(m, dict) and m.get("images") and m.get("role") == "user"
+            for m in messages
         )
-    out = []
-    total_b64 = 0
-    for m in messages:
-        imgs = m.get("images")
-        if not (imgs and m.get("role") == "user"):
-            out.append(m)
-            continue
-        m = dict(m)
-        blocks = []
-        text = m.get("content")
-        if text:
-            blocks.append({"type": "text", "text": str(text)})
-        for p in imgs:
-            try:
-                if str(p).strip().lower().startswith(("http://", "https://")):
-                    url = p
-                    err = _safe_url(url)
-                    if err:
-                        raise ValueError(f"图片 URL 不安全：{err}")
-                    with _safe_stream("GET", url, timeout=20) as resp:
-                        resp.raise_for_status()
-                        raw = b""
-                        for chunk in resp.iter_bytes(64 * 1024):
-                            raw += chunk
-                            if len(raw) > IMAGE_MAX_BYTES:
-                                raise ValueError(
-                                    f"图片下载超过 {IMAGE_MAX_BYTES // (1024 * 1024)}MB，请先压缩"
-                                )
-                        mime = _detect_image_mime(raw[:16])
-                        b64 = base64.b64encode(raw).decode("ascii")
-                    blocks.append(
-                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
-                    )
-                    total_b64 += len(b64)
-                else:
-                    local = p
-                    if os.path.isfile(local) and not os.path.isabs(local):
-                        local = os.path.abspath(local)
-                    if not os.path.isfile(local):
-                        raise ValueError(f"图片文件不存在：{p}")
-                    try:
-                        size = os.path.getsize(local)
-                    except OSError as e:
-                        raise ValueError(f"图片文件读取失败：{p}: {e}")
-                    if size > IMAGE_MAX_BYTES:
-                        raise ValueError(
-                            f"图片超过 {IMAGE_MAX_BYTES // (1024 * 1024)}MB，请先用 image_process 压缩：{os.path.basename(p)}"
+        if not has_image:
+            return messages
+        if not is_vision_model(model):
+            raise ValueError(
+                f"当前模型 {model} 不支持图片输入，请切换到视觉模型 {VISION_MODEL}"
+            )
+        out = []
+        total_b64 = 0
+        for m in messages:
+            imgs = m.get("images")
+            if not (imgs and m.get("role") == "user"):
+                out.append(m)
+                continue
+            m = dict(m)
+            blocks = []
+            text = m.get("content")
+            if text:
+                blocks.append({"type": "text", "text": str(text)})
+            for p in imgs:
+                try:
+                    if str(p).strip().lower().startswith(("http://", "https://")):
+                        url = p
+                        err = _safe_url(url)
+                        if err:
+                            raise ValueError(f"图片 URL 不安全：{err}")
+                        with _safe_stream("GET", url, timeout=20) as resp:
+                            resp.raise_for_status()
+                            raw = b""
+                            for chunk in resp.iter_bytes(64 * 1024):
+                                raw += chunk
+                                if len(raw) > IMAGE_MAX_BYTES:
+                                    raise ValueError(
+                                        f"图片下载超过 {IMAGE_MAX_BYTES // (1024 * 1024)}MB，请先压缩"
+                                    )
+                            mime = _detect_image_mime(raw[:16])
+                            b64 = base64.b64encode(raw).decode("ascii")
+                        blocks.append(
+                            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}", "detail": detail}}
                         )
-                    with open(local, "rb") as f:
-                        raw = f.read()
-                    b64 = base64.b64encode(raw).decode("ascii")
-                    blocks.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{_detect_image_mime(raw[:16])};base64,{b64}"
-                            },
-                        }
-                    )
-                    total_b64 += len(b64)
-            except Exception as e:
-                raise ValueError(f"图片 {p} 处理失败: {e}")
-        if total_b64 > IMAGE_INLINE_TOTAL_BASE64:
-            raise ValueError("本轮图片总量过大（超过请求体限制），请减少图片或先压缩")
-        if not blocks:
-            blocks.append({"type": "text", "text": ""})
-        m["content"] = blocks
-        out.append(m)
-    _log.info("已内联 %d 条消息的图片（base64 共 %.1f MB）", len(out), total_b64 / 1024 / 1024)
-    return out
+                        total_b64 += len(b64)
+                    else:
+                        local = p
+                        if os.path.isfile(local) and not os.path.isabs(local):
+                            local = os.path.abspath(local)
+                        if not os.path.isfile(local):
+                            raise ValueError(f"图片文件不存在：{p}")
+                        try:
+                            size = os.path.getsize(local)
+                        except OSError as e:
+                            raise ValueError(f"图片文件读取失败：{p}: {e}")
+                        if size > IMAGE_MAX_BYTES:
+                            raise ValueError(
+                                f"图片超过 {IMAGE_MAX_BYTES // (1024 * 1024)}MB，请先用 image_process 压缩：{os.path.basename(p)}"
+                            )
+                        with open(local, "rb") as f:
+                            raw = f.read()
+                        b64 = base64.b64encode(raw).decode("ascii")
+                        blocks.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{_detect_image_mime(raw[:16])};base64,{b64}",
+                                    "detail": detail,
+                                },
+                            }
+                        )
+                        total_b64 += len(b64)
+                except Exception as e:
+                    raise ValueError(f"图片 {p} 处理失败: {e}")
+            if total_b64 > IMAGE_INLINE_TOTAL_BASE64:
+                raise ValueError("本轮图片总量过大（超过请求体限制），请减少图片或先压缩")
+            if not blocks:
+                blocks.append({"type": "text", "text": ""})
+            m["content"] = blocks
+            out.append(m)
+        _log.info("已内联 %d 条消息的图片（base64 共 %.1f MB）", len(out), total_b64 / 1024 / 1024)
+        return out
 
 THINKING_MODES = {
     "none": "禁用思考 (none)",
@@ -5167,11 +5169,22 @@ def create_evolution(name, files):
         return '错误：files 必须是非空数组 [{"path": "main.py", "content": "..."}]'
     if len(files) > 20:
         return "错误：文件数超过 20 上限"
-    # 分支总大小上限：单文件无限内容可写 GB 级磁盘（模型幻觉/失控时防资源耗尽）
     total_bytes = sum(len(str(f.get("content") or "")) for f in files if isinstance(f, dict))
     if total_bytes > 50 * 1024 * 1024:
         return "错误：提案内容超过 50MB 总上限"
-    # 微秒时间戳：同一秒重复创建同名提案不再静默合并目录
+    # 校验前置：非法路径/类型在创建任何目录前拒绝（避免空分支残留）
+    for f in files[:20]:
+        if not isinstance(f, dict):
+            return "错误：files 元素必须是对象"
+        rel = str(f.get("path") or "").strip().replace("\\", "/")
+        if not rel or rel in (".", "..") or ".." in rel.split("/"):
+            return f"错误：非法相对路径：{rel}"
+        if not rel.endswith(EVO_WRITE_EXTS):
+            return f"错误：不支持的文件类型：{rel}"
+        branch_preview = os.path.join(EVOLUTIONS_DIR, "_preview")
+        full = os.path.normpath(os.path.join(branch_preview, rel))
+        if full != branch_preview and not full.startswith(branch_preview.rstrip("\\/") + os.sep):
+            return f"错误：路径越界：{rel}"
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
     branch = os.path.join(EVOLUTIONS_DIR, f"{name}_{ts}")
     try:
@@ -5181,17 +5194,9 @@ def create_evolution(name, files):
     written = []
     has_md = False
     for f in files[:20]:
-        if not isinstance(f, dict):
-            return "错误：files 元素必须是对象"
         rel = str(f.get("path") or "").strip().replace("\\", "/")
         content = f.get("content") or ""
-        if not rel or rel in (".", "..") or ".." in rel.split("/"):
-            return f"错误：非法相对路径：{rel}"
-        if not rel.endswith(EVO_WRITE_EXTS):
-            return f"错误：不支持的文件类型：{rel}"
         full = os.path.normpath(os.path.join(branch, rel))
-        if full != branch and not full.startswith(branch.rstrip("\\/") + os.sep):
-            return f"错误：路径越界：{rel}"
         try:
             os.makedirs(os.path.dirname(full) or branch, exist_ok=True)
             with open(full, "w", encoding="utf-8") as fh:
@@ -9456,34 +9461,71 @@ def _prune_reasoning_for_send(messages):
     return cleaned
 
 
-def _strictify_schema(schema):
+def _strictify_schema(schema, is_root=False):
     """把 JSON Schema 转换为 strict 模式（Beta）兼容形式。
 
-    注意：不会再把「所有属性」自动加入 required，也不会把自由对象/map 强制
-    改成 additionalProperties=false——那会破坏 call_api.params / json_body、
-    create_plugin.workflows 等任意键对象，并让可选参数全部变成必填。
-    仅保留 schema 中显式声明的 required，并递归处理嵌套结构。
+    服务端实测规则（2026-08 beta /chat/completions 校验）：
+    - object 的 required 必须与 properties 键集完全一致（缺项/多出项均 400）
+    - 每个 object 必须显式声明 properties，嵌套 object 的 properties 不能为空
+      （根级可空：无参工具 200 OK，嵌套空 properties 400）
+    - 每个 schema 节点必须携带 type / anyOf / $ref（宽松 `{}`、纯 enum、oneOf 均 400）
+    - additionalProperties 仅允许 false 或缺省（true / map 形式 400）
+
+    无法合规的结构（自由对象/宽松 items/纯 enum/oneOf 等）返回 None，
+    调用方（_strictify_tools）必须放弃该工具的 strict 标记——
+    服务端实测：strict 校验仅作用于标了 strict=true 的 function，
+    混合列表正常通过，硬转则整轮请求直接 400。
     """
     if not isinstance(schema, dict):
-        return schema
+        return None
     st = dict(schema)
-    if st.get("type") == "object":
+    if "$ref" in st:
+        return None  # 含 ref 的节点不再递归处理（保守放弃 strict）
+    t = st.get("type")
+    if t == "object":
         props = st.get("properties")
-        if isinstance(props, dict):
-            st["properties"] = {k: _strictify_schema(v) for k, v in props.items()}
-            if isinstance(st.get("required"), list):
-                st["required"] = [r for r in st["required"] if r in props]
-            elif st.get("additionalProperties") is False:
-                # 仅当原 schema 明确是封闭结构时才补全 required（兼容 strict 语义）
-                st["required"] = list(props.keys())
-        # 不强制修改 additionalProperties：自由对象保持开放
-    items = st.get("items")
-    if isinstance(items, dict):
-        st["items"] = _strictify_schema(items)
-    anyof = st.get("anyOf")
-    if isinstance(anyof, list):
-        st["anyOf"] = [_strictify_schema(a) for a in anyof]
-    return st
+        if not isinstance(props, dict):
+            return None  # 自由对象/任意键 map 无法在 strict 模式下表达
+        if props:
+            new_props = {}
+            for k, v in props.items():
+                nv = _strictify_schema(v)
+                if nv is None:
+                    return None
+                new_props[k] = nv
+            st["properties"] = new_props
+            # 服务端要求 required 与 properties 一致：全量必填 + 不得多出
+            st["required"] = list(new_props.keys())
+        elif not is_root:
+            return None  # 嵌套空 properties 被服务端拒绝
+        else:
+            st["required"] = []
+        ap = st.get("additionalProperties")
+        if ap is True or (ap is not None and not isinstance(ap, bool)):
+            return None
+        st["additionalProperties"] = False
+        return st
+    if t == "array":
+        items = st.get("items")
+        if not isinstance(items, dict):
+            return None
+        ni = _strictify_schema(items)
+        if ni is None:
+            return None
+        st["items"] = ni
+        return st
+    if "anyOf" in st:
+        new_branches = []
+        for b in st["anyOf"]:
+            nb = _strictify_schema(b)
+            if nb is None:
+                return None
+            new_branches.append(nb)
+        st["anyOf"] = new_branches
+        return st
+    if t in ("string", "integer", "number", "boolean", "null"):
+        return st
+    return None
 
 
 _BASE_TOOLS_CACHE = None
@@ -9508,7 +9550,12 @@ def _cached_all_tools(custom_tools):
 
 
 def _strictify_tools(tools):
-    """把所有 function 工具转换为 strict 模式（官方要求：全部 function 均需 strict=true）。"""
+    """把 function 工具转换为 strict 模式（Beta）兼容形式。
+
+    strict 校验仅作用于标了 strict=true 的 function；schema 无法合规化的工具
+    （自由对象/宽松 items 等）不标 strict——服务端实测混合列表正常通过，
+    而强行标 strict 会导致整轮请求 400。
+    """
     out = []
     for t in tools or []:
         if not isinstance(t, dict):
@@ -9518,9 +9565,12 @@ def _strictify_tools(tools):
         fn = t.get("function")
         if isinstance(fn, dict):
             fn = dict(fn)
-            fn["strict"] = True
-            if isinstance(fn.get("parameters"), dict):
-                fn["parameters"] = _strictify_schema(fn["parameters"])
+            params = fn.get("parameters")
+            if isinstance(params, dict):
+                clean = _strictify_schema(params, is_root=True)
+                if clean is not None:
+                    fn["parameters"] = clean
+                    fn["strict"] = True
             t["function"] = fn
         out.append(t)
     return out
@@ -9589,6 +9639,7 @@ class DeepSeekClient:
         on_reasoning=None,
         on_content=None,
         on_tool=None,
+        on_tool_start=None,
         on_usage=None,
         stop_event=None,
         temperature=None,
@@ -9599,6 +9650,9 @@ class DeepSeekClient:
         on_tool_duration=None,
         json_output=False,
         continue_prefix=False,
+        stop=None,
+        logprobs=False,
+        tool_choice=None,
         on_approval=None,
         on_plan=None,
         memory_text=None,
@@ -9647,6 +9701,16 @@ class DeepSeekClient:
         }
         if json_output:
             kwargs["response_format"] = {"type": "json_object"}
+        if stop:
+            # 官方支持：string 或最多 16 个 string
+            if isinstance(stop, str):
+                kwargs["stop"] = [stop]
+            elif isinstance(stop, (list, tuple)):
+                kwargs["stop"] = [str(s) for s in stop][:16]
+        if logprobs:
+            kwargs["logprobs"] = True
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
         if continue_prefix and work and work[-1].get("role") == "assistant":
             last = dict(work[-1])
             last["prefix"] = True
@@ -10017,6 +10081,11 @@ class DeepSeekClient:
                     """
                     name = tc["name"]
                     raw_args = tc["args"] or ""
+                    if on_tool_start is not None:
+                        try:
+                            on_tool_start(name, raw_args)
+                        except Exception:
+                            pass
                     fn = TOOL_CALL_MAP.get(name)
                     args = {}
                     t0 = time.monotonic()

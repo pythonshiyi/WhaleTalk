@@ -150,6 +150,9 @@ DEFAULT_CONFIG = {
     "browser_headless": False,  # 初始浏览器可见（有头模式）
     "json_output": False,
     "beta_api": False,
+    "stop": [],
+    "logprobs": False,
+    "tool_choice": "auto",
     "peak_warning": True,
     "fold_early_threshold": 1200,  # 早期消息折叠阈值（块数，超过折叠为可点击展开提示；0=关闭）
     "current_profile": "",

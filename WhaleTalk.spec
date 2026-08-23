@@ -1,12 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-# 鲸语 WhaleTalk TkUI 打包配置（PyInstaller）
+# 鲸语 WhaleTalk Web 打包配置（PyInstaller）
 # 用法：pyinstaller WhaleTalk.spec --noconfirm
+# 入口为 Web 版：api_server 同源服务 webui/dist，desktop.py（pywebview）加载原生窗口。
 # 大型可选依赖（playwright / faster-whisper / PyMuPDF 等）未安装时自动禁用，
 # 此处显式排除，保持体积可控。
 
+import os
+
+_webui_dist = os.path.join(SPECPATH, 'webui', 'dist')
 
 a = Analysis(
-    ['main.py'],
+    ['desktop.py'],
     pathex=[],
     binaries=[],
     datas=[
@@ -15,10 +19,13 @@ a = Analysis(
         ('sample_plugins', 'sample_plugins'),
         ('evolutions', 'evolutions'),
         ('app.ico', '.'),
+        (_webui_dist, 'webui/dist') if os.path.isdir(_webui_dist) else ('', ""),
     ],
     hiddenimports=[
         'tiktoken_ext.openai_public',
         'tkinterdnd2',
+        'webview',
+        'pystray',
     ],
     hookspath=[],
     hooksconfig={},

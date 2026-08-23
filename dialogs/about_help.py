@@ -22,10 +22,11 @@ def show_about(app):
     app._lbl(body, f"版本 v{app.VERSION} · 基于 DeepSeek V4 API", role="label_sec", bg="panel",
              font=(FONT_FAMILY, 9)).pack(anchor="w", pady=(0, 12))
     for line in (
+        "· v3.0 Web 架构：React 前端 + 本地 API（流式对话/控制台侧栏/三主题）",
         "· 流式思考与回答、1M 长上下文、缓存命中优化",
         "· 100+ Agent 工具：文档/代码/浏览器/数据/媒体/云盘/公众号写作",
         "· 完全智能/纯对话双模式，权限黑名单制由用户掌控",
-        "· 产物面板、会话快照、用量统计、预算控制、隐私模式",
+        "· 产物直达、文件面板、会话快照、用量统计、预算控制、隐私模式",
         "· 自我进化：AI 可感知自身代码并提出改进提案",
     ):
         app._lbl(body, "✓ " + line, bg="panel", font=(FONT_FAMILY, 9)).pack(anchor="w", pady=1)
