@@ -307,6 +307,7 @@ function ParamsTab() {
       const d = await api.api("/v1/config", { method: "POST", body: JSON.stringify(draft) });
       if (d && d.ok) {
         setCfg((c) => ({ ...c, ...draft }));
+        if ("model" in draft) setCustomModel(!modelOptions.includes(draft.model));
         setDraft(null);
         setTip("✅ 已保存并锁定");
         setTimeout(() => setTip(""), 1800);
@@ -326,8 +327,8 @@ function ParamsTab() {
 
   if (!cfg) return <div className="aux-tab fx-hint">加载中…</div>;
 
-  // 当前生效值 = 草稿覆盖后的值（未点保存前控件显示草稿，便于预览）
-  const cur = draft || cfg;
+  // 当前生效值 = cfg 上叠加草稿（草稿只含改过的字段，不能整体替换否则下方下拉框/输入框会丢失数据）
+  const cur = { ...cfg, ...(draft || {}) };
   const modelOptions = Array.isArray(cfg.models) && cfg.models.length ? cfg.models : [];
   const ctxTools = Array.isArray(ctx?.tools) ? ctx.tools : [];
   const ctxMemCount = ctx?.memory?.count ?? (Array.isArray(ctx?.memory) ? ctx.memory.length : 0);

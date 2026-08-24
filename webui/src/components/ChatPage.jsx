@@ -308,6 +308,18 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
   }, [busy]);
 }
 
+// 后端会话 → 左侧列表项（后端一旦可用就以真实数据为准，空列表也必须清干净）
+const toSessionItem = (s) => ({
+  id: s.id,
+  title: s.name,
+  time: (s.saved_at || "").replace("T", " ").slice(5, 16),
+  pinned: s.pinned,
+  tag: s.scenario || "会话",
+  model: s.model,
+  brief: `${s.msg_count} 条消息`,
+  tags: s.tags || [],
+});
+
 function useDataSources() {
   const [mode, setMode] = React.useState("auto");
   const [sessions, setSessions] = React.useState(mockSessions);
@@ -324,19 +336,7 @@ function useDataSources() {
       setMode("backend");
       try {
         const real = await api.listSessions();
-        if (real && real.length) {
-          const mapped = real.map((s) => ({
-            id: s.id,
-            title: s.name,
-            time: (s.saved_at || "").replace("T", " ").slice(5, 16),
-            pinned: s.pinned,
-            tag: s.scenario || "会话",
-            model: s.model,
-            brief: `${s.msg_count} 条消息`,
-            tags: s.tags || [],
-          }));
-          setSessions(mapped);
-        }
+        setSessions((real || []).map(toSessionItem));
       } catch {}
       try {
         const c = await api.getContext();
@@ -396,23 +396,21 @@ function useDataSources() {
     if (mode !== "backend") return;
     try {
       const real = await api.listSessions();
-      if (real && real.length) {
-        const mapped = real.map((s) => ({
-          id: s.id,
-          title: s.name,
-          time: (s.saved_at || "").replace("T", " ").slice(5, 16),
-          pinned: s.pinned,
-          tag: s.scenario || "会话",
-          model: s.model,
-          brief: `${s.msg_count} 条消息`,
-          tags: s.tags || [],
-        }));
-        setSessions(mapped);
-      }
+      setSessions((real || []).map(toSessionItem));
     } catch {}
   }, [mode]);
 
-  return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx };
+  // mock/离线演示模式：删除本地演示会话（后端无对应文件，只改前端状态）
+  const removeLocalSessions = React.useCallback((ids) => {
+    setSessions((list) => list.filter((s) => !ids.includes(s.id)));
+    setHistory((h) => {
+      const next = { ...h };
+      for (const id of ids) delete next[id];
+      return next;
+    });
+  }, []);
+
+  return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx, removeLocalSessions };
 }
 
 export default function ChatPage({ onGoWorkbench, onGoSettings }) {
@@ -488,8 +486,12 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     setGenState(s);
   }, []);
 
-  const { mode: dataMode, sessions, ctx, history, pickSession, refreshSessions, setCtx } = useDataSources();
+  const { mode: dataMode, sessions, ctx, history, pickSession, refreshSessions, setCtx, removeLocalSessions } = useDataSources();
   connRef.current = dataMode;
+
+  React.useEffect(() => {
+    setBackendNote(dataMode === "mock" ? "演示模式：后端未连接，当前为内置演示数据" : "");
+  }, [dataMode]);
 
   const useMock = dataMode === "mock";
   useMockPlayer(useMock && busy, setBusy, setMsgs, pendingRef, setGenStateThrottled);
@@ -670,6 +672,15 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
   };
 
   const onDeleteSession = async (id) => {
+    if (dataMode === "mock") {
+      removeLocalSessions([id]);
+      if (activeId === id) {
+        setActiveId(null);
+        setMsgs([]);
+      }
+      toast("已移除演示会话");
+      return;
+    }
     try {
       await api.deleteSession(id);
       if (activeId === id) {
@@ -677,10 +688,22 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
         setMsgs([]);
       }
       refreshSessions();
-    } catch {}
+      toast("已删除会话");
+    } catch {
+      toast("删除失败：后端未响应");
+    }
   };
 
   const onBatchDeleteSessions = async (ids) => {
+    if (dataMode === "mock") {
+      removeLocalSessions(ids);
+      if (activeId && ids.includes(activeId)) {
+        setActiveId(null);
+        setMsgs([]);
+      }
+      toast(`已移除 ${ids.length} 个演示会话`);
+      return;
+    }
     try {
       await api.deleteSessionsBatch(ids);
       if (activeId && ids.includes(activeId)) {
@@ -689,7 +712,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
       }
       refreshSessions();
       toast(`已删除 ${ids.length} 个会话`);
-    } catch {}
+    } catch {
+      toast("删除失败：后端未响应");
+    }
   };
 
   // ── 消息操作（对齐原程序右键菜单）──

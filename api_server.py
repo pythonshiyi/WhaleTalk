@@ -2591,7 +2591,6 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(200, _dirs())
                 elif self.path == "/v1/roles":
                     self._json(200, _roles())
-                    self._json(200, _roles())
                 elif self.path.startswith("/v1/tools/"):
                     name = self.path[len("/v1/tools/"):]
                     schema = _tool_schema(name)

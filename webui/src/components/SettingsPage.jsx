@@ -561,7 +561,10 @@ export default function SettingsPage() {
   const baseUrlText = baseUrlDraft ?? cfg?.base_url ?? "";
   const commitModel = (v) => {
     const clean = String(v).trim();
-    if (clean) saveField({ model: clean });
+    if (clean) {
+      saveField({ model: clean });
+      if (modelOptions.includes(clean)) setCustomModel(false);
+    }
     setModelDraft(null);
   };
   const commitBaseUrl = (v) => {
@@ -642,7 +645,7 @@ export default function SettingsPage() {
           <div className="svc-title" style={{ marginTop: 16 }}>核心设置</div>
           <div className="set-card">
             <Row label="模型" desc="官方三模型 + 任意 OpenAI 兼容">
-              {customModel ? (
+              {customModel || !modelOptions.includes(cfg.model) ? (
                 <input className="set-select set-combo" value={modelText} placeholder="输入任意模型名" onChange={(e) => setModelDraft(e.target.value)} onBlur={(e) => commitModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
               ) : (
                 <select className="set-select" value={modelOptions.includes(cfg.model) ? cfg.model : "__custom__"} onChange={(e) => {
@@ -687,7 +690,7 @@ export default function SettingsPage() {
                   <input className="set-select set-combo" value={baseUrlText} placeholder="https://api.deepseek.com" onChange={(e) => setBaseUrlDraft(e.target.value)} onBlur={(e) => commitBaseUrl(e.target.value)} />
                 </Row>
                 <Row label="模型" desc={activeModelMeta ? `${activeModelMeta.label} · 上下文 ${(activeModelMeta.max_context_tokens / 1000000).toFixed(1)}M · 输出 ${(activeModelMeta.max_output_tokens / 1024).toFixed(0)}K` : "可输入任意兼容模型"}>
-                  {customModel ? (
+                  {customModel || !modelOptions.includes(cfg.model) ? (
                     <input className="set-select set-combo" value={modelText} placeholder="输入任意模型名" onChange={(e) => setModelDraft(e.target.value)} onBlur={(e) => commitModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
                   ) : (
                     <select className="set-select" value={modelOptions.includes(cfg.model) ? cfg.model : "__custom__"} onChange={(e) => {
