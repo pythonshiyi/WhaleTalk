@@ -1598,6 +1598,7 @@ def _save_session_data(body):
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    _index_session_file(f"{sid}.json")
     return sid
 
 
@@ -1675,6 +1676,7 @@ def _migrate_legacy_sessions():
             os.makedirs(SESSIONS_DIR, exist_ok=True)
             with open(os.path.join(SESSIONS_DIR, f"{sid}.json"), "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+            _index_session_file(f"{sid}.json")
             _mark_migrated(full)
             imported += 1
         except Exception:
@@ -2366,6 +2368,160 @@ _TOOLS_PROVIDER = None
 _CHAT_PROVIDER = None
 _PORT = 8745
 
+# ── 会话索引缓存 ────────────────────────────────────
+# 避免列表接口每次打开都逐个读会话文件内容（5000 会话实测 500ms+）。
+# index.json 持元数据 + 文件指纹（mtime/size）；命中时仅 stat 校验，毫秒级返回。
+SESSION_INDEX_PATH = os.path.join(DATA_DIR, "sessions_index.json")
+_SESSIONS_INDEX = {}      # sid -> [file_mtime, file_size, metadata_dict]
+_SESSIONS_INDEX_LOCK = threading.Lock()
+
+
+def _index_session_locked(fn):
+    """带锁的单会话索引更新（写路径钩子用）。"""
+    with _SESSIONS_INDEX_LOCK:
+        return _index_session_file(fn)
+
+
+def _drop_session_index_locked(sid):
+    """带锁的索引移除（删除路径钩子用）。"""
+    with _SESSIONS_INDEX_LOCK:
+        _drop_session_index(sid)
+
+
+def _session_fingerprint(path):
+    """会话文件指纹：(mtime_ns, size)。用于判断文件是否变更。"""
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _session_meta(d, fn):
+    """从会话 dict 提取列表元数据 + msg_count。"""
+    msgs = d.get("messages") or []
+    return {
+        "id": str(d.get("id") or fn[:-5]),
+        "name": str(d.get("name") or "未命名会话"),
+        "model": str(d.get("model") or ""),
+        "scenario": str(d.get("scenario") or ""),
+        "saved_at": str(d.get("saved_at") or ""),
+        "pinned": bool(d.get("pinned")),
+        "top": bool(d.get("top")),
+        "tags": [str(x) for x in (d.get("tags") or [])][:20],
+        "msg_count": len(msgs),
+    }
+
+
+def _load_session_index():
+    """从磁盘加载索引（启动时调用一次）。失败返回空（将惰性重建）。"""
+    try:
+        with open(SESSION_INDEX_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if isinstance(raw, dict) and isinstance(raw.get("entries"), dict):
+            entries = raw["entries"]
+            return {
+                sid: [int(v[0]), int(v[1]), dict(v[2])]
+                for sid, v in entries.items()
+                if isinstance(v, list) and len(v) == 3 and isinstance(v[2], dict)
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def _save_session_index():
+    """索引落盘（原子写）。"""
+    global _SESSIONS_INDEX
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = SESSION_INDEX_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"entries": _SESSIONS_INDEX}, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, SESSION_INDEX_PATH)
+    except Exception:
+        pass
+
+
+def _index_session_file(fn, meta_override=None):
+    """把单个会话文件编入内存索引（重复调用安全：先 read 一遍拿指纹与元数据）。"""
+    global _SESSIONS_INDEX
+    full = os.path.join(SESSIONS_DIR, fn)
+    fp = _session_fingerprint(full)
+    if fp is None:
+        _SESSIONS_INDEX.pop(fn[:-5], None) if fn.endswith(".json") else None
+        return None
+    if fn.endswith(".json"):
+        sid = fn[:-5]
+        # 若指纹一致且已有内存条目 → 直接复用元数据，不读文件内容
+        cur = _SESSIONS_INDEX.get(sid)
+        if cur and list(cur[:2]) == list(fp) and not meta_override:
+            return cur[2]
+        try:
+            with open(full, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            meta = _session_meta(d, fn)
+        except Exception:
+            return None
+        _SESSIONS_INDEX[sid] = [fp[0], fp[1], meta]
+        return meta
+    return None
+
+
+def _drop_session_index(sid):
+    """从索引移除会话（删除时）。"""
+    global _SESSIONS_INDEX
+    _SESSIONS_INDEX.pop(str(sid), None)
+
+
+def _rebuild_session_index_locked():
+    """全量重建索引核心（调用方须已持有 _SESSIONS_INDEX_LOCK）。"""
+    if not os.path.isdir(SESSIONS_DIR):
+        _SESSIONS_INDEX.clear()
+        return 0
+    fnames = {fn for fn in os.listdir(SESSIONS_DIR) if fn.endswith(".json")}
+    for sid in [k for k in _SESSIONS_INDEX if f"{k}.json" not in fnames]:
+        _SESSIONS_INDEX.pop(sid, None)
+    for fn in fnames:
+        sid = fn[:-5]
+        fp = _session_fingerprint(os.path.join(SESSIONS_DIR, fn))
+        cur = _SESSIONS_INDEX.get(sid)
+        if cur and list(cur[:2]) == list(fp or (0, 0)):
+            continue
+        _index_session_file(fn)
+    _save_session_index()
+    return len(_SESSIONS_INDEX)
+
+
+def _rebuild_session_index():
+    """全量重建索引（加锁壳）。"""
+    with _SESSIONS_INDEX_LOCK:
+        return _rebuild_session_index_locked()
+
+
+def _ensure_session_index():
+    """确保索引已就绪：首次调用从磁盘加载，之后按目录变化增量重建。"""
+    global _SESSIONS_INDEX, _session_dir_mtime
+    if not _SESSIONS_INDEX:
+        with _SESSIONS_INDEX_LOCK:
+            if not _SESSIONS_INDEX:
+                _SESSIONS_INDEX = _load_session_index()
+                _rebuild_session_index_locked()
+                _session_dir_mtime = os.stat(SESSIONS_DIR).st_mtime_ns if os.path.isdir(SESSIONS_DIR) else 0
+                return
+    # 轻量校验：目录 mtime 或文件数变了才增量重建（兼容外部直接改动文件）
+    try:
+        dir_m = os.stat(SESSIONS_DIR).st_mtime_ns if os.path.isdir(SESSIONS_DIR) else 0
+        fcount = len([fn for fn in os.listdir(SESSIONS_DIR) if fn.endswith(".json")]) if os.path.isdir(SESSIONS_DIR) else 0
+        if dir_m != _session_dir_mtime or fcount != len(_SESSIONS_INDEX):
+            _rebuild_session_index()
+            _session_dir_mtime = dir_m
+    except Exception:
+        pass
+
+
+_session_dir_mtime = 0
+
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -2472,31 +2628,10 @@ class _Handler(BaseHTTPRequestHandler):
         return re.sub(r"[^0-9a-zA-Z_-]", "", str(sid or ""))[:64]
 
     def _list_sessions(self):
-        out = []
-        if not os.path.isdir(SESSIONS_DIR):
-            return out
-        for fn in os.listdir(SESSIONS_DIR):
-            if not fn.endswith(".json"):
-                continue
-            try:
-                with open(os.path.join(SESSIONS_DIR, fn), "r", encoding="utf-8") as f:
-                    d = json.load(f)
-                msgs = d.get("messages") or []
-                out.append({
-                    "id": str(d.get("id") or fn[:-5]),
-                    "name": str(d.get("name") or "未命名会话"),
-                    "model": str(d.get("model") or ""),
-                    "scenario": str(d.get("scenario") or ""),
-                    "saved_at": str(d.get("saved_at") or ""),
-                    "pinned": bool(d.get("pinned")),
-                    "top": bool(d.get("top")),
-                    "tags": [str(x) for x in (d.get("tags") or [])][:20],
-                    "msg_count": len(msgs),
-                })
-            except Exception:
-                continue
-        out.sort(key=lambda s: s["saved_at"], reverse=True)
-        return out[:200]
+        _ensure_session_index()
+        metas = [v[2] for v in _SESSIONS_INDEX.values() if isinstance(v, list) and len(v) == 3]
+        metas.sort(key=lambda s: s.get("saved_at") or "", reverse=True)
+        return metas[:200]
 
     def _load_session_messages(self, sid):
         path = os.path.join(SESSIONS_DIR, f"{self._safe_sid(sid)}.json")
@@ -2542,6 +2677,8 @@ class _Handler(BaseHTTPRequestHandler):
             path = os.path.join(SESSIONS_DIR, f"{sid}.json")
             if os.path.exists(path):
                 os.remove(path)
+            _drop_session_index_locked(sid)
+            _save_session_index()
             return True, None
         except Exception as e:
             return False, str(e)
@@ -2571,6 +2708,8 @@ class _Handler(BaseHTTPRequestHandler):
             d["pinned"] = bool(body.get("pinned"))
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(d, f, ensure_ascii=False, separators=(",", ":"))
+            _index_session_locked(f"{sid}.json")
+            _save_session_index()
             return True, None
         except Exception as e:
             return False, str(e)
@@ -2595,6 +2734,8 @@ class _Handler(BaseHTTPRequestHandler):
                 d["tags"] = [str(x)[:20] for x in tags if str(x).strip()][:20]
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(d, f, ensure_ascii=False, separators=(",", ":"))
+            _index_session_locked(f"{sid}.json")
+            _save_session_index()
             return True, None
         except Exception as e:
             return False, str(e)
@@ -2670,6 +2811,8 @@ class _Handler(BaseHTTPRequestHandler):
             os.makedirs(SESSIONS_DIR, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+            _index_session_locked(f"{sid}.json")
+            _save_session_index()
             return sid, None
         except Exception as e:
             return None, str(e)
