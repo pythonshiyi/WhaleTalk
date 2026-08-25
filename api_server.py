@@ -1936,14 +1936,57 @@ def _start_im():
         _IM_THREAD.start()
 
 
+def _play_completion_sound():
+    """Windows 系统提示音（回复/任务完成，浏览器在后台或已关闭时也能听到）。"""
+    try:
+        import winsound
+        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+    except Exception:
+        pass
+
+
+def _notify_completed(ok=True):
+    """回复/任务完成：桌面通知 + 提示音（受 notify_on_done / completion_sound 开关控制）。
+    completion_sound 关闭时彻底静默（含 toast 失败兜底音）；后台线程执行，不阻塞请求线程。"""
+    try:
+        import config_utils
+        cfg = config_utils.load_config()
+        if cfg.get("privacy_mode"):
+            return
+        sound_on = bool(cfg.get("completion_sound", True))
+        notify_on = bool(cfg.get("notify_on_done", True))
+        if not sound_on and not notify_on:
+            return
+        summary = "✅ 回复完成" if ok else "⚠ 回复中断"
+        if ok and sound_on:
+            _play_completion_sound()
+        if not notify_on:
+            return
+        def _toast():
+            try:
+                import deepseek_client as dc
+                dc.notify_desktop("鲸语 WhaleTalk", summary, fallback_sound=sound_on)
+            except Exception:
+                pass
+        threading.Thread(target=_toast, daemon=True).start()
+    except Exception:
+        pass
+
+
 def _apply_autostart(enabled):
-    """注册/卸载 HKCU Run 开机自启（源码=pythonw 起 webui/start.py 类似路径）。"""
+    """注册/卸载 HKCU Run 开机自启。
+    打包版：注册 exe 自身；源码版：pythonw 无窗口起 webui/start.py。"""
     try:
         import winreg
         import sys
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
-        path = os.path.join(_ORIG_DIR, "webui", "start.py")
-        cmd = f'"{sys.executable}" "{path}"'
+        if getattr(sys, "frozen", False):
+            cmd = f'"{sys.executable}"'
+        else:
+            path = os.path.join(_ORIG_DIR, "webui", "start.py")
+            exe = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+            pyw = exe if os.path.exists(exe) else sys.executable
+            cmd = f'"{pyw}" "{path}"'
         if enabled:
             winreg.SetValueEx(key, "WhaleTalk", 0, winreg.REG_SZ, cmd)
         else:
@@ -2643,10 +2686,15 @@ class _Handler(BaseHTTPRequestHandler):
                 elif self.path == "/v1/context":
                     import deepseek_client as dc
                     tools = sorted({t["function"]["name"] for t in dc.TOOLS})
+                    try:
+                        costv = _status()["monthly_cost"]
+                    except Exception:
+                        costv = None
                     self._json(200, {
                         "tools": tools,
                         "memory": self._memory_summary(),
-                        "usage": {"prompt": 0, "completion": 0, "cached": "—", "cost": "—"},
+                        # 上下文占用/累计 token 无实时来源时如实置 null，前端显示为“—”（不编造 0）
+                        "usage": {"prompt": None, "completion": None, "cached": None, "cost": costv},
                     })
                 elif self.path == "/v1/config":
                     import config_utils
@@ -2675,6 +2723,8 @@ class _Handler(BaseHTTPRequestHandler):
                         "tool_choice": str(cfg.get("tool_choice") or "auto"),
                         "privacy_mode": bool(cfg.get("privacy_mode")),
                         "notify_on_done": bool(cfg.get("notify_on_done")),
+                        "completion_sound": bool(cfg.get("completion_sound", True)),
+                        "silent_start": bool(cfg.get("silent_start", False)),
                         "project_context": bool(cfg.get("project_context")),
                         "monthly_budget": float(cfg.get("monthly_budget") or 0.0),
                         "block_on_budget": bool(cfg.get("block_on_budget")),
@@ -2921,6 +2971,7 @@ class _Handler(BaseHTTPRequestHandler):
                            ("temperature", float), ("top_p", float), ("seed", int), ("json_output", bool),
                            ("beta_api", bool), ("strict_tools", bool), ("base_url", str),
                            ("notify_on_done", bool), ("project_context", bool),
+                           ("completion_sound", bool), ("silent_start", bool),
                            ("max_context_tokens", int), ("max_context_chars", int),
                            ("min_kept_turns", int), ("timeout", float), ("max_tool_rounds", int),
                            ("fold_early_threshold", int), ("browser_headless", bool),
@@ -3347,6 +3398,7 @@ class _Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             _LAST_TOOL_CHAIN.clear()
+            _notify_completed(ok=not stop_event.is_set())
             send("done", {})
         except Exception as e:
             logger.exception("API chat/stream 失败")

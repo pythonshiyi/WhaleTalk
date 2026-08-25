@@ -1,7 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 # 鲸语 WhaleTalk Web 打包配置（PyInstaller）
 # 用法：pyinstaller WhaleTalk.spec --noconfirm
-# 入口为 Web 版：api_server 同源服务 webui/dist，desktop.py（pywebview）加载原生窗口。
+# 入口为 Web 版（v3.1）：api_server 同源服务 webui/dist，web_app.py 启动本地 API +
+# 打开浏览器 + 系统托盘常驻（不再有 pywebview 原生窗口）。
 # 大型可选依赖（playwright / faster-whisper / PyMuPDF 等）未安装时自动禁用，
 # 此处显式排除，保持体积可控。
 
@@ -19,14 +20,13 @@ if os.path.isdir(_webui_dist):
     _datas.append((_webui_dist, 'webui/dist'))
 
 a = Analysis(
-    ['desktop.py'],
+    ['web_app.py'],
     pathex=[],
     binaries=[],
     datas=_datas,
     hiddenimports=[
         'tiktoken_ext.openai_public',
         'tkinterdnd2',
-        'webview',
         'pystray',
     ],
     hookspath=[],
@@ -46,6 +46,7 @@ a = Analysis(
         'PyQt5',
         'IPython',
         'pytest',
+        'webview',
     ],
     noarchive=False,
     optimize=0,

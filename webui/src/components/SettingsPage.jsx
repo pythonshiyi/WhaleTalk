@@ -537,18 +537,26 @@ export default function SettingsPage() {
   const [tip, setTip] = React.useState("");
   const [modelDraft, setModelDraft] = React.useState(null);
   const [baseUrlDraft, setBaseUrlDraft] = React.useState(null);
+  const [loadErr, setLoadErr] = React.useState("");
 
   React.useEffect(() => {
     let alive = true;
     (async () => {
-      const d = await apiGet("/v1/config");
-      const s = await apiGet("/v1/status");
-      const r = await apiGet("/v1/roles");
-      const m = await apiGet("/v1/models");
-      if (alive && d) {
-        setCfg({ ...d, privacy_mode: s?.privacy ?? false });
-        if (r?.roles) setRoles(r.roles);
-        if (m?.models) setModels(m.models);
+      try {
+        const d = await apiGet("/v1/config");
+        const s = await apiGet("/v1/status");
+        const r = await apiGet("/v1/roles");
+        const m = await apiGet("/v1/models");
+        if (alive && d) {
+          setCfg({ ...d, privacy_mode: s?.privacy ?? false });
+          if (r?.roles) setRoles(r.roles);
+          if (m?.models) setModels(m.models);
+          setLoadErr("");
+        } else {
+          setLoadErr("配置加载失败：后端未连接，请启动「鲸语 WhaleTalk」(web_app.py) 后刷新");
+        }
+      } catch {
+        if (alive) setLoadErr("配置加载失败：网络异常，请重试");
       }
     })();
     return () => {
@@ -605,7 +613,7 @@ export default function SettingsPage() {
     }
   };
 
-  if (!cfg) return <div className="page"><div className="page-head"><h1>设置</h1><p>加载中…</p></div></div>;
+  if (!cfg) return <div className="page"><div className="page-head"><h1>设置</h1><p>加载中…</p></div>{loadErr && <div className="set-saved-tip" style={{ color: "var(--danger)" }}>{loadErr}<button className="msg-op" style={{ marginLeft: 8 }} onClick={() => window.location.reload()}>重试</button></div>}</div>;
 
   const TABS = [
     { id: "model", label: "🎛 模型与网关" },
@@ -789,9 +797,11 @@ export default function SettingsPage() {
             )}
             {tab === "notice" && (
               <>
-                <Toggle on={cfg.notify_on_done !== false} label="✅ 完成通知" desc="任务栏闪烁 + 桌面通知" onClick={() => saveField({ notify_on_done: cfg.notify_on_done === false })} />
+                <Toggle on={cfg.notify_on_done !== false} label="✅ 完成通知" desc="回复完成发桌面通知（浏览器在后台也收到）" onClick={() => saveField({ notify_on_done: cfg.notify_on_done === false })} />
+                <Toggle on={cfg.completion_sound !== false} label="🔊 完成提示音" desc="回复完成播放系统提示音（浏览器关闭也能听到）" onClick={() => saveField({ completion_sound: cfg.completion_sound === false })} />
+                <Toggle on={!!cfg.silent_start} label="🖥 静默启动" desc="启动后不进浏览器，托盘常驻（托盘「打开界面」进入）" onClick={() => saveField({ silent_start: !cfg.silent_start })} />
                 <Toggle on={cfg.peak_warning !== false} label="⏰ 高峰提示" desc="每天首次发送提示高峰价" onClick={() => saveField({ peak_warning: cfg.peak_warning === false })} />
-                <Toggle on={cfg.autostart !== false} label="🚀 开机自启" desc="注册 HKCU Run 开机自动启动" onClick={() => saveField({ autostart: cfg.autostart === false })} />
+                <Toggle on={cfg.autostart !== false} label="🚀 开机自启" desc="注册 HKCU Run 开机自动启动（无窗口静默进入托盘）" onClick={() => saveField({ autostart: cfg.autostart === false })} />
                 <Toggle on={!!cfg.privacy_mode} label="🔒 隐私模式" desc="不写快照/会话/记忆/统计" onClick={() => saveField({ privacy_mode: !cfg.privacy_mode })} />
                 <Row label="💵 本月预算（元）" desc="0=不限">
                   <NumInput min={0} max={10000} step={50} value={cfg.monthly_budget || 0} onChange={(v) => saveField({ monthly_budget: v })} />

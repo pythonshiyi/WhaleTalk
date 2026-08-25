@@ -1,6 +1,15 @@
 import React from "react";
-import { navItems } from "../mock.js";
 import { getStatus } from "../api.js";
+
+// 真实导航布局（非演示数据）：会话 / 工作台 / 能力中心 / 插件市场 / 记忆与知识 / 设置
+const NAV_ITEMS = [
+  { id: "chat", label: "会话", icon: "chat" },
+  { id: "workbench", label: "工作台", icon: "home" },
+  { id: "abilities", label: "能力中心", icon: "grid" },
+  { id: "plugins", label: "插件市场", icon: "puzzle" },
+  { id: "memory", label: "记忆与知识", icon: "brain" },
+  { id: "settings", label: "设置", icon: "gear" },
+];
 
 const ICONS = {
   chat: <path d="M21 12a8 8 0 01-8 8H5l-3 3V12a8 8 0 018-8h3a8 8 0 018 8zM9 10h6M9 14h4" />,
@@ -13,14 +22,20 @@ const ICONS = {
 
 export default function Sidebar({ page, onPage }) {
   const [status, setStatus] = React.useState(null);
+  const [statusErr, setStatusErr] = React.useState(false);
 
   React.useEffect(() => {
     let alive = true;
     const load = async () => {
       try {
         const s = await getStatus();
-        if (alive && s) setStatus(s);
-      } catch {}
+        if (alive) {
+          setStatus(s);
+          setStatusErr(false);
+        }
+      } catch {
+        if (alive) setStatusErr(true);
+      }
     };
     load();
     const iv = setInterval(load, 10000);
@@ -38,7 +53,7 @@ export default function Sidebar({ page, onPage }) {
         </svg>
       </div>
       <div className="sb-items">
-        {navItems.map((n) => (
+        {NAV_ITEMS.map((n) => (
           <button
             key={n.id}
             className={`sb-item ${page === n.id ? "sb-item-on" : ""}`}
@@ -61,7 +76,7 @@ export default function Sidebar({ page, onPage }) {
           <span className="sb-status-dot" />
           <span className="sb-status-model">{status ? status.model : "…"}</span>
           <span className="sb-status-sub">
-            {status ? (status.full_auto ? "🚀任务" : "💬对话") : "连接中"}
+            {status ? (status.full_auto ? "🚀任务" : "💬对话") : statusErr ? "未连接" : "连接中"}
           </span>
         </button>
         <button

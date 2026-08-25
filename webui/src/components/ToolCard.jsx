@@ -1,7 +1,6 @@
 import React from "react";
-import { toolCallDefs } from "../mock.js";
 
-// 工具图标（内联 SVG，无图标库依赖）
+// 工具图标（内联 SVG，无图标库依赖）；图标归属按真实工具名前缀展示，无映射时用 code 兜底
 const ICONS = {
   search: (
     <path d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" />
@@ -17,11 +16,19 @@ const ICONS = {
   ),
 };
 
+const TOOL_ICON_KIND = [
+  [/^search_|^net_|^fetch_|^http|^web_/, "globe"],
+  [/^(read|write|edit|file_|md_|doc|pdf|json_|table_|data_|db_|sql)/, "doc"],
+  [/^run_|^exec|^code|^dev_|^test_/, "code"],
+];
+
+const toolIconKey = (tool) => (TOOL_ICON_KIND.find(([re]) => re.test(tool || "")) || [null, "code"])[1];
+
 export default function ToolCard({ tool, status, args, result, cost, duration }) {
-  const def = toolCallDefs[tool] || { icon: "code", color: "var(--ai)" };
+  const iconKey = toolIconKey(tool);
   const Icon = () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      {ICONS[def.icon] || ICONS.code}
+      {ICONS[iconKey] || ICONS.code}
     </svg>
   );
 
@@ -32,7 +39,7 @@ export default function ToolCard({ tool, status, args, result, cost, duration })
   return (
     <div className={`tool-card tool-${status} ${open ? "tool-open" : ""}`}>
       <div className="tool-card-head" onClick={() => status !== "running" && setOpen(!open)}>
-        <span className="tool-icon" style={{ color: def.color, background: `${def.color}1f` }}>
+        <span className="tool-icon" style={{ color: "var(--ai)" }}>
           <Icon />
         </span>
         <span className="tool-name">{tool}</span>

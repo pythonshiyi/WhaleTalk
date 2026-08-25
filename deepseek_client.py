@@ -5963,8 +5963,9 @@ $toast = New-Object Windows.UI.Notifications.ToastNotification $template
 """
 
 
-def notify_desktop(title="鲸语提醒", text=""):
-    """Windows 桌面 Toast 通知（离线可用，任务完成/定时任务触发时使用）。"""
+def notify_desktop(title="鲸语提醒", text="", fallback_sound=True):
+    """Windows 桌面 Toast 通知（离线可用，任务完成/定时任务触发时使用）。
+    fallback_sound=False：toast 失败时不播兜底提示音（用户已关闭完成提示音的场景）。"""
     if not str(text or "").strip():
         return "错误：text 必填"
     title = str(title or "鲸语提醒")[:60]
@@ -5990,15 +5991,16 @@ def notify_desktop(title="鲸语提醒", text=""):
                 encoding="utf-8", errors="replace",
             )
             if proc.returncode != 0:
-                # Toast 不可用（老系统/受限环境）时兜底为提示音
-                try:
-                    import winsound
+                # Toast 不可用（老系统/受限环境）时兜底为提示音（可关闭）
+                if fallback_sound:
+                    try:
+                        import winsound
 
-                    winsound.Beep(880, 250)
-                    winsound.Beep(660, 250)
-                except Exception:
-                    pass
-                return f"通知显示失败（已播放提示音）：{(proc.stderr or '')[:150]}"
+                        winsound.Beep(880, 250)
+                        winsound.Beep(660, 250)
+                    except Exception:
+                        pass
+                return f"通知显示失败{'（已静音）' if not fallback_sound else '（已播放提示音）'}：{(proc.stderr or '')[:150]}"
             return f"已发送桌面通知：{title}"
         finally:
             try:

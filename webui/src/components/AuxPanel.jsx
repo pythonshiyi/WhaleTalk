@@ -67,7 +67,10 @@ function FilesTab({ onInject }) {
   const [busyPath, setBusyPath] = React.useState(null);
 
   React.useEffect(() => {
-    api.api("/v1/files").then((d) => d && setRoots(d)).catch(() => {});
+    api.api("/v1/files").then((d) => {
+      if (d) setRoots(d);
+      else setErr("文件列表加载失败：后端未连接");
+    }).catch(() => setErr("文件列表加载失败：后端未连接"));
   }, []);
 
   const openFile = async (path) => {
@@ -281,13 +284,14 @@ function ParamsTab() {
   const [st, setSt] = React.useState(PREFETCHED.st);
   const [customModel, setCustomModel] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [loadErr, setLoadErr] = React.useState("");
 
   React.useEffect(() => {
     const apply = (d, set, fn) => {
       if (d) {
         set(d);
       } else {
-        api[fn]().then((d) => d && set(d)).catch(() => {});
+        api[fn]().then((d) => d && set(d)).catch(() => setLoadErr(`「${fn}」加载失败：后端未连接`));
       }
     };
     prefetchPromise.then(() => {
@@ -325,7 +329,7 @@ function ParamsTab() {
   // 有未保存草稿时标记（视觉提醒）
   const dirty = draft != null;
 
-  if (!cfg) return <div className="aux-tab fx-hint">加载中…</div>;
+  if (!cfg) return <div className="aux-tab fx-hint">{loadErr ? <><span>{loadErr}</span><button className="msg-op" style={{ marginLeft: 8 }} onClick={() => window.location.reload()}>重试</button></> : "加载中…"}</div>;
 
   // 当前生效值 = cfg 上叠加草稿（草稿只含改过的字段，不能整体替换否则下方下拉框/输入框会丢失数据）
   const cur = { ...cfg, ...(draft || {}) };

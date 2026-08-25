@@ -213,12 +213,16 @@ export default function PluginsPage() {
   const [detail, setDetail] = React.useState(null);
   const [tip, setTip] = React.useState("");
   const [studioOpen, setStudioOpen] = React.useState(false);
+  const [err, setErr] = React.useState("");
 
   const load = async () => {
     const d = await apiGet("/v1/plugins");
     if (d) {
       setInstalled(d.installed || []);
       setGallery(d.gallery || []);
+      setErr("");
+    } else {
+      setErr("插件列表加载失败：后端未连接，请启动服务后刷新");
     }
   };
   React.useEffect(() => {
@@ -297,13 +301,17 @@ export default function PluginsPage() {
               🧩 AI 插件设计工坊——描述需求，AI 帮你造插件
             </button>
           </div>
+          {err && <div className="empty-tip">{err}</div>}
           <div className="plugin-grid">
             {gallery.map((p) => <Card key={p.name} p={p} />)}
           </div>
+          {!err && gallery.length === 0 && <div className="empty-tip">画廊暂无插件</div>}
         </>
       )}
 
       {tab === "installed" && (
+        <>
+          {err && <div className="empty-tip">{err}</div>}
         <div className="plugin-grid">
           {installed.length === 0 && <div className="empty-tip">暂无已安装插件——去画廊安装或 AI 工坊生成</div>}
           {installed.map((p) => (
@@ -336,6 +344,7 @@ export default function PluginsPage() {
             </div>
           ))}
         </div>
+        </>
       )}
 
       {detail && <DetailOverlay name={detail} onClose={() => setDetail(null)} />}

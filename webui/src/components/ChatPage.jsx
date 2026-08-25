@@ -8,7 +8,6 @@ import ConfirmGate from "./ConfirmGate.jsx";
 import AuxPanel from "./AuxPanel.jsx";
 import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
-import { sessions as mockSessions, historyMessages, demoScript, contextData } from "../mock.js";
 import * as api from "../api.js";
 
 // ── 多轮消息链构造（官方规范）────────────────────────
@@ -42,83 +41,6 @@ function buildMessageChain(msgs) {
     }
   }
   return out;
-}
-
-// ── Mock 流式播放器（后端不可用时的离线演示）──────────
-function playMockScript(userText, setMsgs, onDone, isCancelled) {
-  let idx = 0;
-  let prog = 0;
-  let timer = null;
-
-  const msg = { role: "assistant", think: "", tools: [], text: "", streaming: true, time: new Date().toTimeString().slice(0, 8) };
-  setMsgs((m) => [...m, { role: "user", text: userText, time: new Date().toTimeString().slice(0, 8) }, msg]);
-
-  const tick = () => {
-    if (isCancelled()) return;
-    const block = demoScript[idx];
-    if (!block) {
-      msg.streaming = false;
-      setMsgs((m) => [...m]);
-      onDone();
-      return;
-    }
-    if (block.type === "think") {
-      prog = Math.min(prog + 3, block.text.length);
-      msg.think = block.text.slice(0, prog);
-      setMsgs((m) => [...m]);
-      if (prog < block.text.length) timer = setTimeout(tick, 14);
-      else { idx += 1; prog = 0; timer = setTimeout(tick, 120); }
-    } else if (block.type === "tool") {
-      if (prog === 0) {
-        msg.tools.push({ tool: block.name, args: block.args, status: "running" });
-        setMsgs((m) => [...m]);
-        prog = 1;
-        timer = setTimeout(tick, 900);
-      } else {
-        const t = msg.tools[msg.tools.length - 1];
-        t.status = "done";
-        t.result = block.result;
-        t.cost = block.cost;
-        t.duration = (0.9 + Math.random() * 1.4).toFixed(1);
-        setMsgs((m) => [...m]);
-        idx += 1; prog = 0;
-        timer = setTimeout(tick, 300);
-      }
-    } else if (block.type === "text") {
-      prog = Math.min(prog + 2, block.text.length);
-      msg.text = block.text.slice(0, prog);
-      setMsgs((m) => [...m]);
-      if (prog < block.text.length) timer = setTimeout(tick, 22);
-      else { idx += 1; prog = 0; timer = setTimeout(tick, 150); }
-    } else {
-      idx += 1;
-      timer = setTimeout(tick, 50);
-    }
-  };
-  timer = setTimeout(tick, 400);
-  return () => clearTimeout(timer);
-}
-
-function useMockPlayer(busy, setBusy, setMsgs, pendingRef, setGenState) {
-  React.useEffect(() => {
-    if (!busy) return;
-    let cancelled = false;
-    const cleanup = playMockScript(
-      pendingRef.current.text,
-      setMsgs,
-      () => {
-        if (!cancelled) {
-          setBusy(false);
-          setGenState({ on: false, text: "" });
-        }
-      },
-      () => cancelled
-    );
-    return () => {
-      cancelled = true;
-      cleanup && cleanup();
-    };
-  }, [busy]);
 }
 
 // ── 真实后端流式对话 ────────────────────────────────
@@ -287,17 +209,17 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
         finish(true);
       } catch (err) {
         if (!alive) return;
-        if (connRef.current === "backend") {
-          connRef.current = "mock";
-          if (!isContinue) {
-            playMockScript(userText, setMsgs, () => setBusy(false), () => stopRef.current);
-          }
-          setBusy(false);
-          setGenState({ on: false, text: "" });
-        } else {
-          setBusy(false);
-          setGenState({ on: false, text: "" });
-        }
+        setBusy(false);
+        setGenState({ on: false, text: "" });
+        try {
+          onFinished?.({
+            userText: pendingRef.current.text,
+            msg: null,
+            ok: false,
+            isContinue: false,
+            error: err.message || String(err),
+          });
+        } catch {}
       }
     })();
 
@@ -322,32 +244,44 @@ const toSessionItem = (s) => ({
 
 function useDataSources() {
   const [mode, setMode] = React.useState("auto");
-  const [sessions, setSessions] = React.useState(mockSessions);
-  const [ctx, setCtx] = React.useState(contextData);
-  const [history, setHistory] = React.useState(historyMessages);
+  const [sessions, setSessions] = React.useState([]);
+  const [ctx, setCtx] = React.useState(null);
+  const [history, setHistory] = React.useState({});
+  const [loadErr, setLoadErr] = React.useState("");
 
   React.useEffect(() => {
     (async () => {
-      const ok = await api.checkBackend();
-      if (!ok) {
-        setMode("mock");
-        return;
-      }
-      setMode("backend");
       try {
-        const real = await api.listSessions();
-        setSessions((real || []).map(toSessionItem));
-      } catch {}
-      try {
-        const c = await api.getContext();
-        if (c && c.tools) {
-          setCtx({
-            tools: c.tools.slice(0, 12).map((name) => ({ name, desc: "", state: "on" })),
-            memory: (c.memory.facts || []).map((f, i) => ({ id: `MEM#${i}`, text: f, tag: "记忆" })),
-            usage: c.usage,
-          });
+        const ok = await api.checkBackend();
+        if (!ok) {
+          setMode("offline");
+          setLoadErr("后端服务未连接：请启动「鲸语 WhaleTalk」(web_app.py) 后刷新页面");
+          return;
         }
-      } catch {}
+        setMode("backend");
+        setLoadErr("");
+        try {
+          const real = await api.listSessions();
+          setSessions((real || []).map(toSessionItem));
+        } catch (e) {
+          setLoadErr(`会话列表加载失败：${e.message || "网络异常"}`);
+        }
+        try {
+          const c = await api.getContext();
+          if (c) {
+            setCtx({
+              tools: (c.tools || []).slice(0, 12).map((name) => ({ name, desc: "", state: "on" })),
+              memory: (c.memory?.facts || []).map((f, i) => ({ id: `MEM#${i}`, text: f, tag: "记忆" })),
+              usage: c.usage,
+            });
+          }
+        } catch {}
+
+        setLoadErr("");
+      } catch {
+        setMode("offline");
+        setLoadErr("后端服务未连接：请启动「鲸语 WhaleTalk」(web_app.py) 后刷新页面");
+      }
     })();
   }, []);
 
@@ -397,20 +331,13 @@ function useDataSources() {
     try {
       const real = await api.listSessions();
       setSessions((real || []).map(toSessionItem));
-    } catch {}
+    } catch {
+      setLoadErr("会话列表刷新失败：后端未响应");
+      setTimeout(() => setLoadErr((e) => (e.startsWith("会话列表刷新失败") ? "" : e)), 3000);
+    }
   }, [mode]);
 
-  // mock/离线演示模式：删除本地演示会话（后端无对应文件，只改前端状态）
-  const removeLocalSessions = React.useCallback((ids) => {
-    setSessions((list) => list.filter((s) => !ids.includes(s.id)));
-    setHistory((h) => {
-      const next = { ...h };
-      for (const id of ids) delete next[id];
-      return next;
-    });
-  }, []);
-
-  return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx, removeLocalSessions };
+  return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr };
 }
 
 export default function ChatPage({ onGoWorkbench, onGoSettings }) {
@@ -486,26 +413,35 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     setGenState(s);
   }, []);
 
-  const { mode: dataMode, sessions, ctx, history, pickSession, refreshSessions, setCtx, removeLocalSessions } = useDataSources();
+  const { mode: dataMode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr } = useDataSources();
   connRef.current = dataMode;
 
   React.useEffect(() => {
-    setBackendNote(dataMode === "mock" ? "演示模式：后端未连接，当前为内置演示数据" : "");
-  }, [dataMode]);
+    setBackendNote(
+      dataMode === "offline"
+        ? "后端未连接：请启动「鲸语 WhaleTalk」(web_app.py) 后刷新页面"
+        : loadErr || ""
+    );
+  }, [dataMode, loadErr]);
 
-  const useMock = dataMode === "mock";
-  useMockPlayer(useMock && busy, setBusy, setMsgs, pendingRef, setGenStateThrottled);
   useBackendChat(
-    !useMock && busy,
+    dataMode === "backend" && busy,
     setBusy,
     setMsgs,
     pendingRef,
     historyRef,
     connRef,
     mode,
-        async ({ userText, msg, ok, isContinue }) => {
-      if (ok) toast("✅ 回复完成");
-      if (dataMode !== "backend" || !ok) return;
+        async ({ userText, msg, ok, isContinue, error }) => {
+      if (ok) {
+        toast("✅ 回复完成");
+      } else if (error) {
+        toast(`⚠️ 发送失败：${error}`);
+        setBackendNote("⚠️ 发送失败：后端未响应，请确认「鲸语 WhaleTalk」服务在运行");
+        return;
+      }
+      if (!ok) return;
+      if (dataMode !== "backend") return;
       if (isContinue) {
         // 续写：保存更新后的完整消息链
         try {
@@ -591,13 +527,17 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     }
     starsRef.current = new Set();
     pinsRef.current = new Set();
+    if (dataMode !== "backend") {
+      toast("⚠️ 后端未连接，发送已取消（请启动服务后刷新页面）");
+      setBackendNote("后端未连接：请启动「鲸语 WhaleTalk」(web_app.py) 后刷新页面");
+      return;
+    }
     pendingRef.current = { text, images: attachments.map((a) => a.path) };
     historyRef.current = buildMessageChain(base.filter((m) => !m.streaming));
     setActiveId(null);
     setMsgs([]);
     setBusy(true);
-    if (dataMode === "mock") setBackendNote("后端未连接，当前为离线演示数据");
-    else setBackendNote("");
+    setBackendNote("");
   };
 
   const nowTime = () => new Date().toTimeString().slice(0, 8);
@@ -672,15 +612,6 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
   };
 
   const onDeleteSession = async (id) => {
-    if (dataMode === "mock") {
-      removeLocalSessions([id]);
-      if (activeId === id) {
-        setActiveId(null);
-        setMsgs([]);
-      }
-      toast("已移除演示会话");
-      return;
-    }
     try {
       await api.deleteSession(id);
       if (activeId === id) {
@@ -690,20 +621,11 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
       refreshSessions();
       toast("已删除会话");
     } catch {
-      toast("删除失败：后端未响应");
+      toast(`删除失败：${"后端未响应，请确认服务在运行"}`);
     }
   };
 
   const onBatchDeleteSessions = async (ids) => {
-    if (dataMode === "mock") {
-      removeLocalSessions(ids);
-      if (activeId && ids.includes(activeId)) {
-        setActiveId(null);
-        setMsgs([]);
-      }
-      toast(`已移除 ${ids.length} 个演示会话`);
-      return;
-    }
     try {
       await api.deleteSessionsBatch(ids);
       if (activeId && ids.includes(activeId)) {
@@ -713,7 +635,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
       refreshSessions();
       toast(`已删除 ${ids.length} 个会话`);
     } catch {
-      toast("删除失败：后端未响应");
+      toast("删除失败：后端未响应，请确认服务在运行");
     }
   };
 
@@ -1074,8 +996,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
                   🚀 任务模式
                 </button>
               </div>
-              <span className={`header-chip ${dataMode === "mock" ? "" : "header-chip-brand"}`}>
-                {dataMode === "mock" ? "演示数据" : "已连接"}
+              <span className={`header-chip ${dataMode === "backend" ? "header-chip-brand" : ""}`}>
+                {dataMode === "backend" ? "已连接" : "未连接"}
               </span>
               <button className="icon-btn" title="控制台（参数/文件/进程）" onClick={() => setAuxOpen(!auxOpen)}>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1113,8 +1035,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
                 </p>
                 <div className="empty-suggest">
                   {(isTask
-                    ? ["帮我调研 AI 芯片市场并出报告", "把这个文件夹整理成 Markdown 索引", "分析这张图的报错原因", "给公众号写一篇 AI 基建专题"]
-                    : ["用一句话介绍你自己", "翻译：Knowledge is power", "帮我写一首关于深海的诗", "解释什么是前缀缓存"]
+                    ? ["帮我调研一个主题并输出报告", "把这个文件夹整理成 Markdown 索引", "分析这张图片的内容", "帮我定时巡检一个网站"]
+                    : ["用一句话介绍你自己", "翻译：Knowledge is power", "帮我写一首关于海的短诗", "帮我解释一个概念，比如 HTTP"]
                   ).map((s) => (
                     <button key={s} className="suggest-chip" onClick={() => onSend(s)}>
                       {s}

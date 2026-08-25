@@ -1,10 +1,11 @@
 // ── 后端 API 封装 ─────────────────────────────────────
 // 同源访问（生产：api_server 服务静态文件；开发：dev server 上直连 8745）。
 // token 自动获取：1) localStorage → 2) URL ?token= → 3) 本机端点 /v1/token 自取。
-// 后端不可用时自动降级到 mock 演示数据（离线可玩）。
+// 后端不可用时一律抛出带中文描述的异常，由界面明确提示（不提供任何假数据兜底）。
 
 const API_PORT = 8745;
 const TOKEN_KEY = "whaletalk.api.token";
+const REQUEST_TIMEOUT = 15000;
 
 function getBase() {
   // 生产构建由 api_server 同源服务（8745）；开发时跨域直连（CORS 已开）
@@ -76,6 +77,7 @@ async function api(path, opts = {}) {
   const attempt = async (token) => {
     const r = await fetch(`${getBase()}${path}`, {
       ...opts,
+      signal: opts.signal || AbortSignal.timeout(REQUEST_TIMEOUT),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
@@ -84,7 +86,13 @@ async function api(path, opts = {}) {
     });
     return r;
   };
-  let r = await attempt(getToken());
+  let r;
+  try {
+    r = await attempt(getToken());
+  } catch (e) {
+    const why = e && e.name === "TimeoutError" ? "请求超时" : "后端服务未连接";
+    throw new Error(why);
+  }
   if (r.status === 401) {
     // token 缺失/失效（如启动时预取早于 checkBackend 拿到 token）：自取后重试一次
     try {

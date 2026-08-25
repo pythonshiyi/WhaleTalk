@@ -157,6 +157,8 @@ DEFAULT_CONFIG = {
     "fold_early_threshold": 1200,  # 早期消息折叠阈值（块数，超过折叠为可点击展开提示；0=关闭）
     "current_profile": "",
     "notify_on_done": True,  # 初始完成通知开启
+    "completion_sound": True,  # 回复完成播系统提示音（web 版，浏览器在后台也能听到）
+    "silent_start": False,  # web 版静默启动：启动后不自动打开浏览器（托盘常驻，随手打开界面）
     "ssrf_trusted": [],
     "project_context": False,
     "full_auto": True,  # 初始即完全智能：全部工具、零审批、零开关（黑名单仍生效）

@@ -19,45 +19,35 @@ const apiPost = async (path, body) => {
   }
 };
 
-const DOMAINS = [
-  { name: "系统与基础", count: 9, icon: "🖥", desc: "系统体检、密钥托管、键值存储", status: "stable", color: "#0ea5e9" },
-  { name: "文件与目录", count: 11, icon: "📁", desc: "读写/编辑/检索/打包/解压", status: "stable", color: "#f59e0b" },
-  { name: "数据与文档", count: 14, icon: "📊", desc: "表格、Excel、PDF、Word、图表", status: "stable", color: "#10b981" },
-  { name: "数据库", count: 6, icon: "🗄", desc: "SQLite/MySQL/PostgreSQL", status: "stable", color: "#8b5cf6" },
-  { name: "网络与通信", count: 12, icon: "🌐", desc: "抓取、HTTP、RSS、订阅", status: "stable", color: "#06b6d4" },
-  { name: "开发与测试", count: 8, icon: "⚙", desc: "代码执行、测试、工程创建", status: "beta", color: "#ec4899" },
-  { name: "媒体与图像", count: 7, icon: "🎨", desc: "生成、OCR、转写、处理", status: "stable", color: "#f97316" },
-  { name: "消息与协作", count: 9, icon: "✉", desc: "邮件、IM、通知、剪贴板", status: "stable", color: "#22d3ee" },
-  { name: "桌面与自动化", count: 8, icon: "🖱", desc: "RPA、窗口、浏览器可视操作", status: "beta", color: "#a3e635" },
-  { name: "定时与任务", count: 6, icon: "⏰", desc: "定时任务、周期巡检", status: "stable", color: "#fbbf24" },
-  { name: "记忆与知识", count: 10, icon: "🧠", desc: "长期记忆、图谱、向量检索", status: "beta", color: "#c084fc" },
-  { name: "AI 与智能", count: 9, icon: "🤖", desc: "对话、规划、多智能体", status: "stable", color: "#38bdf8" },
-];
+const DOMAINS = []; // 能力域以后端 /v1/abilities 为准（未加载时无数据，明确提示错误）
 
 export function AbilitiesPage() {
   const [open, setOpen] = React.useState(null);
   const [tab, setTab] = React.useState("tools");
   const [domains, setDomains] = React.useState(null);
-  const [total, setTotal] = React.useState(109);
+  const [total, setTotal] = React.useState(0);
   const [testTool, setTestTool] = React.useState(null);
+  const [err, setErr] = React.useState("");
 
   React.useEffect(() => {
     let alive = true;
     (async () => {
-      try {
-        const d = await apiGet("/v1/abilities");
-        if (alive && d && d.domains) {
-          setDomains(d.domains);
-          setTotal(d.total || 109);
-        }
-      } catch {}
+      const d = await apiGet("/v1/abilities");
+      if (!alive) return;
+      if (d && d.domains) {
+        setDomains(d.domains);
+        setTotal(d.total || 0);
+        setErr("");
+      } else {
+        setErr("能力清单加载失败：后端未连接，请启动服务后刷新");
+      }
     })();
     return () => {
       alive = false;
     };
   }, []);
 
-  const list = domains || DOMAINS;
+  const list = domains || [];
   return (
     <div className="page">
       <div className="page-head">
@@ -116,18 +106,10 @@ export function AbilitiesPage() {
       )}
       {tab === "perms" && <PermissionsPage />}
       {testTool && <ToolTest name={testTool} onClose={() => setTestTool(null)} />}
+      {err && <div className="empty-tip">{err}</div>}
     </div>
   );
 }
-
-const PLUGINS = [
-  { name: "智能飞侠 · World Cruiser", icon: "✈️", desc: "五维世界巡航 → 五站式观察报告（md+html），线索追踪与判断验证", author: "官方", installs: "1.2k", stars: 4.9, trigger: "/飞侠", tag: "应用型" },
-  { name: "公众号自动写作", icon: "✍️", desc: "多信源采集 → 选题 → 三阶段写作 → 质量门禁 → 草稿箱", author: "官方", installs: "986", stars: 4.8, trigger: "/写作", tag: "流程" },
-  { name: "图表解读专家", icon: "📈", desc: "截图 → 结构化数据 + 解读，支持金融/运维/科研图表", author: "社区", installs: "742", stars: 4.6, trigger: "/图表", tag: "技能" },
-  { name: "PDF 工作台", icon: "📄", desc: "提取/合并/拆分/转 Markdown，批量文档流水线", author: "社区", installs: "531", stars: 4.5, trigger: "/pdf", tag: "工具" },
-  { name: "定时巡检机器人", icon: "⏱", desc: "周期巡检服务器/网站/数据库，异常推送到 IM", author: "官方", installs: "417", stars: 4.7, trigger: "/巡检", tag: "流程" },
-  { name: "周报生成器", icon: "🗓", desc: "聚合 git/任务/邮件 → 结构化周报，支持多格式", author: "社区", installs: "389", stars: 4.4, trigger: "/周报", tag: "技能" },
-];
 
 export { default as PluginsPage } from "./PluginsPage.jsx";
 
@@ -135,21 +117,25 @@ export function MemoryPage() {
   const [q, setQ] = React.useState("");
   const [focused, setFocused] = React.useState(false);
   const [memories, setMemories] = React.useState(null);
+  const [err, setErr] = React.useState("");
 
   React.useEffect(() => {
     let alive = true;
     (async () => {
       const d = await apiGet("/v1/memory");
-      if (alive && d && d.facts) {
+      if (!alive) return;
+      if (d && d.facts) {
         setMemories(
           d.facts.map((f, i) => ({
             id: `MEM#${String(d.facts.length - i).padStart(4, "0")}`,
             text: f.text,
             tag: f.type || (f.tags ? f.tags.split(",")[0] : "记忆"),
             time: f.ts ? f.ts.slice(0, 16).replace("T", " ") : "",
-            score: 0.8 + ((i * 37) % 17) / 100,
           }))
         );
+        setErr("");
+      } else {
+        setErr("记忆加载失败：后端未连接，请启动服务后刷新");
       }
     })();
     return () => {
@@ -184,15 +170,15 @@ export function MemoryPage() {
             <div className="mem-card-head">
               <span className="mem-id">{m.id}</span>
               <span className="mem-tag">{m.tag}</span>
-              {memories && <span className="mem-score">相似度 {m.score.toFixed(2)}</span>}
+              {typeof m.score === "number" && <span className="mem-score">相似度 {m.score.toFixed(2)}</span>}
               {m.time && <span className="mem-time">{m.time}</span>}
             </div>
             <div className="mem-text">{m.text}</div>
-            <div className="mem-card-foot">
-              <button className="ctx-action">查看来源会话 →</button>
-            </div>
           </div>
         ))}
+        {items.length === 0 && (
+          <div className="empty-tip">{err || "暂无记忆（对话中记录的事实会出现在这里）"}</div>
+        )}
       </div>
     </div>
   );
@@ -413,7 +399,7 @@ export function TasksPage() {
           </div>
         </>
       )}
-      {!tasks && <div className="empty-tip">后端未连接，试玩任务在离线演示中可用</div>}
+      {!tasks && <div className="empty-tip">任务模板加载失败：后端未连接，请启动服务后刷新</div>}
     </div>
   );
 }
@@ -421,11 +407,18 @@ export function TasksPage() {
 // ── 文件与产物 ────────────────────────────────────
 export function FilesPage() {
   const [files, setFiles] = React.useState(null);
+  const [err, setErr] = React.useState("");
   React.useEffect(() => {
     let alive = true;
     (async () => {
       const d = await apiGet("/v1/files");
-      if (alive && d) setFiles(d);
+      if (!alive) return;
+      if (d) {
+        setFiles(d);
+        setErr("");
+      } else {
+        setErr("文件列表加载失败：后端未连接，请启动服务后刷新");
+      }
     })();
     return () => {
       alive = false;
@@ -439,9 +432,13 @@ export function FilesPage() {
       </div>
       <div className="wb-card-title">最近产物（{files?.recent?.length || 0}）</div>
       <div className="files-list">
-        {(files?.recent || ["暂无产物——工具生成文件后自动出现在这里"]).map((r, i) => (
+        {err && <div className="empty-tip">{err}</div>}
+        {(files ? files.recent || [] : []).map((r, i) => (
           <div className="files-row" key={i}>📦 {r}</div>
         ))}
+        {!err && files && (files.recent || []).length === 0 && (
+          <div className="empty-tip">暂无产物——工具生成文件后自动出现在这里</div>
+        )}
       </div>
       <div className="wb-card-title" style={{ marginTop: 16 }}>工作区（{files?.entries?.length || 0} 项）</div>
       <div className="files-list">

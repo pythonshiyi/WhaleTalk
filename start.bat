@@ -6,4 +6,8 @@ if not exist .venv\Scripts\python.exe (
     py -3 -m venv .venv || python -m venv .venv
     .venv\Scripts\python.exe -m pip install -r requirements.txt
 )
-.venv\Scripts\python.exe web_app.py
+if exist .venv\Scripts\pythonw.exe (
+    start "" .venv\Scripts\pythonw.exe web_app.py
+) else (
+    start "" pythonw web_app.py
+)

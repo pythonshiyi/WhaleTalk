@@ -1,0 +1,19 @@
+{
+  "name": "鲸语 WhaleTalk",
+  "short_name": "鲸语",
+  "description": "本地 AI 智能体 · 浏览器界面 + 本地服务常驻",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#05070e",
+  "theme_color": "#0ea5e9",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
