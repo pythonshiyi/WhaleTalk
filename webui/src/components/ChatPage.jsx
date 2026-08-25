@@ -559,9 +559,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     }
     pendingRef.current = { text, images: attachments.map((a) => a.path) };
     historyRef.current = buildMessageChain(base.filter((m) => !m.streaming));
-    // 连续对话：保留 activeId 复用同一会话；只有「新对话」(onPickSession(null)) 才清空
-    // 保存目标在 onFinished 里以 activeId 为准（ref 已保证最新值）
-    setMsgs([]);
+    // 连续对话：保留已有消息（useBackendChat 在 base 上追加本轮 user+assistant），
+    // 实现常规聊天记录连续滚动；只有「新对话」(onPickSession(null)) 才清空。
+    setMsgs(base);
     setBusy(true);
     setBackendNote("");
   };
@@ -702,7 +702,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     pinsRef.current = new Set();
     historyRef.current = buildMessageChain(msgs.slice(0, idx + 1));
     setActiveId(null);
-    setMsgs([]);
+    setMsgs(msgs.slice(0, idx + 1));
     setBackendNote("分支会话：已从此处创建新会话");
   };
 
@@ -777,7 +777,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     pinsRef.current = new Set();
     historyRef.current = buildMessageChain(base);
     setActiveId(null);
-    setMsgs([]);
+    setMsgs(base);
     pendingRef.current = { text, images: [] };
     setBusy(true);
     setBackendNote("");
