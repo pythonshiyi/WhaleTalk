@@ -1601,10 +1601,99 @@ def _save_session_data(body):
     return sid
 
 
+def _migrate_legacy_sessions():
+    """一次性迁移：旧 Tkinter 版导出的 history/session_*.jsonl 导入标准会话库。
+
+    旧版（v3 前）会话以「导出文件」形式保存在 history/ 目录（JSONL，每行一条消息），
+    Web 版会话库只读 sessions/*.json —— 若不迁移，用户历史会话在 Web 列表里永远看不到。
+    按消息指纹去重（同内容不重复导入），幂等可重复调用；已迁移文件改写
+    .jsonl.migrated 标记，避免重复导入。
+    """
+    import re as _re
+    from datetime import datetime
+    pat = _re.compile(r"^(session_|.*_)?(\d{8})_(\d{6})\.jsonl$")
+    if not os.path.isdir(HISTORY_DIR):
+        return 0
+    imported = 0
+    seen_fingerprints = set()
+    for fn in sorted(os.listdir(HISTORY_DIR)):
+        if fn.endswith(".migrated"):
+            continue
+        m = pat.match(fn)
+        if not m or not fn.startswith("session_"):
+            continue
+        full = os.path.join(HISTORY_DIR, fn)
+        try:
+            with open(full, "r", encoding="utf-8", errors="replace") as f:
+                lines = [l.strip() for l in f.read().splitlines() if l.strip()]
+            if not lines or len(lines) > 2000:
+                continue
+            msgs = []
+            for line in lines:
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                role = str(obj.get("role") or "")
+                if role not in ("user", "assistant", "system", "tool"):
+                    continue
+                item = {"role": role, "content": str(obj.get("content") or "")[:MAX_MSG_CHARS]}
+                if obj.get("reasoning_content"):
+                    item["reasoning_content"] = str(obj["reasoning_content"])[:MAX_MSG_CHARS]
+                if obj.get("tool_calls") and isinstance(obj.get("tool_calls"), list):
+                    item["tool_calls"] = obj["tool_calls"][:16]
+                if role == "tool" and obj.get("tool_call_id"):
+                    item["tool_call_id"] = str(obj["tool_call_id"])[:128]
+                if role == "tool" and obj.get("name"):
+                    item["name"] = str(obj["name"])[:128]
+                msgs.append(item)
+            if len(msgs) < 2:
+                continue
+            # 指纹去重：首尾消息角色+内容（同内容副本不重复导入）
+            fp = (msgs[0].get("role"), msgs[0].get("content", "")[:60], msgs[-1].get("content", "")[:60])
+            if fp in seen_fingerprints:
+                _mark_migrated(full)
+                continue
+            seen_fingerprints.add(fp)
+            sid = hex(int(time.time() * 1000))[2:] + secrets_token(4)
+            data = {
+                "id": sid,
+                "name": str(msgs[0].get("content") or "历史会话")[:40],
+                "messages": msgs,
+                "usage_total": {},
+                "stars": [],
+                "tags": [],
+                "pinned": [],
+                "top": False,
+                "model": "",
+                "scenario": "通用",
+                "ephemeral": False,
+                "saved_at": f"{m.group(2)[:4]}-{m.group(2)[4:6]}-{m.group(2)[6:]}T{m.group(3)[:2]}:{m.group(3)[2:4]}:{m.group(3)[4:]}" if fname else datetime.now().isoformat(timespec="seconds"),
+            }
+            os.makedirs(SESSIONS_DIR, exist_ok=True)
+            with open(os.path.join(SESSIONS_DIR, f"{sid}.json"), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+            _mark_migrated(full)
+            imported += 1
+        except Exception:
+            continue
+    return imported
+
+
+def _mark_migrated(full):
+    """迁移完成标记：文件改写为 .migrated 后缀（保留原数据，便于可疑时人工恢复）。"""
+    try:
+        if os.path.exists(full) and not full.endswith(".migrated"):
+            os.replace(full, full + ".migrated")
+    except Exception:
+        pass
+
+
 def _workflows_get():
     """流程编排列表（workflows.json）。"""
-    import stores
-    return {"workflows": stores.load_schedules(WORKFLOWS_PATH) if False else _load_workflows()}
+    return {"workflows": _load_workflows()}
 
 
 def _load_workflows():
@@ -1701,15 +1790,15 @@ def _roles_save(body):
 
 def _profiles_get():
     import profiles as profiles_mod
-    try:
-        items = profiles_mod.load_profiles()
-        cur = str(profiles_mod._data.get("current_profile") or "") if hasattr(profiles_mod, "_data") else ""
-        return {
-            "profiles": [{"name": str(p.get("name") or ""), "model": str(p.get("model") or ""), "base_url": str(p.get("base_url") or "")} for p in (items or [])],
-            "current": str(getattr(profiles_mod, "current", "") or ""),
-        }
-    except Exception:
-        return {"profiles": [], "current": ""}
+    data = profiles_mod.load_profiles()
+    profiles = data.get("profiles") or {}
+    return {
+        "profiles": [
+            {"name": str(name), "model": str(p.get("model") or ""), "base_url": str(p.get("base_url") or "")}
+            for name, p in profiles.items() if isinstance(p, dict)
+        ],
+        "current": str(data.get("current") or ""),
+    }
 
 
 def _audit_get():
@@ -2246,7 +2335,16 @@ FAILURES_PATH = os.path.join(DATA_DIR, "failures.json")
 PATTERNS_PATH = os.path.join(DATA_DIR, "patterns.json")
 WORKFLOWS_PATH = os.path.join(DATA_DIR, "workflows.json")
 CHECKPOINT_PATH = os.path.join(DATA_DIR, "task_checkpoint.json")
+PROFILES_PATH = os.path.join(DATA_DIR, "profiles.json")
+USER_TOOLS_PATH = os.path.join(DATA_DIR, "user_tools.json")
 DIST_DIR = os.path.join(_ORIG_DIR, "webui", "dist")
+try:
+    import profiles as _profiles_mod
+    _profiles_mod.DEFAULT_PROFILES_PATH = PROFILES_PATH
+    import user_tools as _user_tools_mod
+    _user_tools_mod.DEFAULT_USER_TOOLS_PATH = USER_TOOLS_PATH
+except Exception:
+    pass
 
 _MIME = {
     ".html": "text/html; charset=utf-8",
@@ -3411,6 +3509,12 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
         return _PORT, _TOKEN, None
     import secrets
     _init_dc_paths()
+    try:
+        n = _migrate_legacy_sessions()
+        if n:
+            logger.info("已迁移 %s 个旧版会话到会话库", n)
+    except Exception:
+        logger.exception("旧会话迁移失败（不影响启动）")
     if _SCHEDULER_THREAD is None:
         _SCHEDULER_THREAD = threading.Thread(target=_scheduler_loop, daemon=True)
         _SCHEDULER_THREAD.start()

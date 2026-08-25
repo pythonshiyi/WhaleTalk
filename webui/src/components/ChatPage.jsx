@@ -424,6 +424,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     );
   }, [dataMode, loadErr]);
 
+  // 保存回调用 ref 转发最新版本：useBackendChat 的 effect 只依赖 [busy]，
+  // 若直接传正文箭头函数，会捕获发送时刻的陈旧闭包（msgs/activeId/sessions 过期）。
+  const onFinishedRef = React.useRef(null);
+  const invokeFinished = React.useCallback(
+    (payload) => onFinishedRef.current && onFinishedRef.current(payload),
+    []
+  );
+
   useBackendChat(
     dataMode === "backend" && busy,
     setBusy,
@@ -432,7 +440,16 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     historyRef,
     connRef,
     mode,
-        async ({ userText, msg, ok, isContinue, error }) => {
+    invokeFinished,
+    stopSignalRef,
+    setPromptReq,
+    setGenStateThrottled,
+    continueRef
+  );
+
+  // 会话保存：每次 render 同步到 ref，保证 useBackendChat 用的是最新闭包
+  onFinishedRef.current = ({ userText, msg, ok, isContinue, error }) => {
+    const saveChatFinished = async () => {
       if (ok) {
         toast("✅ 回复完成");
       } else if (error) {
@@ -443,28 +460,32 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
       if (!ok) return;
       if (dataMode !== "backend") return;
       if (isContinue) {
-        // 续写：保存更新后的完整消息链
+        // 续写：保存更新后的完整消息链（用实参 msg 而非陈旧闭包 msgs）
         try {
+          const updated = buildMessageChain([
+            ...(msgs.length ? msgs : []),
+            { role: "user", text: userText, time: new Date().toTimeString().slice(0, 8) },
+            msg,
+          ]);
           await api.saveSession({
             id: activeId || undefined,
             name: activeSession?.title || userText.replace(/\s+/g, " ").slice(0, 24),
-            messages: buildMessageChain(msgs),
+            messages: updated,
           });
           refreshSessions();
         } catch {}
         continueRef.current = { active: false, idx: -1 };
         return;
       }
-      if (!msgs.length) return;
-      const last = msgs[msgs.length - 1];
-      if (last.role !== "assistant" || !last.text) return;
+      // 用实参 msg（流式引用对象，内容完整）而非闭包 msgs（陈旧/可能为空）保存会话
+      if (!msg || msg.role !== "assistant" || !msg.text) return;
       try {
-        const calls = last.tools.map((t, i) => ({
+        const calls = msg.tools.map((t, i) => ({
           id: `call_${i}`,
           type: "function",
           function: { name: t.tool, arguments: JSON.stringify(t.args || {}) },
         }));
-        const toolMsgs = last.tools.map((t, i) => ({
+        const toolMsgs = msg.tools.map((t, i) => ({
           role: "tool",
           tool_call_id: `call_${i}`,
           name: t.tool,
@@ -476,8 +497,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
             { role: "user", content: userText },
             {
               role: "assistant",
-              content: last.text,
-              reasoning_content: last.think || "",
+              content: msg.text,
+              reasoning_content: msg.think || "",
               ...(calls.length ? { tool_calls: calls } : {}),
             },
             ...toolMsgs,
@@ -493,17 +514,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
           historyRef.current = buildMessageChain([
             ...(msgs.length ? msgs : []),
             { role: "user", text: userText, time: new Date().toTimeString().slice(0, 8) },
-            last,
+            msg,
           ]).slice(-80);
           refreshSessions();
         }
       } catch {}
-    },
-    stopSignalRef,
-    setPromptReq,
-    setGenStateThrottled,
-    continueRef
-  );
+    };
+    saveChatFinished();
+  };
 
   const onSend = (text, attachments = []) => {
     if (busy && !resendIdxRef.current) return;
