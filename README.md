@@ -113,7 +113,7 @@
 └──────────────────────────────────────────────────────┘
 ```
 
-- **入口**：`web_app.py`（默认 pywebview 桌面窗）+ 托盘；`--browser` 用默认浏览器；`--server` 无头 API；`--legacy` 回退旧 Tkinter
+- **入口**：`web_app.py`（唯一入口）：启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API；`--no-tray`/`--no-browser` 可选
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置/会话/记忆/统计；API Key 加密存储）
 - **安全**：仅 127.0.0.1 监听 + Bearer token；工具权限黑白名单；SSRF 防护
 
@@ -123,10 +123,9 @@
 # 方式一：双击 start.bat（自动创建虚拟环境并安装依赖）
 # 方式二：
 pip install -r requirements.txt
-python web_app.py            # Web 桌面窗口（pywebview + 托盘）
-python web_app.py --browser  # 默认浏览器打开页面
+python web_app.py            # 启动本地服务 + 打开浏览器 + 托盘常驻（推荐）
 python web_app.py --server   # 仅启动 API 服务（终端常驻，供远程/开发）
-python main.py               # 旧版 Tkinter 界面（保底回退）
+python web_app.py --no-tray  # 常驻但不启用系统托盘
 # 方式三：双击 build_exe.bat 打包为 dist\WhaleTalk.exe（WhaleTalk.spec）
 ```
 
@@ -140,13 +139,13 @@ python main.py               # 旧版 Tkinter 界面（保底回退）
 
 ## 🕘 更新策略
 
-- **版本线**：`v3.0.0`（Web 重构重大版本）起，同步镜像 `main.py VERSION`（单一版本源）
+- **版本线**：`v3.0.0`（Web 重构重大版本）起，同步镜像 `config_defaults.VERSION`（单一版本源）
 - **更新源**：GitHub Releases（`https://api.github.com/repos/pythonshiyi/WhaleTalk/releases/latest`，或自定义 `update_url`）
 - **更新方式**：
   - 应用内「关于/帮助 → 检查更新」（自动检测 GitHub 最新版）
   - 更新包支持 Ed25519 签名校验（配置 `update_public_key`）+ SHA-256 校验
   - 更新前自动备份 `backups/WhaleTalk_v<版本>_<时间戳>.zip`（一键回滚）
-- **兼容性**：旧配置自动迁移（`migration.py`）；旧数据目录无缝升级
+- **兼容性**：旧配置自动迁移；旧数据目录无缝升级
 - **分支**：`main`（稳定版）· CI 自动跑 653+ 测试
 
 ## 👥 关于我们

@@ -26,7 +26,6 @@ a = Analysis(
     datas=_datas,
     hiddenimports=[
         'tiktoken_ext.openai_public',
-        'tkinterdnd2',
         'pystray',
     ],
     hookspath=[],

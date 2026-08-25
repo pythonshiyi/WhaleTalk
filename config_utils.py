@@ -22,7 +22,6 @@ from config_defaults import (
     DEFAULT_SYSTEM_PROMPT,
 )
 from app_utils import as_bool
-from layout import LAYOUT
 from themes import THEMES
 from user_tools import load_user_tools
 
@@ -61,7 +60,6 @@ def normalize_config(cfg):
     api_key = cfg.get("api_key")
     cfg["api_key"] = "" if api_key is None else str(api_key).strip()
     cfg["tools_enabled"] = as_bool(cfg.get("tools_enabled", True), True)
-    cfg["restore_session"] = as_bool(cfg.get("restore_session", True), True)
     cfg["privacy_mode"] = as_bool(cfg.get("privacy_mode", False))
     cfg["check_update"] = as_bool(cfg.get("check_update", False))
     cfg["welcomed"] = as_bool(cfg.get("welcomed", False))
@@ -128,29 +126,6 @@ def normalize_config(cfg):
         cfg["timeout"] = max(10, min(600, float(cfg.get("timeout", 120))))
     except (TypeError, ValueError):
         cfg["timeout"] = 120
-    try:
-        cfg["font_size"] = max(8, min(18, int(cfg.get("font_size", 10))))
-    except (TypeError, ValueError):
-        cfg["font_size"] = 10
-    cfg["font_family"] = str(cfg.get("font_family", "Microsoft YaHei UI") or "Microsoft YaHei UI").strip() or "Microsoft YaHei UI"
-    if cfg.get("message_density") not in ("compact", "comfort", "loose"):
-        cfg["message_density"] = "comfort"
-    try:
-        cfg["input_height"] = max(2, min(14, int(cfg.get("input_height", 4))))
-    except (TypeError, ValueError):
-        cfg["input_height"] = 4
-    try:
-        cfg["input_height_px"] = max(0, min(3000, int(cfg.get("input_height_px", 0))))
-    except (TypeError, ValueError):
-        cfg["input_height_px"] = 0
-    try:
-        cfg["sidebar_width"] = max(LAYOUT["sidebar_min"], min(LAYOUT["sidebar_max"], int(cfg.get("sidebar_width", LAYOUT["sidebar_default"]))))
-    except (TypeError, ValueError):
-        cfg["sidebar_width"] = LAYOUT["sidebar_default"]
-    try:
-        cfg["panel_width"] = max(LAYOUT["panel_min"], min(LAYOUT["panel_max"], int(cfg.get("panel_width", LAYOUT["panel_default"]))))
-    except (TypeError, ValueError):
-        cfg["panel_width"] = LAYOUT["panel_default"]
     # 自定义主题：仅接受 dict 值，且名称不覆盖内置主题
     try:
         custom_themes = cfg.get("custom_themes") or {}
@@ -164,13 +139,6 @@ def normalize_config(cfg):
         cfg["custom_themes"] = {}
     if cfg.get("theme") not in THEMES and cfg.get("theme") not in cfg.get("custom_themes", {}):
         cfg["theme"] = "light"
-    try:
-        shortcuts = cfg.get("shortcuts") or {}
-        cfg["shortcuts"] = {
-            str(k): str(v) for k, v in shortcuts.items() if isinstance(v, (str, int))
-        } if isinstance(shortcuts, dict) else {}
-    except Exception:
-        cfg["shortcuts"] = {}
     cfg["json_output"] = as_bool(cfg.get("json_output", False))
     cfg["beta_api"] = as_bool(cfg.get("beta_api", False))
     cfg["peak_warning"] = as_bool(cfg.get("peak_warning", True), True)

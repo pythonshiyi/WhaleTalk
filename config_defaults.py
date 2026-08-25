@@ -4,6 +4,9 @@
 从 main.py 中拆出，供配置加载/角色/场景等模块复用。
 """
 
+# 应用版本号（统一来源：deepseek_client / backup 引用此处）
+VERSION = "3.0.0"
+
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个强大的AI助手，具备以下核心能力：\n"
     "1. 任务拆解：将复杂问题分解为可执行的子任务\n"
@@ -128,13 +131,7 @@ DEFAULT_CONFIG = {
     "max_context_tokens": 400000,
     "min_kept_turns": 8,
     "timeout": 120,
-    "restore_session": False,
-    "font_size": 10,
-    "font_size_custom": False,  # 用户手动改过字号后为 True，启动时不再自动按屏幕调整
-    "font_family": "Microsoft YaHei UI",
-    "message_density": "comfort",  # compact / comfort / loose
     "theme": "light",
-    "md_render": True,
     "custom_temperature": 1.0,
     "custom_top_p": 1.0,
     "privacy_mode": False,
@@ -143,10 +140,6 @@ DEFAULT_CONFIG = {
     "max_tool_rounds": 100,  # 单条消息工具轮数上限：能力最大化，默认 100
     "monthly_budget": 0.0,
     "block_on_budget": False,
-    "input_height": 4,
-    "input_height_px": 0,
-    "sidebar_width": 260,
-    "panel_width": 280,
     "browser_headless": False,  # 初始浏览器可见（有头模式）
     "json_output": False,
     "beta_api": False,
@@ -173,8 +166,7 @@ DEFAULT_CONFIG = {
     "image_base_url": "",     # 图片生成端点（默认 = base_url）
     "image_model": "gpt-image-1",
     "vision_self_review": False,  # 视觉自审：工具产出图片时自动调用视觉模型审图（需视觉模型；默认关控成本）
-    "window_geometry": "",    # 窗口大小位置记忆（如 1280x820+100+50）
-    "minimize_to_tray": True,   # 初始关闭时最小化到系统托盘（需 pystray；不可用时回滚）
+    "minimize_to_tray": True,   # 关闭浏览器后服务保持托盘常驻（纯 Web 形态核心行为）
     "autostart": True,          # 初始开机自启（注册表 Run 键；失败自动回滚）
     "strict_tools": False,    # strict 工具模式（Beta）：模型严格遵循工具 JSON Schema
     "update_url": "",         # 更新检查源（latest.json，如 https://example.com/latest.json）

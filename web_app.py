@@ -16,7 +16,6 @@
 用法：
     python web_app.py             → 启动本地服务 + 打开浏览器 + 托盘常驻（推荐）
     python web_app.py --server    → 只启动 API 服务（终端常驻，供调试）
-    python web_app.py --legacy    → 旧版 tkinter 桌面（保底回退，仅特殊场景）
     python web_app.py --no-tray   → 常驻但不启用系统托盘（无 pystray 环境）
     python web_app.py --no-browser → 常驻但不自动打开浏览器（手动访问）
     python web_app.py --install-shortcuts → 强制重建桌面/开始菜单快捷方式
@@ -300,13 +299,6 @@ def _serve_forever(port, open_browser=False, tray=True):
     return 0
 
 
-def _legacy_main():
-    """旧版 tkinter 桌面主循环（保底回退）。"""
-    import main as legacy_app  # noqa: F401 -- 仅保底场景引用
-    from main import main as legacy_run
-    return legacy_run()
-
-
 def main():
     parser = argparse.ArgumentParser(prog="whaletalk", description=APP_NAME + " · 纯 Web + 托盘常驻")
     parser.add_argument("--server", action="store_true", help="仅启动 API 服务（终端常驻，不托盘不开浏览器）")
@@ -314,12 +306,9 @@ def main():
     parser.add_argument("--no-tray", action="store_true", help="常驻但不启用系统托盘")
     parser.add_argument("--no-shortcuts", action="store_true", help="不自动创建桌面/开始菜单快捷方式")
     parser.add_argument("--install-shortcuts", action="store_true", help="强制重建桌面/开始菜单快捷方式")
-    parser.add_argument("--legacy", action="store_true", help="旧版 tkinter 桌面（保底回退）")
     parser.add_argument("--port", type=int, default=API_PORT, help=f"API 端口（默认 {API_PORT}）")
     args = parser.parse_args()
 
-    if args.legacy:
-        return _legacy_main()
     if not args.server:
         _hide_console()
     # 快捷方式：强制 / 首次启动自动创建（不指定 --no-shortcuts）

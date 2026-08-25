@@ -20,14 +20,10 @@ EXCLUDE_FILES = {".clean_exit"}
 
 def current_version():
     try:
-        with open(os.path.join(BASE_DIR, "main.py"), encoding="utf-8") as f:
-            src = f.read()
-        m = re.search(r'^VERSION\s*=\s*"([\d.]+)"', src, re.MULTILINE)
-        if m:
-            return m.group(1)
+        from config_defaults import VERSION
+        return str(VERSION)
     except Exception:
-        pass
-    return "unknown"
+        return "unknown"
 
 
 def make_backup():
