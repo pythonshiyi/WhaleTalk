@@ -84,7 +84,7 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
         await api.streamChat(
           {
             messages: isContinue ? history : [...history, { role: "user", content: userText, ...(images.length ? { images } : {}) }],
-            thinking: "high",
+            // 不传 thinking：后端 _chat_kwargs 使用 config.json 的 thinking（控制台/设置选择的档位即时生效）
             mode: chatMode,
             toolsEnabled: chatMode === "task",
             continue_prefix: isContinue,

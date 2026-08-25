@@ -3510,6 +3510,10 @@ class _Handler(BaseHTTPRequestHandler):
             "logprobs": bool(cfg.get("logprobs")),
             "tool_choice": None if (pure or not tools) else (cfg.get("tool_choice") or "auto"),
             "continue_prefix": bool(body.get("continue_prefix")),
+            # 采样参数：显式透传用户配置（无思考档时生效）；seed 恒传（0=随机）
+            "temperature": float(cfg.get("custom_temperature") or 1.0),
+            "top_p": float(cfg.get("custom_top_p") or 1.0),
+            "seed": int(cfg.get("seed") or 0) or None,
         }
 
     def _inject_system_messages(self, messages, cfg, pure_chat):
