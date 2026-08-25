@@ -248,6 +248,7 @@ function useDataSources() {
   const [ctx, setCtx] = React.useState(null);
   const [history, setHistory] = React.useState({});
   const [loadErr, setLoadErr] = React.useState("");
+  const [peakInfo, setPeakInfo] = React.useState({ on: false, warn: true });
 
   React.useEffect(() => {
     (async () => {
@@ -275,6 +276,10 @@ function useDataSources() {
               usage: c.usage,
             });
           }
+        } catch {}
+        try {
+          const st = await api.getStatus();
+          if (st) setPeakInfo({ on: !!st.peak_hour, warn: st.peak_warning !== false });
         } catch {}
 
         setLoadErr("");
@@ -337,7 +342,7 @@ function useDataSources() {
     }
   }, [mode]);
 
-  return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr };
+  return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr, peakInfo };
 }
 
 export default function ChatPage({ onGoWorkbench, onGoSettings }) {
@@ -413,7 +418,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     setGenState(s);
   }, []);
 
-  const { mode: dataMode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr } = useDataSources();
+  const { mode: dataMode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr, peakInfo } = useDataSources();
   connRef.current = dataMode;
 
   React.useEffect(() => {
@@ -532,16 +537,13 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
 
   const onSend = (text, attachments = []) => {
     if (busy && !resendIdxRef.current) return;
-    // 高峰提示（每天首次发送，对齐原程序 _peak_notified）
+    // 高峰提示（每天首次发送；受「高峰提醒」开关与后端实时峰值判定控制）
     try {
       const today = new Date().toISOString().slice(0, 10);
       const last = localStorage.getItem("whaletalk.peak.notified");
-      if (last !== today) {
-        const hour = new Date().getHours();
-        if ((hour >= 9 && hour < 12) || (hour >= 14 && hour < 18)) {
-          toast("⏰ 当前为 DeepSeek 高峰时段，按高峰价计费（空闲时段为一半）");
-          localStorage.setItem("whaletalk.peak.notified", today);
-        }
+      if (last !== today && peakInfo.warn && peakInfo.on) {
+        toast("⏰ 当前为 DeepSeek 高峰时段，按高峰价计费（空闲时段为一半）");
+        localStorage.setItem("whaletalk.peak.notified", today);
       }
     } catch {}
     let base = msgs;

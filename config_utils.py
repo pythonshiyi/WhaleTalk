@@ -150,10 +150,6 @@ def normalize_config(cfg):
     except (TypeError, ValueError):
         cfg["evolution_reminder_days"] = 7
     try:
-        cfg["fold_early_threshold"] = max(0, min(20000, int(cfg.get("fold_early_threshold", 0))))
-    except (TypeError, ValueError):
-        cfg["fold_early_threshold"] = 0
-    try:
         cfg["inbound_port"] = max(0, min(65535, int(cfg.get("inbound_port", 0))))
     except (TypeError, ValueError):
         cfg["inbound_port"] = 0
@@ -162,7 +158,6 @@ def normalize_config(cfg):
     cfg["image_base_url"] = str(cfg.get("image_base_url", "") or "").strip()
     cfg["image_model"] = str(cfg.get("image_model", "gpt-image-1")).strip() or "gpt-image-1"
     cfg["vision_self_review"] = as_bool(cfg.get("vision_self_review", False))
-    cfg["minimize_to_tray"] = as_bool(cfg.get("minimize_to_tray", False))
     cfg["autostart"] = as_bool(cfg.get("autostart", False))
     cfg["strict_tools"] = as_bool(cfg.get("strict_tools", False))
     cfg["update_url"] = str(cfg.get("update_url", "") or "").strip()

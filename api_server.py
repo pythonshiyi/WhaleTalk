@@ -454,6 +454,7 @@ def _status():
         "monthly_cost": _monthly_cost(),
         "monthly_budget": float(cfg.get("monthly_budget") or 0.0),
         "peak_hour": dc.is_peak_hour(),
+        "peak_warning": bool(cfg.get("peak_warning")),
         "model": cfg.get("model") or dc.DEFAULT_MODEL,
         "role": _role_name(cfg.get("system_prompt") or ""),
         "scenario": cfg.get("scenario") or "通用",
@@ -2991,8 +2992,7 @@ class _Handler(BaseHTTPRequestHandler):
                         "min_kept_turns": int(cfg.get("min_kept_turns") or 8),
                         "timeout": float(cfg.get("timeout") or 120.0),
                         "max_tool_rounds": int(cfg.get("max_tool_rounds") or 100),
-                        "fold_early_threshold": int(cfg.get("fold_early_threshold") or 1200),
-                        "browser_headless": bool(cfg.get("browser_headless")),
+                                                "browser_headless": bool(cfg.get("browser_headless")),
                         "peak_warning": bool(cfg.get("peak_warning")),
                         "suggestions_enabled": bool(cfg.get("suggestions_enabled")),
                     })
@@ -3232,7 +3232,7 @@ class _Handler(BaseHTTPRequestHandler):
                            ("completion_sound", bool), ("silent_start", bool),
                            ("max_context_tokens", int), ("max_context_chars", int),
                            ("min_kept_turns", int), ("timeout", float), ("max_tool_rounds", int),
-                           ("fold_early_threshold", int), ("browser_headless", bool),
+                           ("browser_headless", bool),
                            ("peak_warning", bool), ("suggestions_enabled", bool),
                            ("monthly_budget", float), ("block_on_budget", bool),
                            ("autostart", bool), ("minimize_to_tray", bool)):
@@ -3484,6 +3484,21 @@ class _Handler(BaseHTTPRequestHandler):
         timeout = float(cfg.get("timeout") or 120.0)
         return dc.DeepSeekClient(key, base_url=base_url, model=model, timeout=timeout), cfg
 
+    def _budget_block(self, cfg):
+        """预算检查：block_on_budget 开启且本月成本>=预算时，返回错误消息（否则 None）。"""
+        if not bool(cfg.get("block_on_budget")):
+            return None
+        try:
+            limit = float(cfg.get("monthly_budget") or 0.0)
+            if limit <= 0:
+                return None
+            cost = _monthly_cost()
+            if cost >= limit:
+                return "本月预算已用完（¥%.2f/¥%.2f）：请到「设置 → 通知与安全」调高预算或关闭预算阻止。" % (cost, limit)
+        except Exception:
+            pass
+        return None
+
     def _chat_kwargs(self, body, cfg):
         import deepseek_client as dc
         thinking = str(body.get("thinking") or cfg.get("thinking") or "high")
@@ -3514,6 +3529,11 @@ class _Handler(BaseHTTPRequestHandler):
             "temperature": float(cfg.get("custom_temperature") or 1.0),
             "top_p": float(cfg.get("custom_top_p") or 1.0),
             "seed": int(cfg.get("seed") or 0) or None,
+            # 输出与工具模式：无条件透传（client.chat 内部判断生效场景）
+            "json_output": bool(cfg.get("json_output")),
+            "strict_tools": bool(cfg.get("strict_tools")),
+            # 工具轮数上限：透传用户配置（client.chat 默认 100）
+            "max_tool_rounds": int(cfg.get("max_tool_rounds") or 100),
         }
 
     def _inject_system_messages(self, messages, cfg, pure_chat):
@@ -3586,13 +3606,15 @@ class _Handler(BaseHTTPRequestHandler):
         _sync_full_auto()
         try:
             client, cfg = self._client_from_cfg(body)
+            kb = self._budget_block(cfg)
+            if kb:
+                self._json(400, {"error": kb})
+                return
             kwargs = self._chat_kwargs(body, cfg)
             messages, memory_text = self._inject_system_messages(messages, cfg, kwargs.get("pure_chat", False))
             if memory_text:
                 kwargs["memory_text"] = memory_text
             messages, comp_info = _compress_messages(messages, cfg, client)
-            if kwargs.get("tools_enabled"):
-                kwargs["strict_tools"] = bool(cfg.get("strict_tools"))
             out = []
             kwargs.update({
                 "on_content": (lambda t: out.append(("c", t))),
@@ -3629,6 +3651,11 @@ class _Handler(BaseHTTPRequestHandler):
 
         try:
             client, cfg = self._client_from_cfg(body)
+            kb = self._budget_block(cfg)
+            if kb:
+                send("error", {"message": kb})
+                self._sse_end()
+                return
             kwargs = self._chat_kwargs(body, cfg)
             messages, memory_text = self._inject_system_messages(messages, cfg, kwargs.get("pure_chat", False))
             if memory_text:
@@ -3636,8 +3663,6 @@ class _Handler(BaseHTTPRequestHandler):
             messages, comp_info = _compress_messages(messages, cfg, client)
             if comp_info:
                 send("compressed", comp_info)
-            if kwargs.get("tools_enabled"):
-                kwargs["strict_tools"] = bool(cfg.get("strict_tools"))
             kwargs.update({
                 "on_reasoning": lambda t: send("reasoning", {"text": t}),
                 "on_content": lambda t: send("content", {"text": t}),

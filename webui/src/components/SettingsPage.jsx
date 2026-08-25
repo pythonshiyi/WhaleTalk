@@ -216,9 +216,6 @@ function AdvancedTab({ cfg, saveField, onReset }) {
         <Row label="保留轮数" desc="压缩时最少保留的对话轮">
           <NumInput min={3} max={500} value={cfg?.min_kept_turns} onChange={(v) => saveField({ min_kept_turns: v })} />
         </Row>
-        <Row label="早期折叠阈值" desc="超过此块数折叠（0=关闭）">
-          <NumInput min={0} max={20000} step={100} value={cfg?.fold_early_threshold} onChange={(v) => saveField({ fold_early_threshold: v })} />
-        </Row>
       </div>
       <div className="svc-group">
         <div className="svc-title">⚙ 运行参数</div>
@@ -228,8 +225,6 @@ function AdvancedTab({ cfg, saveField, onReset }) {
         <Row label="工具轮数上限" desc="单条消息最多工具循环轮数">
           <NumInput min={1} max={100} value={cfg?.max_tool_rounds} onChange={(v) => saveField({ max_tool_rounds: v })} />
         </Row>
-        <Toggle on={!!cfg?.project_context} label="项目上下文" desc="注入工作区概览（默认关）" onClick={() => saveField({ project_context: !cfg?.project_context })} />
-        <Toggle on={cfg?.suggestions_enabled !== false} label="主动建议" desc="状态栏建议条" onClick={() => saveField({ suggestions_enabled: cfg?.suggestions_enabled === false })} />
       </div>
       <div className="svc-group">
         <div className="svc-title">📋 指令库（⚡ 指令菜单）</div>

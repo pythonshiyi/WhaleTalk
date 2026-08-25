@@ -147,8 +147,6 @@ DEFAULT_CONFIG = {
     "logprobs": False,
     "tool_choice": "auto",
     "peak_warning": True,
-    "fold_early_threshold": 1200,  # 早期消息折叠阈值（块数，超过折叠为可点击展开提示；0=关闭）
-    "current_profile": "",
     "notify_on_done": True,  # 初始完成通知开启
     "completion_sound": True,  # 回复完成播系统提示音（web 版，浏览器在后台也能听到）
     "silent_start": False,  # web 版静默启动：启动后不自动打开浏览器（托盘常驻，随手打开界面）
@@ -166,7 +164,6 @@ DEFAULT_CONFIG = {
     "image_base_url": "",     # 图片生成端点（默认 = base_url）
     "image_model": "gpt-image-1",
     "vision_self_review": False,  # 视觉自审：工具产出图片时自动调用视觉模型审图（需视觉模型；默认关控成本）
-    "minimize_to_tray": True,   # 关闭浏览器后服务保持托盘常驻（纯 Web 形态核心行为）
     "autostart": True,          # 初始开机自启（注册表 Run 键；失败自动回滚）
     "strict_tools": False,    # strict 工具模式（Beta）：模型严格遵循工具 JSON Schema
     "update_url": "",         # 更新检查源（latest.json，如 https://example.com/latest.json）
