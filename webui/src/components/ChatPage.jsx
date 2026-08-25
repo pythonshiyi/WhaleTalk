@@ -491,8 +491,15 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
           name: t.tool,
           content: String(t.result || "").slice(0, 4000),
         }));
+        // 连续对话：若已有 activeId（历史会话/当前会话），写回同一会话并 append（后端合并旧消息）；
+        // 仅当无 activeId（新对话）时才新建，名称取首条用户消息。
+        const isExisting = !!activeId;
         const sid = await api.saveSession({
-          name: userText.replace(/\s+/g, " ").slice(0, 24),
+          id: activeId || undefined,
+          append: isExisting,
+          name: isExisting
+            ? (activeSession?.title || userText.replace(/\s+/g, " ").slice(0, 24))
+            : userText.replace(/\s+/g, " ").slice(0, 24),
           messages: [
             { role: "user", content: userText },
             {
@@ -552,7 +559,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     }
     pendingRef.current = { text, images: attachments.map((a) => a.path) };
     historyRef.current = buildMessageChain(base.filter((m) => !m.streaming));
-    setActiveId(null);
+    // 连续对话：保留 activeId 复用同一会话；只有「新对话」(onPickSession(null)) 才清空
+    // 保存目标在 onFinished 里以 activeId 为准（ref 已保证最新值）
     setMsgs([]);
     setBusy(true);
     setBackendNote("");

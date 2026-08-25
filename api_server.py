@@ -2793,10 +2793,27 @@ class _Handler(BaseHTTPRequestHandler):
                     old = json.load(f)
             except Exception:
                 old = {}
+        # append 语义（连续对话）：本轮消息追加到已有会话尾部（按首条 user 消息去重）。
+        # 前端 onSend 会清空界面 msgs，闭包保存不到历史 → 由后端读旧文件合并，保证完整。
+        saved_msgs = clean
+        if body.get("append") and old.get("messages"):
+            # 防重复：若本轮首条 user 消息已在尾部的最后 50 条中，视为重复提交，跳过追加
+            old_msgs = list(old["messages"])
+            dup_found = False
+            if len(clean) >= 2 and clean[0].get("role") == "user":
+                first_user = clean[0]
+                for om in old_msgs[-50:]:
+                    if om.get("role") == "user" and om.get("content") == first_user.get("content"):
+                        dup_found = True
+                        break
+            if not dup_found:
+                saved_msgs = old_msgs + clean
+            else:
+                saved_msgs = old_msgs
         data = {
             "id": sid,
             "name": str(body.get("name") or old.get("name") or "未命名会话")[:80],
-            "messages": clean,
+            "messages": saved_msgs,
             "usage_total": old.get("usage_total") or {},
             "stars": body.get("stars") if isinstance(body.get("stars"), list) else (old.get("stars") or []),
             "tags": body.get("tags") if isinstance(body.get("tags"), list) else (old.get("tags") or []),

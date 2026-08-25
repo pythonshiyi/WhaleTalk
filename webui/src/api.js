@@ -161,10 +161,10 @@ export async function listSessions() {
   return d.sessions || [];
 }
 
-export async function saveSession({ id, name, messages, model }) {
+export async function saveSession({ id, name, messages, model, append }) {
   const d = await api("/v1/sessions", {
     method: "POST",
-    body: JSON.stringify({ id, name, messages, model }),
+    body: JSON.stringify({ id, name, messages, model, append }),
   });
   return d.id;
 }
