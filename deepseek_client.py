@@ -244,7 +244,8 @@ def embed_message_images(messages, model, _log=None, detail="auto"):
         """把 user 消息中的 images（本地路径或 http(s) 图片 URL）内联为 image_url 内容块。
 
         - 仅对消息的浅拷贝生效，不修改调用方内存中的消息对象（UI/存档保持文本 content）；
-        - 模型不支持视觉时抛 ValueError（附中文提示，UI 层会切换视觉模型）；
+        - 调用方（chat()）保证带图时已自动切换到视觉模型；此处保留非视觉模型抛
+          ValueError 作为兜底防线（直调场景）；
         - 单张 ≤32 MiB、base64 总量 ≤40 MiB，超限抛 ValueError 提示压缩；
         - 图片仅出现在 user 消息中（官方限制：system/assistant 携带图片返回 400）；
         - detail 控制官方图片处理级别：low（缩放 512 省 token）/ high / original / auto。
@@ -2999,6 +3000,49 @@ def set_active_client(client):
     _CLIENT_HOLDER["client"] = client
 
 
+# 工具直调路径的懒构建客户端（带配置指纹：api_key/base_url/model/timeout 变更自动重建）
+_ACTIVE_FALLBACK = {"sig": None, "client": None}
+
+
+def get_active_client():
+    """返回可用 LLM 客户端：优先会话注入的（set_active_client），否则按当前配置懒构建。
+
+    v3.x Web 架构中 api_server 每个请求自建临时客户端、无人调用 set_active_client，
+    导致视觉理解/子代理/语音/团队等依赖客户端的工具在「未先聊天」场景下全部报
+    「没有可用客户端」。懒构建兜底后这些工具开箱即用（无需先完成一次对话）；
+    配置变更后指纹不符自动重建，不会用到过期密钥/网关。
+    """
+    c = _CLIENT_HOLDER.get("client")
+    if c is not None:
+        return c
+    try:
+        import config_utils
+        cfg = config_utils.load_config()
+    except Exception:
+        return None
+    key = str(cfg.get("api_key") or "").strip()
+    if not key:
+        return None
+    try:
+        sig = (
+            key,
+            str(cfg.get("base_url") or DEFAULT_BASE_URL),
+            str(cfg.get("model") or DEFAULT_MODEL),
+            float(cfg.get("timeout") or 120.0),
+        )
+    except (TypeError, ValueError):
+        return None
+    fb = _ACTIVE_FALLBACK
+    if fb["client"] is not None and fb["sig"] == sig:
+        return fb["client"]
+    try:
+        c = DeepSeekClient(key, base_url=sig[1], model=sig[2], timeout=sig[3])
+    except Exception:
+        return None
+    fb["sig"], fb["client"] = sig, c
+    return c
+
+
 def subagent_run(tasks, parallel=2, context=""):
     """并行子代理：把大任务拆给多个并发 LLM 子代理，各自输出结论后汇总。
 
@@ -3012,9 +3056,9 @@ def subagent_run(tasks, parallel=2, context=""):
         parallel = max(1, min(4, int(parallel or 2)))
     except (TypeError, ValueError):
         parallel = 2
-    client = _CLIENT_HOLDER.get("client")
+    client = get_active_client()
     if client is None:
-        return "错误：没有可用客户端（请先完成一次对话建立连接）"
+        return "错误：没有可用客户端（请先在设置中配置 API Key）"
     base = "你是并行子代理，专注完成分配的子任务，输出简洁、可执行的结论（不要提及子代理身份）。"
     if str(context or "").strip():
         base += f"\n\n【共享背景上下文】\n{context}"
@@ -6503,9 +6547,9 @@ def image_understand(path, question=""):
             b64 = base64.b64encode(raw).decode("ascii")
             # 格式按文件实际内容（魔数）识别，而非文件名/扩展名
             mime = _detect_image_mime(raw[:16])
-        client = _CLIENT_HOLDER.get("client")
+        client = get_active_client()
         if client is None:
-            return "错误：没有可用客户端（请先完成一次对话建立连接）"
+            return "错误：没有可用客户端（请先在设置中配置 API Key）"
         model, switched = client.model, False
         if not is_vision_model(model):
             model = VISION_MODEL
@@ -8926,9 +8970,9 @@ def daily_brief(topic="", max_items=8):
     except (TypeError, ValueError):
         limit = 8
     items = items[:limit]
-    client = _CLIENT_HOLDER.get("client")
+    client = get_active_client()
     if client is None:
-        return "错误：没有可用客户端（请先完成一次对话建立连接）"
+        return "错误：没有可用客户端（请先在设置中配置 API Key）"
     material = "\n\n".join(
         f"{i + 1}. {it.title}（{it.source}）\n   {it.url}\n   {it.summary[:200]}"
         for i, it in enumerate(items)
@@ -9403,9 +9447,9 @@ def voice_chat_loop(rounds=3, model="base", max_seconds=15, speak=True, rate=0):
         rounds_n = max(1, min(20, int(rounds or 3)))
     except (TypeError, ValueError):
         rounds_n = 3
-    client = _CLIENT_HOLDER.get("client")
+    client = get_active_client()
     if client is None:
-        return "错误：没有可用客户端（请先完成一次对话建立连接）"
+        return "错误：没有可用客户端（请先在设置中配置 API Key）"
     with _WHISPER_LOOP_LOCK:  # 同一时间只允许一个语音会话占用麦克风
         log = []
         ended = False
@@ -9481,9 +9525,9 @@ def team_run(goal, roles=("研究员", "工程师", "评审"), steps=0):
     g = str(goal or "").strip()
     if not g:
         return "错误：goal 必填"
-    client = _CLIENT_HOLDER["client"]
+    client = get_active_client()
     if client is None:
-        return "错误：没有可用客户端（请先完成一次对话建立连接）"
+        return "错误：没有可用客户端（请先在设置中配置 API Key）"
 
     role_list = []
     for r in (roles or ()):  # 支持传字符串数组
@@ -10451,7 +10495,16 @@ class DeepSeekClient:
         messages[:] = self._sanitize_messages(messages)
         # 图片内联：仅替换受影响的 user 消息副本；原始消息对象（content 文本 +
         # images 路径）不受影响，chat() 结束时再同步回调用方（含新增 assistant/tool 消息）。
-        work = embed_message_images(messages, self.model)
+        # 会话带图而当前模型非视觉：本请求自动改用视觉模型（优雅切换，不抛错、不改全局配置）。
+        if any(
+            isinstance(m, dict) and m.get("images") and m.get("role") == "user"
+            for m in messages
+        ) and not is_vision_model(self.model):
+            eff_model = VISION_MODEL
+            logger.info("会话包含图片输入：本次请求自动改用视觉模型 %s（全局配置不变）", VISION_MODEL)
+        else:
+            eff_model = self.model
+        work = embed_message_images(messages, eff_model)
         json_hint = None
         memory_msg = None
         # 缓存友好消息布局（官方硬盘缓存按「前缀完整匹配」命中）：
@@ -10471,7 +10524,7 @@ class DeepSeekClient:
             "thinking": {"type": "enabled" if thinking_key != "none" else "disabled"}
         }
         kwargs = {
-            "model": self.model,
+            "model": eff_model,
             "messages": work,
             "max_tokens": max_tokens,
             "stream": True,

@@ -3291,6 +3291,12 @@ class _Handler(BaseHTTPRequestHandler):
                     # 开机自启注册（HKCU Run / 卸载）
                     if "autostart" in body and body["autostart"] is not None:
                         _apply_autostart(bool(body["autostart"]))
+                    # 密钥/网关/模型等影响 LLM 客户端的配置变更后，失效懒构建客户端
+                    # （get_active_client 下次调用按新配置重建；会话注入的由下次对话刷新）
+                    if any(k in body for k in ("api_key", "base_url", "model")):
+                        import deepseek_client as _dc
+                        _dc.set_active_client(None)
+                        _dc._ACTIVE_FALLBACK["sig"], _dc._ACTIVE_FALLBACK["client"] = None, None
                     if "api_key" in body and body["api_key"] is not None:
                         _cached_invalidate("status")
                     self._json(200, {"ok": True})
@@ -3496,7 +3502,11 @@ class _Handler(BaseHTTPRequestHandler):
         if cfg.get("strict_tools") and not base_url.rstrip("/").endswith("/beta"):
             base_url = base_url.rstrip("/") + "/beta"
         timeout = float(cfg.get("timeout") or 120.0)
-        return dc.DeepSeekClient(key, base_url=base_url, model=model, timeout=timeout), cfg
+        client = dc.DeepSeekClient(key, base_url=base_url, model=model, timeout=timeout)
+        # 注册为会话级客户端：视觉/子代理/语音/团队等工具经 get_active_client 直接复用，
+        # 与本请求的网关/模型保持一致（每次对话刷新，工具不再报「没有可用客户端」）
+        dc.set_active_client(client)
+        return client, cfg
 
     def _budget_block(self, cfg):
         """预算检查：block_on_budget 开启且本月成本>=预算时，返回错误消息（否则 None）。"""
