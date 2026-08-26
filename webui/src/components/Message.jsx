@@ -2,7 +2,7 @@ import React from "react";
 import Markdown from "./Markdown.jsx";
 import ToolCard from "./ToolCard.jsx";
 import * as api from "../api.js";
-import { cleanForSpeech, enqueueSpeak, stopSpeak } from "../ttsUtil.js";
+import { cleanForSpeech, enqueueSpeak, stopSpeak, primeAudio } from "../ttsUtil.js";
 
 const Whale = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -62,19 +62,25 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
   };
 
   const [speaking, setSpeaking] = React.useState(false);
+  const [loading, setLoading] = React.useState(false);
+  const [err, setErr] = React.useState("");
 
-  // 朗读/停止切换：走服务端合成（语速/音量/音色跟随设置），播放中再点即停
+  // 朗读/停止切换：点击立即 ⏳（合成中）→ 播放 ⏹ → 失败 ⚠ 并提示原因
   const toggleSpeak = () => {
-    if (speaking) {
+    if (speaking || loading) {
       stopSpeak();
+      setLoading(false);
+      setSpeaking(false);
       return;
     }
+    primeAudio();  // 借本次点击手势解锁音频管线（防自动播放拦截）
     const clean = cleanForSpeech(msg.text).slice(0, 4000);
     if (!clean) return;
-    setSpeaking(true);
-    enqueueSpeak(clean)
-      .catch(() => {})
-      .finally(() => setSpeaking(false));
+    setErr("");
+    setLoading(true);
+    enqueueSpeak(clean, {}, () => { setLoading(false); setSpeaking(true); })
+      .catch((e) => { setErr(e && e.message ? e.message : "朗读失败"); setTimeout(() => setErr(""), 4000); })
+      .finally(() => { setLoading(false); setSpeaking(false); });
   };
 
   const time = msg.time || "";
@@ -153,8 +159,8 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
             <button className="msg-op" title="复制回复" onClick={copy}>
               {copied ? "✓ 已复制" : "📋"}
             </button>
-            <button className="msg-op" title={speaking ? "⏹ 停止朗读" : "🔊 朗读回复（服务端合成，跟随语音设置）"} onClick={toggleSpeak}>
-              {speaking ? "⏹" : "🔊"}
+            <button className="msg-op" title={err ? ("朗读失败：" + err) : loading ? "正在合成语音…" : speaking ? "⏹ 停止朗读" : "🔊 朗读回复（服务端合成，跟随语音设置）"} style={err ? { color: "var(--danger)" } : undefined} onClick={toggleSpeak}>
+              {err ? "⚠" : loading ? "⏳" : speaking ? "⏹" : "🔊"}
             </button>
             <button className="msg-op" title={isStarred ? "取消收藏" : "收藏"} onClick={() => onStar && onStar()}>
               {isStarred ? "⭐" : "☆"}

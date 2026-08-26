@@ -1,7 +1,7 @@
 import React from "react";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
-import { enqueueSpeak, invalidateVoiceConfig } from "../ttsUtil.js";
+import { enqueueSpeak, invalidateVoiceConfig, playTestTone } from "../ttsUtil.js";
 
 const apiGet = async (path) => {
   try {
@@ -143,12 +143,18 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
           ))}
         </select>
       </Row>
-      <Row label="试听" desc="以当前设置朗读样例句">
+      <Row label="试听" desc="以当前设置朗读样例句（走服务端合成）">
         <button className="confirm-btn confirm-primary" onClick={() => {
           enqueueSpeak("你好，我是鲸语。这是当前语音设置的试听效果。", { ...vc });
           onTip("正在试听…");
           setTimeout(() => onTip(""), 2000);
         }}>🔊 试听</button>
+      </Row>
+      <Row label="测试出声" desc="浏览器直接播一声提示音，验证 声卡→扬声器 链路（不经过合成）。听不到它=输出设备问题，与鲸语无关">
+        <button className="confirm-btn" onClick={() => {
+          playTestTone().then(() => onTip("✅ 测试音已播放——听到「哔」了吗？")).catch(() => onTip("❌ 播放被拦截或无输出设备"));
+          setTimeout(() => onTip(""), 2500);
+        }}>📈 测试出声</button>
       </Row>
     </div>
   );

@@ -45,10 +45,12 @@ export function splitSentences(text, limit = 200) {
 let currentAudio = null;
 let queueChain = Promise.resolve();
 let generation = 0;           // stopSpeak 时 +1，令旧队列任务作废
-const listeners = new Set();  // 状态变化回调 ({speaking:boolean})
+let loadingCount = 0;         // 合成中的任务数（点击后立即有反馈）
+let lastError = "";           // 最近一次朗读失败原因
+const listeners = new Set();  // 状态变化回调 ({speaking,loading,error})
 
 function emit() {
-  const st = { speaking: !!currentAudio };
+  const st = { speaking: !!currentAudio, loading: loadingCount > 0, error: lastError };
   listeners.forEach((fn) => { try { fn(st); } catch {} });
 }
 
@@ -59,6 +61,19 @@ export function onSpeechState(fn) {
 
 export function isSpeaking() {
   return !!currentAudio;
+}
+
+// 在用户点击手势内"解锁"音频管线（页面刚加载+合成超过瞬态窗口的场景）
+let primed = false;
+export function primeAudio() {
+  if (primed) return;
+  try {
+    const a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=");
+    a.muted = true;
+    const p = a.play();
+    if (p && p.then) p.then(() => { primed = true; a.pause(); }).catch(() => {});
+    primed = true;
+  } catch {}
 }
 
 // 调后端合成（清洗由调用方完成后传入），返回 {url} 或抛错
@@ -77,42 +92,74 @@ async function synthesize(text, opts = {}) {
   return d; // {ok,url,cached,engine}
 }
 
-async function playUrl(urlPath, volumePct) {
-  const resp = await fetch(`${getBase()}${urlPath}`, {
+async function fetchAudio(urlPath) {
+  const once = () => fetch(`${getBase()}${urlPath}`, {
     headers: { Authorization: `Bearer ${getToken()}` },
   });
+  let resp = await once();
+  if (resp.status === 401) {
+    try { localStorage.removeItem("whaletalk.api.token"); } catch {}
+    try {
+      const tr = await fetch(`${getBase()}/v1/token`, { signal: AbortSignal.timeout(2500) });
+      if (tr.ok) {
+        const tj = await tr.json();
+        if (tj.token) { try { localStorage.setItem("whaletalk.api.token", tj.token); } catch {} }
+      }
+    } catch {}
+    resp = await once();
+  }
+  return resp;
+}
+
+async function playUrl(urlPath, volumePct) {
+  const resp = await fetchAudio(urlPath);
   if (!resp.ok) throw new Error(`音频加载失败 ${resp.status}`);
   const blobUrl = URL.createObjectURL(await resp.blob());
   return await new Promise((resolve, reject) => {
     const audio = new Audio(blobUrl);
     audio.volume = Math.max(0, Math.min(1, (volumePct ?? 100) / 100));
     audio.onended = () => resolve();
-    audio.onerror = () => reject(new Error("播放失败"));
+    audio.onerror = () => reject(new Error("音频解码/播放失败"));
     currentAudio = audio;
     emit();
-    audio.play().catch(reject);
+    audio.play().catch((e) => {
+      currentAudio = null;
+      reject(e && e.name === "NotAllowedError" ? e : new Error("播放失败: " + (e && e.name || "")));
+    });
   });
 }
 
 /**
- * 朗读一段文本（进入全局串行队列）。
- * opts: {rate,volume,voice,engine,signal?} — signal.aborted 时任务作废。
+ * 朗读一段文本（进入全局串行队列）。返回本条任务专属 Promise：
+ * 开始播放时回调 onStart()；失败时 reject（message 已转为人话）。
+ * opts: {rate,volume,voice,engine}
  */
-export function enqueueSpeak(text, opts = {}) {
+export function enqueueSpeak(text, opts = {}, onStart) {
   const gen = generation;
-  queueChain = queueChain.then(async () => {
+  const run = queueChain.then(async () => {
     if (gen !== generation || !text) return;
+    loadingCount++; lastError = ""; emit();
     try {
       const r = await synthesize(text.slice(0, 4000), opts);
       if (gen !== generation) return;
+      loadingCount--; emit();
+      onStart && onStart();
       await playUrl(r.url, opts.volume);
     } catch (e) {
-      console.warn("[tts]", e.message);
+      loadingCount--;
+      const raw = e && e.message ? e.message : String(e);
+      lastError = raw.includes("500") ? "合成失败（服务端/引擎）"
+        : raw.includes("400") ? "没有可朗读的内容"
+        : raw.includes("NotAllowed") ? "浏览器拦截了播放：请先点击页面任意处再重试"
+        : raw;
+      emit();
+      throw new Error(lastError);
     } finally {
-      if (gen === generation) { currentAudio = null; emit(); }
+      if (gen === generation && !currentAudio) emit();
     }
   });
-  return queueChain;
+  queueChain = run.catch(() => {});
+  return run;
 }
 
 /** 停止当前朗读并清空队列；返回是否真的有播放被打断 */
@@ -144,4 +191,26 @@ export async function getVoiceConfig(force = false) {
     return fallback;
   }
   return voiceCfg;
+}
+
+// ── 测试出声：直接用浏览器播一段 440Hz 提示音（不依赖后端，验证 浏览器→扬声器 链路）──
+export function playTestTone(seconds = 0.6) {
+  return new Promise((resolve, reject) => {
+    try {
+      const sr = 8000, n = Math.floor(sr * seconds);
+      const buf = new ArrayBuffer(44 + n * 2);
+      const dv = new DataView(buf);
+      const ws = (o, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i)); };
+      ws(0, "RIFF"); dv.setUint32(4, 36 + n * 2, true); ws(8, "WAVEfmt ");
+      dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+      dv.setUint32(24, sr, true); dv.setUint32(28, sr * 2, true); dv.setUint16(32, 2, true);
+      dv.setUint16(34, 16, true); ws(36, "data"); dv.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) dv.setInt16(44 + i * 2, Math.round(12000 * Math.sin((2 * Math.PI * 440 * i) / sr)), true);
+      const url = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+      const a = new Audio(url);
+      a.onended = () => { URL.revokeObjectURL(url); resolve(true); };
+      a.onerror = () => reject(new Error("播放失败"));
+      a.play().catch(reject);
+    } catch (e) { reject(e); }
+  });
 }

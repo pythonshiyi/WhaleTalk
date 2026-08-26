@@ -9,7 +9,29 @@ import AuxPanel from "./AuxPanel.jsx";
 import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
-import { cleanForSpeech, splitSentences, enqueueSpeak, getVoiceConfig } from "../ttsUtil.js";
+import { cleanForSpeech, splitSentences, enqueueSpeak, getVoiceConfig, onSpeechState, stopSpeak } from "../ttsUtil.js";
+
+// 全局朗读状态浮标：合成中/播放中均有可见反馈，点击可停
+function SpeakingPill() {
+  const [st, setSt] = React.useState({ speaking: false, loading: false });
+  React.useEffect(() => onSpeechState(setSt), []);
+  if (!st.speaking && !st.loading) return null;
+  return (
+    <div
+      onClick={() => st.speaking && stopSpeak()}
+      title={st.speaking ? "点击停止朗读" : "正在合成语音…"}
+      style={{
+        position: "fixed", right: 18, bottom: 84, zIndex: 60,
+        padding: "7px 14px", borderRadius: 999, cursor: st.speaking ? "pointer" : "default",
+        fontSize: 12.5, fontWeight: 600, color: "var(--text, #eee)",
+        background: st.speaking ? "linear-gradient(135deg,#0ea5e9,#2563eb)" : "rgba(120,130,150,.85)",
+        boxShadow: "0 4px 14px rgba(0,0,0,.35)", userSelect: "none",
+      }}
+    >
+      {st.speaking ? "🔊 正在朗读 · 点击停止" : "⏳ 正在合成语音…"}
+    </div>
+  );
+}
 
 // ── 多轮消息链构造（官方规范）────────────────────────
 // tools 模式下必须完整回传：assistant(reasoning_content + tool_calls) → tool 结果
@@ -1003,6 +1025,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
 
   return (
     <div className="chat-page">
+      <SpeakingPill />
       <div className="chat-row">
         {listOpen && (
           <SessionList
