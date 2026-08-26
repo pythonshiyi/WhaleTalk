@@ -911,13 +911,32 @@ def _friendly_error(e):
 
 
 def _init_dc_paths():
-    """注入外部配置文件路径与全局（对齐 main.py 启动注入）。"""
+    """注入外部配置文件路径与全局（完整对齐旧 main.py 启动注入）。
+
+    v3.0 重构删除 main.py 后，这里成为唯一的应用接线点。凡是漏接的全局，
+    对应工具都会静默失效（如 MEMORY_FILE 未接 → AI 任务中存不下长期记忆）。
+    """
     import deepseek_client as dc
     import config_utils
+    dc.MEMORY_FILE = MEMORY_PATH
     dc.WEBHOOK_CONFIG_FILE = os.path.join(DATA_DIR, "webhooks.json")
     dc.IM_CONFIG_FILE = os.path.join(DATA_DIR, "im_config.json")
     dc.DB_CONFIG_FILE = os.path.join(DATA_DIR, "db_config.json")
     dc.EMAIL_CONFIG_FILE = os.path.join(DATA_DIR, "email_config.json")
+    # ↓ v3.1.2 补齐的断链接线（对齐旧 main.py 注入清单）↓
+    dc.SECRETS_FILE = os.path.join(DATA_DIR, "secrets.json")
+    dc.BROWSER_PROFILE_DIR = os.path.join(DATA_DIR, "browser_profile")
+    dc.SCHEDULES_FILE = SCHEDULES_PATH
+    dc.KNOWLEDGE_INDEX_FILE = os.path.join(DATA_DIR, "knowledge_index.json")
+    dc.WORKFLOWS_FILE = WORKFLOWS_PATH
+    dc.CHECKPOINT_FILE = CHECKPOINT_PATH
+    dc.STATS_FILE = STATS_PATH
+    dc.PATTERNS_FILE = PATTERNS_PATH
+    dc.RSS_SOURCES_FILE = os.path.join(DATA_DIR, "rss_sources.json")
+    dc.KV_CACHE_DIR = os.path.join(DATA_DIR, "kv_cache")
+    dc.WEBDAV_CONFIG_FILE = os.path.join(DATA_DIR, "webdav_config.json")
+    dc.PLUGIN_PATHS = _plugin_paths()
+    os.environ.setdefault("WHALETALK_DATA_DIR", DATA_DIR)  # 应用型插件数据目录（flybot.db 等）
     try:
         cfg = config_utils.load_config()
         dc.IMAGE_GEN_KEY = str(cfg.get("image_api_key") or "").strip() or str(cfg.get("api_key") or "").strip()
@@ -925,8 +944,15 @@ def _init_dc_paths():
         dc.IMAGE_GEN_MODEL = str(cfg.get("image_model") or "gpt-image-1").strip()
         dc.VISION_SELF_REVIEW = bool(cfg.get("vision_self_review"))
         dc.BROWSER_HEADLESS = bool(cfg.get("browser_headless"))
+        dc.AGENT_MAIL_ENABLED = bool(cfg.get("agent_mail_enabled", False))
+        dc.AGENT_MAIL_CLI = str(cfg.get("agent_mail_cli") or "agently-cli").strip() or "agently-cli"
+        dc.CHART_THEME = str(cfg.get("theme") or "dark")
+        # 工作目录启动恢复（run_command/start_process 的 cwd 跟随；_set_dir 运行期更新）
+        active_dir = str(cfg.get("active_dir") or "").strip()
+        if active_dir and os.path.isdir(active_dir):
+            dc.WORKING_DIR = active_dir
     except Exception:
-        pass
+        logger.exception("_init_dc_paths 配置同步部分失败（不影响启动）")
 
 
 def _record_failure(name, result):
@@ -1540,6 +1566,47 @@ def _scheduler_loop():
         time.sleep(30)
 
 
+def _headless_chat(text):
+    """无头执行一段指令（定时任务 message / run_workflow 消息投递共用）。
+
+    Web 架构没有旧 main 的「投递到输入框」通道，改为后台静默执行一轮对话；
+    有产出时发桌面通知告知（文件类产物落盘工作目录，可在文件面板查看）。
+    """
+    import config_utils
+    import deepseek_client as dc
+    cfg = config_utils.load_config()
+    key = str(cfg.get("api_key") or "").strip()
+    if not key:
+        logger.warning("无头执行跳过：未配置 API Key")
+        return
+    client = dc.DeepSeekClient(
+        key, base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
+        model=cfg.get("model") or dc.DEFAULT_MODEL,
+        timeout=float(cfg.get("timeout") or 120),
+    )
+    parts = []
+    try:
+        client.chat(
+            [{"role": "user", "content": str(text)}],
+            scenario=cfg.get("scenario") or "通用",
+            thinking=cfg.get("thinking") or "high",
+            max_tokens=int(cfg.get("max_tokens") or 16384),
+            tools_enabled=bool(cfg.get("full_auto")),
+            smart_tools=bool(cfg.get("full_auto")),
+            on_content=lambda t: parts.append(t),
+        )
+    except Exception:
+        logger.exception("无头执行失败：%s", str(text)[:80])
+        return
+    reply = "".join(parts).strip()
+    logger.info("无头执行完成：%s => %s", str(text)[:40], reply[:60] or "（无文本输出）")
+    if reply:
+        try:
+            dc.notify_desktop("鲸语后台任务完成", body=str(text)[:40] + "\n" + reply[:120])
+        except Exception:
+            pass
+
+
 def _dispatch_schedule(s, action):
     """执行定时任务动作。"""
     import config_utils
@@ -1555,31 +1622,7 @@ def _dispatch_schedule(s, action):
             if name:
                 dc.run_workflow(name)
         else:
-            text = str(s.get("text") or "").strip()
-            if not text:
-                return
-            cfg = config_utils.load_config()
-            key = str(cfg.get("api_key") or "").strip()
-            if not key:
-                return
-            client = dc.DeepSeekClient(key, base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
-                                       model=cfg.get("model") or dc.DEFAULT_MODEL, timeout=120)
-            msgs = [{"role": "user", "content": text}]
-            memory_text = None
-            parts = []
-            client.chat(msgs, scenario=cfg.get("scenario") or "通用",
-                        thinking=cfg.get("thinking") or "high",
-                        max_tokens=int(cfg.get("max_tokens") or 16384),
-                        tools_enabled=bool(cfg.get("full_auto")),
-                        smart_tools=bool(cfg.get("full_auto")),
-                        memory_text=memory_text,
-                        on_content=lambda t: parts.append(t))
-            reply = "".join(parts).strip()
-            if reply:
-                _save_session_data({
-                    "name": text[:24],
-                    "messages": [{"role": "user", "content": text}, {"role": "assistant", "content": reply}],
-                })
+            _headless_chat(str(s.get("text") or "").strip())
     except Exception:
         logger.exception("定时任务执行失败: %s", action)
 
@@ -3291,6 +3334,8 @@ class _Handler(BaseHTTPRequestHandler):
                     # 开机自启注册（HKCU Run / 卸载）
                     if "autostart" in body and body["autostart"] is not None:
                         _apply_autostart(bool(body["autostart"]))
+                    # 配置保存后热同步全部工具侧接线（路径/agent_mail/主题/工作目录/图片键）
+                    _init_dc_paths()
                     # 密钥/网关/模型等影响 LLM 客户端的配置变更后，失效懒构建客户端
                     # （get_active_client 下次调用按新配置重建；会话注入的由下次对话刷新）
                     if any(k in body for k in ("api_key", "base_url", "model")):
@@ -3638,6 +3683,12 @@ class _Handler(BaseHTTPRequestHandler):
             messages, memory_text = self._inject_system_messages(messages, cfg, kwargs.get("pure_chat", False))
             if memory_text:
                 kwargs["memory_text"] = memory_text
+            try:
+                # 插件工具/用户自定义工具（对齐旧 main.py：custom_tools=load_user_tools(...)）
+                import user_tools as _ut
+                kwargs["custom_tools"] = _ut.load_user_tools(USER_TOOLS_PATH)
+            except Exception:
+                logger.exception("加载自定义工具失败（不影响基础工具）")
             messages, comp_info = _compress_messages(messages, cfg, client)
             out = []
             kwargs.update({
@@ -3684,6 +3735,12 @@ class _Handler(BaseHTTPRequestHandler):
             messages, memory_text = self._inject_system_messages(messages, cfg, kwargs.get("pure_chat", False))
             if memory_text:
                 kwargs["memory_text"] = memory_text
+            try:
+                # 插件工具/用户自定义工具（对齐旧 main.py：custom_tools=load_user_tools(...)）
+                import user_tools as _ut
+                kwargs["custom_tools"] = _ut.load_user_tools(USER_TOOLS_PATH)
+            except Exception:
+                logger.exception("加载自定义工具失败（不影响基础工具）")
             messages, comp_info = _compress_messages(messages, cfg, client)
             if comp_info:
                 send("compressed", comp_info)
@@ -3749,6 +3806,18 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
         perms.set_full_auto(bool(_cu_load("full_auto")))
     except Exception:
         logger.exception("权限模块初始化失败")
+    # run_workflow 的消息投递通道：Web 版无「投递输入框」，走无头后台执行
+    def _send_to_headless(text):
+        try:
+            threading.Thread(target=_headless_chat, args=(str(text),), daemon=True).start()
+            return True
+        except Exception:
+            return False
+    try:
+        import deepseek_client as _dcw
+        _dcw.set_send_callback(_send_to_headless)
+    except Exception:
+        logger.exception("workflow 发送通道接线失败")
     token = (token or "").strip() or ("wt_" + secrets.token_hex(16))
     _TOKEN = token
     _TOOLS_PROVIDER = tools_provider

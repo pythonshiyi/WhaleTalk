@@ -2,6 +2,20 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.1.2（2026-08-26）—— 🧯 重构遗留断链全面审计与修复
+
+**对 v3.0「删除 main.py」重构做全量接线审计**（静态挖掘旧 main.py 注入清单 + 115 工具动态探测），已知/未知问题一次修清：
+
+- **修复一：12 项工具侧全局路径断链**（api_server `_init_dc_paths` 现在完整对齐旧 main 注入）：
+  - `MEMORY_FILE` —— **AI 任务中存不下长期记忆**（write/read/query_memory_graph 全部静默失效；且与 UI 记忆面板 api_server 自用路径分裂）
+  - `SCHEDULES_FILE` / `CHECKPOINT_FILE` / `KNOWLEDGE_INDEX_FILE` / `STATS_FILE` / `PATTERNS_FILE` —— schedule_task、任务检查点、知识库索引持久化、用量报告、成功模式，此前全部不可持久化
+  - `SECRETS_FILE` / `RSS_SOURCES_FILE` / `KV_CACHE_DIR` / `WEBDAV_CONFIG_FILE` / `BROWSER_PROFILE_DIR` —— 密钥库/RSS 源/KV/WebDAV/浏览器配置
+- **修复二：插件工具的 AI 调用恢复**——聊天管线从未传 `custom_tools`，已安装插件/自定义工具模型根本看不到；两处聊天 handler 现按旧 main 方式注入 `load_user_tools(USER_TOOLS_PATH)`
+- **修复三：启动工作目录恢复**——WORKING_DIR 此前只在手动切目录后才有值，现在从 cfg.active_dir 启动还原；`AGENT_MAIL_ENABLED/CLI`、`CHART_THEME` 随配置同步；`WHALETALK_DATA_DIR` 环境变量补设（应用型插件数据目录）
+- **修复四：热同步**——设置保存后立即重跑接线，agent_mail 开关等即时生效不再等重启
+
+验证：离线 12 项接线断言通过；真实服务重启后记忆写入→读取→UI 可见、调度创建→列表→取消、检查点存取清、知识库索引落盘等端到端探测全部通过。
+
 ## v3.1.1（2026-08-26）—— 🔧 视觉模型切换与工具客户端断链修复
 
 **修复：所有依赖 LLM 客户端的工具报「没有可用客户端（请先完成一次对话建立连接）」**
