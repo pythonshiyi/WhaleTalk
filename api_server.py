@@ -918,6 +918,8 @@ def _init_dc_paths():
     """
     import deepseek_client as dc
     import config_utils
+    import profiles as profiles_mod
+    profiles_mod.DEFAULT_PROFILES_PATH = os.path.join(DATA_DIR, "profiles.json")
     dc.MEMORY_FILE = MEMORY_PATH
     dc.WEBHOOK_CONFIG_FILE = os.path.join(DATA_DIR, "webhooks.json")
     dc.IM_CONFIG_FILE = os.path.join(DATA_DIR, "im_config.json")
@@ -1894,6 +1896,69 @@ def _profiles_get():
         ],
         "current": str(data.get("current") or ""),
     }
+
+
+def _reset_llm_client_cache():
+    """失效 LLM 客户端缓存：会话注入的与懒构建的都清掉，下次按新配置重建。"""
+    import deepseek_client as dc
+    dc.set_active_client(None)
+    dc._ACTIVE_FALLBACK["sig"], dc._ACTIVE_FALLBACK["client"] = None, None
+
+
+def _profiles_post(body):
+    """配置方案管理：save（保存当前 Key/网关/模型为方案）/ apply（一键应用）/ delete。
+
+    api_key 全程经 profiles 模块 DPAPI 加密落盘，接口不回传明文。
+    apply 后配置即时生效（写 config.json + 失效 LLM 客户端缓存 + 热同步接线）。
+    """
+    import config_utils
+    import profiles as profiles_mod
+    action = str(body.get("action") or "").strip().lower()
+    name = str(body.get("name") or "").strip()[:40]
+    if action not in ("save", "apply", "delete"):
+        return None, "未知 action（save/apply/delete）"
+    if not name:
+        return None, "缺少方案名 name"
+    data = profiles_mod.load_profiles()
+    profiles = data.get("profiles") or {}
+    if action == "save":
+        cfg = config_utils.load_config()
+        key = str(cfg.get("api_key") or "").strip()
+        if not key:
+            return None, "当前未配置 API Key，无可保存的方案"
+        profiles[name] = {
+            "api_key": key,
+            "base_url": str(cfg.get("base_url") or "").strip(),
+            "model": str(cfg.get("model") or "").strip(),
+        }
+        data["current"] = name
+    elif action == "apply":
+        p = profiles.get(name)
+        if not isinstance(p, dict):
+            return None, f"方案不存在：{name}"
+        cfg = config_utils.load_config()
+        for k in ("api_key", "base_url", "model"):
+            v = str(p.get(k) or "").strip()
+            if v:
+                cfg[k] = v
+        config_utils.save_config(cfg)
+        data["current"] = name
+        _init_dc_paths()          # 接线热同步（图片键/网关派生等跟随新 cfg）
+        _reset_llm_client_cache()  # 下次对话/工具调用按新方案重建客户端
+        try:
+            _cached_invalidate("status")
+        except Exception:
+            pass
+    else:  # delete
+        if name not in profiles:
+            return None, f"方案不存在：{name}"
+        profiles.pop(name)
+        if data.get("current") == name:
+            data["current"] = ""
+    ok = profiles_mod.save_profiles({"profiles": profiles, "current": str(data.get("current") or "")})
+    if not ok:
+        return None, "Profile 保存失败（api_key 加密落盘未通过，已保留旧文件）"
+    return {"ok": True, "current": str(data.get("current") or ""), "count": len(profiles)}, None
 
 
 def _audit_get():
@@ -3281,6 +3346,16 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(400, {"error": err})
                 else:
                     self._json(200, result)
+            elif self.path == "/v1/profiles":
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                result, err = _profiles_post(body)
+                if err:
+                    self._json(400, {"error": err})
+                else:
+                    self._json(200, result)
             elif self.path == "/v1/mode":
                 body = self._read_body()
                 if body is None:
@@ -3383,12 +3458,10 @@ class _Handler(BaseHTTPRequestHandler):
                         _apply_autostart(bool(body["autostart"]))
                     # 配置保存后热同步全部工具侧接线（路径/agent_mail/主题/工作目录/图片键）
                     _init_dc_paths()
-                    # 密钥/网关/模型等影响 LLM 客户端的配置变更后，失效懒构建客户端
+                    # 密钥/网关/模型等影响 LLM 客户端的配置变更后，失效客户端缓存
                     # （get_active_client 下次调用按新配置重建；会话注入的由下次对话刷新）
                     if any(k in body for k in ("api_key", "base_url", "model")):
-                        import deepseek_client as _dc
-                        _dc.set_active_client(None)
-                        _dc._ACTIVE_FALLBACK["sig"], _dc._ACTIVE_FALLBACK["client"] = None, None
+                        _reset_llm_client_cache()
                     if "api_key" in body and body["api_key"] is not None:
                         _cached_invalidate("status")
                     self._json(200, {"ok": True})

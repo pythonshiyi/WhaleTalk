@@ -2,6 +2,14 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.1.5（2026-08-27）—— 🗂 配置方案（Profile）管理回归
+
+恢复旧桌面版的 Profile 能力并接入 Web 架构：把当前的 **API Key + 网关 + 模型** 保存为一套命名方案，之后一键整套切换（官方/中转站/多账号场景免手动改三个字段）。
+
+- 后端：`POST /v1/profiles`（save/apply/delete）；api_key 沿用 profiles 模块 DPAPI 加密落盘、原子写，接口不回传明文；apply 即时生效——写 config.json + 热同步接线 + 失效 LLM 客户端缓存
+- 前端：设置页新增「🗂 配置方案」卡片（简单模式与高级模式「模型与网关」均有）：保存当前为方案、一键应用、删除；当前方案标记"生效中"
+- `_init_dc_paths` 补接 profiles.json 路径；LLM 客户端缓存失效逻辑抽为 `_reset_llm_client_cache` 供 config/profiles 两处复用
+
 ## v3.1.4（2026-08-27）—— 🧹 企业微信智能机器人幽灵配置清理
 
 应用户决策移除 wecom_aibot 长连接的全部残留入口（功能代码已随桌面版重构删除，配置项却仍在误导用户）：

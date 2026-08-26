@@ -64,6 +64,45 @@ function NumInput({ value, onChange, min, max, step }) {
   );
 }
 
+// ── 配置方案（API Key + 网关 + 模型 组合一键切换）──────
+function ProfilesBlock({ onTip }) {
+  const [data, setData] = React.useState(null);
+  const [nameDraft, setNameDraft] = React.useState("");
+  const load = () => apiGet("/v1/profiles").then((d) => d && setData(d));
+  React.useEffect(() => { load(); }, []);
+  if (!data) return null;
+  const act = async (action, name) => {
+    const d = await apiPost("/v1/profiles", { action, name });
+    if (d && d.ok) {
+      onTip(action === "apply" ? `✅ 已应用方案「${name}」` : action === "save" ? `✅ 已保存方案「${name}」` : `已删除方案「${name}」`);
+      load();
+    } else {
+      onTip("❌ " + ((d && d.error) || "操作失败"));
+    }
+    setTimeout(() => onTip(""), 2500);
+  };
+  return (
+    <div className="svc-group">
+      <div className="svc-title">🗂 配置方案（API Key + 网关 + 模型 整套切换）</div>
+      {(data.profiles || []).map((p) => (
+        <Row key={p.name} label={p.name} desc={`${p.model || "默认模型"} @ ${p.base_url || "默认网关"}${data.current === p.name ? " · ✅ 当前生效" : ""}`}>
+          <div style={{ display: "flex", gap: 6 }}>
+            {data.current !== p.name ? (
+              <button className="confirm-btn confirm-primary" onClick={() => act("apply", p.name)}>应用</button>
+            ) : <span className="set-badge">生效中</span>}
+            <button className="msg-op" title="删除方案（不影响当前配置）" onClick={() => { if (window.confirm(`删除方案「${p.name}」？`)) act("delete", p.name); }}>✕</button>
+          </div>
+        </Row>
+      ))}
+      {!data.profiles.length && <div className="empty-tip">还没有保存的方案：在下方填好 API Key/网关/模型后，起个名字点「保存当前」</div>}
+      <div className="svc-actions">
+        <input className="set-select set-combo" placeholder="方案名（如：官方 / 中转站A）" value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} />
+        <button className="confirm-btn confirm-primary" disabled={!nameDraft.trim()} onClick={async () => { await act("save", nameDraft.trim()); setNameDraft(""); }}>💾 保存当前</button>
+      </div>
+    </div>
+  );
+}
+
 // ── 外部服务（邮件/IM/Webhook/数据库/图片/接收端）──────
 function ServicesTab({ cfg, onTip }) {
   const [svc, setSvc] = React.useState(null);
@@ -661,6 +700,7 @@ export default function SettingsPage() {
               </button>
             ))}
           </div>
+          <ProfilesBlock onTip={setTip} />
           <div className="svc-title" style={{ marginTop: 16 }}>核心设置</div>
           <div className="set-card">
             <Row label="模型" desc="官方三模型 + 任意 OpenAI 兼容">
@@ -702,6 +742,7 @@ export default function SettingsPage() {
           <div className="set-card">
             {tab === "model" && (
               <>
+                <ProfilesBlock onTip={setTip} />
                 <Row label="API Key" desc={cfg.has_key ? `✅ 已配置 ${cfg.key_hint || ""}（加密存储于 config.json）· 输入新 Key 可覆盖` : "⚠️ 未配置，粘贴后回车或失焦保存"}>
                   <input className="set-select set-combo" type="password" placeholder="sk-…" value={apiKeyDraft ?? ""} onChange={(e) => setApiKeyDraft(e.target.value)} onBlur={(e) => commitApiKey(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
                 </Row>
