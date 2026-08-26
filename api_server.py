@@ -1566,11 +1566,41 @@ def _scheduler_loop():
         time.sleep(30)
 
 
-def _headless_chat(text):
-    """无头执行一段指令（定时任务 message / run_workflow 消息投递共用）。
+def _installed_plugins_hint():
+    """已启用插件的触发词提示（对齐旧 main 的静态注入：让模型知道有哪些插件可提/可调）。
+
+    v3.0 重构丢失了这段注入——用户装了插件后模型毫无感知，只能靠人肉说明。
+    """
+    try:
+        import plugins as plugins_mod
+        lines = []
+        for p in plugins_mod.list_plugins(_plugin_paths()["plugins_dir"]):
+            if not p.get("enabled", True):
+                continue
+            meta = p.get("meta") or {}
+            name = str(meta.get("name") or "")
+            if not name:
+                continue
+            trs = meta.get("triggers") or ([meta.get("trigger")] if meta.get("trigger") else [])
+            desc = str(meta.get("description") or "")[:40]
+            tr_text = "/".join(str(t) for t in trs[:3]) if trs else "无固定触发词"
+            lines.append(f"- {name}（触发词：{tr_text}）{desc}")
+        if not lines:
+            return ""
+        return (
+            "[已安装插件] 用户可能提到这些应用；命中触发词即代表想使用对应能力，"
+            "按其功能直接执行或引导使用：\n" + "\n".join(lines[:10])
+        )
+    except Exception:
+        return ""
+
+
+def _headless_chat(text, reply_channel=""):
+    """无头执行一段指令（定时任务 message / run_workflow 消息投递 / IM 远程任务共用）。
 
     Web 架构没有旧 main 的「投递到输入框」通道，改为后台静默执行一轮对话；
-    有产出时发桌面通知告知（文件类产物落盘工作目录，可在文件面板查看）。
+    结果落会话库；有产出时发桌面通知告知（文件类产物落盘工作目录，可在文件面板查看）。
+    reply_channel="telegram" 时把回复推回 Telegram（远程指令的完整闭环）。
     """
     import config_utils
     import deepseek_client as dc
@@ -1600,7 +1630,22 @@ def _headless_chat(text):
         return
     reply = "".join(parts).strip()
     logger.info("无头执行完成：%s => %s", str(text)[:40], reply[:60] or "（无文本输出）")
-    if reply:
+    if not reply:
+        return
+    # 会话落库（对齐旧 main 定时任务分支：任务结果可追溯）
+    try:
+        _save_session_data({
+            "name": str(text)[:24],
+            "messages": [{"role": "user", "content": str(text)}, {"role": "assistant", "content": reply}],
+        })
+    except Exception:
+        logger.exception("无头执行结果存会话库失败")
+    if reply_channel == "telegram":
+        try:
+            dc.im_send(reply, title="🐋 鲸语远程任务", channel="telegram")
+        except Exception:
+            logger.exception("Telegram 回复发送失败")
+    else:
         try:
             dc.notify_desktop("鲸语后台任务完成", body=str(text)[:40] + "\n" + reply[:120])
         except Exception:
@@ -2060,8 +2105,10 @@ def _im_loop():
                     continue
                 if chat_id and str(from_chat) != chat_id:
                     continue
-                # 执行任务（复用定时任务 message 通道）
-                _dispatch_schedule({"text": text, "name": "IM 任务"}, "message")
+                # 执行任务并回推 Telegram（后台线程，避免阻塞下一轮长轮询）
+                threading.Thread(
+                    target=_headless_chat, args=(text, "telegram"), daemon=True
+                ).start()
         except Exception:
             logger.exception("IM 轮询异常")
             time.sleep(30)
@@ -3644,6 +3691,12 @@ class _Handler(BaseHTTPRequestHandler):
                             p_lines.append("- " + str(p.get("tool") or p.get("recipe")))
                     if len(p_lines) > 1:
                         parts.append("\n".join(p_lines))
+            except Exception:
+                pass
+            try:
+                hint = _installed_plugins_hint()
+                if hint:
+                    parts.append(hint)
             except Exception:
                 pass
             try:

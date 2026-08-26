@@ -2,6 +2,15 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.1.3（2026-08-26）—— 📋 依赖级二次审计：远程任务闭环与插件感知修复
+
+在 v3.1.2 注入审计之上，对旧 main.py 做**功能级依赖对照**（逐模块调用面 + 启动行为清单）：
+
+- **Telegram 远程任务闭环补全**：IM 轮询注释写着「执行任务并回复」，但上游实现只执行不回消息；现在 `_headless_chat(reply_channel="telegram")` 执行完把结果推回 Telegram，且改为独立后台线程执行（不再阻塞长轮询）
+- **无头执行结果恢复落会话库**：v3.1.2 抽取 `_headless_chat` 时丢了旧版"存会话库"步骤（定时任务/IM 结果可追溯性退化），已恢复
+- **已装插件提示注入补回**：旧 main 会把应用型插件触发词注入系统提示（模型据此识别 `/飞侠` 等意图），v3.0 重构丢失——装了插件模型却毫无感知。`_inject_system_messages` 现注入启用插件的名称/触发词/描述
+- 审计确认（有意移除/半残，暂不动）：watchdog/perception/splash/taskpanel/processpanel/dialogs 为纯桌面 UI 有意移除；exporters 由前端 exporters.js 替代；企业微信智能机器人长连接（wecom_aibot SDK）随桌面版移除但**设置页仍保留 secret 配置项且 deps 清单仍提示安装 SDK**——幽灵配置，待产品决策（改走 webhook 或删除入口）；profiles 仅剩只读接口，切换能力与 UI 待规划
+
 ## v3.1.2（2026-08-26）—— 🧯 重构遗留断链全面审计与修复
 
 **对 v3.0「删除 main.py」重构做全量接线审计**（静态挖掘旧 main.py 注入清单 + 115 工具动态探测），已知/未知问题一次修清：
