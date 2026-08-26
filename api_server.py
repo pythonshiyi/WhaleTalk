@@ -15,10 +15,13 @@
 - 必须携带 Bearer token（优先 config.json 的 inbound_token，否则启动时自动生成）。
 - 请求体上限 1MB，messages 条数/长度受限。
 """
+import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -1905,6 +1908,208 @@ def _reset_llm_client_cache():
     dc._ACTIVE_FALLBACK["sig"], dc._ACTIVE_FALLBACK["client"] = None, None
 
 
+# ===== 语音朗读（Web 端朗读按钮/自动模式 的合成服务端）=====
+
+_TTS_SEM = threading.Semaphore(2)  # 合成并发上限：短句高频场景防线程风暴
+_TTS_SENTENCE_MAX = 200            # 单次合成文本上限（分句后超长再切）
+
+
+def _voice_cfg():
+    """读取规范化 voice_config（缺失字段用默认值兜底）。"""
+    import config_utils
+    try:
+        vc = config_utils.load_config().get("voice_config") or {}
+    except Exception:
+        vc = {}
+    if not isinstance(vc, dict):
+        vc = {}
+    mode = str(vc.get("auto_mode") or "off")
+    out = {
+        "auto_mode": mode if mode in ("off", "sentence", "full") else "off",
+        "rate": max(-10, min(10, int(vc.get("rate") or 0))) if str(vc.get("rate") or 0).lstrip("-").isdigit() else 0,
+        "volume": max(0, min(100, int(vc.get("volume") or 100))),
+        "voice": str(vc.get("voice") or "").strip()[:80],
+    }
+    return out
+
+
+_MD_STRIP_PATTERNS = [
+    (re.compile(r"```.*?```", re.S), " "),           # 代码块整段跳过
+    (re.compile(r"`([^`]*)`"), r"\1"),               # 行内代码留内容
+    (re.compile(r"!\[[^\]]*\]\([^)]*\)"), " "),      # 图片
+    (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),   # 链接留文字
+    (re.compile(r"[#*_~>|]+"), " "),                 # 标题/强调/表格符号
+    (re.compile(r"^\s*[-+*]\s+", re.M), ""),         # 列表符
+    (re.compile(r"\s{2,}"), " "),
+]
+
+
+def _tts_clean_text(t):
+    """朗读前清洗 Markdown：代码块跳过、链接只读文字、去掉强调与表格符号。"""
+    s = str(t or "")
+    for pat, rep in _MD_STRIP_PATTERNS:
+        s = pat.sub(rep, s)
+    return re.sub(r"\n{2,}", "\n", s).strip()
+
+
+def _split_sentences(t, limit=_TTS_SENTENCE_MAX):
+    """按中英句末标点切句，短句合并、超长硬切，供逐句流式朗读。"""
+    raw = re.split(r"(?<=[。！？；!?\n])\s*", str(t or ""))
+    out = []
+    buf = ""
+    for seg in raw:
+        seg = seg.strip()
+        if not seg:
+            continue
+        cand = f"{buf}{seg}"
+        if len(cand) <= limit:
+            buf = cand
+            continue
+        if buf:
+            out.append(buf)
+        while len(seg) > limit:  # 无标点超长句硬切
+            cut = seg.rfind("，", 0, limit)
+            cut = cut + 1 if cut > 20 else limit
+            out.append(seg[:cut].strip())
+            seg = seg[cut:]
+        buf = seg.strip()
+    if buf.strip():
+        out.append(buf.strip())
+    return [s for s in out if s]
+
+
+def _synthesize_sapi(text, path, rate=0, volume=100, voice=""):
+    """SAPI 合成 WAV 文件（独立实现：带音量/音色，不进播放注册表）。"""
+    import pythoncom
+    import win32com.client
+
+    result = {"err": None}
+
+    def _go():
+        pythoncom.CoInitialize()
+        stream = None
+        try:
+            speaker = win32com.client.Dispatch("SAPI.SpVoice")
+            speaker.Rate = max(-10, min(10, int(rate)))
+            speaker.Volume = max(0, min(100, int(volume)))
+            import deepseek_client as _dc
+
+            _dc._sapi_pick_voice(speaker, voice)
+            stream = win32com.client.Dispatch("SAPI.SpFileStream")
+            stream.Open(path, 3)  # SSFMCreateForWrite
+            speaker.AudioOutputStream = stream
+            speaker.Speak(str(text)[:4000])
+        except Exception as e:
+            result["err"] = e
+        finally:
+            if stream is not None:
+                try:
+                    stream.Close()
+                except Exception:
+                    pass
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+
+    thd = threading.Thread(target=_go, daemon=True)
+    thd.start()
+    thd.join(timeout=max(30.0, len(text) * 0.12))
+    if thd.is_alive():
+        return "合成超时"
+    if result["err"]:
+        return str(result["err"])
+    try:
+        if os.path.getsize(path) < 200:
+            return "合成结果为空（系统可能缺少语音包）"
+    except OSError:
+        return "合成输出缺失"
+    return ""
+
+
+def _synthesize_edge(text, path_mp3, rate=0, volume=100, voice=""):
+    """edge-tts 合成 MP3（python -m edge_tts CLI 子进程，失败返回错误串）。"""
+    v = str(voice or "").strip() or "zh-CN-XiaoxiaoNeural"
+    exe = sys.executable
+    in_file = path_mp3 + ".in.txt"
+    try:
+        with open(in_file, "w", encoding="utf-8") as f:
+            f.write(text)
+        subprocess.run(
+            [exe, "-m", "edge_tts", "--voice", v,
+             "--rate", f"{int(rate) * 10:+d}%", "--volume", f"{max(0, min(100, int(volume) - 100)):+d}%",
+             "--file", in_file, "--write-media", path_mp3],
+            capture_output=True, timeout=25,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as e:
+        return f"edge-tts 调用失败: {e}"
+    finally:
+        try:
+            os.remove(in_file)
+        except OSError:
+            pass
+    try:
+        if os.path.getsize(path_mp3) > 500:
+            return ""
+    except OSError:
+        pass
+    return "edge-tts 无输出"
+
+
+_EDGE_STATE = {"checked": False, "ok": False}
+
+
+def _edge_available():
+    """探测 edge-tts 是否可用（python -m edge_tts，结果缓存；失败则走 SAPI 兜底）。"""
+    if _EDGE_STATE["checked"]:
+        return _EDGE_STATE["ok"]
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "edge_tts", "--version"],
+            capture_output=True, timeout=8,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        _EDGE_STATE["ok"] = (r.returncode == 0)
+    except Exception:
+        _EDGE_STATE["ok"] = False
+    _EDGE_STATE["checked"] = True
+    return _EDGE_STATE["ok"]
+
+
+_EDGE_VOICES_ZH = [
+    {"id": "zh-CN-XiaoxiaoNeural", "name": "晓晓（女·自然）"},
+    {"id": "zh-CN-XiaoyiNeural", "name": "晓伊（女·活泼）"},
+    {"id": "zh-CN-YunxiNeural", "name": "云希（男·阳光）"},
+    {"id": "zh-CN-YunjianNeural", "name": "云健（男·浑厚）"},
+]
+
+
+def _tts_voices():
+    """枚举可用音色：SAPI 本地音色 + （装了 edge-tts 时）中文神经网络音色。"""
+    sapi = []
+    try:
+        import pythoncom
+        import win32com.client
+
+        pythoncom.CoInitialize()
+        try:
+            speaker = win32com.client.Dispatch("SAPI.SpVoice")
+            voices = speaker.GetVoices()
+            for i in range(voices.Count):
+                desc = str(voices.Item(i).GetDescription())
+                sapi.append({"id": desc, "name": desc})
+        finally:
+            pythoncom.CoUninitialize()
+    except Exception:
+        pass
+    return {
+        "sapi": sapi,
+        "edge": _EDGE_VOICES_ZH if _edge_available() else [],
+        "default_engine": "edge" if (_EDGE_STATE["ok"] and sapi is not None) else "sapi",
+    }
+
+
 def _profiles_post(body):
     """配置方案管理：save（保存当前 Key/网关/模型为方案）/ apply（一键应用）/ delete。
 
@@ -2482,6 +2687,8 @@ try:
 except Exception:
     pass
 DATA_DIR = os.path.join(os.path.expanduser("~"), "Documents", "WhaleTalk")
+
+_VOICE_CACHE_DIR = os.path.join(DATA_DIR, "voice", "cache")
 HISTORY_DIR = os.path.join(DATA_DIR, "history")
 SESSIONS_DIR = os.path.join(HISTORY_DIR, "sessions")
 MEMORY_PATH = os.path.join(DATA_DIR, "memory.json")
@@ -3157,7 +3364,36 @@ class _Handler(BaseHTTPRequestHandler):
                                                 "browser_headless": bool(cfg.get("browser_headless")),
                         "peak_warning": bool(cfg.get("peak_warning")),
                         "suggestions_enabled": bool(cfg.get("suggestions_enabled")),
+                        "voice_config": _voice_cfg(),
                     })
+                elif self.path.startswith("/v1/tts/audio/"):
+                    fn = self.path.rsplit("/", 1)[-1]
+                    base, _, ext = fn.partition(".")
+                    ok_fn = (
+                        ext in ("wav", "mp3") and len(base) >= 8 and len(base) <= 40
+                        and all(c in "0123456789abcdef" for c in base)
+                    )
+                    if not ok_fn:
+                        self._json(400, {"error": "invalid audio name"})
+                        return
+                    fp = os.path.join(_VOICE_CACHE_DIR, fn)
+                    if not os.path.isfile(fp):
+                        self._json(404, {"error": "audio not found"})
+                        return
+                    try:
+                        with open(fp, "rb") as f:
+                            data = f.read()
+                    except OSError:
+                        self._json(500, {"error": "read audio failed"})
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/wav" if ext == "wav" else "audio/mpeg")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(data)
+                elif self.path == "/v1/tts/voices":
+                    self._json(200, _tts_voices())
                 elif self.path.startswith("/v1/sessions/") and self.path.endswith("/messages"):
                     sid = self.path[len("/v1/sessions/"):-len("/messages")]
                     data = self._load_session_messages(sid)
@@ -3356,6 +3592,55 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(400, {"error": err})
                 else:
                     self._json(200, result)
+            elif self.path == "/v1/tts/synthesize":
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                try:
+                    text = _tts_clean_text(str(body.get("text") or ""))
+                    if not text:
+                        self._json(400, {"error": "清洗后无可朗读内容（代码块/纯符号）"})
+                        return
+                    if len(text) > 4000:
+                        text = text[:4000]
+                    vc = _voice_cfg()
+                    rate = max(-10, min(10, int(body.get("rate") or vc["rate"])))
+                    volume = max(0, min(100, int(body.get("volume") or vc["volume"])))
+                    voice = str(body.get("voice") or vc["voice"])[:80]
+                    engine_req = str(body.get("engine") or "").strip().lower()
+                    digest = hashlib.sha1(
+                        json.dumps([text, rate, volume, voice, engine_req], ensure_ascii=False).encode("utf-8")
+                    ).hexdigest()
+                    os.makedirs(_VOICE_CACHE_DIR, exist_ok=True)
+                    use_edge = (engine_req != "sapi") and _edge_available()
+                    candidates = []
+                    if engine_req != "sapi" and use_edge:
+                        candidates.append(("edge", f"{digest}.mp3"))
+                    if not candidates or engine_req == "sapi":
+                        pass
+                    # 候选顺序：edge 优先（请求允许时），失败或未启用回退 SAPI；sapi 强制走 SAPI
+                    plan = ([("edge", f"{digest}.mp3")] if use_edge else []) + [("sapi", f"{digest}.wav")]
+                    err_last = ""
+                    for eng, fn in plan:
+                        fp = os.path.join(_VOICE_CACHE_DIR, fn)
+                        if os.path.isfile(fp) and os.path.getsize(fp) > (500 if fn.endswith(".mp3") else 200):
+                            self._json(200, {"ok": True, "url": f"/v1/tts/audio/{fn}", "cached": True, "engine": eng})
+                            return
+                        with _TTS_SEM:
+                            err_last = _synthesize_edge(text, fp, rate, volume, voice) if eng == "edge" \
+                                else _synthesize_sapi(text, fp, rate, volume, voice)
+                        if not err_last:
+                            self._json(200, {"ok": True, "url": f"/v1/tts/audio/{fn}", "cached": False, "engine": eng})
+                            return
+                        try:
+                            os.remove(fp)
+                        except OSError:
+                            pass
+                    self._json(500, {"error": err_last or "合成失败"})
+                except Exception as e:
+                    logger.exception("TTS 合成失败")
+                    self._json(500, {"error": str(e)})
             elif self.path == "/v1/mode":
                 body = self._read_body()
                 if body is None:
@@ -3447,6 +3732,23 @@ class _Handler(BaseHTTPRequestHandler):
                         cfg["logprobs"] = bool(body["logprobs"])
                     if "tool_choice" in body and body["tool_choice"] is not None:
                         cfg["tool_choice"] = str(body["tool_choice"])[:32]
+                    if "voice_config" in body and isinstance(body["voice_config"], dict):
+                        vreq = body["voice_config"]
+                        mode = str(vreq.get("auto_mode") or "off")
+                        try:
+                            rate_v = max(-10, min(10, int(vreq.get("rate") or 0)))
+                        except (TypeError, ValueError):
+                            rate_v = 0
+                        try:
+                            vol_v = max(0, min(100, int(vreq.get("volume") or 100)))
+                        except (TypeError, ValueError):
+                            vol_v = 100
+                        cfg["voice_config"] = {
+                            "auto_mode": mode if mode in ("off", "sentence", "full") else "off",
+                            "rate": rate_v,
+                            "volume": vol_v,
+                            "voice": str(vreq.get("voice") or "").strip()[:80],
+                        }
                     # API Key：留空/缺省=不修改；非空 strip 后交给 save_config 加密落盘
                     if "api_key" in body and body["api_key"] is not None:
                         new_key = str(body["api_key"]).strip()

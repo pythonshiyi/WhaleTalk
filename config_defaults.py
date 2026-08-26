@@ -5,7 +5,7 @@
 """
 
 # 应用版本号（统一来源：deepseek_client / backup 引用此处）
-VERSION = "3.1.5"
+VERSION = "3.2.0"
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个强大的AI助手，具备以下核心能力：\n"
@@ -120,6 +120,7 @@ DEFAULT_CONFIG = {
     "api_key": "",
     "base_url": "https://api.deepseek.com",
     "model": "deepseek-v4-flash",
+    "voice_config": {"auto_mode": "off", "rate": 0, "volume": 100, "voice": ""},
     "scenario": "通用",
     "thinking": "none",  # 初始最干净：思考关闭（用户可在设置中开启）
     "max_tokens": 16384,

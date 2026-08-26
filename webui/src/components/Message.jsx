@@ -2,6 +2,7 @@ import React from "react";
 import Markdown from "./Markdown.jsx";
 import ToolCard from "./ToolCard.jsx";
 import * as api from "../api.js";
+import { cleanForSpeech, enqueueSpeak, stopSpeak } from "../ttsUtil.js";
 
 const Whale = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -60,18 +61,20 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
     } catch {}
   };
 
-  const speak = () => {
-    try {
-      if (typeof window.speechSynthesis === "undefined") {
-        alert("当前浏览器不支持语音朗读（需要 Chrome/Edge）");
-        return;
-      }
-      if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
-      const clean = String(msg.text || "").replace(/[#*`>|_]/g, "").slice(0, 4000);
-      const u = new SpeechSynthesisUtterance(clean);
-      u.lang = "zh-CN";
-      window.speechSynthesis.speak(u);
-    } catch {}
+  const [speaking, setSpeaking] = React.useState(false);
+
+  // 朗读/停止切换：走服务端合成（语速/音量/音色跟随设置），播放中再点即停
+  const toggleSpeak = () => {
+    if (speaking) {
+      stopSpeak();
+      return;
+    }
+    const clean = cleanForSpeech(msg.text).slice(0, 4000);
+    if (!clean) return;
+    setSpeaking(true);
+    enqueueSpeak(clean)
+      .catch(() => {})
+      .finally(() => setSpeaking(false));
   };
 
   const time = msg.time || "";
@@ -150,7 +153,9 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
             <button className="msg-op" title="复制回复" onClick={copy}>
               {copied ? "✓ 已复制" : "📋"}
             </button>
-            <button className="msg-op" title="朗读回复" onClick={speak}>🔊</button>
+            <button className="msg-op" title={speaking ? "⏹ 停止朗读" : "🔊 朗读回复（服务端合成，跟随语音设置）"} onClick={toggleSpeak}>
+              {speaking ? "⏹" : "🔊"}
+            </button>
             <button className="msg-op" title={isStarred ? "取消收藏" : "收藏"} onClick={() => onStar && onStar()}>
               {isStarred ? "⭐" : "☆"}
             </button>

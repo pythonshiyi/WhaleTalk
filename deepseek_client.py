@@ -1687,6 +1687,37 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "tts_speak",
+            "description": "朗读文本：立即返回，后台通过扬声器播放（配对 tts_stop 可随时打断）。适合提醒、播报、读结果给用户听",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "要朗读的文本（≤8000 字）"},
+                    "voice": {"type": "string", "description": "可选：音色名子串（如 Huihui / Xiaoxiao，留空=系统默认）"},
+                    "rate": {"type": "integer", "description": "可选：语速 -10~10（默认 0）"},
+                    "volume": {"type": "integer", "description": "可选：音量 0~100（默认 100）"},
+                    "save_path": {"type": "string", "description": "可选：同时把合成结果另存为 WAV 文件"},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tts_stop",
+            "description": "停止朗读：立即中断后台播放（sid 留空停止全部当前朗读）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sid": {"type": "string", "description": "可选：tts_speak 返回的会话 id（留空=全部停止）"},
+                },
+            },
+        },
+    },
     # ===== v3.1 能力层 · 应用管理 / 视觉点击 / 实时语音 / 多智能体 / 网络自愈 =====
     {
         "type": "function",
@@ -9404,33 +9435,138 @@ def _mic_record_once(max_seconds=15, silence_ms=900, threshold=0.02):
     return wav_path, None
 
 
-def _speak_aloud(text, rate=0):
-    """用 Windows SAPI 直接朗读文本（阻塞至读完或 90s 超时）。"""
-    if not str(text or "").strip():
+# ===== 朗读播放注册表：_ACTIVE_SPEAK[sid] = {"event": stop_ev, "voice": spObj, "thread": thd} =====
+# tts_stop 通过向同一 SpVoice 实例投递空 utterance（async+purge）立即中断当前朗读。
+_ACTIVE_SPEAK = {}
+_ACTIVE_SPEAK_LOCK = threading.Lock()
+_SPEAK_SEQ = itertools.count(1)
+
+
+def _sapi_pick_voice(speaker, voice):
+    """按名称子串选择 SAPI 音色（不匹配则保持默认）。"""
+    v = str(voice or "").strip()
+    if not v:
         return
+    try:
+        voices = speaker.GetVoices()
+        for i in range(voices.Count):
+            if v.lower() in str(voices.Item(i).GetDescription()).lower():
+                speaker.Voice = voices.Item(i)
+                return
+    except Exception:
+        pass
+
+
+def _speak_aloud(text, rate=0, volume=None, voice="", label=""):
+    """用 Windows SAPI 直接朗读文本（后台线程，可被 tts_stop 立即中断）。
+
+    返回会话 id（sid）；无声环境（缺 pywin32/无声卡）静默降级返回 ""。
+    """
+    synth = str(text or "")[:4000]
+    if not synth.strip():
+        return ""
+    sid = f"spk_{next(_SPEAK_SEQ)}"
     try:
         import pythoncom
         import win32com.client
 
-        synth = str(text)[:4000]
+        stop_event = threading.Event()
 
         def _go():
             pythoncom.CoInitialize()
+            speaker = None
             try:
                 speaker = win32com.client.Dispatch("SAPI.SpVoice")
                 try:
                     speaker.Rate = max(-10, min(10, int(rate or 0)))
                 except (TypeError, ValueError):
                     pass
+                try:
+                    speaker.Volume = max(0, min(100, int(volume if volume is not None else 100)))
+                except (TypeError, ValueError):
+                    pass
+                _sapi_pick_voice(speaker, voice)
+                with _ACTIVE_SPEAK_LOCK:
+                    _ACTIVE_SPEAK[sid] = {"event": stop_event, "voice": speaker, "thread": threading.current_thread()}
+                # 同步 Speak 占住线程；被 stop 投递空句后此调用立即返回
                 speaker.Speak(synth)
+            except Exception:
+                pass
             finally:
-                pythoncom.CoUninitialize()
+                if speaker is not None:
+                    with _ACTIVE_SPEAK_LOCK:
+                        _ACTIVE_SPEAK.pop(sid, None)
+                    try:
+                        speaker.Speak("", 1 | 2)  # async + purge：确保队列清空释放
+                    except Exception:
+                        pass
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
-        thd = threading.Thread(target=_go, daemon=True)
+        try:
+            permissions.audit("tts_speak", f"{sid} {label}"[:60], str(rate))
+        except Exception:
+            pass
+        thd = threading.Thread(target=_go, name=f"tts-{sid}", daemon=True)
         thd.start()
-        thd.join(timeout=90.0)
+        return sid
     except Exception:
-        pass  # 无声环境（缺 pywin32/无声卡）：静默跳过朗读，对话循环继续
+        return ""  # 无声环境：静默跳过，调用方对话循环继续
+
+
+def tts_stop(sid=""):
+    """停止朗读：sid 为空停止全部当前朗读，否则只停指定会话。返回实际停止数。"""
+    s = str(sid or "").strip()
+    stopped = 0
+    targets = []
+    with _ACTIVE_SPEAK_LOCK:
+        if s:
+            if s in _ACTIVE_SPEAK:
+                targets.append((s, _ACTIVE_SPEAK[s]))
+        else:
+            targets = list(_ACTIVE_SPEAK.items())
+    for k, entry in targets:
+        try:
+            entry["event"].set()
+            sp = entry.get("voice")
+            if sp is not None:
+                import pythoncom
+
+                def _purge(sp=sp):
+                    pythoncom.CoInitialize()
+                    try:
+                        sp.Speak("", 1 | 2)  # async + purge：立即中断并清空朗读队列
+                    finally:
+                        pythoncom.CoUninitialize()
+
+                threading.Thread(target=_purge, daemon=True).start()
+            stopped += 1
+        except Exception:
+            pass
+    return stopped
+
+
+def tts_speak(text, voice="", rate=0, volume=100, save_path=""):
+    """朗读文本（立即返回，后台播放；配对 tts_stop 可随时停止）。
+
+    save_path 可选：同时把合成结果另存为 WAV 文件。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return "错误：text 必填"
+    if len(t) > 8000:
+        t = t[:8000]
+    sid = _speak_aloud(t, rate=rate, volume=volume, voice=voice, label="工具朗读")
+    if not sid:
+        return "错误：本机没有可用的 TTS 引擎（需要 pywin32 的 SAPI），或系统无中文语音包"
+    out = f"✅ 已开始后台朗读（会话 {sid}）。可用 tts_stop 停止；语速 {rate}，音量 {volume}。"
+    p = str(save_path or "").strip()
+    if p:
+        saved = tts_save(t[:4000], p, rate=rate)
+        out += f"\n另存：{saved}"
+    return out
 
 
 _BYE_PAT = ("再见", "拜拜", "停止对话", "结束对话", "退下吧", "goodbye", "bye-bye")
@@ -9866,6 +10002,8 @@ TOOL_CALL_MAP = {
     "image_batch": image_batch,
     "screen_capture": screen_capture,
     "speech_to_text": speech_to_text,
+    "tts_speak": tts_speak,
+    "tts_stop": tts_stop,
     "app_manage": app_manage,
     "screen_find_click": screen_find_click,
     "voice_chat_loop": voice_chat_loop,
@@ -9959,7 +10097,7 @@ TOOL_GROUPS = [
     ("📁 文件与目录", ["read_file", "write_file", "edit_file", "list_dir", "search_local", "delete_file", "archive_files", "extract_archive", "batch_rename", "clipboard_get", "clipboard_set"]),
     ("📊 数据与文档", ["read_csv", "write_csv", "read_excel", "write_excel", "chart_data", "database_query", "database_query_mysql", "database_query_postgres", "database_execute", "create_doc", "docx_read", "pptx_read", "pdf_extract", "pdf_create", "epub_read", "mobi_read", "doc_read", "archive_list", "secret_store", "kv_store"]),
     ("📧 邮件与消息", ["send_email", "read_email", "email_summary", "agent_mail", "msg_read", "im_send", "telegram_poll_updates", "send_webhook", "publish_draft", "run_wechat_writer", "daily_brief"]),
-    ("🎨 媒体与图像", ["image_process", "image_understand", "screen_see", "chart_read", "screenshot_to_html", "debug_screenshot", "scan_read", "image_batch", "image_generate", "ocr_image", "screen_capture", "speech_to_text", "voice_chat_loop", "tts_save", "media_ffmpeg", "qrcode"]),
+    ("🎨 媒体与图像", ["image_process", "image_understand", "screen_see", "chart_read", "screenshot_to_html", "debug_screenshot", "scan_read", "image_batch", "image_generate", "ocr_image", "screen_capture", "speech_to_text", "voice_chat_loop", "tts_save", "tts_speak", "tts_stop", "media_ffmpeg", "qrcode"]),
     ("🖱 桌面自动化", ["rpa_screen_size", "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot", "screen_find_click", "notify_desktop"]),
     ("📦 应用与环境", ["app_manage"]),
     ("⏰ 定时与任务", ["schedule_task", "list_schedules", "cancel_schedule", "task_checkpoint_save", "task_checkpoint_load", "run_workflow"]),
@@ -10122,7 +10260,9 @@ _TOOL_ACTION_PHRASES = {
     "team_run": "多智能体团队协作编排",
     "net_diagnose": "网络诊断（分层探测+降级建议）",
     "fetch_url_smart": "智能抓取（失败自动走代理通道）",
-    "tts_save": "文字转语音",
+    "tts_save": "文字转语音（存文件）",
+    "tts_speak": "立即朗读（后台播放，可打断）",
+    "tts_stop": "停止朗读",
     "media_ffmpeg": "音视频处理（ffmpeg）",
     "qrcode": "二维码生成/识别",
     "rpa_screen_size": "获取屏幕尺寸",

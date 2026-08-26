@@ -9,6 +9,7 @@ import AuxPanel from "./AuxPanel.jsx";
 import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
+import { cleanForSpeech, splitSentences, enqueueSpeak, getVoiceConfig } from "../ttsUtil.js";
 
 // ── 多轮消息链构造（官方规范）────────────────────────
 // tools 模式下必须完整回传：assistant(reasoning_content + tool_calls) → tool 结果
@@ -67,6 +68,20 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
 
     const targetIdx = () => (isContinue ? continueIdx : -1);
 
+    // ── 自动朗读（跟随设置 voice_config.auto_mode：off/sentence/full）──
+    let voiceSettings = null;
+    getVoiceConfig().then((v) => { voiceSettings = v; });
+    let acc = "";            // 本轮流式全文累加
+    let spokenCount = 0;     // 已入队句数（sentence 模式游标）
+    const feedAuto = () => {
+      if (!voiceSettings || voiceSettings.auto_mode !== "sentence") return;
+      const all = splitSentences(cleanForSpeech(acc));
+      while (spokenCount < all.length - 1) {  // 末句可能是半截，等下一包/收尾
+        enqueueSpeak(all[spokenCount], voiceSettings);
+        spokenCount += 1;
+      }
+    };
+
     (async () => {
       let done = false;
       const finish = (ok) => {
@@ -75,6 +90,20 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
         setMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, streaming: false } : x)));
         setBusy(false);
         setGenState({ on: false, text: "" });
+        // 自动朗读收尾：full 一次性读整段；sentence 补读最后半截句
+        try {
+          if (ok && voiceSettings && voiceSettings.auto_mode !== "off" && acc.trim()) {
+            if (voiceSettings.auto_mode === "full") {
+              enqueueSpeak(cleanForSpeech(acc), voiceSettings);
+            } else {
+              const all = splitSentences(cleanForSpeech(acc));
+              while (spokenCount < all.length) {
+                enqueueSpeak(all[spokenCount], voiceSettings);
+                spokenCount += 1;
+              }
+            }
+          }
+        } catch {}
         onFinished && onFinished({ userText, msg, ok, isContinue });
       };
       try {
@@ -102,6 +131,8 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
             },
             onContent: (t) => {
               if (!alive || stopRef.current) return;
+              acc += t;
+              feedAuto();
               if (isContinue) {
                 setMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, text: (x.text || "") + t } : x)));
               } else {

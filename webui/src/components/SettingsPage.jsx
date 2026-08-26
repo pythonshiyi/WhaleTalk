@@ -1,6 +1,7 @@
 import React from "react";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
+import { enqueueSpeak, invalidateVoiceConfig } from "../ttsUtil.js";
 
 const apiGet = async (path) => {
   try {
@@ -99,6 +100,56 @@ function ProfilesBlock({ onTip }) {
         <input className="set-select set-combo" placeholder="方案名（如：官方 / 中转站A）" value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} />
         <button className="confirm-btn confirm-primary" disabled={!nameDraft.trim()} onClick={async () => { await act("save", nameDraft.trim()); setNameDraft(""); }}>💾 保存当前</button>
       </div>
+    </div>
+  );
+}
+
+
+// ── 语音朗读设置（模式/语速/音量/音色/引擎/试听）──────
+function VoiceSettingsBlock({ cfg, saveField, onTip }) {
+  const [voices, setVoices] = React.useState(null);
+  React.useEffect(() => { apiGet("/v1/tts/voices").then((d) => d && setVoices(d)); }, []);
+  const vc = { auto_mode: "off", rate: 0, volume: 100, voice: "", ...(cfg?.voice_config || {}) };
+  const setV = (patch) => {
+    invalidateVoiceConfig();
+    saveField({ voice_config: { ...vc, ...patch } });
+  };
+  const hasEdge = !!(voices?.edge || []).length;
+  return (
+    <div className="svc-group">
+      <div className="svc-title">🗣 语音朗读</div>
+      <Row label="自动朗读" desc="逐句=生成中边出边读；整段=回复完成后读">
+        <select className="set-select" value={vc.auto_mode} onChange={(e) => setV({ auto_mode: e.target.value })}>
+          <option value="off">关闭（手动点 🔊）</option>
+          <option value="sentence">自动 · 逐句跟读</option>
+          <option value="full">自动 · 整段读完</option>
+        </select>
+      </Row>
+      <Row label="语速" desc="-10 慢 ~ 10 快，0 正常">
+        <NumInput min={-10} max={10} value={vc.rate} onChange={(v) => setV({ rate: v })} />
+      </Row>
+      <Row label="朗读音量" desc="0~100（叠加系统音量）">
+        <NumInput min={0} max={100} value={vc.volume} onChange={(v) => setV({ volume: v })} />
+      </Row>
+      <Row label="音色" desc={voices ? (hasEdge ? "Edge 在线音色更自然；SAPI 为本机离线" : "本机 SAPI 音色（安装 edge-tts 可获得在线自然音色）") : "加载可用音色…"}>
+        <select className="set-select" value={vc.voice} onChange={(e) => setV({ voice: e.target.value })}>
+          <option value="">默认音色</option>
+          {(voices?.edge || []).map((v) => <option key={"e_"+v.id} value={v.id}>🌐 {v.name}</option>)}
+          {(voices?.sapi || []).filter((v) => /chinese|zh|hui|kang|yaoyao|kangkang/i.test(v.name)).slice(0, 12).map((v) => (
+            <option key={"s_"+v.id} value={v.id}>💻 {v.name}</option>
+          ))}
+          {(voices?.sapi || []).filter((v) => !/chinese|zh|hui|kang|yaoyao|kangkang/i.test(v.name)).slice(0, 6).map((v) => (
+            <option key={"s2_"+v.id} value={v.id}>💻 {v.name}</option>
+          ))}
+        </select>
+      </Row>
+      <Row label="试听" desc="以当前设置朗读样例句">
+        <button className="confirm-btn confirm-primary" onClick={() => {
+          enqueueSpeak("你好，我是鲸语。这是当前语音设置的试听效果。", { ...vc });
+          onTip("正在试听…");
+          setTimeout(() => onTip(""), 2000);
+        }}>🔊 试听</button>
+      </Row>
     </div>
   );
 }
@@ -855,6 +906,7 @@ export default function SettingsPage() {
                 <Toggle on={cfg.peak_warning !== false} label="⏰ 高峰提示" desc="每天首次发送提示高峰价" onClick={() => saveField({ peak_warning: cfg.peak_warning === false })} />
                 <Toggle on={cfg.autostart !== false} label="🚀 开机自启" desc="注册 HKCU Run 开机自动启动（无窗口静默进入托盘）" onClick={() => saveField({ autostart: cfg.autostart === false })} />
                 <Toggle on={!!cfg.privacy_mode} label="🔒 隐私模式" desc="不写快照/会话/记忆/统计" onClick={() => saveField({ privacy_mode: !cfg.privacy_mode })} />
+                <VoiceSettingsBlock cfg={cfg} saveField={saveField} onTip={setTip} />
                 <Row label="💵 本月预算（元）" desc="0=不限">
                   <NumInput min={0} max={10000} step={50} value={cfg.monthly_budget || 0} onChange={(v) => saveField({ monthly_budget: v })} />
                 </Row>
