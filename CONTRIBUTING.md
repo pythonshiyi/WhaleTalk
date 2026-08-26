@@ -8,7 +8,7 @@
 
 - Python 3.9+（推荐 3.12）
 - 安装依赖：`pip install -r requirements.txt`（核心依赖 openai / httpx 已在清单中，其余为可选增强）
-- 运行：`python web_app.py`（本地 API + 自动打开浏览器 + 托盘常驻）
+- 运行：`python web_app.py`（本地 API + 自动打开浏览器 + 托盘常驻；首次启动自动构建 WebUI——`webui/dist` 缺失或源码更新时自动 `npm run build`，已构建则跳过，`--no-webui-build` 可跳过）
 - 打包：`python build_exe.bat`（产出 `dist\WhaleTalk.exe`）
 
 ## 前端开发 / Frontend Dev

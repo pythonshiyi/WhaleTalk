@@ -1,4 +1,4 @@
-﻿# 🐋 鲸语 WhaleTalk · AI 全能桌面智能体 / AI Desktop Agent
+# 🐋 鲸语 WhaleTalk · AI 全能桌面智能体 / AI Desktop Agent
 
 [![CI](https://github.com/pythonshiyi/WhaleTalk/actions/workflows/ci.yml/badge.svg)](https://github.com/pythonshiyi/WhaleTalk/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/pythonshiyi/WhaleTalk?color=blue)](https://github.com/pythonshiyi/WhaleTalk/releases)
@@ -129,7 +129,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 # 方式三：双击 build_exe.bat 打包为 dist\WhaleTalk.exe（WhaleTalk.spec）
 ```
 
-要求：**Python 3.9+，Windows 10/11**（Node 仅供前端开发：`cd webui && npm i && npm run dev` / `build`）。
+要求：**Python 3.9+，Windows 10/11**。首次启动会自动构建 WebUI：`web_app.py` 检测到 `webui/dist` 缺失或源码有更新时自动执行 `npm run build`（缺依赖先 `npm ci/install`），已构建则跳过；打包版 exe 前端已内置，无需 Node。前端单独开发：`cd webui && npm i && npm run dev` / `build`（可加 `--no-webui-build` 跳过自动构建）。
 
 ### 配置
 

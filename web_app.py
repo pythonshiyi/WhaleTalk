@@ -19,6 +19,7 @@
     python web_app.py --no-tray   → 常驻但不启用系统托盘（无 pystray 环境）
     python web_app.py --no-browser → 常驻但不自动打开浏览器（手动访问）
     python web_app.py --install-shortcuts → 强制重建桌面/开始菜单快捷方式
+    python web_app.py --no-webui-build → 跳过自动构建前端（默认：未构建/源码更新时自动 npm run build）
 
 退出方式：
 - 系统托盘菜单「退出」（停止服务并退出）
@@ -26,6 +27,7 @@
 """
 import argparse
 import os
+import subprocess
 import sys
 import time
 
@@ -34,6 +36,7 @@ sys.path.insert(0, BASE_DIR)
 
 APP_NAME = "鲸语 WhaleTalk"
 API_PORT = 8745
+WEBUI_DIR = os.path.join(BASE_DIR, "webui")
 
 
 def _start_api(port):
@@ -264,6 +267,120 @@ def _make_tray(stop_cb):
         return None
 
 
+# ── WebUI 构建保障 ──────────────────────────────
+def _harden_stdio():
+    """stdout/stderr 非 UTF 编码（如管道/重定向到 GBK 文件）时改为 replace，
+    避免日志里的 ✓/✅ 等字符触发 UnicodeEncodeError 导致启动崩溃。"""
+    for name in ("stdout", "stderr"):
+        s = getattr(sys, name, None)
+        try:
+            s.reconfigure(errors="replace")
+        except Exception:
+            pass
+
+
+def _webui_dist_index():
+    return os.path.join(WEBUI_DIR, "dist", "index.html")
+
+
+def _webui_built():
+    return os.path.isfile(_webui_dist_index())
+
+
+def _webui_sources_mtime():
+    """构建输入（src/public/index.html/vite.config.js/package.json）的最新修改时间。"""
+    mtime = 0.0
+    for sub in ("src", "public"):
+        root = os.path.join(WEBUI_DIR, sub)
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirs, files in os.walk(root):
+            for fn in files:
+                try:
+                    mtime = max(mtime, os.path.getmtime(os.path.join(dirpath, fn)))
+                except OSError:
+                    pass
+    for fn in ("index.html", "vite.config.js", "package.json"):
+        p = os.path.join(WEBUI_DIR, fn)
+        if os.path.isfile(p):
+            try:
+                mtime = max(mtime, os.path.getmtime(p))
+            except OSError:
+                pass
+    return mtime
+
+
+def _webui_needs_build():
+    """是否需要构建：产物缺失，或源码比产物新（保证 UI 改动重启后生效）。"""
+    idx = _webui_dist_index()
+    if not _webui_built():
+        return True
+    src_mtime = _webui_sources_mtime()
+    if src_mtime <= 0:
+        return False
+    try:
+        return src_mtime > os.path.getmtime(idx)
+    except OSError:
+        return True
+
+
+def _run_npm(args, timeout=900):
+    """在 webui 目录执行 npm 命令。Windows 用 npm.cmd 并静默建窗，避免黑窗闪现。
+    返回 (ok, 输出尾部)。"""
+    npm = "npm.cmd" if os.name == "nt" else "npm"
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        r = subprocess.run(
+            [npm] + args,
+            cwd=WEBUI_DIR,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            **kwargs,
+        )
+        tail = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()[-2000:]
+        return r.returncode == 0, tail
+    except FileNotFoundError:
+        return False, "找不到 npm 命令：请先安装 Node.js（https://nodejs.org）"
+    except subprocess.TimeoutExpired:
+        return False, f"npm {' '.join(args)} 超时（{timeout}s）"
+    except Exception as e:
+        return False, str(e)
+
+
+def _ensure_webui_build():
+    """确保 WebUI 构建产物就绪（开箱即用）：
+    - 已构建（dist/index.html 存在且源码未更新）→ 跳过；
+    - 未构建或源码有更新 → 自动 npm run build（缺依赖先 npm ci/install）。
+    打包 exe（前端随程序分发）与 WHALETALK_NO_WEBUI_BUILD=1 时跳过自动构建。
+    返回 (ok, 说明)。"""
+    if getattr(sys, "frozen", False):
+        return _webui_built(), "打包模式：前端产物随程序分发，跳过构建"
+    if os.environ.get("WHALETALK_NO_WEBUI_BUILD") == "1":
+        return _webui_built(), "WHALETALK_NO_WEBUI_BUILD=1：已跳过自动构建"
+    if not _webui_needs_build():
+        return True, "WebUI 已构建，跳过构建步骤"
+    # 缺依赖先装（有 package-lock.json 用 npm ci 更快更可复现）
+    if not os.path.isdir(os.path.join(WEBUI_DIR, "node_modules")):
+        install = "ci" if os.path.isfile(os.path.join(WEBUI_DIR, "package-lock.json")) else "install"
+        print(f"⏳ WebUI 依赖缺失，正在自动安装（npm {install}）…")
+        ok, tail = _run_npm([install])
+        if not ok:
+            print(f"❌ WebUI 依赖安装失败：\n{tail}")
+            return False, "WebUI 依赖安装失败"
+    print("⏳ WebUI 未构建，正在自动构建（npm run build）…")
+    ok, tail = _run_npm(["run", "build"])
+    if ok:
+        print("✅ WebUI 自动构建完成")
+        return True, "WebUI 自动构建成功"
+    print(f"❌ WebUI 自动构建失败：\n{tail}")
+    return False, "WebUI 自动构建失败"
+
+
 def _serve_forever(port, open_browser=False, tray=True):
     """启动 API 并常驻（默认带系统托盘；单实例：已有服务时只打开界面）。"""
     import api_server
@@ -300,11 +417,13 @@ def _serve_forever(port, open_browser=False, tray=True):
 
 
 def main():
+    _harden_stdio()
     parser = argparse.ArgumentParser(prog="whaletalk", description=APP_NAME + " · 纯 Web + 托盘常驻")
     parser.add_argument("--server", action="store_true", help="仅启动 API 服务（终端常驻，不托盘不开浏览器）")
     parser.add_argument("--no-browser", action="store_true", help="常驻但不自动打开浏览器（手动访问）")
     parser.add_argument("--no-tray", action="store_true", help="常驻但不启用系统托盘")
     parser.add_argument("--no-shortcuts", action="store_true", help="不自动创建桌面/开始菜单快捷方式")
+    parser.add_argument("--no-webui-build", action="store_true", help="不自动构建 WebUI（产物缺失时界面不可用）")
     parser.add_argument("--install-shortcuts", action="store_true", help="强制重建桌面/开始菜单快捷方式")
     parser.add_argument("--port", type=int, default=API_PORT, help=f"API 端口（默认 {API_PORT}）")
     args = parser.parse_args()
@@ -317,6 +436,13 @@ def main():
             print("✅ 已创建 桌面 + 开始菜单 快捷方式")
         else:
             print("[快捷方式] 创建失败（可稍后用托盘菜单「📌 桌面快捷方式」重试）")
+    # WebUI 构建保障：已构建则跳过；未构建/源码更新则自动 npm run build
+    if not args.no_webui_build:
+        ok, note = _ensure_webui_build()
+        if not ok:
+            print(f"⚠️ {note}：可手动执行 cd webui && npm install && npm run build；API 仍会启动")
+    elif not _webui_built():
+        print("⚠️ --no-webui-build：WebUI 未构建，界面将无法打开（请手动执行 cd webui && npm run build）")
     if args.server:
         return _serve_forever(args.port, open_browser=False, tray=False)
     # 默认（推荐）：浏览器 + 托盘常驻；静默启动时不自动弹浏览器

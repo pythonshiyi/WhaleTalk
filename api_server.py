@@ -2607,7 +2607,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not os.path.isfile(full):
             full = os.path.join(DIST_DIR, "index.html")
             if not os.path.isfile(full):
-                self._json(404, {"error": "webui 未构建，请先运行 npm run build"})
+                self._json(404, {"error": "webui 未构建（启动时已尝试自动构建，请检查启动日志）；或手动运行 cd webui && npm run build"})
                 return
         try:
             with open(full, "rb") as f:
