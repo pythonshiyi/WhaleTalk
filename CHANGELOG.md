@@ -2,6 +2,14 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.0.1（2026-08-26）
+
+- **🔑 设置页支持在线填写 DeepSeek API Key（修复：前端此前只能查看"已配置/未配置"状态，无填写入口）**：
+  - 前端（webui/）：简单模式「核心设置」与高级模式「模型与网关」均新增 API Key 输入框（密码框，回车或失焦保存；留空=不修改；保存后显示脱敏提示如 `sk-***abcd`）
+  - 后端（api_server.py）：`POST /v1/config` 白名单放行 `api_key`（strip 后经 `save_config` DPAPI 加密落盘，明文永不落盘）；保存后失效 status 缓存
+  - `GET /v1/config` 新增 `key_hint` 字段（前3+尾4 脱敏，绝不回传明文密钥）
+  - 端到端冒烟验证：写入 → 磁盘 `dpapi:` 密文 → 解密回读 → 界面状态刷新全链路通过
+
 ## v3.0.0（2026-08-23）—— 🎉 Web 重构重大版本
 
 **程序形态从 Tkinter 桌面版重构为 Web 架构（本地优先）**——全新 React 前端 + 本地 API 服务，同一能力引擎（deepseek_client 复用），界面与交互全面升级。

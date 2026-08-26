@@ -2959,6 +2959,7 @@ class _Handler(BaseHTTPRequestHandler):
                     import config_utils
                     import deepseek_client as dc
                     cfg = config_utils.load_config()
+                    key_val = str(cfg.get("api_key") or "").strip()
                     self._json(200, {
                         "models": list(dc.MODELS.keys()),
                         "thinking_modes": list(dc.THINKING_MODES.keys()),
@@ -2969,7 +2970,9 @@ class _Handler(BaseHTTPRequestHandler):
                         "max_tokens": int(cfg.get("max_tokens") or 16384),
                         "tools_enabled": bool(cfg.get("tools_enabled")),
                         "base_url": cfg.get("base_url") or dc.DEFAULT_BASE_URL,
-                        "has_key": bool(str(cfg.get("api_key") or "").strip()),
+                        "has_key": bool(key_val),
+                        # 脱敏提示（前3 + 尾4），绝不回传明文密钥
+                        "key_hint": (f"{key_val[:3]}***{key_val[-4:]}" if len(key_val) >= 8 else ("***" if key_val else "")),
                         "system_prompt": str(cfg.get("system_prompt") or ""),
                         "temperature": float(cfg.get("custom_temperature") or 1.0),
                         "top_p": float(cfg.get("custom_top_p") or 1.0),
@@ -3275,10 +3278,17 @@ class _Handler(BaseHTTPRequestHandler):
                         cfg["logprobs"] = bool(body["logprobs"])
                     if "tool_choice" in body and body["tool_choice"] is not None:
                         cfg["tool_choice"] = str(body["tool_choice"])[:32]
+                    # API Key：留空/缺省=不修改；非空 strip 后交给 save_config 加密落盘
+                    if "api_key" in body and body["api_key"] is not None:
+                        new_key = str(body["api_key"]).strip()
+                        if new_key:
+                            cfg["api_key"] = new_key
                     config_utils.save_config(cfg)
                     # 开机自启注册（HKCU Run / 卸载）
                     if "autostart" in body and body["autostart"] is not None:
                         _apply_autostart(bool(body["autostart"]))
+                    if "api_key" in body and body["api_key"] is not None:
+                        _cached_invalidate("status")
                     self._json(200, {"ok": True})
                 except Exception as e:
                     logger.exception("POST /v1/config 失败")

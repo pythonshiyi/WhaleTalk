@@ -532,6 +532,7 @@ export default function SettingsPage() {
   const [tip, setTip] = React.useState("");
   const [modelDraft, setModelDraft] = React.useState(null);
   const [baseUrlDraft, setBaseUrlDraft] = React.useState(null);
+  const [apiKeyDraft, setApiKeyDraft] = React.useState(null);
   const [loadErr, setLoadErr] = React.useState("");
 
   React.useEffect(() => {
@@ -575,6 +576,20 @@ export default function SettingsPage() {
     if (clean) saveField({ base_url: clean });
     setBaseUrlDraft(null);
   };
+  // API Key：留空提交=不修改；与后端约定一致（密钥不回显，只显示脱敏提示）
+  const commitApiKey = async (v) => {
+    const clean = String(v).trim();
+    setApiKeyDraft(null);
+    if (!clean) return;
+    const d = await saveField({ api_key: clean }, true);
+    if (d && d.ok) {
+      setCfg((c) => ({ ...c, has_key: true, key_hint: `${clean.slice(0, 3)}***${clean.slice(-4)}` }));
+      setTip("✅ API Key 已保存（加密存储）");
+    } else {
+      setTip("❌ API Key 保存失败，请重试");
+    }
+    setTimeout(() => setTip(""), 2500);
+  };
 
   const modelOptions = Array.isArray(cfg?.models) && cfg.models.length ? cfg.models : models.map((m) => m.name);
   const activeModelMeta = models.find((m) => m.name === cfg?.model);
@@ -588,7 +603,10 @@ export default function SettingsPage() {
         setTip("已保存");
         setTimeout(() => setTip(""), 1500);
       }
-    } catch {}
+      return d;
+    } catch {
+      return null;
+    }
   };
 
   const applyPreset = async (preset) => {
@@ -668,8 +686,8 @@ export default function SettingsPage() {
             <Row label="API 网关" desc="OpenAI 兼容 base_url">
               <input className="set-select set-combo" value={baseUrlText} placeholder="https://api.deepseek.com" onChange={(e) => setBaseUrlDraft(e.target.value)} onBlur={(e) => commitBaseUrl(e.target.value)} />
             </Row>
-            <Row label="API Key" desc={cfg.has_key ? "✅ 已配置（加密存储）" : "⚠️ 未配置"}>
-              <span className="set-badge">{cfg.has_key ? "已配置" : "未配置"}</span>
+            <Row label="API Key" desc={cfg.has_key ? `✅ 已配置 ${cfg.key_hint || ""}（加密存储）· 输入新 Key 可覆盖` : "⚠️ 未配置，粘贴后回车或失焦保存"}>
+              <input className="set-select set-combo" type="password" placeholder="sk-…" value={apiKeyDraft ?? ""} onChange={(e) => setApiKeyDraft(e.target.value)} onBlur={(e) => commitApiKey(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
             </Row>
             <Row label="输出上限" desc={`V4 最大 ${activeModelMeta?.max_output_tokens || 393216}`}>
               <NumInput min={1024} max={393216} step={1024} value={cfg.max_tokens} onChange={(v) => saveField({ max_tokens: v })} />
@@ -686,8 +704,8 @@ export default function SettingsPage() {
           <div className="set-card">
             {tab === "model" && (
               <>
-                <Row label="API Key" desc={cfg.has_key ? "✅ 已配置（加密存储于 config.json）" : "⚠️ 未配置"}>
-                  <span className="set-badge">{cfg.has_key ? "已配置" : "未配置"}</span>
+                <Row label="API Key" desc={cfg.has_key ? `✅ 已配置 ${cfg.key_hint || ""}（加密存储于 config.json）· 输入新 Key 可覆盖` : "⚠️ 未配置，粘贴后回车或失焦保存"}>
+                  <input className="set-select set-combo" type="password" placeholder="sk-…" value={apiKeyDraft ?? ""} onChange={(e) => setApiKeyDraft(e.target.value)} onBlur={(e) => commitApiKey(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
                 </Row>
                 <Row label="🌐 API 网关地址" desc="支持任意 OpenAI 兼容网关（/beta、中转站）">
                   <input className="set-select set-combo" value={baseUrlText} placeholder="https://api.deepseek.com" onChange={(e) => setBaseUrlDraft(e.target.value)} onBlur={(e) => commitBaseUrl(e.target.value)} />
