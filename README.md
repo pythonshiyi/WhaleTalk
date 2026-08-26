@@ -48,7 +48,7 @@
 
 - **看得见**：🖼 多模态视觉（图片理解/图表阅读/截图修复/OCR/扫码、屏幕截图）
 - **说得出**：💬 对话/思考模式/语音合成（TTS）/朗读
-- **做得了**：⚡ 109 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA），权限模型分层
+- **做得了**：⚡ 115 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理），权限模型分层
 - **会进化**：🧬 自我进化（提案分支、失败模式库、成功模式复用）
 - **自疗**：🔁 失败模式沉淀 + 已知坑注入，AI 越用越聪明
 
@@ -73,7 +73,7 @@
 - **消息体验**：流式 Markdown、思考卡片、工具卡片、收藏/固定/分叉/变体/续写、多选批量导出
 - **会话管理**：多会话/标签/搜索/导入导出（JSON/JSONL）、历史库
 
-### ⚡ Agent 工具链（109 项）
+### ⚡ Agent 工具链（115 项）
 
 - **信息**：搜索（多引擎/分页/过滤/健康降级）、GitHub、实时热点（Hacker News）、网页抓取（含被墙站点代理通道）、RSS
 - **执行**：沙箱 Python、终端/进程、pip 安装、浏览器自动化
@@ -82,6 +82,7 @@
 - **媒体**：图像生成/处理、语音转文字（whisper）、TTS
 - **桌面 RPA**：pyautogui 鼠标/键盘/滚轮/截屏（防误触 failsafe）
 - **自动化**：定时任务（错峰省费）、流程编排、任务检查点、知识库
+- **v3.1 新增**：📦 应用管理 `app_manage`（winget/choco 装/卸/搜/升级，环境搭建闭环）· 🖱 视觉定位点击 `screen_find_click`（看图→定位→点击一步完成）· 🎙 实时语音对话 `voice_chat_loop`（听一句答一句）· 🤝 多智能体编排 `team_run`（协调者拆解+角色接力+共享黑板）· 🌐 网络自愈 `net_diagnose`/`fetch_url_smart`（分层诊断+自动走代理兜底）
 
 ### 🧬 自我进化
 
@@ -153,7 +154,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 鲸语 WhaleTalk 是一个**独立开发的个人作品**，关注「本地 AI 智能体」体验——
 
 - **目标**：让 Windows 用户拥有一个真正"看得见、做得了、能进化"的 AI 助手，而非只是一个聊天窗口
-- **理念**：本地优先（数据不出本机）、能力为王（109 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
+- **理念**：本地优先（数据不出本机）、能力为王（115 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
 - **联系**：
   - 官网：https://whaletalk.top/
   - GitHub Issues：https://github.com/pythonshiyi/WhaleTalk/issues
@@ -184,7 +185,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 WhaleTalk v3.0 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745) with a pywebview desktop shell and system tray.
 
 - **v3.0 highlights**: 3 themes (starfield/deepsea/arctic), console sidebar (model/thinking/scene/appearance), artifact one-click access, unified `web_app.py` entry (desktop/browser/headless)
-- **Capabilities**: 109 Agent tools (files/browser/DB/mail/media/desktop RPA), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
+- **Capabilities**: 115 Agent tools (files/browser/DB/mail/media/desktop RPA), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
 - **Stack**: Python 3.9+ + React (Vite) + local API (openai/httpx) · Windows 10/11
 
 ### Quick Start

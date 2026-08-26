@@ -160,6 +160,11 @@ _LONG_TOOL_NAMES = frozenset({
     "debug_screenshot",
     "scan_read",
     "image_batch",
+    "app_manage",
+    "team_run",
+    "voice_chat_loop",
+    "screen_find_click",
+    "fetch_url_smart",
 })
 
 
@@ -1678,6 +1683,100 @@ TOOLS = [
                     "model": {"type": "string", "description": "可选：tiny/base/small/medium/large-v3（默认 base，tiny 最快）"},
                 },
                 "required": ["path"],
+            },
+        },
+    },
+    # ===== v3.1 能力层 · 应用管理 / 视觉点击 / 实时语音 / 多智能体 / 网络自愈 =====
+    {
+        "type": "function",
+        "function": {
+            "name": "app_manage",
+            "description": "Windows 应用安装与卸载管理（winget/choco 自动选择）：列出已装软件、搜索、静默安装、卸载、检查可升级。安装/卸载前应先向用户确认",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["managers", "list", "search", "install", "uninstall", "upgrade"], "description": "操作类型（默认 list 列出已安装应用）"},
+                    "query": {"type": "string", "description": "list 时为过滤关键字；search/install/uninstall 时为软件名或包 ID（必填）"},
+                    "source": {"type": "string", "enum": ["auto", "winget", "choco"], "description": "可选：指定包管理器（默认 auto 自动选）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "screen_find_click",
+            "description": "视觉定位点击闭环：截屏后用视觉模型按自然语言描述定位界面元素（如「右上角关闭按钮」），算出坐标并自动点击——看图+操作一步完成，适合自动化 Web 应用/旧桌面软件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "要点击的目标描述（自然语言，如「登录按钮」「搜索框右侧的放大镜图标」）"},
+                    "area": {"type": "string", "description": "可选：限定区域 left,top,right,bottom（默认全屏，区域越小定位越准）"},
+                    "button": {"type": "string", "enum": ["left", "right", "middle"], "description": "可选：鼠标键（默认 left）"},
+                    "dry_run": {"type": "boolean", "description": "可选：true 只定位不点击（先确认位置再动手）"},
+                    "verify": {"type": "boolean", "description": "可选：点击后 0.6s 再截一张自查图（默认 true）"},
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "voice_chat_loop",
+            "description": "实时语音对话循环：麦克风听用户说一句 → 本地转写 → AI 回复 → 直接朗读出声，循环多轮直到说完「再见」。适合免打字的快速问答节奏（需本机麦克风与 faster-whisper/sounddevice）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rounds": {"type": "integer", "description": "可选：最多对话轮数（1-20，默认 3；中途说再见即结束）"},
+                    "model": {"type": "string", "description": "可选：whisper 模型 tiny/base/small（默认 base）"},
+                    "max_seconds": {"type": "integer", "description": "可选：每轮录音最长秒数（默认 15）"},
+                    "speak": {"type": "boolean", "description": "可选：是否朗读回复（默认 true）"},
+                    "rate": {"type": "integer", "description": "可选：语速 -10 到 10（默认 0 正常）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "team_run",
+            "description": "多智能体团队协作编排：协调者把总目标拆解为多步计划，各专业角色（研究员/工程师/评审/设计师/分析师或自定义）按流水线接力执行（共享黑板传递中间成果），最后综合成完整交付物",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "总目标（一句话说清要交付什么）"},
+                    "roles": {"type": "array", "items": {"type": "string"}, "description": "可选：团队成员角色名列表（默认 [研究员,工程师,评审]；自定义角色名会按名字推断专长，最多 5 个）"},
+                    "steps": {"type": "integer", "description": "可选：限制最大步数（默认协调者自行拆解，最多 6 步）"},
+                },
+                "required": ["goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "net_diagnose",
+            "description": "网络诊断：对网址/主机做 全局连通→DNS→TCP→HTTP 分层探测，判定故障类别（断网/DNS 故障/端口不通/反爬 403/限流/超时被墙/TLS 问题），并给出自动降级建议策略",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "网址或主机名（留空则探测全局连通性）"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_url_smart",
+            "description": "智能抓取网页：直连失败时自动做网络诊断并用内置代理通道降级重试（被墙站点/限流场景自愈），返回内容并注明走了哪条路径",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "http(s):// 页面地址"},
+                },
+                "required": ["url"],
             },
         },
     },
@@ -8966,6 +9065,676 @@ def create_plugin(name, description="", tools=None, skills=None, workflows=None,
     )
 
 
+# ===== v3.1 能力层：应用管理 / 视觉点击闭环 / 实时语音 / 多智能体编排 / 网络自愈 =====
+
+def _which_any(*names):
+    """依次查找可执行文件路径，返回第一个命中者或 None。"""
+    import shutil
+    for n in names:
+        p = shutil.which(str(n))
+        if p:
+            return p
+    return None
+
+
+def _win_installed_apps():
+    """枚举 Windows 已安装应用（注册表 Uninstall 键，含 32/64 位视图与当前用户）。"""
+    apps = {}
+    if os.name != "nt":
+        return apps
+    try:
+        import winreg
+    except ImportError:
+        return apps
+    for hive, view in (
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY),
+        (winreg.HKEY_CURRENT_USER, 0),
+    ):
+        try:
+            key = winreg.OpenKey(
+                hive, r"Software\Microsoft\Windows\CurrentVersion\Uninstall",
+                0, winreg.KEY_READ | view,
+            )
+        except OSError:
+            continue
+        with key:
+            i = 0
+            while True:
+                try:
+                    sub = winreg.EnumKey(key, i)
+                    i += 1
+                except OSError:
+                    break
+                try:
+                    with winreg.OpenKey(key, sub) as sk:
+                        def _v(name):
+                            try:
+                                v, _t = winreg.QueryValueEx(sk, name)
+                                return str(v).strip()
+                            except OSError:
+                                return ""
+                        disp = _v("DisplayName")
+                        if disp:
+                            apps[disp] = {"version": _v("DisplayVersion"), "publisher": _v("Publisher")}
+                except OSError:
+                    continue
+    return apps
+
+
+def _proc_capture(argv, timeout):
+    """直接以 argv 执行子进程并收集输出（不经 shell），返回 (rc, 输出文本)。"""
+    import tempfile
+    with tempfile.SpooledTemporaryFile(
+        max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
+    ) as out:
+        proc = subprocess.Popen(
+            argv, stdout=out, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+            cwd=WORKING_DIR or permissions.WORKSPACE_DIR or None,
+        )
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            return proc.returncode or -1, f"[超时中止：>{timeout} 秒]"
+        out.seek(0)
+        data = out.read(20000)
+        out.seek(0, os.SEEK_END)
+        if out.tell() > 20000:
+            data += "\n[输出已截断]"
+        return proc.returncode, data
+
+
+def app_manage(action="list", query="", source="auto"):
+    """Windows 应用安装与卸载管理。
+
+    action：
+      managers — 检测本机可用的包管理器（winget/choco）
+      list     — 列出本机已安装应用（注册表枚举，query 可过滤）
+      search   — 在包管理器中搜索软件（query 必填）
+      install  — 安装软件（query 为名称或 --id 的 ID；敏感操作，请先向用户确认）
+      uninstall— 卸载软件（query 为包管理器中的 ID/名称；敏感操作，请先向用户确认）
+      upgrade  — 列出有可用更新的软件
+    """
+    act = str(action or "list").strip().lower()
+    q = str(query or "").strip()
+    winget = _which_any("winget")
+    choco = _which_any("choco")
+    base_timeout = permissions.shell_timeout()
+
+    def _pkg_argv(op, args_extra):
+        use_winget = (source == "winget" or source == "auto") and winget
+        if use_winget:
+            return [winget] + op + args_extra
+        if (source == "choco" or source == "auto") and choco:
+            return ["choco"] + op + args_extra
+        return None
+
+    if act == "managers":
+        lines = [
+            f"- winget：{'✅ ' + winget if winget else '❌ 未安装'}",
+            f"- choco ：{'✅ ' + choco if choco else '❌ 未安装'}",
+        ]
+        hint = "" if (winget or choco) else "\n提示：两者均未安装，可先用 app_manage 安装（winget 需 Microsoft Store「应用安装程序」；choco 安装命令见 chocolatey.org）"
+        return "\n".join(lines) + hint
+
+    if act == "list":
+        apps = _win_installed_apps()
+        if not apps:
+            return "未枚举到已安装应用（非 Windows 或注册表不可读）"
+        ql = q.lower()
+        rows = [
+            (name, meta.get("version", ""), meta.get("publisher", ""))
+            for name, meta in sorted(apps.items())
+            if not ql or ql in name.lower()
+        ]
+        total = len(rows)
+        rows = rows[:80]
+        lines = [f"{n}｜版本 {v or '?'}｜{pub}"[:150] for n, v, pub in rows]
+        tail = f"\n—— 共 {total} 项{'（截取前 80 条）' if total > 80 else ''} ——"
+        permissions.audit("app_manage", "list", str(q)[:60])
+        return "\n".join(lines) + tail
+
+    if act == "upgrade":
+        argv = _pkg_argv(["upgrade"], [])
+        if not argv:
+            return "错误：未找到可用包管理器（winget/choco）。可先运行 app_manage(action='managers') 查看"
+        rc, out = _proc_capture(argv, max(base_timeout, 300))
+        permissions.audit("app_manage", "upgrade", out[:60])
+        return f"退出码 {rc}\n{out.strip() or '（无输出）'}"
+
+    if act in ("search", "install", "uninstall"):
+        if not q:
+            return f"错误：action={act} 时 query 必填"
+        if act == "search":
+            argv = _pkg_argv(["search"], [q])
+            timeout = max(base_timeout, 120)
+        elif act == "install":
+            if winget and (source != "choco"):
+                argv = [winget, "install", "--id", q, "--silent", "--accept-package-agreements", "--accept-source-agreements"]
+            else:
+                argv = ["choco", "install", "-y", q]
+            timeout = max(base_timeout, 900)
+        else:
+            if winget and (source != "choco"):
+                argv = [winget, "uninstall", "--id", q]
+            else:
+                argv = ["choco", "uninstall", "-y", q]
+            timeout = max(base_timeout, 600)
+        if not argv:
+            return "错误：未找到可用包管理器（winget/choco），无法执行该操作。可让用户手动安装包管理器后再试"
+        rc, out = _proc_capture(argv, timeout)
+        permissions.audit("app_manage", act, f"{os.path.basename(argv[0])} {q}"[:80])
+        verdict = "成功" if rc == 0 else "失败（可尝试改用 --id 包 ID，或先 search 确认准确标识）"
+        return f"{act} {q}：{verdict}（退出码 {rc}）\n{out.strip() or '（无输出）'}"
+
+    return f"错误：未知 action={act}（支持 managers/list/search/install/uninstall/upgrade）"
+
+
+def _extract_json_obj(text, must_keys=("left",)):
+    """从模型输出中宽容提取第一个含指定键的 JSON 对象。"""
+    import re as _re
+    for m in _re.finditer(r"\{[^{}]*\}", str(text or "")):
+        try:
+            obj = json.loads(m.group(0))
+        except Exception:
+            continue
+        if isinstance(obj, dict) and all(k in obj for k in must_keys):
+            return obj
+    return None
+
+
+def screen_find_click(target, area="", button="left", dry_run=False, verify=True):
+    """视觉定位点击闭环：截图 → 视觉模型定位目标元素坐标 → 移动鼠标点击。
+
+    把 screen_see（看）与 rpa_click（点）合成一步——用自然语言描述目标即可，
+    如「右上角的关闭按钮」「登录按钮」。验证方式：视觉定位得到的是截图像素坐标。
+    """
+    t = str(target or "").strip()
+    if not t:
+        return "错误：target 必填（要点的目标描述，如「确定按钮」）"
+    ok, hint = _rpa_ready()
+    if not ok:
+        return hint
+    try:
+        from PIL import ImageGrab  # noqa: F401  提前校验依赖
+    except ImportError:
+        return "错误：屏幕截图需要 Pillow，请先安装：pip install Pillow"
+    path = _capture_screen_png(area)
+    if not path:
+        return "错误：屏幕截图失败"
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            img_w, img_h = im.size
+    except Exception as e:
+        return f"错误：读取截图尺寸失败: {e}"
+    q = (
+        f"这是 {img_w}x{img_h} 像素的屏幕截图。请在图中找到满足以下描述的界面元素：「{t}」。"
+        '只输出一个 JSON 对象（不要解释、不要代码块围栏），格式：'
+        '{"found": true, "label": "元素文字", "left": 整数, "top": 整数, "right": 整数, "bottom": 整数}。'
+        "坐标为该元素外接框在该截图像素坐标系下的值。找不到时输出 {\"found\": false}。"
+    )
+    answer = image_understand(path, question=q)
+    obj = _extract_json_obj(answer, must_keys=("left",))
+    if obj is None or not obj.get("found"):
+        snippet = str(answer or "")[:200].replace("\n", " ")
+        return f"未能从屏幕上定位目标「{t}」。模型反馈：{snippet or '（无）'}"
+    try:
+        left, top = int(obj["left"]), int(obj["top"])
+        right, bottom = int(obj.get("right", left)), int(obj.get("bottom", top))
+    except (TypeError, ValueError):
+        return f"错误：定位结果坐标不合法：{obj}"
+    x = max(0, min(img_w - 1, (left + right) // 2))
+    y = max(0, min(img_h - 1, (top + bottom) // 2))
+    label = str(obj.get("label", ""))[:40]
+    preview = f"已定位目标「{t}」→ 元素 {label} 外接框 ({left},{top})-({right},{bottom})，中心 ({x},{y})"
+    if dry_run:
+        return f"{preview}（dry_run 仅定位未点击）"
+    try:
+        import pyautogui
+        btn = str(button or "left").strip().lower()
+        if btn not in ("left", "right", "middle"):
+            return "错误：button 仅支持 left/right/middle"
+        pyautogui.FAILSAFE = RPA_FAILSAFE
+        pyautogui.click(x, y, button=btn)
+        permissions.audit("screen_find_click", f"{x},{y}", str(t)[:60])
+    except Exception as e:
+        return f"{preview}\n错误：RPA 点击失败: {e}"
+    note = ""
+    if verify:
+        time.sleep(0.6)
+        check = _capture_screen_png(area)
+        if check:
+            note = f"\n点击后自查截图已保存：{check}（可用 screen_see 进一步确认效果）"
+    return f"{preview}，已{btn}键点击完成。{note}".replace("\n\n", "\n")
+
+
+_WHISPER_LOOP_LOCK = threading.Lock()
+
+
+def _mic_record_once(max_seconds=15, silence_ms=900, threshold=0.02):
+    """录一段麦克风音频直到静音或超时，返回 WAV 路径；无声返回 None。"""
+    try:
+        import sounddevice as sd
+        import numpy as _np
+    except ImportError:
+        return None, "错误：实时语音需要 sounddevice 与 numpy（pip install sounddevice numpy）"
+    sr = 16000
+    frame = int(sr * 0.05)  # 50ms 一帧
+    collected = []
+    started = False
+    silence_run = 0
+    try:
+        with sd.InputStream(samplerate=sr, channels=1, dtype="int16", blocksize=frame) as stream:
+            deadline = time.time() + max(2, min(60, int(max_seconds or 15)))
+            while time.time() < deadline:
+                data, _overflow = stream.read(frame)
+                arr = _np.frombuffer(data, dtype=_np.int16).astype(_np.float32) / 32768.0
+                rms = float(_np.sqrt(_np.mean(arr ** 2)) + 1e-9)
+                collected.append(arr.copy())
+                if rms > threshold:
+                    started = True
+                    silence_run = 0
+                elif started:
+                    silence_run += 50
+                    if silence_run >= silence_ms:
+                        break
+                if not started and sum(len(a) for a in collected) > sr * 3:
+                    break  # 前 3 秒完全无声：不必等满时长
+    except Exception as e:
+        return None, f"错误：麦克风打开失败: {e}（检查系统录音设备权限与默认输入设备）"
+    if not started:
+        return None, None  # 用户没说话：正常结束信号
+    import wave
+    wav_dir = os.path.join(permissions.WORKSPACE_DIR or ".", "voice")
+    os.makedirs(wav_dir, exist_ok=True)
+    wav_path = os.path.join(wav_dir, f"in_{datetime.now():%Y%m%d_%H%M%S}.wav")
+    pcm = (_np.concatenate(collected) * 32767).astype(_np.int16)
+    with wave.open(wav_path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(pcm.tobytes())
+    return wav_path, None
+
+
+def _speak_aloud(text, rate=0):
+    """用 Windows SAPI 直接朗读文本（阻塞至读完或 90s 超时）。"""
+    if not str(text or "").strip():
+        return
+    try:
+        import pythoncom
+        import win32com.client
+
+        synth = str(text)[:4000]
+
+        def _go():
+            pythoncom.CoInitialize()
+            try:
+                speaker = win32com.client.Dispatch("SAPI.SpVoice")
+                try:
+                    speaker.Rate = max(-10, min(10, int(rate or 0)))
+                except (TypeError, ValueError):
+                    pass
+                speaker.Speak(synth)
+            finally:
+                pythoncom.CoUninitialize()
+
+        thd = threading.Thread(target=_go, daemon=True)
+        thd.start()
+        thd.join(timeout=90.0)
+    except Exception:
+        pass  # 无声环境（缺 pywin32/无声卡）：静默跳过朗读，对话循环继续
+
+
+_BYE_PAT = ("再见", "拜拜", "停止对话", "结束对话", "退下吧", "goodbye", "bye-bye")
+
+
+def voice_chat_loop(rounds=3, model="base", max_seconds=15, speak=True, rate=0):
+    """全双工语音对话循环：麦克风听一句 → 转写 → 思考回复 → 朗读，循环多轮。
+
+    依赖：sounddevice+numpy（录音）、faster-whisper（转写）、pywin32 SAPI（朗读）。
+    说「再见/拜拜/结束对话」即挂断。适合不想打字的快速问答节奏。
+    """
+    rounds_n = 3
+    try:
+        rounds_n = max(1, min(20, int(rounds or 3)))
+    except (TypeError, ValueError):
+        rounds_n = 3
+    client = _CLIENT_HOLDER.get("client")
+    if client is None:
+        return "错误：没有可用客户端（请先完成一次对话建立连接）"
+    with _WHISPER_LOOP_LOCK:  # 同一时间只允许一个语音会话占用麦克风
+        log = []
+        ended = False
+        for i in range(rounds_n):
+            wav, err = _mic_record_once(max_seconds=max_seconds)
+            if err:
+                return "\n".join(log) + ("\n" if log else "") + err
+            if not wav:
+                if i == 0:
+                    return "未听到说话内容（前几秒完全安静）。请确认麦克风可用后重试"
+                log.append(f"（第 {i + 1} 轮未听到声音，语音会话结束）")
+                break
+            heard = speech_to_text(wav, model=model)
+            heard = str(heard or "").strip()
+            low = heard.lower()
+            if not heard or heard.startswith(("错误", "（未识别")):
+                log.append(f"第 {i + 1} 轮：没能听清，可以再说一遍")
+                if speak:
+                    _speak_aloud("没听清，请再说一遍", rate=rate)
+                continue
+            log.append(f"🗣 你说：{heard}")
+            if any(p in low for p in _BYE_PAT):
+                if speak:
+                    _speak_aloud("好的，下次再聊，再见！", rate=rate)
+                log.append("👋 会话由你结束，再见！")
+                ended = True
+                break
+            prompt = (
+                "你在与用户进行实时语音对话：回复请口语化、简洁自然（一两句话最好，不要 Markdown、"
+                "不要列表和长篇大论），因为内容会被转成语音朗读。\n\n用户说：" + heard
+            )
+            try:
+                resp = client.client.chat.completions.create(
+                    model=client.model,
+                    messages=[
+                        {"role": "system", "content": "你是语音助手鲸语，用最短的话把事情说明白。"},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=1024,
+                    stream=False,
+                    timeout=120.0,
+                    extra_body={"thinking": {"type": "disabled"}},
+                )
+                reply = (resp.choices[0].message.content or "").strip() or "（我在想……没想出说什么）"
+            except Exception as e:
+                reply = f"网络好像出了点问题：{e}"
+                log.append(f"🤔 系统异常：{reply}")
+                break
+            log.append(f"🐋 鲸语：{reply}")
+            if speak:
+                _speak_aloud(reply, rate=rate)
+        if not ended and len(log) and not log[-1].startswith(("（", "👋")):
+            log.append("（本轮语音会话结束）")
+        permissions.audit("voice_chat_loop", f"rounds={rounds_n}", f"共 {len(log)} 行")
+        return "\n".join(log)
+
+
+_TEAM_ROLE_PRESETS = {
+    "研究员": "资料搜集与事实核查专家：给出结论时尽量带依据与出处线索。",
+    "工程师": "资深工程师：给出可直接落地的方案、代码或命令，注重边界情况。",
+    "评审": "苛刻的技术评审：找漏洞、提风险、给改进清单。",
+    "设计师": "体验设计师：关注交互、可用性与呈现结构，给出具体设计建议。",
+    "分析师": "数据/商业分析师：拆解量化指标，给出决策建议。",
+}
+
+
+def team_run(goal, roles=("研究员", "工程师", "评审"), steps=0):
+    """多智能体协作编排：协调者拆解任务 → 各专业角色按流水线接力 → 综合产出报告。
+
+    roles 传角色名列表（研究员/工程师/评审/设计师/分析师，可自定义任意角色名并附专长描述，
+    如 ["前端工程师(React)", "测试工程师"]）；每个角色的产出对后续角色可见（共享黑板）。
+    """
+    g = str(goal or "").strip()
+    if not g:
+        return "错误：goal 必填"
+    client = _CLIENT_HOLDER["client"]
+    if client is None:
+        return "错误：没有可用客户端（请先完成一次对话建立连接）"
+
+    role_list = []
+    for r in (roles or ()):  # 支持传字符串数组
+        rs = str(r or "").strip()
+        if rs and rs not in role_list:
+            role_list.append(rs)
+    if not role_list:
+        role_list = ["研究员", "工程师", "评审"]
+    role_list = role_list[:5]
+    try:
+        steps_n = max(0, min(8, int(steps or 0)))
+    except (TypeError, ValueError):
+        steps_n = 0
+
+    def _chat(system, user, tokens=2048):
+        for attempt in range(2):
+            try:
+                resp = client.client.chat.completions.create(
+                    model=client.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    max_tokens=tokens,
+                    stream=False,
+                    timeout=180.0,
+                    extra_body={"thinking": {"type": "disabled"}},
+                )
+                return (resp.choices[0].message.content or "").strip()
+            except Exception:
+                if attempt == 0:
+                    time.sleep(1)
+        return ""
+
+    role_brief = "\n".join(f"- {r}：{_TEAM_ROLE_PRESETS.get(r, '该领域专业智能体')}" for r in role_list)
+    plan_raw = _chat(
+        "你是多智能体团队的协调者。把总目标拆解为按序执行的子任务并指派给合适的角色，"
+        "只输出一个 JSON 对象：{\"tasks\": [{\"role\": \"角色名\", \"task\": \"该步要做的事\"}]}，最多 6 步，"
+        "角色必须从给定名单中选择。最后一步应是综合/评审类收尾。",
+        f"【团队名单】\n{role_brief}\n\n【总目标】\n{g}",
+    )
+    tasks = []
+    parsed = None
+    m = re.search(r"\{.*\}", plan_raw, re.S)
+    if m:
+        try:
+            parsed = json.loads(m.group(0))
+        except Exception:
+            parsed = None
+    if isinstance(parsed, dict) and isinstance(parsed.get("tasks"), list):
+        for it in parsed["tasks"]:
+            if isinstance(it, dict) and str(it.get("task") or "").strip():
+                r = str(it.get("role") or "").strip() or role_list[0]
+                tasks.append((r, str(it["task"]).strip()))
+    if not tasks:  # 计划失败时退化为默认流水线，保证功能可用
+        tasks = [(role_list[i % len(role_list)], f"{g}（默认流水线步骤 {i + 1}）") for i in range(min(3, len(role_list)))]
+    if steps_n:
+        tasks = tasks[:steps_n]
+
+    board = []  # 共享黑板：(role, task, output)
+    lines = [f"🎯 总目标：{g}", "", "📋 执行计划："]
+    for i, (r, t) in enumerate(tasks, 1):
+        lines.append(f"  {i}. [{r}] {t}")
+    lines.append("")
+    for i, (role, task) in enumerate(tasks, 1):
+        preset = _TEAM_ROLE_PRESETS.get(role, "")
+        prior = ""
+        if board:
+            digest = "\n".join(
+                f"[{rr}] {tt} → {oo[:1200]}" for rr, tt, oo in board[-3:]
+            )
+            prior = f"\n\n【前序成果黑板】\n{digest}"
+        sys_p = f"你是团队中的「{role}」。{preset} 只以本角色身份完成分配的任务，输出干货结论（不超过 600 字）。"
+        out = _chat(sys_p, f"【总目标】{g}\n【你的任务】{task}{prior}")
+        if not out:
+            out = "（本步骤执行失败，继续后续步骤）"
+        board.append((role, task, out))
+        lines.append(f"── 第 {i} 步 · [{role}] ──\n{out}\n")
+    final = _chat(
+        "你是多智能体团队的最终综合者。汇总各角色成果，产出面向用户的完整交付物："
+        "关键结论在前，方案/代码/清单居中，风险与后续行动殿后。使用 Markdown。",
+        f"【总目标】{g}\n\n" + "\n\n".join(f"[{r}·{t}]\n{o}" for r, t, o in board),
+        tokens=3000,
+    )
+    lines.append("═══ 🏁 最终综合 ═══")
+    lines.append(final or "（综合阶段失败，请参考上方各角色产出）")
+    permissions.audit("team_run", str(g)[:80], f"{len(tasks)} 步")
+    return "\n".join(lines)
+
+
+_NET_PROBE_REFS = ("https://www.msftconnecttest.com/connecttest.txt", "https://www.baidu.com")
+
+
+def net_diagnose(target=""):
+    """网络诊断：对一个网址/主机做 DNS→TCP→TLS→HTTP 分层探测并给出结论与降级建议。
+
+    target 支持 URL（https://example.com/a）或纯域名/IP；省略时探测全局连通性。
+    """
+    t = str(target or "").strip() or "https://www.baidu.com"
+    from urllib.parse import urlparse
+    if "//" not in t:
+        t = "https://" + t
+    try:
+        up = urlparse(t)
+        host = (up.hostname or "").strip()
+        port = up.port or (443 if up.scheme == "https" else 80)
+        use_tls = up.scheme == "https"
+    except Exception:
+        return f"错误：无法解析目标：{target}"
+    if not host:
+        return f"错误：无法解析主机名：{target}"
+    import socket as _socket
+
+    def _timed(fn, seconds):
+        box = {}
+
+        def _run():
+            try:
+                box["val"] = fn()
+            except Exception as e:
+                box["err"] = e
+
+        th = threading.Thread(target=_run, daemon=True)
+        th.start()
+        th.join(seconds)
+        if th.is_alive():
+            return None, f"超时（>{seconds}s）"
+        if "err" in box:
+            return None, str(box["err"])
+        return box.get("val"), None
+
+    def _http_status(u):
+        with _safe_stream("GET", u, timeout=8) as resp:
+            return resp.status_code
+
+    lines = [f"🔎 网络诊断：{t}", ""]
+    # 0) 全局连通性参照
+    ref_ok, ref_note = False, ""
+    for ref in _NET_PROBE_REFS:
+        val, err = _timed(lambda r=ref: _http_status(r), 10)
+        if val is not None:
+            ref_ok = True
+            ref_note = f"参照站点可达（{ref.split('/')[2]} 返回 {val}）"
+            break
+        ref_note = f"参照站点也不可达：{err}"
+    lines.append(f"① 全局连通性：{'✅ ' if ref_ok else '❌ '}{ref_note}")
+    # 1) DNS
+    t0 = time.monotonic()
+    addrs, dns_err = _timed(lambda: [ai[4][0] for ai in _socket.getaddrinfo(host, port)], 6)
+    if addrs:
+        lines.append(f"② DNS 解析：✅ {host} → {'、'.join(addrs[:3])}（{(time.monotonic() - t0) * 1000:.0f}ms）")
+    else:
+        lines.append(f"② DNS 解析：❌ {dns_err}")
+        lines.extend([
+            "",
+            "**结论**：DNS 故障（本机无法解析该域名）。",
+            "**建议策略**：① 换公共 DNS（223.5.5.5 / 119.29.29.29）后在 hosts 加映射或重试；② 若为被墙站点，直接走 fetch_blocked 代理通道；③ 断定与目标服务器无关（全局网也可能正常）。",
+        ])
+        return "\n".join(lines)
+    # 2) TCP
+    t0 = time.monotonic()
+
+    def _tcp_probe():
+        with _socket.create_connection((addrs[0], port), timeout=6) as s:
+            return s.getpeername()
+
+    sock_info, tcp_err = _timed(_tcp_probe, 8)
+    if sock_info:
+        lines.append(f"③ TCP 连接：✅ {sock_info[0]}:{port}（{(time.monotonic() - t0) * 1000:.0f}ms）")
+    else:
+        lines.append(f"③ TCP 连接：❌ {tcp_err}")
+        verdict = ("本机/本地网络问题" if not ref_ok else "目标主机端口不通（服务下线/防火墙拦截）")
+        lines.extend([
+            "",
+            f"**结论**：{verdict}。",
+            "**建议策略**：" + ("检查 Wi-Fi/代理设置后重试。" if not ref_ok else "改用镜像站点或稍后重试；该端口确实不可达，换端点无效时可走 fetch_blocked 代理。"),
+        ])
+        return "\n".join(lines)
+    # 3) HTTP(S)
+    status, http_err = None, ""
+    t0 = time.monotonic()
+    try:
+        with _safe_stream("GET", t, timeout=(6, 12)) as resp:
+            status = resp.status_code
+    except Exception as e:
+        http_err = str(e)
+    ms = f"（{(time.monotonic() - t0) * 1000:.0f}ms）"
+    if status is not None:
+        lines.append(f"④ HTTP 响应：✅ 状态码 {status}{ms}")
+    else:
+        lines.append(f"④ HTTP 响应：❌ {http_err}{ms}")
+    category, advice = "连通正常", []
+    if status == 403 or status == 451:
+        category = "反爬/WAF 拦截（HTTP 403/451）"
+        advice = ["自动切换 fetch_blocked 代理通道抓取（Agent 已可直接调用）", "降低频率、补齐 User-Agent/Cookie 后直连重试", "换官方 API 或公开镜像获取同等数据"]
+    elif status == 429:
+        category = "限流（HTTP 429 Too Many Requests）"
+        advice = ["等待 30-60 秒再试", "拉长请求间隔/减少并发", "换镜像源"]
+    elif status and status >= 500:
+        category = f"服务端故障（HTTP {status}）"
+        advice = ["稍后自动重试即可（非本机问题）", "查状态页 https://www.githubstatus.com 等（如是第三方服务）", "换备用端点"]
+    elif status is None:
+        if "certificat" in http_err.lower() or "ssl" in http_err.lower():
+            category = "TLS/证书问题"
+            advice = ["更新系统根证书", "确认系统时间正确", "临时换 HTTP 端点（仅内网信任环境）"]
+        elif "timeout" in http_err.lower() or "timed out" in http_err.lower():
+            category = "响应超时/TCP RESET（疑似被墙或链路差）"
+            advice = ["走 fetch_blocked 代理通道（被墙站点专用）", "增大超时重试一次", "换 CDN 友好的镜像域名"]
+        else:
+            category = f"HTTP 层失败：{http_err[:80]}"
+            advice = ["重试一次并观察是否稳定复现", "用 web_screenshot 打开看看实际页面表现"]
+    elif status and 200 <= status < 400:
+        advice = ["无需处理：目标可达，若仍解析失败多为内容层问题，可重试"]
+    lines.extend(["", f"**结论**：{category}。"])
+    if advice:
+        lines.append("**建议策略**：")
+        lines.extend(f"- {a}" for a in advice)
+    if not ref_ok:
+        lines.append("\n⚠ 参照站点也不可达：优先排查本机网络（Wi-Fi/VPN/代理）后再操作目标。")
+    permissions.audit("net_diagnose", str(t)[:80], category[:60])
+    return "\n".join(lines)
+
+
+def fetch_url_smart(url):
+    """智能抓取：直连优先，失败自动诊断并降级（被墙代理通道），返回内容 + 抓取路径说明。
+
+    用于替代 fetch_url 的“一击即溃”场景：被墙站点、限流、区域性封锁等自动兜底。
+    """
+    direct = fetch_url(url)
+    if not str(direct or "").startswith("错误"):
+        return direct  # 直连成功：原样返回（不做包装，保持下游兼容）
+    url_s = str(url or "").strip()
+    diag = net_diagnose(url_s)
+    category = ""
+    for ln in diag.splitlines():
+        if ln.startswith("**结论**"):
+            category = ln.replace("**结论**", "").strip("* ").strip()
+            break
+    attempts = [f"① 直连失败：{str(direct)[:160]}"]
+    if _fetch_blocked_impl is not None:
+        blocked = _run_fetch_blocked(url_s)
+        if not str(blocked or "").startswith("错误"):
+            attempts.append("② 自动降级：经内置代理通道抓取成功 ✅")
+            return "".join([*attempts, f"\n诊断：{category}\n", f"\n--- 以下为代理通道返回的内容 ---\n{blocked}"])
+        attempts.append(f"② 代理通道也失败：{str(blocked)[:160]}")
+    else:
+        attempts.append("② 代理通道不可用（fetch_blocked.py 未启用）")
+    attempts.append(f"\n诊断：{category}\n\n以上两种途径均失败。可依据诊断建议稍后重试、换镜像源，或让用户提供该页面的其他入口。")
+    return "\n".join(attempts)
+
+
 TOOL_CALL_MAP = {
     "get_date": get_date,
     "ask_user": None,  # 特殊处理：chat() 中通过 on_ask 回调询问用户
@@ -9053,6 +9822,12 @@ TOOL_CALL_MAP = {
     "image_batch": image_batch,
     "screen_capture": screen_capture,
     "speech_to_text": speech_to_text,
+    "app_manage": app_manage,
+    "screen_find_click": screen_find_click,
+    "voice_chat_loop": voice_chat_loop,
+    "team_run": team_run,
+    "net_diagnose": net_diagnose,
+    "fetch_url_smart": fetch_url_smart,
     "knowledge_index": knowledge_index,
     "knowledge_search": knowledge_search,
     "database_execute": database_execute,
@@ -9135,13 +9910,14 @@ _TOOL_INDEX_KEY = None
 
 # 能力地图分类（精确感知：类别 + 完整工具名 + 核心动作）。全部内置工具全覆盖。
 TOOL_GROUPS = [
-    ("🌐 浏览器与网页", ["browser_navigate", "web_screenshot", "fetch_url", "fetch_blocked", "search_web", "search_realtime", "search_github", "webdav", "download_file", "rss_fetch"]),
-    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "write_code_project", "subagent_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "system_status"]),
+    ("🌐 浏览器与网页", ["browser_navigate", "web_screenshot", "fetch_url", "fetch_url_smart", "net_diagnose", "fetch_blocked", "search_web", "search_realtime", "search_github", "webdav", "download_file", "rss_fetch"]),
+    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "system_status"]),
     ("📁 文件与目录", ["read_file", "write_file", "edit_file", "list_dir", "search_local", "delete_file", "archive_files", "extract_archive", "batch_rename", "clipboard_get", "clipboard_set"]),
     ("📊 数据与文档", ["read_csv", "write_csv", "read_excel", "write_excel", "chart_data", "database_query", "database_query_mysql", "database_query_postgres", "database_execute", "create_doc", "docx_read", "pptx_read", "pdf_extract", "pdf_create", "epub_read", "mobi_read", "doc_read", "archive_list", "secret_store", "kv_store"]),
     ("📧 邮件与消息", ["send_email", "read_email", "email_summary", "agent_mail", "msg_read", "im_send", "telegram_poll_updates", "send_webhook", "publish_draft", "run_wechat_writer", "daily_brief"]),
-    ("🎨 媒体与图像", ["image_process", "image_understand", "screen_see", "chart_read", "screenshot_to_html", "debug_screenshot", "scan_read", "image_batch", "image_generate", "ocr_image", "screen_capture", "speech_to_text", "tts_save", "media_ffmpeg", "qrcode"]),
-    ("🖱 桌面自动化", ["rpa_screen_size", "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot", "notify_desktop"]),
+    ("🎨 媒体与图像", ["image_process", "image_understand", "screen_see", "chart_read", "screenshot_to_html", "debug_screenshot", "scan_read", "image_batch", "image_generate", "ocr_image", "screen_capture", "speech_to_text", "voice_chat_loop", "tts_save", "media_ffmpeg", "qrcode"]),
+    ("🖱 桌面自动化", ["rpa_screen_size", "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot", "screen_find_click", "notify_desktop"]),
+    ("📦 应用与环境", ["app_manage"]),
     ("⏰ 定时与任务", ["schedule_task", "list_schedules", "cancel_schedule", "task_checkpoint_save", "task_checkpoint_load", "run_workflow"]),
     ("🧠 记忆与知识", ["write_memory", "read_memory", "query_memory_graph", "knowledge_index", "knowledge_search"]),
     ("🔧 系统与基础", ["get_date", "get_weather", "ask_user", "request_permission", "call_api", "project_info", "read_project_file", "create_evolution", "verify_files", "usage_report", "create_plugin"]),
@@ -9296,6 +10072,12 @@ _TOOL_ACTION_PHRASES = {
     "ocr_image": "图片文字识别 OCR",
     "screen_capture": "屏幕截图",
     "speech_to_text": "语音转文字",
+    "app_manage": "应用安装/卸载管理（winget/choco）",
+    "screen_find_click": "视觉定位点击（看图即点，一句话指定目标）",
+    "voice_chat_loop": "实时语音对话（听一句答一句）",
+    "team_run": "多智能体团队协作编排",
+    "net_diagnose": "网络诊断（分层探测+降级建议）",
+    "fetch_url_smart": "智能抓取（失败自动走代理通道）",
     "tts_save": "文字转语音",
     "media_ffmpeg": "音视频处理（ffmpeg）",
     "qrcode": "二维码生成/识别",

@@ -182,10 +182,12 @@ _TOOL_DOMAIN = {
     "fetch_url": "网络与通信", "fetch_blocked": "网络与通信", "search_web": "网络与通信",
     "search_github": "网络与通信", "search_realtime": "网络与通信", "rss_fetch": "网络与通信",
     "webdav": "网络与通信", "search_local": "网络与通信",
+    "net_diagnose": "网络与通信", "fetch_url_smart": "网络与通信",
     "run_python": "开发与测试", "run_command": "开发与测试", "pip_install": "开发与测试",
     "write_code_project": "开发与测试", "run_tests": "开发与测试", "verify_output": "开发与测试",
     "verify_files": "开发与测试", "project_info": "开发与测试", "read_project_file": "开发与测试",
     "create_plugin": "开发与测试", "create_evolution": "开发与测试",
+    "app_manage": "开发与测试",
     "tts_save": "媒体与图像", "image_process": "媒体与图像", "ocr_image": "媒体与图像",
     "image_understand": "媒体与图像", "image_generate": "媒体与图像", "image_batch": "媒体与图像",
     "screen_see": "媒体与图像", "chart_read": "媒体与图像", "screenshot_to_html": "媒体与图像",
@@ -199,6 +201,7 @@ _TOOL_DOMAIN = {
     "rpa_screen_size": "桌面与自动化", "rpa_click": "桌面与自动化", "rpa_type": "桌面与自动化",
     "rpa_hotkey": "桌面与自动化", "rpa_move": "桌面与自动化", "rpa_scroll": "桌面与自动化",
     "rpa_screenshot": "桌面与自动化", "browser_navigate": "桌面与自动化",
+    "screen_find_click": "桌面与自动化",
     "start_process": "桌面与自动化", "stop_process": "桌面与自动化",
     "list_processes": "桌面与自动化",
     "schedule_task": "定时与任务", "list_schedules": "定时与任务", "cancel_schedule": "定时与任务",
@@ -209,7 +212,8 @@ _TOOL_DOMAIN = {
     "knowledge_search": "记忆与知识",
     "ask_user": "AI 与智能", "request_permission": "AI 与智能",
     "run_wechat_writer": "AI 与智能", "publish_draft": "AI 与智能",
-    "subagent_run": "AI 与智能",
+    "subagent_run": "AI 与智能", "team_run": "AI 与智能",
+    "voice_chat_loop": "媒体与图像",
 }
 
 _DOMAIN_ORDER = [

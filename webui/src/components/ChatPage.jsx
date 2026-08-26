@@ -1058,7 +1058,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
                 <h1>{isTask ? "今天想做点什么？" : "随便聊聊"}</h1>
                 <p>
                   {isTask
-                    ? "看得见屏幕、听得见语音、动得了鼠标键盘与浏览器——109 项能力随叫随到"
+                    ? "看得见屏幕、听得见语音、动得了鼠标键盘与浏览器——115 项能力随叫随到"
                     : "纯问答 · 不调用工具 · 适合聊天、翻译、写作、答疑"}
                 </p>
                 <div className="empty-suggest">

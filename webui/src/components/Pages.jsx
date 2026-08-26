@@ -700,7 +700,7 @@ export function WorkbenchPage({ onGoChat }) {
           <div className="sys-row"><span>累计输出</span><b>{(u.completion || 0).toLocaleString()} tokens</b></div>
           <div className="sys-row"><span>缓存命中</span><b className="ok-text">{(u.cache_hit || 0).toLocaleString()}</b></div>
           <div className="sys-row"><span>本月成本</span><b>¥{status?.monthly_cost || 0}{status?.monthly_budget ? ` / ¥${status.monthly_budget}` : ""}</b></div>
-          <div className="sys-row"><span>工具数</span><b>109（12 域）</b></div>
+          <div className="sys-row"><span>工具数</span><b>115（12 域）</b></div>
           <div className="sys-row"><span>网络</span><b className="ok-text">● 正常</b></div>
         </div>
       </div>

@@ -11,6 +11,7 @@ OPTIONAL_DEPS = [
     ("pystray", "pystray", "系统托盘常驻", "pip install pystray"),
     ("playwright", "playwright", "浏览器操作/网页截图", "pip install playwright && playwright install chromium"),
     ("faster_whisper", "faster-whisper", "语音转文字", "pip install faster-whisper"),
+    ("sounddevice", "sounddevice", "实时语音对话录音（voice_chat_loop）", "pip install sounddevice numpy"),
     ("fitz", "PyMuPDF", "PDF 提取", "pip install PyMuPDF"),
     ("reportlab", "reportlab", "PDF 生成", "pip install reportlab"),
     ("docx", "python-docx", "Word 读写", "pip install python-docx"),
