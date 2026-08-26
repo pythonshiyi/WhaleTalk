@@ -327,33 +327,68 @@ function useDataSources() {
       try {
         const d = await api.getSession(id);
         if (d && d.messages) {
-          const mapped = d.messages.map((m, idx, all) => {
-            if (m.role === "user") {
-              return { role: "user", text: m.content };
-            }
-            const tools = (m.tool_calls || [])
-              .map((tc) => {
+          // tool_call_id 只在单轮内唯一（call_0 起步会跨轮重复），按顺序指针向前消费，
+          // 保证每轮 assistant 拿到的是自己那一轮的工具结果
+          let searchFrom = 0;
+          const usedToolIdx = new Set();
+          const mapped = d.messages
+            .map((m) => {
+              if (m.role === "user") {
+                return { role: "user", text: m.content };
+              }
+              // tool 结果消息：已按顺序归并进 assistant 的工具卡片，不单独渲染
+              if (m.role === "tool" || m.role === "system") {
+                return null;
+              }
+              const tools = (m.tool_calls || []).map((tc) => {
                 let args = {};
                 try {
                   args = JSON.parse(tc.function?.arguments || "{}");
                 } catch {}
-                const toolMsg = all.find((mm) => mm.role === "tool" && mm.tool_call_id === tc.id);
+                let hit = -1;
+                for (let i = searchFrom; i < d.messages.length; i++) {
+                  const mm = d.messages[i];
+                  if (mm.role === "tool" && mm.tool_call_id === tc.id) {
+                    hit = i;
+                    break;
+                  }
+                }
+                if (hit >= 0) {
+                  searchFrom = hit + 1;
+                  usedToolIdx.add(hit);
+                }
                 return {
                   tool: tc.function?.name || "?",
                   args,
                   status: "done",
-                  result: toolMsg ? String(toolMsg.content || "").slice(0, 500) : "",
+                  result: hit >= 0 ? String(d.messages[hit].content || "").slice(0, 500) : "",
                   duration: "—",
                 };
               });
-            return {
-              role: "assistant",
-              think: m.reasoning_content || "",
-              tools,
-              text: m.content,
-              streaming: false,
-            };
-          });
+              return {
+                role: "assistant",
+                think: m.reasoning_content || "",
+                tools,
+                text: m.content,
+                streaming: false,
+              };
+            })
+            .filter(Boolean);
+          // 兜底：历史上后端曾把 tool_calls 截到 16 条，孤儿 tool 消息挂到最后一个 assistant
+          const lastAsst = [...mapped].reverse().find((x) => x.role === "assistant");
+          if (lastAsst) {
+            d.messages.forEach((mm, i) => {
+              if (mm.role === "tool" && !usedToolIdx.has(i)) {
+                lastAsst.tools.push({
+                  tool: mm.name || mm.tool_call_id || "tool",
+                  args: {},
+                  status: "done",
+                  result: String(mm.content || "").slice(0, 500),
+                  duration: "—",
+                });
+              }
+            });
+          }
           return { messages: mapped, usage: d.usage_total, stars: d.stars, pinned: d.pinned, tags: d.tags };
         }
       } catch {}

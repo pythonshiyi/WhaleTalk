@@ -3018,7 +3018,7 @@ class _Handler(BaseHTTPRequestHandler):
                 }
                 tc = m.get("tool_calls")
                 if tc and isinstance(tc, list):
-                    item["tool_calls"] = tc[:16]
+                    item["tool_calls"] = tc[:64]
                 if m.get("role") == "tool" and m.get("tool_call_id"):
                     item["tool_call_id"] = str(m["tool_call_id"])[:128]
                 msgs.append(item)
