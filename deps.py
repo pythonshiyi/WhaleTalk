@@ -25,7 +25,6 @@ OPTIONAL_DEPS = [
     ("win32com", "pywin32", "语音朗读/语音合成", "pip install pywin32"),
     ("tiktoken", "tiktoken", "精确 token 估算（缺省回退字符估算）", "pip install tiktoken"),
     ("pygments", "Pygments", "代码块语法高亮", "pip install pygments"),
-    ("aibot", "wecom-aibot-python-sdk", "企业微信智能机器人长连接（接收召唤/回复）", "pip install wecom-aibot-python-sdk"),
     ("ebooklib", "ebooklib", "EPUB 电子书阅读", "pip install ebooklib"),
     ("mobi", "mobi", "MOBI 电子书阅读", "pip install mobi"),
     ("extract_msg", "extract-msg", "Outlook .msg 邮件阅读", "pip install extract-msg"),

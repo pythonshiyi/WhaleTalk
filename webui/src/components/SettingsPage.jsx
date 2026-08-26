@@ -118,8 +118,6 @@ function ServicesTab({ cfg, onTip }) {
       <div className="svc-group">
         <div className="svc-title">📱 IM 通道（企业微信 / Telegram）</div>
         <EmRow label="企业微信机器人 Webhook" group="im" key="wecom_webhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" />
-        <EmRow label="企业微信智能机器人 Bot ID" group="im" key="wecom_aibot_bot_id" />
-        <EmRow label="企业微信 Secret" group="im" key="wecom_aibot_secret" type="password" />
         <EmRow label="Telegram Bot Token" group="im" key="telegram_bot_token" type="password" />
         <EmRow label="Telegram Chat ID" group="im" key="telegram_chat_id" />
       </div>

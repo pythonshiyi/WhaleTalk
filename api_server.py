@@ -1134,7 +1134,7 @@ def _services_save(body):
         # ── IM ──
         if isinstance(body.get("im"), dict):
             im = dict(body["im"])
-            for k in ("wecom_aibot_secret", "telegram_bot_token"):
+            for k in ("telegram_bot_token",):
                 if k in im:
                     im[k] = _encrypt_val(im[k])
             im = {k: v for k, v in im.items() if str(v or "").strip()}

@@ -2823,7 +2823,7 @@ def _load_im_config():
     if not IM_CONFIG_FILE or not os.path.exists(IM_CONFIG_FILE):
         return {}, (
             "IM 通道未配置（如不需要推送可忽略；如需开启：系统菜单 → IM 通道配置）。"
-            "支持 wecom_webhook / wecom_aibot_bot_id+secret / telegram_bot_token+chat_id"
+            "支持 wecom_webhook（企业微信群机器人）或 telegram_bot_token+chat_id"
         )
     try:
         with open(IM_CONFIG_FILE, "r", encoding="utf-8") as f:
