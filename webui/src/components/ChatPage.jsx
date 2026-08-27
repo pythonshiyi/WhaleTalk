@@ -9,7 +9,7 @@ import AuxPanel from "./AuxPanel.jsx";
 import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
-import { cleanForSpeech, splitSentences, enqueueSpeak, getVoiceConfig, onSpeechState, stopSpeak } from "../ttsUtil.js";
+import { cleanForSpeech, splitSentences, enqueueSpeak, speakText, getVoiceConfig, onSpeechState, stopSpeak } from "../ttsUtil.js";
 
 // 全局朗读状态浮标：合成中/播放中均有可见反馈，点击可停
 function SpeakingPill() {
@@ -99,7 +99,7 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
       if (!voiceSettings || voiceSettings.auto_mode !== "sentence") return;
       const all = splitSentences(cleanForSpeech(acc));
       while (spokenCount < all.length - 1) {  // 末句可能是半截，等下一包/收尾
-        enqueueSpeak(all[spokenCount], voiceSettings);
+        enqueueSpeak(all[spokenCount], voiceSettings).catch(() => {});
         spokenCount += 1;
       }
     };
@@ -116,11 +116,12 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
         try {
           if (ok && voiceSettings && voiceSettings.auto_mode !== "off" && acc.trim()) {
             if (voiceSettings.auto_mode === "full") {
-              enqueueSpeak(cleanForSpeech(acc), voiceSettings);
+              // 整段读完：用 speakText 分句流式播（长文不卡、可随时停止）
+              speakText(acc, voiceSettings, {}).catch(() => {});
             } else {
               const all = splitSentences(cleanForSpeech(acc));
               while (spokenCount < all.length) {
-                enqueueSpeak(all[spokenCount], voiceSettings);
+                enqueueSpeak(all[spokenCount], voiceSettings).catch(() => {});
                 spokenCount += 1;
               }
             }

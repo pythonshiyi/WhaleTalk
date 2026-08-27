@@ -145,7 +145,7 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
       </Row>
       <Row label="试听" desc="以当前设置朗读样例句（走服务端合成）">
         <button className="confirm-btn confirm-primary" onClick={() => {
-          enqueueSpeak("你好，我是鲸语。这是当前语音设置的试听效果。", { ...vc });
+          enqueueSpeak("你好，我是鲸语。这是当前语音设置的试听效果。", { ...vc }).catch(() => {});
           onTip("正在试听…");
           setTimeout(() => onTip(""), 2000);
         }}>🔊 试听</button>

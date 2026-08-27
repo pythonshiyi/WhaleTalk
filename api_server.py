@@ -15,6 +15,7 @@
 - 必须携带 Bearer token（优先 config.json 的 inbound_token，否则启动时自动生成）。
 - 请求体上限 1MB，messages 条数/长度受限。
 """
+import asyncio
 import hashlib
 import json
 import logging
@@ -2028,27 +2029,28 @@ def _synthesize_sapi(text, path, rate=0, volume=100, voice=""):
 
 
 def _synthesize_edge(text, path_mp3, rate=0, volume=100, voice=""):
-    """edge-tts 合成 MP3（python -m edge_tts CLI 子进程，失败返回错误串）。"""
+    """edge-tts 合成 MP3（直接调用 edge_tts 库，避免 pythonw/打包 exe 子进程与超时问题）。"""
     v = str(voice or "").strip() or "zh-CN-XiaoxiaoNeural"
-    exe = sys.executable
-    in_file = path_mp3 + ".in.txt"
     try:
-        with open(in_file, "w", encoding="utf-8") as f:
-            f.write(text)
-        subprocess.run(
-            [exe, "-m", "edge_tts", "--voice", v,
-             "--rate", f"{int(rate) * 10:+d}%", "--volume", f"{max(0, min(100, int(volume) - 100)):+d}%",
-             "--file", in_file, "--write-media", path_mp3],
-            capture_output=True, timeout=25,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        import edge_tts
     except Exception as e:
-        return f"edge-tts 调用失败: {e}"
-    finally:
+        return f"edge-tts 不可用: {e}"
+    try:
+        comm = edge_tts.Communicate(
+            text,
+            v,
+            rate=f"{int(rate) * 10:+d}%",
+            volume=f"{max(0, min(100, int(volume) - 100)):+d}%",
+        )
+        # save 是协程；请求线程内无运行中的事件循环，可安全 asyncio.run。
+        # 超时随文本长度放宽（短句秒回；长文不因 25s 固定阈值误判而回退 SAPI）。
+        asyncio.run(asyncio.wait_for(comm.save(path_mp3), timeout=max(30, len(text) * 0.05)))
+    except Exception as e:
         try:
-            os.remove(in_file)
+            os.remove(path_mp3)
         except OSError:
             pass
+        return f"edge-tts 调用失败: {e}"
     try:
         if os.path.getsize(path_mp3) > 500:
             return ""
@@ -2061,16 +2063,12 @@ _EDGE_STATE = {"checked": False, "ok": False}
 
 
 def _edge_available():
-    """探测 edge-tts 是否可用（python -m edge_tts，结果缓存；失败则走 SAPI 兜底）。"""
+    """探测 edge-tts 是否可用（import edge_tts，结果缓存；失败则走 SAPI 兜底）。"""
     if _EDGE_STATE["checked"]:
         return _EDGE_STATE["ok"]
     try:
-        r = subprocess.run(
-            [sys.executable, "-m", "edge_tts", "--version"],
-            capture_output=True, timeout=8,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        _EDGE_STATE["ok"] = (r.returncode == 0)
+        import edge_tts  # noqa: F401
+        _EDGE_STATE["ok"] = True
     except Exception:
         _EDGE_STATE["ok"] = False
     _EDGE_STATE["checked"] = True
@@ -2083,6 +2081,8 @@ _EDGE_VOICES_ZH = [
     {"id": "zh-CN-YunxiNeural", "name": "云希（男·阳光）"},
     {"id": "zh-CN-YunjianNeural", "name": "云健（男·浑厚）"},
 ]
+
+_EDGE_VOICE_IDS = {v["id"] for v in _EDGE_VOICES_ZH}
 
 
 def _tts_voices():
@@ -3613,31 +3613,41 @@ class _Handler(BaseHTTPRequestHandler):
                         json.dumps([text, rate, volume, voice, engine_req], ensure_ascii=False).encode("utf-8")
                     ).hexdigest()
                     os.makedirs(_VOICE_CACHE_DIR, exist_ok=True)
-                    use_edge = (engine_req != "sapi") and _edge_available()
-                    candidates = []
-                    if engine_req != "sapi" and use_edge:
-                        candidates.append(("edge", f"{digest}.mp3"))
-                    if not candidates or engine_req == "sapi":
-                        pass
+                    # edge 优先：未强制 sapi、edge 可用、且（未选音色 或 选中的是 edge 音色）。
+                    # 选中的是 SAPI 音色时不再白白用 edge 跑一次（其音色名对 edge 无效）。
+                    edge_ok = _edge_available()
+                    voice_sel = str(voice).strip()
+                    _voice_is_edge = bool(voice_sel) and (voice_sel in _EDGE_VOICE_IDS or voice_sel.endswith("Neural"))
+                    use_edge = (engine_req != "sapi") and edge_ok and (not voice_sel or _voice_is_edge)
+                    if engine_req == "edge":
+                        use_edge = edge_ok
                     # 候选顺序：edge 优先（请求允许时），失败或未启用回退 SAPI；sapi 强制走 SAPI
                     plan = ([("edge", f"{digest}.mp3")] if use_edge else []) + [("sapi", f"{digest}.wav")]
-                    err_last = ""
+                    edge_err = sapi_err = ""
                     for eng, fn in plan:
                         fp = os.path.join(_VOICE_CACHE_DIR, fn)
                         if os.path.isfile(fp) and os.path.getsize(fp) > (500 if fn.endswith(".mp3") else 200):
                             self._json(200, {"ok": True, "url": f"/v1/tts/audio/{fn}", "cached": True, "engine": eng})
                             return
                         with _TTS_SEM:
-                            err_last = _synthesize_edge(text, fp, rate, volume, voice) if eng == "edge" \
+                            msg = _synthesize_edge(text, fp, rate, volume, voice) if eng == "edge" \
                                 else _synthesize_sapi(text, fp, rate, volume, voice)
-                        if not err_last:
+                        if eng == "edge":
+                            edge_err = msg
+                        else:
+                            sapi_err = msg
+                        if not msg:
                             self._json(200, {"ok": True, "url": f"/v1/tts/audio/{fn}", "cached": False, "engine": eng})
                             return
                         try:
                             os.remove(fp)
                         except OSError:
                             pass
-                    self._json(500, {"error": err_last or "合成失败"})
+                    # 两种引擎都失败：报更有信息量的一侧（edge 是能力缺口主因）
+                    detail = (edge_err or sapi_err) or "合成失败"
+                    if not edge_err and "语音包" in sapi_err:
+                        detail = "本机无中文离线语音包且在线音色不可用，请安装 edge-tts 或中文语音包后重试"
+                    self._json(500, {"error": detail})
                 except Exception as e:
                     logger.exception("TTS 合成失败")
                     self._json(500, {"error": str(e)})

@@ -2,7 +2,7 @@ import React from "react";
 import Markdown from "./Markdown.jsx";
 import ToolCard from "./ToolCard.jsx";
 import * as api from "../api.js";
-import { cleanForSpeech, enqueueSpeak, stopSpeak, primeAudio } from "../ttsUtil.js";
+import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
 
 const Whale = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -65,7 +65,8 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
   const [loading, setLoading] = React.useState(false);
   const [err, setErr] = React.useState("");
 
-  // 朗读/停止切换：点击立即 ⏳（合成中）→ 播放 ⏹ → 失败 ⚠ 并提示原因
+  // 朗读/停止切换：点击立即 ⏳（合成中）→ 播放 ⏹ → 失败 ⚠ 并提示原因。
+  // 用 speakText 分句逐句合成播放：长回复不超时、更快出第一句，也便于随时停止。
   const toggleSpeak = () => {
     if (speaking || loading) {
       stopSpeak();
@@ -74,13 +75,14 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
       return;
     }
     primeAudio();  // 借本次点击手势解锁音频管线（防自动播放拦截）
-    const clean = cleanForSpeech(msg.text).slice(0, 4000);
-    if (!clean) return;
+    if (!cleanForSpeech(msg.text)) return;
     setErr("");
     setLoading(true);
-    enqueueSpeak(clean, {}, () => { setLoading(false); setSpeaking(true); })
-      .catch((e) => { setErr(e && e.message ? e.message : "朗读失败"); setTimeout(() => setErr(""), 4000); })
-      .finally(() => { setLoading(false); setSpeaking(false); });
+    speakText(msg.text, {}, {
+      onSpeak: () => { setLoading(false); setSpeaking(true); },
+      onDone: () => { setLoading(false); setSpeaking(false); },
+      onError: (e) => { setErr(e && e.message ? e.message : "朗读失败"); setTimeout(() => setErr(""), 4000); setLoading(false); setSpeaking(false); },
+    });
   };
 
   const time = msg.time || "";

@@ -43,6 +43,7 @@ export function splitSentences(text, limit = 200) {
 
 // ── 全局串行播放队列 + 停止 ──
 let currentAudio = null;
+let currentResolve = null;  // 当前播放的 resolve 句柄，stopSpeak 时调用以解除挂起的 playUrl
 let queueChain = Promise.resolve();
 let generation = 0;           // stopSpeak 时 +1，令旧队列任务作废
 let loadingCount = 0;         // 合成中的任务数（点击后立即有反馈）
@@ -76,20 +77,40 @@ export function primeAudio() {
   } catch {}
 }
 
-// 调后端合成（清洗由调用方完成后传入），返回 {url} 或抛错
+// 调后端合成（清洗由调用方完成后传入），返回 {url} 或抛错（含后端 error 详情）
 async function synthesize(text, opts = {}) {
-  const d = await api.api("/v1/tts/synthesize", {
-    method: "POST",
-    signal: AbortSignal.timeout(45000),
-    body: JSON.stringify({
-      text,
-      rate: opts.rate,
-      volume: opts.volume,
-      voice: opts.voice,
-      engine: opts.engine || "",
-    }),
+  const body = JSON.stringify({
+    text,
+    rate: opts.rate,
+    volume: opts.volume,
+    voice: opts.voice,
+    engine: opts.engine || "",
   });
-  return d; // {ok,url,cached,engine}
+  const once = (tok) => fetch(`${getBase()}/v1/tts/synthesize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+    body,
+    signal: AbortSignal.timeout(60000),
+  });
+  let tok = getToken();
+  let r = await once(tok);
+  if (r.status === 401) {
+    try { localStorage.removeItem("whaletalk.api.token"); } catch {}
+    try {
+      const tr = await fetch(`${getBase()}/v1/token`, { signal: AbortSignal.timeout(2500) });
+      if (tr.ok) {
+        const tj = await tr.json();
+        if (tj.token) { try { localStorage.setItem("whaletalk.api.token", tj.token); } catch {} tok = tj.token; }
+      }
+    } catch {}
+    r = await once(tok);
+  }
+  if (!r.ok) {
+    let msg = `合成失败 ${r.status}`;
+    try { const j = await r.json(); if (j && j.error) msg = j.error; } catch {}
+    throw new Error(msg);
+  }
+  return await r.json(); // {ok,url,cached,engine}
 }
 
 async function fetchAudio(urlPath) {
@@ -118,15 +139,57 @@ async function playUrl(urlPath, volumePct) {
   return await new Promise((resolve, reject) => {
     const audio = new Audio(blobUrl);
     audio.volume = Math.max(0, Math.min(1, (volumePct ?? 100) / 100));
-    audio.onended = () => resolve();
-    audio.onerror = () => reject(new Error("音频解码/播放失败"));
+    let settled = false;
+    let watchdog = null;
+    const clearWatch = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null; } };
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearWatch();
+      if (currentAudio === audio) currentAudio = null;
+      if (currentResolve === done) currentResolve = null;
+      try { URL.revokeObjectURL(blobUrl); } catch {}
+      resolve();
+    };
+    audio.onloadedmetadata = () => {
+      // 兜底：即使 onended 不触发（无输出设备/播放卡住），也按时长+4s 强制结束，
+      // 避免朗读按钮永远停在「播放中」。
+      if (settled) return;
+      const d = audio.duration;
+      if (d && isFinite(d) && d > 0) watchdog = setTimeout(done, d * 1000 + 4000);
+    };
+    audio.onended = done;
+    audio.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearWatch();
+      if (currentAudio === audio) currentAudio = null;
+      if (currentResolve === done) currentResolve = null;
+      reject(new Error("音频解码/播放失败"));
+    };
     currentAudio = audio;
+    currentResolve = done;
     emit();
     audio.play().catch((e) => {
-      currentAudio = null;
+      if (settled) return;
+      settled = true;
+      clearWatch();
+      if (currentAudio === audio) currentAudio = null;
+      if (currentResolve === done) currentResolve = null;
       reject(e && e.name === "NotAllowedError" ? e : new Error("播放失败: " + (e && e.name || "")));
     });
   });
+}
+
+// 把异常原因翻译成人话
+function _speakFail(e) {
+  const raw = String((e && e.message) || e);
+  if (/NotAllowed/.test(raw)) lastError = "浏览器拦截了播放：请先点击页面任意处再重试";
+  else if (/语音包|中文离线|无中文/.test(raw)) lastError = "本机无中文离线语音包且在线音色不可用，请安装 edge-tts 或中文语音包";
+  else if (/不可朗读|没有可朗读|无可朗读/.test(raw)) lastError = "没有可朗读的内容";
+  else if (/edge-tts|在线音色/.test(raw)) lastError = "在线音色合成失败（网络或服务不可用）";
+  else if (/合成失败|合成/.test(raw)) lastError = "合成失败（服务端/引擎）";
+  else lastError = raw || "朗读失败";
 }
 
 /**
@@ -139,19 +202,24 @@ export function enqueueSpeak(text, opts = {}, onStart) {
   const run = queueChain.then(async () => {
     if (gen !== generation || !text) return;
     loadingCount++; lastError = ""; emit();
+    let done = false;
+    const dec = () => { if (!done) { done = true; loadingCount--; emit(); } };
+    let r;
     try {
-      const r = await synthesize(text.slice(0, 4000), opts);
-      if (gen !== generation) return;
-      loadingCount--; emit();
+      r = await synthesize(text.slice(0, 4000), opts);
+      if (gen !== generation) { dec(); return; }
+      dec();
       onStart && onStart();
+    } catch (e) {
+      dec();
+      _speakFail(e);
+      emit();
+      throw new Error(lastError);
+    }
+    try {
       await playUrl(r.url, opts.volume);
     } catch (e) {
-      loadingCount--;
-      const raw = e && e.message ? e.message : String(e);
-      lastError = raw.includes("500") ? "合成失败（服务端/引擎）"
-        : raw.includes("400") ? "没有可朗读的内容"
-        : raw.includes("NotAllowed") ? "浏览器拦截了播放：请先点击页面任意处再重试"
-        : raw;
+      _speakFail(e);
       emit();
       throw new Error(lastError);
     } finally {
@@ -162,6 +230,40 @@ export function enqueueSpeak(text, opts = {}, onStart) {
   return run;
 }
 
+/**
+ * 分句朗读一段文本（逐句合成播放，进全局串行队列）。
+ * 手动朗读长回复时使用：按 ≤200 字分句，避免单次超长合成（也为解决服务端超时误判）；
+ * 边读边播，取消只需 stopSpeak()（全局 generation 递增即作废后续句）。
+ * cb: {onStart(), onSpeak(part), onDone(), onError(err)}
+ */
+export function speakText(text, opts = {}, cb = {}) {
+  const chunks = splitSentences(cleanForSpeech(String(text || "")), 200);
+  if (!chunks.length) {
+    const e = new Error("没有可朗读的内容");
+    lastError = e.message; emit();
+    cb.onError && cb.onError(e);
+    return Promise.reject(e);
+  }
+  cb.onStart && cb.onStart();
+  const gen = generation;
+  let i = 0;
+  return new Promise((resolve, reject) => {
+    const step = () => {
+      // 数量枚举完，或已调用 stopSpeak（generation 递增）→ 结束本轮
+      if (gen !== generation || i >= chunks.length) { cb.onDone && cb.onDone(); resolve(); return; }
+      const part = chunks[i++];
+      enqueueSpeak(part, opts, () => cb.onSpeak && cb.onSpeak(part))
+        .then(step)
+        .catch((e) => {
+          if (gen !== generation) { cb.onDone && cb.onDone(); resolve(); return; }
+          cb.onError && cb.onError(e);
+          reject(e);
+        });
+    };
+    step();
+  });
+}
+
 /** 停止当前朗读并清空队列；返回是否真的有播放被打断 */
 export function stopSpeak() {
   const had = !!currentAudio;
@@ -169,6 +271,10 @@ export function stopSpeak() {
   if (currentAudio) {
     try { currentAudio.pause(); } catch {}
     currentAudio = null;
+    // 解除当前挂起的 playUrl，避免队列因 onended 不触发而永久卡死
+    const r = currentResolve;
+    currentResolve = null;
+    if (r) r();
   }
   emit();
   return had;
