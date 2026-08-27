@@ -217,7 +217,7 @@ _TOOL_DOMAIN = {
     "ask_user": "AI 与智能", "request_permission": "AI 与智能",
     "run_wechat_writer": "AI 与智能", "publish_draft": "AI 与智能",
     "subagent_run": "AI 与智能", "team_run": "AI 与智能",
-    "voice_chat_loop": "媒体与图像",
+    "voice_chat_loop": "媒体与图像", "vision_loop": "媒体与图像",
 }
 
 _DOMAIN_ORDER = [

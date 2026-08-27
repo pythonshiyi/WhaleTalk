@@ -1755,6 +1755,23 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "vision_loop",
+            "description": "视觉自动操作闭环：截屏→视觉模型判断当前状态→决定并执行下一步动作（点击/输入/滚动）→再截屏验证→直到目标达成。适合『看着屏幕』自主完成的多步操作（填表、点按钮、验证界面变化、操作旧桌面软件）。goal 用自然语言描述目标",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "要达到的目标（自然语言，如「登录并进入主页」「把表单填完并提交」）"},
+                    "steps": {"type": "string", "description": "可选：操作步骤提示或背景，帮助模型判断（如「先点登录，再输账号密码」）"},
+                    "max_iters": {"type": "integer", "description": "可选：最多闭环轮数（1-12，默认 5）"},
+                    "area": {"type": "string", "description": "可选：限定区域 left,top,right,bottom（默认全屏）"},
+                },
+                "required": ["goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "voice_chat_loop",
             "description": "实时语音对话循环：麦克风听用户说一句 → 本地转写 → AI 回复 → 直接朗读出声，循环多轮直到说完「再见」。适合免打字的快速问答节奏（需本机麦克风与 faster-whisper/sounddevice）",
             "parameters": {
@@ -9386,6 +9403,100 @@ def screen_find_click(target, area="", button="left", dry_run=False, verify=True
     return f"{preview}，已{btn}键点击完成。{note}".replace("\n\n", "\n")
 
 
+_VISION_LOOP_ACTIONS = ("done", "click", "type", "scroll", "describe")
+
+
+def vision_loop(goal, steps="", max_iters=5, area=""):
+    """视觉自动操作闭环：截屏 → 视觉模型判断当前状态 → 决定下一步动作 → 执行 → 再截屏验证，直到目标达成。
+
+    适合"看着屏幕自主完成"的多步操作（填表、点按钮、验证界面变化等）。
+    由视觉模型输出 JSON 动作序列：{"action": done|click|type|scroll|describe, ...}。
+    """
+    g = str(goal or "").strip()
+    if not g:
+        return "错误：goal 必填（要视觉闭环完成的自然语言目标，如「登录页面并看到主页」）"
+    ok, hint = _rpa_ready()
+    if not ok:
+        return hint
+    try:
+        from PIL import ImageGrab  # noqa: F401  # 提前校验依赖
+    except ImportError:
+        return "错误：屏幕截图需要 Pillow，请先安装：pip install Pillow"
+    try:
+        max_iters = max(1, min(12, int(max_iters or 5)))
+    except (TypeError, ValueError):
+        max_iters = 5
+    steps_hint = str(steps or "").strip()
+    step_delay = 0.6
+
+    log = []
+    for i in range(1, max_iters + 1):
+        path = _capture_screen_png(area)
+        if not path:
+            return f"错误：第 {i} 轮截图失败（已执行 {i - 1} 轮）\n" + "\n".join(log)
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                img_w, img_h = im.size
+        except Exception as e:
+            return f"错误：读取截图尺寸失败: {e}"
+        q = (
+            f"这是 {img_w}x{img_h} 像素的屏幕截图。当前视觉闭环目标：「{g}」。"
+            + (f"操作步骤提示：{steps_hint}。已完成动作：{'；'.join(log) if log else '无'}。" if (steps_hint or log) else "")
+            + "请判断当前屏幕状态并输出下一步动作，只输出一个 JSON 对象（不要解释、不要代码块围栏），格式："
+            '{"status": "判断一句话", "action": "done|click|type|scroll|describe", '
+            '"target": "动作对象描述(click)，或要输入的文本(type)，或方向与次数如向下3(scroll)", '
+            '"area": "可选 目标区域 left,top,right,bottom(缩小点更准)"}。'
+            "目标已达成或无法进一步推进时 action 为 done。"
+        )
+        answer = image_understand(path, question=q)
+        obj = _extract_json_obj(answer, must_keys=("action",))
+        action = str((obj or {}).get("action") or "").strip().lower()
+        if action not in _VISION_LOOP_ACTIONS:
+            log.append(f"第{i}轮：模型输出无法识别，已停止。模型反馈：{str(answer)[:160]}")
+            break
+        status = str((obj or {}).get("status") or "")[:120]
+        if action == "done":
+            log.append(f"第{i}轮：达成。{status}")
+            break
+        target = str((obj or {}).get("target") or "").strip()
+        sub_area = str((obj or {}).get("area") or area or "").strip()
+        try:
+            if action == "click":
+                r = screen_find_click(target or "当前焦点", area=sub_area)
+                log.append(f"第{i}轮点击：{str(r)[:120]}")
+            elif action == "type":
+                r = rpa_type(target or "", interval=0.02)
+                log.append(f"第{i}轮输入：{str(r)[:120]}")
+            elif action == "scroll":
+                r = rpa_scroll(_parse_scroll(target))
+                log.append(f"第{i}轮滚动：{str(r)[:120]}")
+            elif action == "describe":
+                log.append(f"第{i}轮观察：{status or '已观察'}")
+        except Exception as e:
+            log.append(f"第{i}轮{action}失败：{str(e)[:120]}")
+            break
+        time.sleep(step_delay)
+    else:
+        log.append(f"已达最大轮数 {max_iters}，结束（可通过第二次调用继续）")
+
+    return "视觉闭环完成：\n" + "\n".join(log[-12:])
+
+
+def _parse_scroll(target):
+    """解析滚动目标：'向上3' / '向下 5' / '3' → pyautogui 正负次数。"""
+    t = str(target or "").strip()
+    import re as _re
+    m = _re.search(r"([+-]?\d+)", t)
+    n = int(m.group(1)) if m else 3
+    n = max(-10, min(10, n))
+    if "上" in t or "up" in t.lower():
+        return n
+    if "下" in t or "down" in t.lower():
+        return -n
+    return -n
+
+
 _WHISPER_LOOP_LOCK = threading.Lock()
 
 
@@ -10006,6 +10117,7 @@ TOOL_CALL_MAP = {
     "tts_stop": tts_stop,
     "app_manage": app_manage,
     "screen_find_click": screen_find_click,
+    "vision_loop": vision_loop,
     "voice_chat_loop": voice_chat_loop,
     "team_run": team_run,
     "net_diagnose": net_diagnose,
@@ -10097,7 +10209,7 @@ TOOL_GROUPS = [
     ("📁 文件与目录", ["read_file", "write_file", "edit_file", "list_dir", "search_local", "delete_file", "archive_files", "extract_archive", "batch_rename", "clipboard_get", "clipboard_set"]),
     ("📊 数据与文档", ["read_csv", "write_csv", "read_excel", "write_excel", "chart_data", "database_query", "database_query_mysql", "database_query_postgres", "database_execute", "create_doc", "docx_read", "pptx_read", "pdf_extract", "pdf_create", "epub_read", "mobi_read", "doc_read", "archive_list", "secret_store", "kv_store"]),
     ("📧 邮件与消息", ["send_email", "read_email", "email_summary", "agent_mail", "msg_read", "im_send", "telegram_poll_updates", "send_webhook", "publish_draft", "run_wechat_writer", "daily_brief"]),
-    ("🎨 媒体与图像", ["image_process", "image_understand", "screen_see", "chart_read", "screenshot_to_html", "debug_screenshot", "scan_read", "image_batch", "image_generate", "ocr_image", "screen_capture", "speech_to_text", "voice_chat_loop", "tts_save", "tts_speak", "tts_stop", "media_ffmpeg", "qrcode"]),
+    ("🎨 媒体与图像", ["image_process", "image_understand", "screen_see", "chart_read", "screenshot_to_html", "debug_screenshot", "scan_read", "image_batch", "image_generate", "ocr_image", "screen_capture", "screen_find_click", "vision_loop", "speech_to_text", "voice_chat_loop", "tts_save", "tts_speak", "tts_stop", "media_ffmpeg", "qrcode"]),
     ("🖱 桌面自动化", ["rpa_screen_size", "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot", "screen_find_click", "notify_desktop"]),
     ("📦 应用与环境", ["app_manage"]),
     ("⏰ 定时与任务", ["schedule_task", "list_schedules", "cancel_schedule", "task_checkpoint_save", "task_checkpoint_load", "run_workflow"]),
@@ -10140,7 +10252,7 @@ _PREACTIVATE_HINTS = [
     (("邮件", "发邮件", "收件箱"), ["send_email", "read_email", "email_summary"]),
     (("文件", "读取", "读一下", "打开"), ["read_file", "list_dir", "search_local"]),
     (("写", "保存", "创建", "生成"), ["write_file", "create_doc", "write_code_project"]),
-    (("图片", "图像", "截图", "看图", "图表"), ["image_understand", "screen_see", "image_process", "chart_read", "chart_data", "ocr_image"]),
+    (("图片", "图像", "截图", "看图", "图表", "视觉执行", "视觉闭环", "屏幕操作"), ["image_understand", "screen_see", "image_process", "chart_read", "chart_data", "ocr_image", "vision_loop", "screen_find_click"]),
     (("表格", "excel", "csv", "报表"), ["read_excel", "write_excel", "read_csv", "chart_data"]),
     (("代码", "编程", "python", "bug", "脚本", "函数"), ["run_python", "read_file", "run_tests"]),
     (("定时", "提醒", "计划", "日程"), ["schedule_task"]),
@@ -10256,6 +10368,7 @@ _TOOL_ACTION_PHRASES = {
     "speech_to_text": "语音转文字",
     "app_manage": "应用安装/卸载管理（winget/choco）",
     "screen_find_click": "视觉定位点击（看图即点，一句话指定目标）",
+    "vision_loop": "视觉操作闭环（看屏幕→动作→再验证，自主达成目标）",
     "voice_chat_loop": "实时语音对话（听一句答一句）",
     "team_run": "多智能体团队协作编排",
     "net_diagnose": "网络诊断（分层探测+降级建议）",
