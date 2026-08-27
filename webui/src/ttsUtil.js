@@ -76,6 +76,7 @@ let bargeInTimer = null;
 async function _startBargeIn() {
   try {
     if (!window.AudioContext && !window.webkitAudioContext) return false;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
     bargeInCtx = new (window.AudioContext || window.webkitAudioContext)();
     bargeInStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     bargeInAnalyser = bargeInCtx.createAnalyser();
@@ -97,6 +98,8 @@ async function _startBargeIn() {
     }, 200);
     return true;
   } catch (e) {
+    // 失败时回收已创建的资源，避免残留麦克风占用
+    disableVoiceInterrupt();
     return false;
   }
 }

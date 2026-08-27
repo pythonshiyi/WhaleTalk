@@ -1496,14 +1496,11 @@ def _compress_messages(messages, cfg, client, max_rounds=6):
         t_after, c_after = _context_size(kept)
         rounds = 0
         while (t_after > max_tokens or c_after > max_chars) and rounds < 4:
-            # 归一：尽量保最新轮次，往前往后都各退一步地减小
+            # 丢一条最老的保留消息（但保留首个 system 系统提示词，避免丢失人格/指令）
             if len(kept) > 1:
-                # 丢最老一条保留消息
-                drop_idx = 1 if kept[0].get("role") in ("system", "assistant") else 0
-                if kept[0].get("role") == "system" and len(kept) > 1:
-                    drop_idx = 1  # 不丢系统提示词
+                drop_idx = 1 if kept[0].get("role") == "system" else 0
                 if drop_idx < len(kept):
-                    kept = kept[1:drop_idx + 1] + kept[drop_idx + 1:]
+                    kept = kept[:drop_idx] + kept[drop_idx + 1:]
             # 再截断超长单条（>6000 字符压到 6000）
             for idx, m in enumerate(kept):
                 c = m.get("content")
@@ -2031,7 +2028,7 @@ def _migrate_legacy_sessions():
                 "model": "",
                 "scenario": "通用",
                 "ephemeral": False,
-                "saved_at": f"{m.group(2)[:4]}-{m.group(2)[4:6]}-{m.group(2)[6:]}T{m.group(3)[:2]}:{m.group(3)[2:4]}:{m.group(3)[4:]}" if fname else datetime.now().isoformat(timespec="seconds"),
+                "saved_at": f"{m.group(2)[:4]}-{m.group(2)[4:6]}-{m.group(2)[6:]}T{m.group(3)[:2]}:{m.group(3)[2:4]}:{m.group(3)[4:]}" if fn else datetime.now().isoformat(timespec="seconds"),
             }
             os.makedirs(SESSIONS_DIR, exist_ok=True)
             with open(os.path.join(SESSIONS_DIR, f"{sid}.json"), "w", encoding="utf-8") as f:
