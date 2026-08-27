@@ -11,6 +11,45 @@ import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { cleanForSpeech, splitSentences, enqueueSpeak, speakText, getVoiceConfig, onSpeechState, stopSpeak } from "../ttsUtil.js";
 
+// 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
+export function BackendBanner() {
+  const [down, setDown] = React.useState(false);
+  const [retrying, setRetrying] = React.useState(false);
+  React.useEffect(() => api.watchBackend(5000, (ok) => setDown(!ok)), []);
+  const retry = () => {
+    setRetrying(true);
+    (async () => {
+      try {
+        const ok = await api.probeBackendHealth();
+        setDown(!ok);
+      } catch {}
+      setRetrying(false);
+    })();
+  };
+  if (!down) return null;
+  return (
+    <div style={{
+      position: "fixed", top: 0, left: 0, right: 0, zIndex: 200,
+      background: "var(--danger, #dc2626)", color: "#fff", textAlign: "center",
+      padding: "7px 12px", fontSize: 13, fontWeight: 600,
+      boxShadow: "0 3px 10px rgba(0,0,0,.25)",
+    }}>
+      ⚠️ 后端服务未连接——请启动本机 WhaleTalk 服务，或点击右侧重试
+      <button
+        onClick={retry}
+        disabled={retrying}
+        style={{
+          marginLeft: 10, background: "rgba(255,255,255,.2)", color: "#fff",
+          border: "1px solid rgba(255,255,255,.5)", borderRadius: 6,
+          padding: "2px 10px", fontSize: 12, cursor: retrying ? "wait" : "pointer",
+        }}
+      >
+        {retrying ? "重连中…" : "立即重连"}
+      </button>
+    </div>
+  );
+}
+
 // 全局朗读状态浮标：合成中/播放中均有可见反馈，点击可停
 function SpeakingPill() {
   const [st, setSt] = React.useState({ speaking: false, loading: false });

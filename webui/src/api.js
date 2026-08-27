@@ -73,6 +73,62 @@ export async function checkBackend() {
   return backendOk;
 }
 
+// 周期性断连探测（不缓存结果）。onChange(ok) 在状态翻转时触发；返回停止函数。
+export async function probeBackendHealth() {
+  const tryHealth = async (token) => {
+    const r = await fetch(`${getBase()}/health`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(2500),
+    });
+    return r;
+  };
+  try {
+    let token = getToken();
+    let r = await tryHealth(token);
+    if (r.status === 401) {
+      try { localStorage.removeItem(TOKEN_KEY); } catch {}
+      token = await _selfFetchToken();
+      r = await tryHealth(token);
+    }
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+// 持续心跳：每 interval 秒探测一次，连接状态翻转时回调；返回取消函数。
+export function watchBackend(interval = 5000, onChange) {
+  let alive = true;
+  let last = null;
+  const tick = async () => {
+    if (!alive) return;
+    let ok = false;
+    try { ok = await probeBackendHealth(); } catch { ok = false; }
+    if (alive && ok !== last) {
+      last = ok;
+      try { onChange(ok); } catch {}
+      // 恢复连接时重置缓存，让各页面重新拉取真实数据
+      if (ok) backendOk = null;
+    }
+  };
+  tick();
+  const iv = setInterval(tick, interval);
+  return () => { alive = false; clearInterval(iv); };
+}
+
+// 从错误响应里取出服务端的人话（{error} / {detail} / {error:{message}}），取不到给兜底
+async function _errMessage(r, fallback) {
+  try {
+    const j = await r.json();
+    if (j && typeof j === "object") {
+      if (typeof j.detail === "string" && j.detail) return j.detail;
+      if (typeof j.error === "string" && j.error) return j.error;
+      if (j.error && typeof j.error === "object" && typeof j.error.message === "string") return j.error.message;
+    }
+  } catch {}
+  return fallback;
+}
+
 async function api(path, opts = {}) {
   const attempt = async (token) => {
     const r = await fetch(`${getBase()}${path}`, {
@@ -101,7 +157,7 @@ async function api(path, opts = {}) {
     const token = await _selfFetchToken();
     if (token) r = await attempt(token);
   }
-  if (!r.ok) throw new Error(`API ${path} → ${r.status}`);
+  if (!r.ok) throw new Error(await _errMessage(r, `请求失败（${r.status}）`));
   return r.json();
 }
 

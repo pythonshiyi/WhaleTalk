@@ -3403,9 +3403,9 @@ class _Handler(BaseHTTPRequestHandler):
                         self._json(200, data)
                 else:
                     self._json(404, {"error": "not found"})
-            except Exception:
+            except Exception as e:
                 logger.exception("GET %s 失败", self.path)
-                self._json(500, {"error": "internal error"})
+                self._json(500, {"error": _friendly_error(e), "code": 500, "detail": str(e)})
         else:
             # 静态资源（WebUI dist/）
             self._serve_static(self.path)
@@ -3938,9 +3938,9 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(200, result)
             else:
                 self._json(404, {"error": "not found"})
-        except Exception:
+        except Exception as e:
             logger.exception("POST %s 失败", self.path)
-            self._json(500, {"error": "internal error"})
+            self._json(500, {"error": _friendly_error(e), "code": 500, "detail": str(e)})
 
     # ── SSE 工具 ─────────────────────────────────
 

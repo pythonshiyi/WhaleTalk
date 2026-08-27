@@ -4,6 +4,39 @@ import ToolCard from "./ToolCard.jsx";
 import * as api from "../api.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
 
+// 后台任务进度条：AI 执行多工具任务时展示「进行中 / 已完成」计数与进度，感知"真在干活"
+function TaskProgress({ tools, streaming }) {
+  const list = tools || [];
+  const total = list.filter((t) => t && (t.tool || t.status)).length;
+  const running = list.filter((t) => t && t.status === "running").length;
+  const done = list.filter((t) => t && t.status === "done").length;
+  const failed = list.filter((t) => t && t.status === "failed").length;
+  if (!total) return null;
+  const pct = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const cur = list.find((t) => t && t.status === "running");
+  const currentTool = cur ? cur.tool : null;
+  return (
+    <div className="task-progress" style={{
+      margin: "6px 0 4px", padding: "8px 12px", borderRadius: 10,
+      background: "var(--bg-2, rgba(128,140,160,.08))", fontSize: 12.5,
+      color: "var(--text, #ddd)", display: "flex", alignItems: "center", gap: 10,
+    }}>
+      <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>
+        {streaming && (!done || running) ? "⏳ 任务进行中" : done >= total && total ? "✅ 任务完成" : "🔄 任务"}
+      </span>
+      <span style={{ flex: 1 }}>
+        <div style={{ height: 6, borderRadius: 3, background: "rgba(128,140,160,.18)", overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg,#0ea5e9,#2563eb)", transition: "width .3s" }} />
+        </div>
+      </span>
+      <span className="task-prog-count" style={{ whiteSpace: "nowrap", opacity: .85 }}>
+        {done}/{total} 步
+        {running ? ` · ${currentTool ? "▶ " + currentTool : "执行中"}…` : failed ? ` · ${failed} 失败` : ""}
+      </span>
+    </div>
+  );
+}
+
 const Whale = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 12c1.5-4 4-6 7-6 3.5 0 5.5 2 9 2 1.6 0 2.8-.6 4-1.5-1 3-3 4.5-5 4.8.6 1.4.9 2.9.9 4.5 0 .8-.1 1.6-.3 2.3-1-.4-1.8-1-2.2-1.8-.9 1-2.4 1.7-4.2 1.7s-3.3-.7-4.2-1.7c-.4.8-1.2 1.4-2.2 1.8A11 11 0 015 15c0-1.6.3-3.1.9-4.5C4.7 10.2 3.3 8.7 3 12z" />
@@ -138,6 +171,9 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
         </div>
         {msg.think && (
           <ThinkBlock text={msg.think} streaming={msg.streaming} />
+        )}
+        {(msg.tools && msg.tools.length > 0 || msg.streaming) && (
+          <TaskProgress tools={msg.tools} streaming={msg.streaming} />
         )}
         {msg.tools && msg.tools.map((t, i) => (
           <ToolCard key={i} {...t} />

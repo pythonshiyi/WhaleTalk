@@ -1,6 +1,6 @@
 import React from "react";
 import Sidebar from "./components/Sidebar.jsx";
-import ChatPage from "./components/ChatPage.jsx";
+import ChatPage, { BackendBanner } from "./components/ChatPage.jsx";
 import { AbilitiesPage, PluginsPage, MemoryPage, SettingsPage, WorkbenchPage } from "./components/Pages.jsx";
 import { FlashProvider, ToastProvider } from "./components/FlashToast.jsx";
 import * as api from "./api.js";
@@ -120,6 +120,7 @@ export default function App() {
               <div className="app">
                 <Sidebar page={page} onPage={setPage} />
                 <main className="app-main">
+                  <BackendBanner />
                   <ErrorBoundary>
                     {page === "chat" && <ChatPage onGoWorkbench={() => setPage("workbench")} onGoSettings={() => setPage("settings")} />}
                     {page === "workbench" && <WorkbenchPage onGoChat={() => setPage("chat")} />}
