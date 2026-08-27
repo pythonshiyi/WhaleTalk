@@ -4,6 +4,43 @@ import ToolCard from "./ToolCard.jsx";
 import * as api from "../api.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
 
+// 表格内嵌预览（CSV/XLSX）：分页展示，不超过后端返回的 rows 上限
+function TablePreview({ header = [], rows = [], total = 0, name = "" }) {
+  const [pg, setPg] = React.useState(0);
+  const PER = 25;
+  const pages = Math.max(1, Math.ceil((rows.length || 1) / PER));
+  const cur = rows.slice(pg * PER, pg * PER + PER);
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ opacity: .8, marginBottom: 4 }}>📊 {name}（{total > 0 ? total + " 行" : rows.length + " 行"}）</div>
+      <div style={{ overflow: "auto", maxHeight: 300, border: "1px solid var(--border)", borderRadius: 8 }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>{header.length > 0 && (
+          <thead><tr>{(header || []).map((h, i) => (
+            <th key={i} style={{ padding: "4px 8px", background: "rgba(128,140,160,.15)", textAlign: "left", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
+          ))}</tr></thead>
+        )}
+          <tbody>
+            {(cur || []).map((r, ri) => (
+              <tr key={ri}>
+                {(r || []).map((c, ci) => (
+                  <td key={ci} style={{ padding: "4px 8px", borderBottom: "1px solid rgba(128,140,160,.12)", whiteSpace: "nowrap", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{c}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {pages > 1 && (
+        <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
+          <button className="msg-op" onClick={() => setPg(Math.max(0, pg - 1))} disabled={pg === 0}>‹</button>
+          <span style={{ opacity: .8 }}>{pg + 1}/{pages}</span>
+          <button className="msg-op" onClick={() => setPg(Math.min(pages - 1, pg + 1))} disabled={pg >= pages - 1}>›</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 后台任务进度条：AI 执行多工具任务时展示「进行中 / 已完成」计数与进度，感知"真在干活"
 function TaskProgress({ tools, streaming }) {
   const list = tools || [];
@@ -235,6 +272,28 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
               {d.kind === "md" && <Markdown text={d.content} deferCode={false} />}
               {d.kind === "text" && (
                 <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit", fontSize: 12.5 }}>{d.content}</pre>
+              )}
+              {d.kind === "table" && (
+                <TablePreview header={d.header} rows={d.rows} total={d.total_rows} name={d.name} />
+              )}
+              {d.kind === "pdf" && (
+                <div style={{ marginTop: 4, fontSize: 12.5 }}>
+                  <div style={{ opacity: .8, marginBottom: 4 }}>📄 PDF（{d.page_count || "?"} 页）· 首页文本预览</div>
+                  {d.content ? (
+                    <pre style={{ whiteSpace: "pre-wrap", margin: 0, maxHeight: 240, overflow: "auto", fontFamily: "inherit", fontSize: 12.5 }}>
+                      {(d.content || "").slice(0, 4000)}
+                    </pre>
+                  ) : (
+                    <div style={{ opacity: .8 }}>（无文本层，可能是扫描件，可用系统程序打开）</div>
+                  )}
+                  <button className="msg-op" style={{ marginTop: 6 }} onClick={() => prodAct(p, "open")}>用系统程序打开</button>
+                </div>
+              )}
+              {d.kind === "doc" && (
+                <div style={{ marginTop: 4, fontSize: 12.5 }}>
+                  <div style={{ opacity: .8 }}>📄 {d.name}（Office 文档）——用系统程序打开查看</div>
+                  <button className="msg-op" style={{ marginTop: 6 }} onClick={() => prodAct(p, "open")}>用系统程序打开</button>
+                </div>
               )}
               {!d.previewable && <div style={{ opacity: .8 }}>{d.reason || "该格式不支持内嵌预览"}</div>}
             </div>

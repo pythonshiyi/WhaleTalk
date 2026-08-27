@@ -831,9 +831,9 @@ _IMAGE_PREVIEW_MIME = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
     ".webp": "image/webp", ".bmp": "image/bmp", ".ico": "image/x-icon",
 }
-_TEXT_PREVIEW_EXTS = {".md", ".txt", ".json", ".csv", ".log", ".py", ".js", ".ts", ".html", ".htm", ".css", ".xml", ".yaml", ".yml", ".ini", ".toml", ".sql", ".jsx", ".tsx", ".sh", ".bat"}
-# 浏览器可直接内嵌预览；其余提示「用系统程序打开」
-_PREVIEW_INLINE_TEXT = {".md", ".txt", ".html", ".htm", ".json", ".csv", ".log", ".xml", ".yaml", ".yml", ".ini", ".toml", ".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".sql", ".sh", ".bat"}
+_TEXT_PREVIEW_EXTS = {".md", ".txt", ".json", ".log", ".py", ".js", ".ts", ".html", ".htm", ".css", ".xml", ".yaml", ".yml", ".ini", ".toml", ".sql", ".jsx", ".tsx", ".sh", ".bat"}
+# 浏览器可直接内嵌预览；其余提示「用系统程序打开」。（csv 单独走表格分支）
+_PREVIEW_INLINE_TEXT = {".md", ".txt", ".html", ".htm", ".json", ".log", ".xml", ".yaml", ".yml", ".ini", ".toml", ".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".sql", ".sh", ".bat"}
 
 
 def _file_preview(path, max_chars=16000):
@@ -892,7 +892,68 @@ def _file_preview(path, max_chars=16000):
             base.update({"previewable": False, "reason": f"读取失败: {e}"})
             return base, None
 
-    # 其余（xlsx/docx/pptx/pdf/zip 等）：不可内嵌，提示用系统程序打开
+    # CSV：解析为表格行（前端分页展示）
+    if ext == ".csv":
+        if size > 2 * 1024 * 1024:
+            base.update({"previewable": False, "reason": "CSV 超过 2MB，不内嵌预览"})
+            return base, None
+        try:
+            import csv as _csv, io as _io
+            with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+                rows = list(_csv.reader(f))
+            max_rows, max_cols = 200, 30
+            header = rows[0] if rows else []
+            body = rows[1:max_rows + 1]
+            # 统一列数 + 单格限长，前端表格不炸
+            width = min(max(len(header), max((len(r) for r in body), default=0)), max_cols)
+            def norm(r):
+                rr = [str(c)[:200] for c in r]
+                return (rr + [""] * (width - len(rr)))[:width]
+            base.update({
+                "previewable": True, "kind": "table",
+                "header": norm(header or body[0] or []),
+                "rows": [norm(r) for r in body[:max_rows]],
+                "total_rows": max(0, len(rows) - 1),
+                "truncated": len(rows) - 1 > max_rows,
+            })
+            return base, None
+        except Exception as e:
+            base.update({"previewable": False, "reason": f"CSV 解析失败: {e}"})
+            return base, None
+
+    # PDF：用 PyMuPDF 提取首页文本预览（≤10MB，缺依赖时提示）
+    if ext in (".pdf", ".xlsx", ".docx", ".pptx"):
+        if size > 10 * 1024 * 1024:
+            base.update({"previewable": False, "reason": "文档超过 10MB，不内嵌预览"})
+            return base, None
+        try:
+            preview_text = ""
+            if ext == ".pdf":
+                import fitz  # PyMuPDF
+                page_count = 0
+                with fitz.open(path) as doc:
+                    page_count = doc.page_count
+                    if page_count:
+                        preview_text = doc[0].get_text()[:16000]
+                base.update({"previewable": True, "kind": "pdf", "page_count": page_count, "content": preview_text or "", "inline": False})
+            elif ext == ".xlsx":
+                import openpyxl
+                wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+                ws = wb.active
+                rows = [[str(c.value)[:120] if c.value is not None else "" for c in row] for row in ws.iter_rows(max_row=30, max_col=20)]
+                wb.close()
+                base.update({"previewable": True, "kind": "table", "header": rows[0] if rows else [], "rows": rows[1:30], "total_rows": 30, "truncated": True})
+            else:
+                base.update({"previewable": True, "kind": "doc", "content": "", "inline": False})
+            return base, None
+        except ImportError:
+            base.update({"previewable": False, "reason": f"预览 {ext} 需要额外依赖（PyMuPDF/openpyxl），可先用系统程序打开"})
+            return base, None
+        except Exception as e:
+            base.update({"previewable": False, "reason": f"文档预览失败: {e}"})
+            return base, None
+
+    # 其余（zip/rar 等）：不可内嵌，提示用系统程序打开
     base.update({"previewable": False, "reason": "该格式暂不支持内嵌预览，请用系统程序打开"})
     return base, None
 
@@ -1427,14 +1488,60 @@ def _compress_messages(messages, cfg, client, max_rounds=6):
         "mode": mode,
         "tokens_before": tokens_total,
     }
+
+    # ── 压缩后二次校验：若仍超限（单轮过大/摘要过大），做更激进的兜底 ──
+    # ① 先试保留更少轮次；② 仍超则截断超长消息内容；③ 仍超则丢弃最老的保留轮。
+    # 避免"压缩后仍超限 → 请求直接被服务端拒绝"导致整轮卡死。
+    try:
+        t_after, c_after = _context_size(kept)
+        rounds = 0
+        while (t_after > max_tokens or c_after > max_chars) and rounds < 4:
+            # 归一：尽量保最新轮次，往前往后都各退一步地减小
+            if len(kept) > 1:
+                # 丢最老一条保留消息
+                drop_idx = 1 if kept[0].get("role") in ("system", "assistant") else 0
+                if kept[0].get("role") == "system" and len(kept) > 1:
+                    drop_idx = 1  # 不丢系统提示词
+                if drop_idx < len(kept):
+                    kept = kept[1:drop_idx + 1] + kept[drop_idx + 1:]
+            # 再截断超长单条（>6000 字符压到 6000）
+            for idx, m in enumerate(kept):
+                c = m.get("content")
+                if isinstance(c, str) and len(c) > 6000:
+                    kept[idx] = dict(m)
+                    kept[idx]["content"] = c[:6000] + "\n…[超长已截断]"
+            t_after, c_after = _context_size(kept)
+            rounds += 1
+        if t_after > max_tokens or c_after > max_chars:
+            # 终极兜底：只保留最后 kept_turns 轮且每轮截断（极少发生）
+            kept = [dict(m) for m in messages[-max(8, kept_turns):]]
+            for m in kept:
+                if isinstance(m.get("content"), str) and len(m["content"]) > 6000:
+                    m["content"] = m["content"][:6000] + "\n…[超长已截断]"
+            info["mode"] = "trim"
+            info["hard_trim"] = True
+    except Exception:
+        logger.exception("压缩后二次校验失败（不影响主流程）")
+
     return kept, info
 
 
-def _global_search(query):
-    """全局搜索：跨全部会话文件匹配 content + reasoning_content（对齐原程序 search_all_sessions）。"""
+def _global_search(query, filters=None):
+    """全局搜索：跨全部会话文件匹配 content + reasoning_content（对齐原程序 search_all_sessions）。
+
+    filters 可选：{tag, time_from, time_to, type}，其中 type 为 "message" | "artifact"。
+    产物（artifact）搜索：匹配消息文本里的绝对文件路径（md/txt/png/...），便于跨会话找历史产物。
+    """
     q = str(query or "").strip().lower()
     if not q or not os.path.isdir(SESSIONS_DIR):
         return {"results": []}
+    filters = filters or {}
+    ftype = (filters.get("type") or "message").lower()
+    f_tag = str(filters.get("tag") or "").strip()
+    ft_from = str(filters.get("time_from") or "").strip()
+    ft_to = str(filters.get("time_to") or "").strip()
+    # 产物路径匹配：以产物扩展名结尾的绝对路径
+    art_re = re.compile(r"[A-Za-z]:[\\/][^\s\"“”“<>|,，;；。]*?[.](?:md|txt|json|csv|xlsx|docx|pptx|pdf|png|jpg|jpeg|html|htm|zip|py|log)\b", re.I)
     results = []
     for fn in os.listdir(SESSIONS_DIR):
         if not fn.endswith(".json"):
@@ -1442,29 +1549,52 @@ def _global_search(query):
         try:
             with open(os.path.join(SESSIONS_DIR, fn), "r", encoding="utf-8") as f:
                 d = json.load(f)
-            msgs = d.get("messages") or []
-            for i, m in enumerate(msgs):
-                content = str(m.get("content") or "")
-                joined = (content + " " + str(m.get("reasoning_content") or "")).lower()
-                if q not in joined:
-                    continue
-                idx = content.lower().find(q)
-                if idx >= 0:
-                    start = max(0, idx - 20)
-                    end = min(len(content), idx + len(q) + 40)
-                    snippet = content[start:end]
-                else:
-                    snippet = str(m.get("reasoning_content") or "")[:80]
-                results.append({
-                    "session_id": str(d.get("id") or fn[:-5]),
-                    "session_name": str(d.get("name") or "未命名会话"),
-                    "index": i,
-                    "role": str(m.get("role") or ""),
-                    "snippet": snippet,
-                    "time": str(m.get("time") or ""),
-                })
         except Exception:
             continue
+        sess_name = str(d.get("name") or "未命名会话")
+        sess_tags = d.get("tags") or []
+        sess_time = str(d.get("saved_at") or "")
+        # 标签过滤
+        if f_tag and f_tag not in [str(t) for t in sess_tags]:
+            continue
+        # 时间过滤（saved_at 形如 YYYY-MM-DDTHH:MM:SS）
+        if (ft_from or ft_to) and sess_time:
+            date_part = sess_time[:10]
+            if ft_from and date_part < ft_from:
+                continue
+            if ft_to and date_part > ft_to:
+                continue
+        msgs = d.get("messages") or []
+        for i, m in enumerate(msgs):
+            content = str(m.get("content") or "")
+            if ftype == "artifact":
+                # 只在产物路径中检索
+                for am in art_re.finditer(content):
+                    path = am.group(0).rstrip("，。、,;；:()")
+                    if q in path.lower():
+                        results.append({
+                            "session_id": str(d.get("id") or fn[:-5]),
+                            "session_name": sess_name,
+                            "index": i, "role": str(m.get("role") or ""),
+                            "snippet": path, "time": str(m.get("time") or ""), "kind": "artifact", "path": path,
+                        })
+                continue
+            joined = (content + " " + str(m.get("reasoning_content") or "")).lower()
+            if q not in joined:
+                continue
+            idx = content.lower().find(q)
+            if idx >= 0:
+                start = max(0, idx - 20)
+                end = min(len(content), idx + len(q) + 40)
+                snippet = content[start:end]
+            else:
+                snippet = str(m.get("reasoning_content") or "")[:80]
+            results.append({
+                "session_id": str(d.get("id") or fn[:-5]),
+                "session_name": sess_name,
+                "index": i, "role": str(m.get("role") or ""),
+                "snippet": snippet, "time": str(m.get("time") or ""), "kind": "message",
+            })
     results.sort(key=lambda r: (r["session_name"], r["index"]))
     return {"results": results[:300]}
 
@@ -1552,10 +1682,37 @@ def _evolution_detail(name):
     return {"name": name, "files": files}
 
 
+def _schedule_next_run(item, now=None):
+    """计算定时任务的下次运行时间字符串（time/cron/every），失败返回空串。"""
+    from datetime import datetime as _dt, timedelta as _td
+    now = now or _dt.now()
+    try:
+        if item.get("time"):
+            t = _dt.strptime(str(item["time"]).strip(), "%H:%M")
+            candidate = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            if candidate <= now:
+                candidate += _td(days=1)
+            return candidate.strftime("%m-%d %H:%M")
+        if item.get("every"):
+            mins = max(1, int(item["every"]))
+            nxt = now + _td(minutes=mins)
+            return nxt.strftime("%m-%d %H:%M") + f"（每 {mins} 分钟）"
+        if item.get("cron"):
+            # 简单近似：只显示 cron 表达式，不精确解析（避免引入 croniter 依赖）
+            return "cron " + str(item["cron"])[:40]
+    except Exception:
+        return ""
+    return ""
+
+
 def _schedules_get():
-    """定时任务列表。"""
+    """定时任务列表（附下次运行时间）。"""
     import stores
     items = stores.load_schedules(SCHEDULES_PATH)
+    now = None
+    for s in items:
+        if s.get("enabled"):
+            s["next_run"] = _schedule_next_run(s, now)
     return {"schedules": items}
 
 
@@ -1727,6 +1884,39 @@ def _headless_chat(text, reply_channel=""):
             dc.notify_desktop("鲸语后台任务完成", body=str(text)[:40] + "\n" + reply[:120])
         except Exception:
             pass
+
+
+_PROCESS_WATCHDOG_LOCK = threading.Lock()
+_process_watchdog_started = False
+
+
+def _start_process_watchdog(interval=180, max_idle=3600):
+    """空闲进程守卫生：定期清理空闲超过 max_idle 秒的后台子进程（AI 起的服务/浏览器等）。
+
+    防止长会话里 AI 启动的进程/浏览器长期驻留成孤儿拖垮系统。
+    interval 最低 30s，防过频；max_idle 可经 config 的 process_max_idle_seconds 覆盖。
+    """
+    global _process_watchdog_started
+    if _process_watchdog_started:
+        return
+    _process_watchdog_started = True
+    try:
+        import config_utils
+        mid = int(config_utils.load_config().get("process_max_idle_seconds") or 0)
+        max_idle = max(300, mid) if mid else max_idle
+    except Exception:
+        pass
+
+    def _loop():
+        while True:
+            try:
+                import deepseek_client as dc
+                dc.cleanup_idle_processes(max_idle_seconds=max_idle)
+            except Exception:
+                logger.debug("空闲进程清理失败", exc_info=True)
+            time.sleep(max(30, interval))
+
+    threading.Thread(target=_loop, daemon=True).start()
 
 
 def _dispatch_schedule(s, action):
@@ -1925,18 +2115,61 @@ def _tasklog_get():
 
 
 def _knowledge_get():
-    """知识库状态。"""
-    idx_path = os.path.join(DATA_DIR, "knowledge", "index.json")
-    if os.path.exists(idx_path):
-        try:
-            with open(idx_path, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            if isinstance(d, dict):
-                files = d.get("files") or d.get("docs") or []
-                return {"indexed": True, "files": [str(x) for x in list(files)[:50]]}
-        except Exception:
-            pass
+    """知识库状态（读取实际索引文件）。"""
+    import deepseek_client as dc
+    idx_path = getattr(dc, "KNOWLEDGE_INDEX_FILE", None)
+    if not idx_path or not os.path.exists(idx_path):
+        return {"indexed": False, "files": []}
+    try:
+        with open(idx_path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict):
+            docs = d.get("docs") or d.get("files") or []
+            paths = [str(x.get("path") if isinstance(x, dict) else x) for x in docs][:50]
+            return {"indexed": bool(docs), "files": paths, "count": len(docs)}
+    except Exception:
+        pass
     return {"indexed": False, "files": []}
+
+
+def _knowledge_search_api(query, top_k=5):
+    """结构化知识库检索（RAG）：返回带来源路径与得分的命中，供前端带引用展示。"""
+    import deepseek_client as dc
+    q = str(query or "").strip()
+    if not q:
+        return None, "query 必填"
+    idx_file = getattr(dc, "KNOWLEDGE_INDEX_FILE", None)
+    if not idx_file or not os.path.exists(idx_file):
+        return None, "知识库尚未建立索引（先在对话用 knowledge_index 或到知识目录建索引）"
+    try:
+        with open(idx_file, "r", encoding="utf-8") as f:
+            index = json.load(f)
+    except Exception:
+        return None, "索引读取失败，请重新建立索引"
+    idf = index.get("idf") or {}
+    docs = index.get("docs") or []
+    if not docs:
+        return None, "知识库为空"
+    try:
+        k = max(1, min(10, int(top_k or 5)))
+    except (TypeError, ValueError):
+        k = 5
+    qt = dc._mem_tokens(q)
+    scored = []
+    for d in docs:
+        s = dc._mem_score(qt, idf, d.get("text") or "")
+        if s > 0:
+            scored.append((s, d))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    hits = []
+    for s, d in scored[:k]:
+        hits.append({
+            "score": round(s, 2),
+            "path": str(d.get("path") or ""),
+            "snippet": dc._knowledge_snippet(d.get("text") or "", q),
+            "text": str(d.get("text") or "")[:3000],
+        })
+    return {"query": q, "hits": hits, "total": len(docs)}, None
 
 
 def _roles_save(body):
@@ -2415,7 +2648,6 @@ def _start_inbound():
 
 
 _IM_THREAD = None
-
 
 def _im_loop():
     """IM 通道：Telegram Bot 轮询（收到消息 → 执行任务并回复）。"""
@@ -3567,6 +3799,16 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(400, {"error": err})
                 else:
                     self._json(200, result)
+            elif self.path == "/v1/knowledge/search":
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                result, err = _knowledge_search_api(str(body.get("query") or ""), int(body.get("top_k") or 5))
+                if err:
+                    self._json(400, {"error": err})
+                else:
+                    self._json(200, result)
             elif self.path == "/v1/roles":
                 body = self._read_body()
                 if body is None:
@@ -3622,7 +3864,7 @@ class _Handler(BaseHTTPRequestHandler):
                 if body is None:
                     self._json(400, {"error": "invalid json or body too large"})
                     return
-                self._json(200, _global_search(body.get("query") or ""))
+                self._json(200, _global_search(body.get("query") or "", body.get("filters") or {}))
             elif self.path == "/v1/plugin_studio/generate":
                 body = self._read_body()
                 if body is None:
@@ -4307,6 +4549,7 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
     if _SCHEDULER_THREAD is None:
         _SCHEDULER_THREAD = threading.Thread(target=_scheduler_loop, daemon=True)
         _SCHEDULER_THREAD.start()
+    _start_process_watchdog()
     try:
         _start_inbound()
     except Exception:
@@ -4356,6 +4599,15 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
 def stop_server():
     global _SERVER, _THREAD
     if _SERVER is not None:
+        try:
+            # 终止全部后台子进程（AI 起的服务/浏览器等），防孤儿进程残留
+            try:
+                import deepseek_client as dc
+                dc.cleanup_all_processes()
+            except Exception:
+                logger.debug("服务停止时进程清理失败", exc_info=True)
+        except Exception:
+            pass
         try:
             _SERVER.shutdown()
             _SERVER.server_close()

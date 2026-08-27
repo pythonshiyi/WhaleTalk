@@ -1,5 +1,34 @@
 import React from "react";
 
+// 多智能体流水线步骤面板：解析工具结果里的 __TEAM_JSON__ 结构化段，渲染步骤条
+function TeamRunSteps({ result }) {
+  const [steps, setSteps] = React.useState(null);
+  React.useEffect(() => {
+    if (!result) return setSteps(null);
+    const m = String(result).match(/__TEAM_JSON__(\{.*\})/);
+    if (m) {
+      try {
+        const d = JSON.parse(m[1]);
+        setSteps(d.team_steps || []);
+      } catch { setSteps(null); }
+    } else setSteps(null);
+  }, [result]);
+  if (!steps || !steps.length) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div className="tool-result-label" style={{ marginBottom: 4 }}>🧩 多智能体流水线</div>
+      <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12.5 }}>
+        {steps.map((s, i) => (
+          <li key={i} style={{ marginBottom: 6 }}>
+            <b>[{s.role}]</b> {s.task}
+            {s.output && <div style={{ opacity: .85, whiteSpace: "pre-wrap", fontSize: 12, margin: "3px 0" }}>{String(s.output).slice(0, 300)}</div>}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 // 工具图标（内联 SVG，无图标库依赖）；图标归属按真实工具名前缀展示，无映射时用 code 兜底
 const ICONS = {
   search: (
@@ -77,7 +106,12 @@ export default function ToolCard({ tool, status, args, result, cost, duration })
         <div className="tool-card-body">
           <div className="tool-result">
             <span className="tool-result-label">结果</span>
-            {result}
+            {tool === "team_run" ? (
+              <>
+                <TeamRunSteps result={result} />
+                {String(result).replace(/__TEAM_JSON__\{.*\}/, "").trim()}
+              </>
+            ) : result}
           </div>
         </div>
       )}

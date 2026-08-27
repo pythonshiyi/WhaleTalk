@@ -64,6 +64,58 @@ export function isSpeaking() {
   return !!currentAudio;
 }
 
+// ── 「说话即打断」barge-in：朗读时监听麦克风，检测到用户说话即停止朗读 ──
+// 权限门控 + 默认关闭；需用户在设置开启并授予麦克风权限。纯前端、无 whisper 依赖，
+// 用音量阈值近似（用户一开口 → 环境声响 → 停止）。
+let bargeInOn = false;
+let bargeInCtx = null;
+let bargeInAnalyser = null;
+let bargeInStream = null;
+let bargeInTimer = null;
+
+async function _startBargeIn() {
+  try {
+    if (!window.AudioContext && !window.webkitAudioContext) return false;
+    bargeInCtx = new (window.AudioContext || window.webkitAudioContext)();
+    bargeInStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    bargeInAnalyser = bargeInCtx.createAnalyser();
+    bargeInAnalyser.fftSize = 512;
+    bargeInAnalyser.smoothingTimeConstant = 0.5;
+    const src = bargeInCtx.createMediaStreamSource(bargeInStream);
+    src.connect(bargeInAnalyser);
+    const buf = new Uint8Array(bargeInAnalyser.frequencyBinCount);
+    bargeInTimer = setInterval(() => {
+      if (!currentAudio || !bargeInAnalyser) return;
+      bargeInAnalyser.getByteFrequencyData(buf);
+      let sum = 0;
+      const n = Math.floor(buf.length * 0.6);  // 只取中低频（人声区）
+      for (let i = 0; i < n; i++) sum += buf[i];
+      const avg = sum / (n || 1) / 255;
+      if (avg > 0.3) {  // 用户开口（中低频能量明显）→ 打断朗读
+        stopSpeak();
+      }
+    }, 200);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+export async function enableVoiceInterrupt() {
+  if (bargeInOn) return true;
+  const ok = await _startBargeIn();
+  if (ok) bargeInOn = true;
+  return ok;
+}
+
+export function disableVoiceInterrupt() {
+  bargeInOn = false;
+  if (bargeInTimer) { clearInterval(bargeInTimer); bargeInTimer = null; }
+  if (bargeInStream) { try { bargeInStream.getTracks().forEach((t) => t.stop()); } catch {} }
+  if (bargeInCtx) { try { bargeInCtx.close(); } catch {} }
+  bargeInStream = null; bargeInCtx = null; bargeInAnalyser = null;
+}
+
 // 在用户点击手势内"解锁"音频管线（页面刚加载+合成超过瞬态窗口的场景）
 let primed = false;
 export function primeAudio() {

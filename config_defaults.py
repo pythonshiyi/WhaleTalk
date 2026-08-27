@@ -5,7 +5,7 @@
 """
 
 # 应用版本号（统一来源：deepseek_client / backup 引用此处）
-VERSION = "3.4.0"
+VERSION = "3.5.0"
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个强大的AI助手，具备以下核心能力：\n"
@@ -175,4 +175,5 @@ DEFAULT_CONFIG = {
     "update_public_key": "",  # 更新包签名公钥（可选；配置后校验 Ed25519 签名/或 sha256 字段）
     "agent_mail_enabled": False,  # Agent Mail（agently-cli）集成开关；默认关闭，不配置不影响使用
     "agent_mail_cli": "agently-cli",  # agently-cli 可执行文件（或绝对路径）
+    "process_max_idle_seconds": 3600,  # 后台子进程空闲清理阈值（AI 起的服务/浏览器等，默认 1 小时）
 }

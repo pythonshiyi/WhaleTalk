@@ -113,6 +113,56 @@ export function AbilitiesPage() {
 
 export { default as PluginsPage } from "./PluginsPage.jsx";
 
+// ── 知识库 RAG（记忆与知识页）：文档建索引 → 语义问答带引用源 ──
+function KnowledgeBaseBlock() {
+  const [kb, setKb] = React.useState(null);
+  const [kquery, setKquery] = React.useState("");
+  const [khits, setKhits] = React.useState(null);
+  const [kerr, setKerr] = React.useState("");
+  React.useEffect(() => { apiGet("/v1/knowledge").then((d) => d && setKb(d)).catch(() => {}); }, []);
+  const doSearch = async () => {
+    if (!kquery.trim()) return;
+    setKerr("");
+    try {
+      const d = await apiPost("/v1/knowledge/search", { query: kquery, top_k: 5 });
+      setKhits(d.hits || []);
+      if (!d.hits || d.hits.length === 0) setKerr("知识库未命中相关内容（可先建立索引）");
+    } catch (e) {
+      setKerr((e && e.message) || "检索失败");
+      setKhits(null);
+    }
+  };
+  return (
+    <div className="wb-card" style={{ marginTop: 16 }}>
+      <div className="wb-card-title">📚 知识库 RAG（带引用源）</div>
+      <div className="empty-tip" style={{ marginBottom: 6 }}>
+        已建立索引：{kb ? (kb.indexed ? ` ${(kb.files || []).length} 个文件` : "未建立") : "查询中…"}
+        {kb && kb.files && kb.files.length > 0 && <span style={{ opacity: .6 }}>（{kb.files.slice(0, 3).join(" · ")}…）</span>}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        <input className="set-select set-combo" placeholder="输入问题，如「我们服务器的部署步骤」" value={kquery}
+          onChange={(e) => setKquery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} />
+        <button className="confirm-btn confirm-primary" onClick={doSearch}>🔍 检索</button>
+      </div>
+      {kerr && <div className="empty-tip">{kerr}</div>}
+      {khits && khits.length > 0 && (
+        <div className="mem-list">
+          {khits.map((h, i) => (
+            <div className="mem-card mem-card-lg" key={i}>
+              <div className="mem-card-head">
+                <span className="mem-id">{h.path ? String(h.path).split(/[\\/]/).pop() : "命中"}</span>
+                <span className="mem-tag">相似度 {h.score}</span>
+                {h.path && <span className="mem-time" style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }} title={h.path}>{h.path}</span>}
+              </div>
+              <div className="mem-text">{h.snippet || h.text}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MemoryPage() {
   const [q, setQ] = React.useState("");
   const [focused, setFocused] = React.useState(false);
@@ -180,6 +230,7 @@ export function MemoryPage() {
           <div className="empty-tip">{err || "暂无记忆（对话中记录的事实会出现在这里）"}</div>
         )}
       </div>
+      <KnowledgeBaseBlock />
     </div>
   );
 }
@@ -592,14 +643,16 @@ function SchedulesBlock() {
   const [schedules, setSchedules] = React.useState([]);
   const [newS, setNewS] = React.useState({ action: "message", time: "09:00", text: "", name: "", off_peak: false, every: "", cron: "" });
 
+  const refetch = () => api.getSchedules().then((d) => d && setSchedules(d.schedules || [])).catch(() => {});
   React.useEffect(() => {
-    api.getSchedules().then((d) => d && setSchedules(d.schedules || [])).catch(() => {});
+    refetch();
   }, []);
 
   const save = async (items) => {
     setSchedules(items);
     try {
       await api.saveSchedules(items);
+      refetch();  // 重新拉取，拿到后端计算的 next_run
     } catch {}
   };
 
@@ -623,17 +676,19 @@ function SchedulesBlock() {
 
   return (
     <div className="wb-card">
-      <div className="wb-card-title">⏰ 定时任务（{schedules.length}）</div>
+      <div className="wb-card-title">⏰ 计划与定时任务（{schedules.filter((s) => s.enabled !== false).length} 启用）</div>
       <div className="sched-list">
         {schedules.map((s, i) => (
           <div className="sched-item" key={i}>
             <div className="sched-line1">
               <b>{s.name}</b>
-              <span className={`sched-mode ${s.cron ? "sched-cron" : ""}`}>
+              <span className={`sched-mode ${s.cron ? "sched-cron" : ""} ${s.enabled === false ? "sched-off" : ""}`}>
                 {s.cron ? `cron ${s.cron}` : s.every ? `每 ${s.every} 分钟` : s.time}
+                {s.enabled === false ? "（已停用）" : s.next_run ? ` · 下次 ${s.next_run}` : ""}
               </span>
               {s.off_peak && <span className="sched-badge">🌙 错峰</span>}
               <span className="sched-action">{s.action}</span>
+              {s.last && <span className="sched-last" title="上次运行">上次 {s.last}</span>}
               <button className="msg-op" onClick={() => del(i)}>✕</button>
             </div>
             {s.text && <div className="sched-text">{s.text}</div>}

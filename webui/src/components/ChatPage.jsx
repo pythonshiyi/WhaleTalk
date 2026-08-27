@@ -226,9 +226,9 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
                   const card = [...tools].reverse().find((t) => t.tool === name && t.status === "running");
                   if (card) {
                     card.status = "done";
-                    card.result = String(result || "").slice(0, 500);
+                    card.result = String(result || "").slice(0, 8000);
                   } else {
-                    tools.push({ tool: name, result: String(result || "").slice(0, 500), status: "done" });
+                    tools.push({ tool: name, result: String(result || "").slice(0, 8000), status: "done" });
                   }
                   return { ...x, tools };
                 }));
@@ -236,9 +236,9 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
                 const card = [...msg.tools].reverse().find((t) => t.tool === name && t.status === "running");
                 if (card) {
                   card.status = "done";
-                  card.result = String(result || "").slice(0, 500);
+                  card.result = String(result || "").slice(0, 8000);
                 } else {
-                  msg.tools.push({ tool: name, result: String(result || "").slice(0, 500), status: "done" });
+                  msg.tools.push({ tool: name, result: String(result || "").slice(0, 8000), status: "done" });
                 }
                 setMsgs((m) => [...m]);
               }
@@ -491,6 +491,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
   const [starPanel, setStarPanel] = React.useState(false);
   const [searchPanel, setSearchPanel] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState("");
+  const [searchType, setSearchType] = React.useState("message");
   const [searchResults, setSearchResults] = React.useState([]);
   const [searchBusy, setSearchBusy] = React.useState(false);
   const [fimPanel, setFimPanel] = React.useState(false);
@@ -968,7 +969,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
     if (!searchQuery.trim()) return;
     setSearchBusy(true);
     try {
-      const d = await api.searchSessions(searchQuery.trim());
+      const d = await api.searchSessions(searchQuery.trim(), { type: searchType });
       setSearchResults(d.results || []);
     } catch {}
     setSearchBusy(false);
@@ -1403,9 +1404,11 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
             </div>
             <div className="overlay-body">
               <div className="global-search-bar">
+                <button className={`confirm-btn ${searchType === "message" ? "confirm-primary" : ""}`} onClick={() => { setSearchType("message"); setSearchResults([]); }}>💬 消息</button>
+                <button className={`confirm-btn ${searchType === "artifact" ? "confirm-primary" : ""}`} onClick={() => { setSearchType("artifact"); setSearchResults([]); }}>📦 产物</button>
                 <input
                   className="set-select set-combo"
-                  placeholder="跨全部会话搜索…（回车搜索）"
+                  placeholder={searchType === "artifact" ? "跨会话搜产物文件路径…（回车搜索）" : "跨全部会话搜索…（回车搜索）"}
                   value={searchQuery}
                   autoFocus
                   onChange={(e) => setSearchQuery(e.target.value)}

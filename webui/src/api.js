@@ -294,8 +294,8 @@ export async function previewFile(path) {
   return api("/v1/files/preview", { method: "POST", body: JSON.stringify({ path }) });
 }
 
-export async function searchSessions(query) {
-  return api("/v1/search", { method: "POST", body: JSON.stringify({ query }) });
+export async function searchSessions(query, filters = {}) {
+  return api("/v1/search", { method: "POST", body: JSON.stringify({ query, filters }) });
 }
 
 export async function getSchedules() {

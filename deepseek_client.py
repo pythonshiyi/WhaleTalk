@@ -5157,6 +5157,7 @@ def start_process(command, name=""):
             "pid": proc.pid,
             "name": proc_name,
             "started": datetime.now().strftime("%H:%M:%S"),
+            "started_ts": time.time(),
             "exited": False,
             "code": None,
             "lines": deque(maxlen=2000),
@@ -5196,6 +5197,44 @@ def stop_process(target):
             return f"进程「{name}」已退出（code={entry['code']}）"
     running = [f"{n}({e['pid']})" for n, e in snapshot_processes()]
     return f"未找到进程：{target}（运行中：{running or '无'}）"
+
+
+def cleanup_idle_processes(max_idle_seconds=3600, force_all=False):
+    """清理后台进程：force_all 时终止全部运行中进程；否则终止空闲超过 max_idle_seconds 的。
+
+    供服务器停止与空闲守卫生调用，防止 AI 起的进程/浏览器长驻成孤儿拖垮系统。
+    返回终止的进程名列表。
+    """
+    killed = []
+    now = time.time()
+    for name, entry in snapshot_processes():
+        if entry.get("exited"):
+            with _PROCESSES_LOCK:
+                PROCESSES.pop(name, None)
+            continue
+        if force_all:
+            idle = True
+        else:
+            idle = (now - float(entry.get("started_ts") or now)) > max_idle_seconds
+        if idle:
+            try:
+                _kill_tree(entry["proc"])
+                try:
+                    entry["proc"].wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+            except Exception:
+                pass
+            with _PROCESSES_LOCK:
+                PROCESSES.pop(name, None)
+            _emit_process(name, "── 已清理（空闲超时/服务停止）──")
+            killed.append(name)
+    return killed
+
+
+def cleanup_all_processes():
+    """服务停止时终止全部后台子进程，防孤儿。返回终止数。"""
+    return len(cleanup_idle_processes(force_all=True))
 
 
 def list_processes():
@@ -9862,6 +9901,18 @@ def team_run(goal, roles=("研究员", "工程师", "评审"), steps=0):
     lines.append("═══ 🏁 最终综合 ═══")
     lines.append(final or "（综合阶段失败，请参考上方各角色产出）")
     permissions.audit("team_run", str(g)[:80], f"{len(tasks)} 步")
+    # 附加结构化 JSON 段，供前端渲染"多智能体流水线"步骤面板（对文本可读性无影响）
+    try:
+        struct = {
+            "team_steps": [
+                {"role": r, "task": t, "output": o[:800]}
+                for r, t, o in board
+            ],
+            "final": (final or "")[:2000],
+        }
+        lines.append("\n\n__TEAM_JSON__" + json.dumps(struct, ensure_ascii=False))
+    except Exception:
+        pass
     return "\n".join(lines)
 
 

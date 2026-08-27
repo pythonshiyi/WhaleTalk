@@ -1,7 +1,7 @@
 import React from "react";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
-import { enqueueSpeak, invalidateVoiceConfig, playTestTone } from "../ttsUtil.js";
+import { enqueueSpeak, invalidateVoiceConfig, playTestTone, enableVoiceInterrupt, disableVoiceInterrupt } from "../ttsUtil.js";
 
 const apiGet = async (path) => {
   try {
@@ -142,6 +142,14 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
             <option key={"s2_"+v.id} value={v.id}>💻 {v.name}</option>
           ))}
         </select>
+      </Row>
+      <Row label="说话即打断（朗读时）" desc="朗读时检测到您开口说话便立即停止（barge-in）。需授予麦克风权限，默认关闭">
+        <button className="confirm-btn" onClick={async () => {
+          const ok = await enableVoiceInterrupt();
+          onTip(ok ? "✅ 已开启：朗读时您一说话即停（请勿对着风扇/音乐）" : "❌ 开启失败：未授予麦克风权限或设备不可用");
+          setTimeout(() => onTip(""), 2500);
+        }}>🎙 开启打断</button>
+        <button className="confirm-btn" style={{ marginLeft: 6 }} onClick={() => { disableVoiceInterrupt(); onTip("已关闭说话即打断"); setTimeout(() => onTip(""), 2500); }}>关闭</button>
       </Row>
       <Row label="试听" desc="以当前设置朗读样例句（走服务端合成）">
         <button className="confirm-btn confirm-primary" onClick={() => {
