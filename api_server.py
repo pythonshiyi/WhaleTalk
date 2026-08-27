@@ -826,6 +826,77 @@ def _read_file(path, max_chars=30000):
         return None, str(e)
 
 
+_IMAGE_PREVIEW_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
+_IMAGE_PREVIEW_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+    ".webp": "image/webp", ".bmp": "image/bmp", ".ico": "image/x-icon",
+}
+_TEXT_PREVIEW_EXTS = {".md", ".txt", ".json", ".csv", ".log", ".py", ".js", ".ts", ".html", ".htm", ".css", ".xml", ".yaml", ".yml", ".ini", ".toml", ".sql", ".jsx", ".tsx", ".sh", ".bat"}
+# 浏览器可直接内嵌预览；其余提示「用系统程序打开」
+_PREVIEW_INLINE_TEXT = {".md", ".txt", ".html", ".htm", ".json", ".csv", ".log", ".xml", ".yaml", ".yml", ".ini", ".toml", ".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".sql", ".sh", ".bat"}
+
+
+def _file_preview(path, max_chars=16000):
+    """产物内嵌预览：提取可内嵌内容（图片→data URI；文本/markdown/HTML→内容）。
+
+    返回 (result, err)。result 含 type/name/ext/size/truncated + data_uri 或 content。
+    不改变原文件、只读；二进制/不可内嵌类型返回元信息供前端引导用系统程序打开。
+    """
+    try:
+        path = os.path.abspath(os.path.expanduser(str(path or "")))
+    except Exception as e:
+        return None, str(e)
+    if not path or not os.path.isfile(path):
+        return None, "文件不存在"
+    ext = os.path.splitext(path)[1].lower()
+    name = os.path.basename(path)
+    try:
+        size = os.path.getsize(path)
+    except OSError as e:
+        return None, str(e)
+
+    base = {"path": path, "name": name, "ext": ext, "size": size}
+
+    # 图片：base64 data URI（≤3MB，防爆内存）
+    if ext in _IMAGE_PREVIEW_EXTS:
+        if size > 3 * 1024 * 1024:
+            base.update({"previewable": False, "reason": "图片超过 3MB，不内嵌预览"})
+            return base, None
+        try:
+            import base64
+            with open(path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            mime = _IMAGE_PREVIEW_MIME.get(ext, "image/png")
+            base.update({"previewable": True, "kind": "image", "data_uri": f"data:{mime};base64,{b64}"})
+            return base, None
+        except Exception as e:
+            base.update({"previewable": False, "reason": f"读取失败: {e}"})
+            return base, None
+
+    # 文本类：读内容（markdown/html 前端直接渲染，其余纯文本展示）
+    if ext in _TEXT_PREVIEW_EXTS:
+        if size > 2 * 1024 * 1024:
+            base.update({"previewable": False, "reason": "文本超过 2MB，不内嵌预览"})
+            return base, None
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read(max_chars + 1)
+            truncated = len(content) > max_chars
+            inline = ext in _PREVIEW_INLINE_TEXT
+            base.update({
+                "previewable": True, "kind": "html" if ext in (".html", ".htm") else ("md" if ext == ".md" else "text"),
+                "content": content[:max_chars], "truncated": truncated, "inline": inline,
+            })
+            return base, None
+        except Exception as e:
+            base.update({"previewable": False, "reason": f"读取失败: {e}"})
+            return base, None
+
+    # 其余（xlsx/docx/pptx/pdf/zip 等）：不可内嵌，提示用系统程序打开
+    base.update({"previewable": False, "reason": "该格式暂不支持内嵌预览，请用系统程序打开"})
+    return base, None
+
+
 _EXEC_LIKE_EXTS = (
     ".exe", ".bat", ".cmd", ".com", ".ps1", ".vbs", ".msi", ".reg", ".scr", ".jar",
 )
@@ -3882,6 +3953,16 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(400, {"error": "invalid json or body too large"})
                     return
                 data, err = _read_file(body.get("path") or "")
+                if err:
+                    self._json(400, {"error": err})
+                else:
+                    self._json(200, data)
+            elif self.path == "/v1/files/preview":
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                data, err = _file_preview(body.get("path") or "")
                 if err:
                     self._json(400, {"error": err})
                 else:

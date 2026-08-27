@@ -97,6 +97,19 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
   const [speaking, setSpeaking] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [err, setErr] = React.useState("");
+  const [preview, setPreview] = React.useState({});  // {path: {loading, data, err}}
+
+  const loadPreview = async (path) => {
+    const cur = preview[path];
+    if (cur && (cur.data || cur.loading)) return;
+    setPreview((s) => ({ ...s, [path]: { loading: true } }));
+    try {
+      const d = await api.previewFile(path);
+      setPreview((s) => ({ ...s, [path]: { loading: false, data: d } }));
+    } catch (e) {
+      setPreview((s) => ({ ...s, [path]: { loading: false, err: e && e.message ? e.message : "预览失败" } }));
+    }
+  };
 
   // 朗读/停止切换：点击立即 ⏳（合成中）→ 播放 ⏹ → 失败 ⚠ 并提示原因。
   // 用 speakText 分句逐句合成播放：长回复不超时、更快出第一句，也便于随时停止。
@@ -181,15 +194,52 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
         {!msg.streaming && products.length > 0 && (
           <div className="prod-bar">
             <span className="prod-label">📦 产物直达</span>
-            {products.map((p) => (
-              <span className="prod-chip" key={p} title={p}>
-                <button className="prod-op" title="打开文件" onClick={() => prodAct(p, "open")}>打开</button>
-                <span className="prod-name">{String(p).split(/[\\/]/).pop()}</span>
-                <button className="prod-op" title="打开所在文件夹" onClick={() => prodAct(p, "opendir")}>⌖</button>
-              </span>
-            ))}
+            {products.map((p) => {
+              const pv = preview[p];
+              const canPreview = !pv || (pv.data && pv.data.previewable !== false) || pv.data === undefined;
+              return (
+                <span className="prod-chip" key={p} title={p}>
+                  <button className="prod-op" title="打开文件" onClick={() => prodAct(p, "open")}>打开</button>
+                  <span className="prod-name" style={{ cursor: canPreview ? "pointer" : "default" }}
+                    onClick={() => canPreview && loadPreview(p)}
+                    title={pv ? (pv.data ? (pv.data.previewable ? "点击查看预览" : pv.data.reason || "") : "预览") : "点击查看预览"}>
+                    {String(p).split(/[\\/]/).pop()}
+                  </span>
+                  <button className="prod-op" title="打开所在文件夹" onClick={() => prodAct(p, "opendir")}>⌖</button>
+                  {pv && (pv.data || pv.loading || pv.err) && (
+                    <button className="prod-op" title={pv.data && pv.data.previewable ? "收起预览" : "关闭"} onClick={() => setPreview((s) => ({ ...s, [p]: undefined }))}>✕</button>
+                  )}
+                  {pv && pv.loading && <span className="prod-op">⏳</span>}
+                </span>
+              );
+            })}
           </div>
         )}
+        {products.length > 0 && products.map((p) => {
+          const pv = preview[p];
+          if (!pv || !pv.data) return null;
+          const d = pv.data;
+          return (
+            <div className="prod-preview" key={"pv_" + p} style={{
+              margin: "4px 0 10px", padding: 10, borderRadius: 10,
+              background: "var(--bg-2, rgba(128,140,160,.08))", fontSize: 13, overflow: "auto",
+            }}>
+              <div style={{ marginBottom: 6, opacity: .8 }}>{d.name}{d.truncated ? "（已截断）" : ""}</div>
+              {d.kind === "image" && d.data_uri && (
+                // eslint-disable-next-line jsx-a11y/alt-text
+                <img src={d.data_uri} style={{ maxWidth: "100%", maxHeight: 360, borderRadius: 8 }} />
+              )}
+              {d.kind === "html" && (
+                <iframe title={d.name} srcDoc={d.content} sandbox="" style={{ width: "100%", height: 260, border: "1px solid var(--border)", borderRadius: 8, background: "#fff" }} />
+              )}
+              {d.kind === "md" && <Markdown text={d.content} deferCode={false} />}
+              {d.kind === "text" && (
+                <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit", fontSize: 12.5 }}>{d.content}</pre>
+              )}
+              {!d.previewable && <div style={{ opacity: .8 }}>{d.reason || "该格式不支持内嵌预览"}</div>}
+            </div>
+          );
+        })}
         {msg.text && <Markdown text={msg.text} deferCode={msg.streaming} />}
         {msg.streaming && <span className="caret" />}
         {!msg.streaming && msg.text && (
