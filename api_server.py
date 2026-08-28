@@ -13,7 +13,7 @@
 安全约定：
 - 仅监听 127.0.0.1（不暴露到局域网）。
 - 必须携带 Bearer token（优先 config.json 的 inbound_token，否则启动时自动生成）。
-- 请求体上限 1MB，messages 条数/长度受限。
+- 请求体上限 1MB（图片上传 /v1/upload 例外：64MB，超限图片自动压缩后落盘），messages 条数/长度受限。
 """
 import asyncio
 import hashlib
@@ -589,8 +589,116 @@ def _set_dir(body):
     return {"ok": True, "active_dir": p}, None
 
 
+# ── 图片自动压缩（上传层兜底：超限图片程序级压缩，用户无需手动处理）──────────
+_IMAGE_UPLOAD_MAX = 32 * 1024 * 1024       # 上传压缩触发线（≥ 此值自动压缩）
+_IMAGE_COMPRESS_TARGET = 8 * 1024 * 1024   # 压缩目标 ≤8MB：远小于内联层 32MB 单张 / 40MB base64 总量上限
+_IMAGE_COMPRESS_MAX_SIDE = 2048            # 最大边长：视觉模型内部还会缩放，2048 足够阅读/浏览
+_IMAGE_COMPRESS_MIN_SIDE = 512             # 最小边长兜底（保证极端图也能收敛）
+_IMAGE_COMPRESS_QUALITY = (85, 70, 55, 40)  # JPEG 质量阶梯：尺寸不变逐级降质，再缩小重试
+
+
+def _auto_compress_image(raw, target=_IMAGE_COMPRESS_TARGET, max_side=_IMAGE_COMPRESS_MAX_SIDE,
+                         min_side=_IMAGE_COMPRESS_MIN_SIDE, quality_steps=_IMAGE_COMPRESS_QUALITY):
+    """超限图片自动压缩（Pillow 等比缩放 + 降质）。返回 (data, new_ext, note)。
+
+    - note 非空 = 已尝试压缩（成功给出压缩说明 / 失败给出原因）；空串 = 未压缩。
+    - 成功保证 len(data) <= target：尺寸从 max_side 逐级降到 min_side，每级质量从高到低，
+      命中即停；兜底输出最小尺寸 + 最低质量（必然达标，循环必收敛）。
+    - 保留 alpha 的 PNG 输出 PNG（透明不丢）；其余统一转 JPEG（压缩率最高），
+      透明图转 JPEG 时先合成白底（避免黑底）。
+    - GIF 动图超限时取首帧转静态图（note 注明）。
+    - Pillow 缺失 / 图片解析失败：返回原数据 + note 说明，调用方按原逻辑拒绝。
+    """
+    try:
+        from PIL import Image
+    except Exception:
+        return raw, ".jpg", "Pillow 未安装，无法自动压缩（pip install pillow）"
+    import io
+    try:
+        src = Image.open(io.BytesIO(raw))
+        src.load()
+    except Exception:
+        return raw, ".jpg", "图片解析失败，无法自动压缩"
+    fmt = (src.format or "").upper()
+    animated = fmt == "GIF" and getattr(src, "n_frames", 1) > 1
+    if animated:
+        try:
+            src.seek(0)
+            src.load()
+        except Exception:
+            pass
+    has_alpha = src.mode in ("RGBA", "LA") or (src.mode == "P" and "transparency" in src.info)
+    ow, oh = src.size
+    parts = []
+    if animated:
+        parts.append("动图已转为静态首帧")
+    out_is_png = has_alpha and fmt != "JPEG"
+
+    def _to_rgb(im):
+        if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+            rgba = im.convert("RGBA")
+            bg = Image.new("RGB", rgba.size, (255, 255, 255))
+            bg.paste(rgba, mask=rgba.split()[3])
+            return bg
+        return im.convert("RGB")
+
+    if out_is_png:
+        base = src
+    else:
+        base = _to_rgb(src)
+        if has_alpha:
+            parts.append("透明背景已转为白底")
+
+    def _save(im, side, kind, quality=None):
+        w, h = im.size
+        m = max(w, h)
+        if m > side:
+            k = side / m
+            w, h = max(1, int(w * k)), max(1, int(h * k))
+            im = im.resize((w, h), Image.LANCZOS)
+        b = io.BytesIO()
+        if kind == "PNG":
+            im.save(b, format="PNG", optimize=True)
+        else:
+            im.save(b, format="JPEG", quality=quality)
+        return b.getvalue(), w, h
+
+    data = None
+    out_w = out_h = 0
+    if out_is_png:
+        data, out_w, out_h = _save(base, max_side, "PNG")
+        if len(data) > target:
+            # 透明 PNG 缩放后仍超限（极端）：转 JPEG 白底继续压
+            base = _to_rgb(src)
+            if "透明背景已转为白底" not in parts:
+                parts.append("透明背景已转为白底")
+            out_is_png = False
+            data = None
+    if not out_is_png:
+        side = max_side
+        while side >= min_side:
+            for q in quality_steps:
+                cand, w, h = _save(base, side, "JPEG", q)
+                if len(cand) <= target:
+                    data, out_w, out_h = cand, w, h
+                    break
+            if data is not None:
+                break
+            nxt = max(min_side, int(side * 0.8))
+            if nxt == side:
+                break
+            side = nxt
+        if data is None:
+            data, out_w, out_h = _save(base, min_side, "JPEG", quality_steps[-1])
+    new_ext = ".png" if out_is_png else ".jpg"
+    size_note = "%.1fMB → %.1fMB" % (len(raw) / 1048576.0, len(data) / 1048576.0)
+    geo_note = "%dx%d → %dx%d" % (ow, oh, out_w, out_h)
+    extra = "，" + "，".join(parts) if parts else ""
+    return data, new_ext, "已自动压缩（%s，%s%s）" % (size_note, geo_note, extra)
+
+
 def _upload(body):
-    """图片上传：base64 → DATA_DIR/uploads/<ts>.<ext>，返回本地路径。"""
+    """图片上传：base64 → 超限自动压缩 → DATA_DIR/uploads/<ts>.<ext>，返回本地路径。"""
     import base64
     b64 = str(body.get("image") or "")
     name = str(body.get("name") or "image.png")
@@ -602,11 +710,19 @@ def _upload(body):
         raw = base64.b64decode(b64, validate=True)
     except Exception:
         return None, "base64 解码失败"
-    if not raw or len(raw) > 32 * 1024 * 1024:
-        return None, "图片为空或超过 32MB"
+    if not raw:
+        return None, "图片为空"
     ext = os.path.splitext(name)[1].lower()
     if ext not in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
         ext = ".png"
+    orig_len = len(raw)
+    note = ""
+    if orig_len > _IMAGE_UPLOAD_MAX:
+        # 超限：程序级自动压缩兜底（Pillow 等比缩放 + 降质），压缩失败才拒绝
+        data, ext, note = _auto_compress_image(raw)
+        if data is raw:
+            return None, f"图片超过 {_IMAGE_UPLOAD_MAX // (1024 * 1024)}MB，且{note}，请先压缩后重试"
+        raw = data
     uploads = os.path.join(DATA_DIR, "uploads")
     os.makedirs(uploads, exist_ok=True)
     fn = f"{int(time.time() * 1000)}_{secrets_token(3)}{ext}"
@@ -616,7 +732,10 @@ def _upload(body):
             f.write(raw)
     except Exception as e:
         return None, f"写入失败：{e}"
-    return {"path": path, "name": name, "size": len(raw)}, None
+    result = {"path": path, "name": name, "size": len(raw)}
+    if note:
+        result.update({"original_size": orig_len, "compressed": True, "note": note})
+    return result, None
 
 
 def _permissions_get():
@@ -2962,6 +3081,9 @@ def _abilities():
     return {"domains": domains, "total": len(dc.TOOLS)}
 
 MAX_BODY = 1_000_000
+# 图片上传专用请求体上限：base64 会把原图放大 4/3，需容纳 ≤48MB 原图直传
+# （超出部分由 _upload 的自动压缩兜底）；仅 /v1/upload 使用，其余接口保持 1MB 基线。
+UPLOAD_BODY_MAX = 64 * 1024 * 1024
 MAX_ROUNDS = 10
 MAX_MESSAGES = 200
 MAX_MSG_CHARS = 100_000
@@ -3214,10 +3336,10 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _read_body(self):
+    def _read_body(self, max_len=None):
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
-            if length <= 0 or length > MAX_BODY:
+            if length <= 0 or length > (max_len or MAX_BODY):
                 return None
             return json.loads(self.rfile.read(length).decode("utf-8", errors="replace"))
         except Exception:
@@ -4247,7 +4369,7 @@ class _Handler(BaseHTTPRequestHandler):
                 else:
                     self._json(200, result)
             elif self.path == "/v1/upload":
-                body = self._read_body()
+                body = self._read_body(UPLOAD_BODY_MAX)
                 if body is None:
                     self._json(400, {"error": "invalid json or body too large"})
                     return

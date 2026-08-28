@@ -1,5 +1,6 @@
 import React from "react";
 import * as api from "../api.js";
+import { ToastContext } from "./FlashToast.jsx";
 
 const SLASH_COMMANDS = [
   { cmd: "/code", desc: "插入代码块", text: "```\n\n```" },
@@ -22,6 +23,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   const [attachments, setAttachments] = React.useState([]);
   const [uploading, setUploading] = React.useState(false);
   const [tokens, setTokens] = React.useState(0);
+  const { toast } = React.useContext(ToastContext);
   const fileRef = React.useRef(null);
   const taRef = React.useRef(null);
   const histRef = React.useRef([]);
@@ -121,7 +123,10 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       setUploading(true);
       try {
         const r = await api.uploadImage(b64, file.name);
-        if (r && r.path) setAttachments((a) => [...a, { path: r.path, name: r.name }]);
+        if (r && r.path) {
+          setAttachments((a) => [...a, { path: r.path, name: r.name }]);
+          if (r.note) toast("🖼 " + r.note);
+        }
       } catch {}
       setUploading(false);
     };
