@@ -8,9 +8,9 @@
 
 > **中文为主 · English follows**（中文完整介绍 + 英文简版）
 
-**鲸语 WhaleTalk v3.0** 是一个为 DeepSeek V4 API 深度优化的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
+**鲸语 WhaleTalk v3.5.0** 是一个为 DeepSeek V4 API 深度优化的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
 
-*WhaleTalk v3.0 is a Windows AI agent deeply optimized for the DeepSeek V4 API — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
+*WhaleTalk v3.5.0 is a Windows AI agent deeply optimized for the DeepSeek V4 API — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
 
 > 🌐 **官网 / Website：**https://whaletalk.top/
 
@@ -48,7 +48,7 @@
 
 - **看得见**：🖼 多模态视觉（图片理解/图表阅读/截图修复/OCR/扫码、屏幕截图）
 - **说得出**：💬 对话/思考模式/语音合成（TTS）/朗读
-- **做得了**：⚡ 115 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理），权限模型分层
+- **做得了**：⚡ 118 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理），权限模型分层
 - **会进化**：🧬 自我进化（提案分支、失败模式库、成功模式复用）
 - **自疗**：🔁 失败模式沉淀 + 已知坑注入，AI 越用越聪明
 
@@ -73,7 +73,7 @@
 - **消息体验**：流式 Markdown、思考卡片、工具卡片、收藏/固定/分叉/变体/续写、多选批量导出
 - **会话管理**：多会话/标签/搜索/导入导出（JSON/JSONL）、历史库
 
-### ⚡ Agent 工具链（115 项）
+### ⚡ Agent 工具链（118 项）
 
 - **信息**：搜索（多引擎/分页/过滤/健康降级）、GitHub、实时热点（Hacker News）、网页抓取（含被墙站点代理通道）、RSS
 - **执行**：沙箱 Python、终端/进程、pip 安装、浏览器自动化
@@ -154,7 +154,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 鲸语 WhaleTalk 是一个**独立开发的个人作品**，关注「本地 AI 智能体」体验——
 
 - **目标**：让 Windows 用户拥有一个真正"看得见、做得了、能进化"的 AI 助手，而非只是一个聊天窗口
-- **理念**：本地优先（数据不出本机）、能力为王（115 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
+- **理念**：本地优先（数据不出本机）、能力为王（118 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
 - **联系**：
   - 官网：https://whaletalk.top/
   - GitHub Issues：https://github.com/pythonshiyi/WhaleTalk/issues
@@ -182,10 +182,10 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 
 ## English Introduction
 
-WhaleTalk v3.0 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745) with a pywebview desktop shell and system tray.
+WhaleTalk v3.5.0 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745) with a pywebview desktop shell and system tray.
 
 - **v3.0 highlights**: 3 themes (starfield/deepsea/arctic), console sidebar (model/thinking/scene/appearance), artifact one-click access, unified `web_app.py` entry (desktop/browser/headless)
-- **Capabilities**: 115 Agent tools (files/browser/DB/mail/media/desktop RPA), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
+- **Capabilities**: 118 Agent tools (files/browser/DB/mail/media/desktop RPA), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
 - **Stack**: Python 3.9+ + React (Vite) + local API (openai/httpx) · Windows 10/11
 
 ### Quick Start
