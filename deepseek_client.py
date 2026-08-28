@@ -211,6 +211,17 @@ VISION_MODEL = "deepseek-v4-flash-vision-exp"
 IMAGE_MAX_BYTES = 32 * 1024 * 1024
 IMAGE_INLINE_TOTAL_BASE64 = 40 * 1024 * 1024
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+# 会话带图时注入的「图片须知」：消除模型对消息内图片的路径困惑。
+# 图片经 embed_message_images 内联为 image_url 块后，模型能直接看到内容，
+# 但工具 image_understand 描述暗示「读图必须传路径」——模型会陷入找路径的兔子洞
+# （扫工作区/临时目录等，浪费大量思考 token）。此提示明确：消息内的图直接看，
+# 工具仅用于 OCR/细节分析等二次处理场景，并给出当前图片路径兜底。
+IMAGE_INLINE_HINT = (
+    "[图片须知] 用户消息中已附带的图片（对话中的图片块）你能直接看到内容，"
+    "解读它们无需调用任何工具、无需文件路径，直接描述/回答即可。"
+    "只有需要 OCR 提取文字、放大查看细节、或分析工具生成的文件图片时，"
+    "才调用 image_understand 并传入明确的本地路径或 URL（路径见下方列表）。"
+)
 
 
 def is_vision_model(model):
@@ -1557,7 +1568,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "image_understand",
-            "description": "用多模态模型理解图片（本地文件路径或 http(s) 图片 URL）。当前模型不支持视觉时自动改用 deepseek-v4-flash-vision-exp，无需手动切换",
+            "description": "分析指定路径/URL 的图片文件（OCR 提取文字、放大细节、回答图片相关问题）。注意：用户消息中已附带的图片（对话中的图片块）你能直接看到，解读它们无需调用本工具，直接回答即可",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -10811,6 +10822,7 @@ class DeepSeekClient:
         work = embed_message_images(messages, eff_model)
         json_hint = None
         memory_msg = None
+        image_hint_msg = None
         # 缓存友好消息布局（官方硬盘缓存按「前缀完整匹配」命中）：
         # - 恒定的 json_hint 保持在最前（前缀稳定 → 可命中）
         # - 系统提示词 messages[0] 紧随其后（稳定前缀主体）
@@ -10822,6 +10834,24 @@ class DeepSeekClient:
         if memory_text:
             memory_msg = {"role": "system", "content": memory_text}
             work = work + [memory_msg]
+        # 图片须知（仅「本轮用户刚发图」时注入，临时 system 消息，不写回历史）：
+        # 内联后模型可直接看到图片，无需为「读图」调用工具；给出当前图片路径
+        # 供 OCR/细节分析等二次处理兜底。历史带图消息在上下文里已内联可见，
+        # 无需重复注入（避免带图会话每轮都注入、路径列表膨胀）。
+        last_user = None
+        for m in messages:
+            if isinstance(m, dict) and m.get("role") == "user":
+                last_user = m
+        if last_user and last_user.get("images"):
+            paths = [
+                str(p) for p in last_user.get("images")
+                if isinstance(p, str) and str(p).strip()
+            ][:5]
+            hint = IMAGE_INLINE_HINT
+            if paths:
+                hint += "\n当前图片路径：\n" + "\n".join("- " + p for p in paths)
+            image_hint_msg = {"role": "system", "content": hint}
+            work = work + [image_hint_msg]
         trailing = str(trailing_text or "")
 
         extra_body = {
@@ -11403,7 +11433,7 @@ class DeepSeekClient:
             messages[:] = [
                 _restore_text_content(m)
                 for m in work
-                if m is not json_hint and m is not memory_msg
+                if m is not json_hint and m is not memory_msg and m is not image_hint_msg
             ]
             for m in messages:
                 if isinstance(m, dict):
