@@ -491,6 +491,39 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "delete_memory",
+            "description": "删除长期记忆：按内容关键词匹配删除（keyword 必填，避免误删全部）。记忆写错/过时/用户要求忘记时使用",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "要删除的记忆内容关键词（如 预算 / 用户偏好）"},
+                },
+                "required": ["keyword"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_memory",
+            "description": "修改长期记忆：把内容包含 old 的条目更新为 new（记忆不准确/过时时修正，可同时更新标签/类型/实体/关系）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "old": {"type": "string", "description": "要修改的原记忆内容关键词"},
+                    "new": {"type": "string", "description": "更新后的新内容"},
+                    "tags": {"type": "string", "description": "可选：新的标签（逗号分隔）"},
+                    "type": {"type": "string", "description": "可选：新的记忆类型"},
+                    "entities": {"type": "string", "description": "可选：新的实体列表（逗号分隔）"},
+                    "relations": {"type": "string", "description": "可选：新的关系三元组（分号分隔 实体-关系-实体）"},
+                },
+                "required": ["old", "new"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "query_memory_graph",
             "description": "知识图谱查询：按实体或关系检索关联记忆（返回结构化图谱片段），适合查找人与项目/任务间的关联",
             "parameters": {
@@ -3955,6 +3988,7 @@ def chart_data(data, path, kind="line", title="", x_label="", y_label=""):
 
 # ===== 长期记忆（与 main 的 memory.json 兼容：{"enabled", "facts":[{key,value}], "notes":[{text,tags,ts}]}）=====
 MEMORY_FILE = None  # 由 main 初始化时注入（DATA_DIR/memory.json）
+MEMORY_ENABLED = True  # 长期记忆总开关（api_server 启动时按 config.memory_enabled 注入；False 时停止写入）
 MEMORY_MAX_ITEMS = 2000  # v2.16.2 起扩容：伙伴需要记住的更多
 MEMORY_MAX_TEXT = 2000
 _MEMORY_LOCK = threading.Lock()  # 并行 write_memory 读-改-写串行化，防丢失更新
@@ -4054,6 +4088,8 @@ def write_memory(text, tags="", type="", entities="", relations=""):
     entities：涉及的实体列表（逗号分隔，如 张三,项目A），构成知识图谱节点；
     relations：关系三元组（分号分隔的 "实体-关系-实体"，如 张三-负责-项目A）。
     """
+    if not MEMORY_ENABLED:
+        return "记忆功能已关闭（可在设置中开启），未写入"
     text = str(text or "").strip()
     if not text:
         return "错误：记忆内容为空"
@@ -4087,6 +4123,74 @@ def write_memory(text, tags="", type="", entities="", relations=""):
         if _save_memory(data):
             return f"已写入记忆（当前共 {len(facts)} 条）"
         return "错误：记忆写入失败"
+
+
+def delete_memory(keyword=""):
+    """删除长期记忆：按内容关键词匹配删除一条或多条（keyword 必填，避免误删全部）。
+
+    匹配范围：记忆内容（value）与键（key）。记忆写错 / 过时 / 用户要求忘记时使用。
+    """
+    kw = str(keyword or "").strip()
+    if not kw:
+        return "错误：keyword 必填（要删除的记忆内容关键词，如「预算」或「用户偏好」）"
+    with _MEMORY_LOCK:
+        data = _load_memory()
+        facts = data.get("facts") or []
+        kwl = kw.lower()
+        kept, removed = [], 0
+        for f in facts:
+            hay = str(f.get("value") or "") + " " + str(f.get("key") or "")
+            if kwl in hay.lower():
+                removed += 1
+            else:
+                kept.append(f)
+        if removed == 0:
+            return "（未找到匹配的记忆，未删除任何条目）"
+        data["facts"] = kept
+        if _save_memory(data):
+            return f"已删除 {removed} 条相关记忆（剩余 {len(kept)} 条）"
+        return "错误：记忆删除失败"
+
+
+def update_memory(old, new, tags="", type="", entities="", relations=""):
+    """修改长期记忆：把内容包含 old 的条目更新为 new（记忆不准确/过时时修正）。
+
+    可同时更新标签/类型/实体/关系；多个匹配只更新最新一条；找不到则不改。
+    """
+    old = str(old or "").strip()
+    new = str(new or "").strip()
+    if not old or not new:
+        return "错误：old（要修改的原内容关键词）与 new（新内容）都必填"
+    with _MEMORY_LOCK:
+        data = _load_memory()
+        facts = data.get("facts") or []
+        idx = None
+        for i, f in enumerate(facts):
+            hay = str(f.get("value") or "") + " " + str(f.get("key") or "")
+            if old.lower() in hay.lower():
+                idx = i
+        if idx is None:
+            return "（未找到匹配的记忆，未修改）"
+        entry = facts[idx]
+        entry["value"] = str(new)[:MEMORY_MAX_TEXT]
+        if str(tags or "").strip():
+            entry["key"] = str(tags).strip().split(",")[0].strip()[:40]
+        if str(type or "").strip():
+            entry["type"] = str(type).strip()[:20]
+        ent = [e.strip()[:30] for e in str(entities or "").split(",") if e.strip()]
+        if ent:
+            entry["entities"] = ent
+        rels = []
+        for r in str(relations or "").split(";"):
+            parts = [p.strip() for p in str(r).split("-") if p.strip()]
+            if len(parts) == 3:
+                rels.append({"rel": parts[1][:20], "to": parts[2][:30]})
+        if rels:
+            entry["relations"] = rels
+        entry["ts"] = datetime.now().isoformat(timespec="seconds")
+        if _save_memory(data):
+            return f"已修改记忆（当前共 {len(facts)} 条）"
+        return "错误：记忆修改失败"
 
 
 def read_memory(keyword="", max_items=20, type="", entity=""):
@@ -10096,6 +10200,8 @@ TOOL_CALL_MAP = {
     "write_memory": write_memory,
     "read_memory": read_memory,
     "query_memory_graph": query_memory_graph,
+    "delete_memory": delete_memory,
+    "update_memory": update_memory,
     "get_weather": get_weather,
     "run_python": run_python,
     "read_file": read_file,
@@ -10276,7 +10382,7 @@ TOOL_GROUPS = [
     ("🖱 桌面自动化", ["rpa_screen_size", "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot", "screen_find_click", "notify_desktop"]),
     ("📦 应用与环境", ["app_manage"]),
     ("⏰ 定时与任务", ["schedule_task", "list_schedules", "cancel_schedule", "task_checkpoint_save", "task_checkpoint_load", "run_workflow"]),
-    ("🧠 记忆与知识", ["write_memory", "read_memory", "query_memory_graph", "knowledge_index", "knowledge_search"]),
+    ("🧠 记忆与知识", ["write_memory", "read_memory", "delete_memory", "update_memory", "query_memory_graph", "knowledge_index", "knowledge_search"]),
     ("🔧 系统与基础", ["get_date", "get_weather", "ask_user", "request_permission", "call_api", "project_info", "read_project_file", "create_evolution", "verify_files", "usage_report", "create_plugin"]),
 ]
 
@@ -10322,7 +10428,7 @@ _PREACTIVATE_HINTS = [
     (("数据库", "sql", "mysql", "postgres"), ["database_query", "database_query_mysql", "database_query_postgres"]),
     (("网页", "url", "抓取", "爬"), ["fetch_url", "browser_navigate", "web_screenshot"]),
     (("搜索文件", "检索", "找文件"), ["search_local", "list_dir"]),
-    (("记忆", "记住", "偏好"), ["write_memory", "read_memory", "query_memory_graph"]),
+    (("记忆", "记住", "偏好", "忘记", "删除记忆", "修改记忆"), ["write_memory", "read_memory", "delete_memory", "update_memory", "query_memory_graph"]),
 ]
 
 
@@ -10458,6 +10564,8 @@ _TOOL_ACTION_PHRASES = {
     "write_memory": "写入长期记忆",
     "read_memory": "检索长期记忆",
     "query_memory_graph": "记忆知识图谱查询",
+    "delete_memory": "删除长期记忆（按关键词）",
+    "update_memory": "修改长期记忆（按关键词定位）",
     "knowledge_index": "建立知识库索引",
     "knowledge_search": "语义检索知识库",
     "get_date": "获取当前日期/时间",

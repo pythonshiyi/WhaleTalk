@@ -919,7 +919,8 @@ export default function SettingsPage() {
                 <Toggle on={!!cfg.silent_start} label="🖥 静默启动" desc="启动后不进浏览器，托盘常驻（托盘「打开界面」进入）" onClick={() => saveField({ silent_start: !cfg.silent_start })} />
                 <Toggle on={cfg.peak_warning !== false} label="⏰ 高峰提示" desc="每天首次发送提示高峰价" onClick={() => saveField({ peak_warning: cfg.peak_warning === false })} />
                 <Toggle on={cfg.autostart !== false} label="🚀 开机自启" desc="注册 HKCU Run 开机自动启动（无窗口静默进入托盘）" onClick={() => saveField({ autostart: cfg.autostart === false })} />
-                <Toggle on={!!cfg.privacy_mode} label="🔒 隐私模式" desc="不写快照/会话/记忆/统计" onClick={() => saveField({ privacy_mode: !cfg.privacy_mode })} />
+                <Toggle on={cfg.privacy_mode !== false} label="🔒 隐私模式" desc="不写快照/会话/记忆/统计" onClick={() => saveField({ privacy_mode: cfg.privacy_mode === false })} />
+                <Toggle on={cfg.memory_enabled !== false} label="🧠 长期记忆" desc="跨会话记忆：关闭后不注入记忆、AI 不再自动写入（记忆可随时用工具管理）" onClick={() => saveField({ memory_enabled: cfg.memory_enabled === false })} />
                 <VoiceSettingsBlock cfg={cfg} saveField={saveField} onTip={setTip} />
                 <Row label="💵 本月预算（元）" desc="0=不限">
                   <NumInput min={0} max={10000} step={50} value={cfg.monthly_budget || 0} onChange={(v) => saveField({ monthly_budget: v })} />

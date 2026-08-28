@@ -1201,6 +1201,7 @@ def _init_dc_paths():
         dc.IMAGE_GEN_MODEL = str(cfg.get("image_model") or "gpt-image-1").strip()
         dc.VISION_SELF_REVIEW = bool(cfg.get("vision_self_review"))
         dc.BROWSER_HEADLESS = bool(cfg.get("browser_headless"))
+        dc.MEMORY_ENABLED = bool(cfg.get("memory_enabled", True))
         dc.AGENT_MAIL_ENABLED = bool(cfg.get("agent_mail_enabled", False))
         dc.AGENT_MAIL_CLI = str(cfg.get("agent_mail_cli") or "agently-cli").strip() or "agently-cli"
         dc.CHART_THEME = str(cfg.get("theme") or "dark")
@@ -4492,9 +4493,11 @@ class _Handler(BaseHTTPRequestHandler):
             parts = [config_defaults.TASK_QUALITY_GUIDE]
         try:
             mem = _memory_full()
-            facts = [f["text"] for f in mem.get("facts", []) if f.get("text")]
-            if facts:
-                parts.append("[长期记忆]\n" + "\n".join("- " + t for t in facts[-6:]))
+            # 记忆开关：config.memory_enabled 关闭时完全不注入（省 token + 稳定前缀缓存）
+            if cfg.get("memory_enabled", True):
+                facts = [f["text"] for f in mem.get("facts", []) if f.get("text")]
+                if facts:
+                    parts.append("[长期记忆]\n" + "\n".join("- " + t for t in facts[-6:]))
         except Exception:
             pass
         active_dir = str(cfg.get("active_dir") or "").strip()

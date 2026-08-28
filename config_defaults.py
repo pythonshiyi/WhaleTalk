@@ -157,6 +157,7 @@ DEFAULT_CONFIG = {
     "active_dir": "",
     "evolution_reminder_days": 7,
     "suggestions_enabled": True,
+    "memory_enabled": True,  # 长期记忆总开关：关闭后停止记忆注入与自动写入（工具仍可手动调用）
     "pure_chat": False,
     # v2 能力层配置
     "inbound_port": 0,        # Webhook 接收端端口（0=关闭）
