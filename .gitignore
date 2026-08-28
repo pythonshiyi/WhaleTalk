@@ -14,6 +14,9 @@ wechat_writer/config.json
 # ===== 内部开发文档（一次性诊断产物，不入库） =====
 full_access_report.md
 
+# ===== 开发工具运行产物 =====
+tools/reports/
+
 # ===== Python =====
 __pycache__/
 *.py[cod]

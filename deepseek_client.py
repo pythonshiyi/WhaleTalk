@@ -580,7 +580,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_web",
-            "description": "联网搜索最新信息，返回相关网页的标题、链接与摘要（Bing + 360 + DuckDuckGo 并行聚合去重，默认最多 5 条，可指定 num 最多 20 条）。site 与 offset 参数保证生效；since/until 时间过滤依赖搜索引擎支持（可能不严格）。适合查询实时新闻、最新资讯、不熟悉的事实等；找到有用链接后可配合 fetch_url 抓取全文",
+            "description": "联网搜索最新信息，返回标题/链接/摘要（Bing+360+DuckDuckGo 聚合去重，默认 5 条最多 20 条）；site/offset 保证生效，since/until 依赖引擎支持。适合实时新闻、最新资讯，可配合 fetch_url 抓全文",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -631,7 +631,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "call_api",
-            "description": "通用外部 API 调用（万能接口）：GET/POST/PUT/DELETE/PATCH，支持自定义查询参数/JSON 体/表单体/请求头。可对接任意开放 API（天气/翻译/大模型/企业服务等）。安全限制：仅公网 http(s) 地址（禁内网/回环，除非在配置 call_api_allowed_hosts 白名单中显式放行），响应 ≤500KB，超时 ≤180s",
+            "description": "通用 HTTP API 调用（万能接口）：GET/POST/PUT/DELETE/PATCH，支持查询参数/JSON/表单/请求头。仅公网 http(s) 地址（禁内网/回环，白名单可放行），响应 ≤500KB，超时 ≤180s",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -693,10 +693,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "pip_install",
-            "description": "安装 Python 库（完全体模式放行任意包），安装后配合 run_python(with_site=true) 使用；已装常用库：openpyxl/matplotlib/pymysql/psycopg2/Pillow 等",
+            "description": "安装 Python 库，安装后配合 run_python(with_site=true) 使用；已装常用库：openpyxl/matplotlib/pymysql/psycopg2/Pillow 等",
             "parameters": {
                 "type": "object",
-                "properties": {"package": {"type": "string", "description": "要安装的包名（完全体模式不限白名单）"}},
+                "properties": {"package": {"type": "string", "description": "要安装的包名（如 pandas / requests，是否需审批由权限配置决定）"}},
                 "required": ["package"],
             },
         },
@@ -726,7 +726,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "文件绝对路径"},
-                    "old": {"type": "string", "description": "要替换的原文（与 regex 二选一）"},
+                    "old": {"type": "string", "description": "要替换的原文（与 regex 二选一，至少提供一个）"},
                     "new": {"type": "string", "description": "替换后的新文本"},
                     "regex": {"type": "string", "description": "可选：正则表达式模式（Python re 语法）"},
                 },
@@ -1371,7 +1371,7 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "项目内文件路径，如 main.py 或 deepseek_client.py"},
+                    "path": {"type": "string", "description": "项目内文件路径，如 web_app.py 或 deepseek_client.py"},
                     "offset": {"type": "integer", "description": "可选：起始字符偏移（分页读取）"},
                     "limit": {"type": "integer", "description": "可选：本次读取字符数上限"},
                 },
@@ -1394,7 +1394,7 @@ TOOLS = [
                         "items": {
                             "type": "object",
                             "properties": {
-                                "path": {"type": "string", "description": "相对项目根目录的路径，如 main.py"},
+                                "path": {"type": "string", "description": "相对项目根目录的路径，如 web_app.py"},
                                 "content": {"type": "string", "description": "修改后的完整文件内容"},
                             },
                             "required": ["path", "content"],
@@ -1428,7 +1428,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "schedule_task",
-            "description": "创建定时任务（可主动安排：每周五周报、每小时巡检、生日提醒等）。expr_type=cron（5字段 分 时 日 月 周）/time（HH:MM 每日）/every（每 N 分钟）；action=message 到点自动发送指令执行 / notify 状态栏提醒 / backup 项目备份",
+            "description": "创建定时任务（每周五周报、每小时巡检、生日提醒等）。expr_type=cron（5字段）/time（HH:MM 每日）/every（每 N 分钟）；action=message 到点执行指令 / notify 提醒 / backup 备份",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1438,6 +1438,7 @@ TOOLS = [
                     "action": {"type": "string", "description": "message / notify / backup（默认 message）"},
                     "name": {"type": "string", "description": "可选：任务名称（便于后续取消/查看）"},
                     "enabled": {"type": "boolean", "description": "可选：是否启用（默认 true）"},
+                    "off_peak": {"type": "boolean", "description": "可选：高峰错峰省费——触发时刻处于高峰时段（9-12 / 14-18 时）自动顺延到低谷执行（默认 false）"},
                 },
                 "required": ["expr", "content"],
             },
@@ -1662,7 +1663,7 @@ TOOLS = [
                 "properties": {
                     "folder": {"type": "string", "description": "图片所在目录绝对路径"},
                     "question": {"type": "string", "description": "可选：每张图要回答的问题（默认描述）"},
-                    "pattern": {"type": "string", "description": "可选：文件通配符（默认 *.png，支持 *.jpg）"},
+                    "pattern": {"type": "string", "description": "可选：文件通配符（默认 *.png，如 *.jpg / *.png 可组合）"},
                     "max": {"type": "integer", "description": "可选：最多分析张数（1-200，默认 100）"},
                 },
                 "required": ["folder"],
@@ -1922,7 +1923,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "agent_mail",
-            "description": "Agent 原生邮箱（agently-cli）：me 查看身份 / list 列邮件 / search 搜索 / read 读取 / send 发送 / reply 回复 / forward 转发 / trash 移回收站 / delete 永久删除 / download 下载附件。写操作需两阶段确认：首次调用返回 confirmation-token，向用户确认后再次调用",
+            "description": "Agent 原生邮箱（agently-cli）：me/list/search/read/send/reply/forward/trash/delete/download。写操作需两阶段确认：首次调用返回 confirmation-token，确认后再次调用",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2082,7 +2083,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "rss_fetch",
-            "description": "RSS 订阅管理：list 列出订阅 / preset 一键添加精选源（机器之心/量子位/少数派/IT之家/开源中国/HN）/ add 添加源 / remove 移除源 / fetch 抓取最新条目（含标题/链接/时间/摘要）。可配合 schedule_task 生成每日简报",
+            "description": "RSS 订阅管理：list/preset 精选源/add/remove/fetch 抓最新条目（标题/链接/时间/摘要）。可配合 schedule_task 生成每日简报",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2193,7 +2194,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_wechat_writer",
-            "description": "运行公众号自动写作工具（WeChat Writer）：采集当日 AI 资讯（RSS+搜索+论坛）→ 选题（历史去重）→ LLM 写作（大纲/正文/润色）→ 质量门禁 → 存草稿箱（只产草稿不发布）。适合『写一篇今天的 AI 公众号文章』等请求；可 dry_run=true 只预览不落盘，topic= 指定主题，use_blocked=true 时被墙信源（linux.do 等）自动走代理通道",
+            "description": "运行公众号自动写作（WeChat Writer）：采集资讯→选题去重→LLM 写作→质量门禁→存草稿箱（只产草稿不发布）。dry_run 只预览，topic 指定主题，use_blocked 被墙信源走代理",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -10417,7 +10418,7 @@ _TOOL_ACTION_PHRASES = {
     "run_wechat_writer": "公众号文章生成/排版",
     "daily_brief": "每日简报（采集当日资讯→提炼点评）",
     "image_process": "图像处理（缩放/裁剪/滤镜/格式转换）",
-    "image_understand": "多模态看图理解",
+    "image_understand": "分析图片文件（OCR/细节/回答图片问题）",
     "screen_see": "截图并让视觉模型解读当前屏幕",
     "chart_read": "图表截图→结构化数据+解读",
     "screenshot_to_html": "UI截图→HTML/CSS前端还原",
