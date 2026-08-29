@@ -1417,13 +1417,15 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "subagent_run",
-            "description": "并行子代理：把大任务拆成多个子任务，交给多个并发 AI 子代理分别完成并汇总结果（适合并行调研/多方案对比/多文件并行处理）",
+            "description": "并行子代理：把大任务拆给多个并发子代理。mode=text 汇总结论（并行调研/方案对比）；mode=code 各子代理编写代码模块并落盘（并行开发多模块）",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "tasks": {"type": "array", "items": {"type": "string"}, "description": "子任务列表（字符串数组，最多 8 个），如 [\"总结文件A\", \"总结文件B\"]"},
+                    "tasks": {"type": "array", "items": {"type": "string"}, "description": "子任务列表（字符串数组，最多 8 个）"},
                     "parallel": {"type": "integer", "description": "可选：并行数 1-4（默认 2）"},
                     "context": {"type": "string", "description": "可选：共享背景上下文（注入每个子代理）"},
+                    "mode": {"type": "string", "description": "可选：text（结论）/ code（代码落盘），默认 text"},
+                    "output_dir": {"type": "string", "description": "code 模式：代码落盘目录（默认工作目录）"},
                 },
                 "required": ["tasks"],
             },
@@ -3253,11 +3255,13 @@ def get_active_client():
     return c
 
 
-def subagent_run(tasks, parallel=2, context=""):
-    """并行子代理：把大任务拆给多个并发 LLM 子代理，各自输出结论后汇总。
+def subagent_run(tasks, parallel=2, context="", mode="text", output_dir=None):
+    """并行子代理：把大任务拆给多个并发 LLM 子代理。
 
-    tasks：任务数组（字符串列表，最多 8 个）；parallel：并行数 1-4。
-    context：可选背景上下文（注入每个子代理）。
+    mode:
+      text（默认）：子代理输出结论，汇总返回（适合并行调研/多方案对比/多文件并行处理）
+      code：子代理各自编写代码模块，输出「@@FILE: 路径 + 代码块」，主代理解析后落盘
+            （适合并行开发多个模块；output_dir 指定落盘目录，默认工作目录）
     """
     if not isinstance(tasks, list) or not tasks:
         return "错误：tasks 必须是非空数组（每个元素是一个子任务目标）"
@@ -3269,7 +3273,22 @@ def subagent_run(tasks, parallel=2, context=""):
     client = get_active_client()
     if client is None:
         return "错误：没有可用客户端（请先在设置中配置 API Key）"
+
+    is_code = (mode or "text").strip().lower() == "code"
+    out_dir = permissions.resolve(output_dir) if output_dir else (WORKING_DIR or permissions.WORKSPACE_DIR or os.getcwd())
+
     base = "你是并行子代理，专注完成分配的子任务，输出简洁、可执行的结论（不要提及子代理身份）。"
+    if is_code:
+        base = (
+            "你是并行子代理，负责编写一个代码模块。\n"
+            "输出格式：每个文件用「@@FILE: 相对路径」单独一行开头，紧接着一个代码块（用 ``` 包裹）。\n"
+            "例如：\n"
+            "@@FILE: src/utils.py\n"
+            "```python\n"
+            "def helper():\n    return 1\n"
+            "```\n"
+            "只输出代码文件，不要输出多余的解释或自我介绍。"
+        )
     if str(context or "").strip():
         base += f"\n\n【共享背景上下文】\n{context}"
     results = [None] * len(tasks)
@@ -3284,9 +3303,9 @@ def subagent_run(tasks, parallel=2, context=""):
                         {"role": "system", "content": base},
                         {"role": "user", "content": str(task)},
                     ],
-                    max_tokens=2048,
+                    max_tokens=4096 if is_code else 2048,
                     stream=False,
-                    timeout=120.0,
+                    timeout=180.0 if is_code else 120.0,
                     extra_body={"thinking": {"type": "disabled"}},
                 )
                 results[i] = (resp.choices[0].message.content or "").strip() or "（子代理无输出）"
@@ -3303,10 +3322,54 @@ def subagent_run(tasks, parallel=2, context=""):
         futures = [ex.submit(run, i, t) for i, t in enumerate(tasks)]
         for _f in cf.as_completed(futures):
             pass
+
+    if is_code:
+        return _subagent_write_code(results, tasks, out_dir)
+
     lines = []
     for i, t in enumerate(tasks):
         lines.append(f"## 子任务 {i + 1}：{t[:80]}\n{results[i]}")
     return "\n\n".join(lines)
+
+
+def _parse_code_files(text):
+    """从子代理输出解析「@@FILE: 路径 + ```代码块```」，返回 [(相对路径, 内容)]。"""
+    files = []
+    pattern = re.compile(r"@@FILE:\s*([^\n]+)\n\s*```[^\n]*\n(.*?)```", re.S)
+    for m in pattern.finditer(text or ""):
+        rel = m.group(1).strip()
+        content = m.group(2).rstrip()
+        if rel and content:
+            files.append((rel, content))
+    return files
+
+
+def _subagent_write_code(results, tasks, out_dir):
+    """解析 code 模式子代理输出，落盘到 out_dir，返回汇总。"""
+    written, failed = [], []
+    for i, (task, text) in enumerate(zip(tasks, results)):
+        files = _parse_code_files(text)
+        if files:
+            for rel, content in files:
+                p = os.path.join(out_dir, rel)
+                ok, reason = permissions.check_filesystem(p, write=True)
+                if not ok:
+                    failed.append(f"[子任务{i + 1}] {rel}：{reason}")
+                    continue
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(content)
+                written.append(rel)
+        else:
+            failed.append(f"[子任务{i + 1}] {task[:50]}：未识别到代码文件")
+    lines = []
+    if written:
+        lines.append(f"已落盘 {len(written)} 个文件：")
+        lines += [f"  - {r}" for r in written]
+    if failed:
+        lines.append("未落盘：")
+        lines += [f"  - {f}" for f in failed]
+    return "\n".join(lines) if lines else "（子代理未产出代码）"
 
 
 # ===== 自我验证闭环（A8）：跑测试 / 对照标准答案自评 =====
