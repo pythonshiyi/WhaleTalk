@@ -745,7 +745,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_lint",
-            "description": "静态检查（ruff）：发现语法/风格/未定义变量/未用 import 等低级错误。写完 Python 代码后立即调用，别等运行才暴露",
+            "description": "静态检查（ruff）：发现语法/风格/未定义变量/未用 import 等常见问题。写完 Python 代码后立即调用，错误尽早暴露成本更低",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1435,7 +1435,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_tests",
-            "description": "运行测试（pytest/unittest）并返回结果摘要：自我验证闭环第一步（写代码后必须自测）",
+            "description": "运行测试（pytest/unittest）并返回结果摘要：自我验证闭环第一步（写完代码后自测）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1561,7 +1561,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "verify_files",
-            "description": "批量核验文件是否存在及其大小（写文件/建工程后必须调用自检，防止幻觉；相对路径基于工作目录）",
+            "description": "批量核验文件是否存在及其大小（写文件/建工程后核验产物真实存在；相对路径基于工作目录）",
             "parameters": {
                 "type": "object",
                 "properties": {
