@@ -741,6 +741,35 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_lint",
+            "description": "静态检查（ruff）：发现语法/风格/未定义变量/未用 import 等低级错误。写完 Python 代码后立即调用，别等运行才暴露",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "可选：目标目录（不填用工作目录）"},
+                    "fix": {"type": "boolean", "description": "可选：是否自动修复（--fix）"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "verify_project",
+            "description": "一键验证：静态检查(ruff)→测试(pytest)→前端构建(npm run build)。项目开发完成后调用，按检测到的产物类型跑完并汇总",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
+                },
+                "required": [],
+            },
+        },
+    },
     # ===== 只读查询（需文件在允许目录内）=====
     {
         "type": "function",
@@ -3246,6 +3275,135 @@ def subagent_run(tasks, parallel=2, context=""):
 
 
 # ===== 自我验证闭环（A8）：跑测试 / 对照标准答案自评 =====
+def run_lint(path=None, fix=False):
+    """静态检查（ruff）：对目录跑 ruff，返回错误/警告摘要。
+
+    写完 Python 代码后立即调用，快速发现语法/风格/未定义变量/未用 import 等低级错误，
+    避免错误累积到测试/运行阶段才暴露。
+    """
+    import shutil
+
+    base = path or WORKING_DIR or permissions.WORKSPACE_DIR or os.getcwd()
+    ok, reason = permissions.check_filesystem(base, write=bool(fix))
+    if not ok:
+        return reason
+    base = permissions.resolve(base) or base
+    if not os.path.isdir(base):
+        return f"错误：目录不存在：{base}"
+
+    ruff = shutil.which("ruff")
+    if not ruff:
+        return "错误：本机未安装 ruff（可 pip install ruff 后重试）"
+
+    cmd = [ruff, "check"]
+    if fix:
+        cmd.append("--fix")
+    cmd.append(base)
+    try:
+        import tempfile
+        with tempfile.SpooledTemporaryFile(
+            max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
+        ) as out:
+            proc = subprocess.Popen(
+                cmd, stdout=out, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace", cwd=base,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            try:
+                proc.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                _kill_tree(proc)
+                return "错误：ruff 检查超时（120 秒）"
+            out.seek(0)
+            out_data = out.read(12000)
+            out.seek(0, os.SEEK_END)
+            if out.tell() > 12000:
+                out_data += "\n[输出已截断]"
+        if proc.returncode == 0:
+            return "无问题（ruff 检查通过）"
+        return f"ruff 检查发现问题：\n{out_data}"
+    except Exception as e:
+        return f"错误：ruff 执行失败: {e}"
+
+
+def _verify_build(base):
+    """前端构建（npm run build），返回结果摘要。"""
+    import shutil
+    npm = shutil.which("npm.cmd" if os.name == "nt" else "npm") or shutil.which("npm")
+    if not npm:
+        return "错误：未找到 npm（需安装 Node.js）"
+    try:
+        import tempfile
+        with tempfile.SpooledTemporaryFile(
+            max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
+        ) as out:
+            proc = subprocess.Popen(
+                [npm, "run", "build"], stdout=out, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace", cwd=base,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            try:
+                proc.wait(timeout=300)
+            except subprocess.TimeoutExpired:
+                _kill_tree(proc)
+                return "错误：构建超时（300 秒）"
+            out.seek(0)
+            out_data = out.read(12000)
+            out.seek(0, os.SEEK_END)
+            if out.tell() > 12000:
+                out_data += "\n[输出已截断]"
+        if proc.returncode == 0:
+            return "构建成功"
+        return f"构建失败（退出码 {proc.returncode}）：\n{out_data}"
+    except Exception as e:
+        return f"错误：构建执行失败: {e}"
+
+
+def verify_project(path=None):
+    """一键验证：静态检查（ruff）→ 测试（pytest）→ 前端构建（npm run build）。
+
+    项目开发完成后调用，按检测到的产物类型依次跑完验证步骤并汇总结果，
+    作为「写完代码自测」的收尾闭环。
+    """
+    import glob as _glob
+
+    base = path or WORKING_DIR or permissions.WORKSPACE_DIR or os.getcwd()
+    ok, reason = permissions.check_filesystem(base, write=False)
+    if not ok:
+        return reason
+    base = permissions.resolve(base) or base
+    if not os.path.isdir(base):
+        return f"错误：目录不存在：{base}"
+
+    lines = [f"一键验证：{base}", ""]
+    steps = 0
+
+    if _glob.glob(os.path.join(base, "**", "*.py"), recursive=True):
+        steps += 1
+        lines.append(f"[{steps}] 静态检查（ruff）：")
+        lines.append("  " + run_lint(base).replace("\n", "\n  "))
+        lines.append("")
+
+    tests = _glob.glob(os.path.join(base, "**", "test_*.py"), recursive=True) + \
+            _glob.glob(os.path.join(base, "**", "*_test.py"), recursive=True)
+    if tests:
+        steps += 1
+        lines.append(f"[{steps}] 测试（pytest）：")
+        lines.append("  " + run_tests(base).replace("\n", "\n  "))
+        lines.append("")
+
+    if os.path.isfile(os.path.join(base, "package.json")):
+        steps += 1
+        lines.append(f"[{steps}] 前端构建（npm run build）：")
+        lines.append("  " + _verify_build(base).replace("\n", "\n  "))
+        lines.append("")
+
+    if steps == 0:
+        return "未发现可验证产物（无 .py 文件、无测试文件、无 package.json）"
+    lines.append(f"验证完成：共 {steps} 步")
+    return "\n".join(lines)
+
+
 def run_tests(path=None, framework="auto"):
     """在允许目录内运行测试（pytest/unittest），返回结果摘要。
 
@@ -10484,6 +10642,8 @@ TOOL_CALL_MAP = {
     "git": git_tool,
     "project_map": project_map,
     "find_symbol": find_symbol,
+    "run_lint": run_lint,
+    "verify_project": verify_project,
     "database_query": database_query,
     "tts_save": tts_save,
     "image_process": image_process,
@@ -10646,7 +10806,7 @@ _TOOL_INDEX_KEY = None
 # 能力地图分类（精确感知：类别 + 完整工具名 + 核心动作）。全部内置工具全覆盖。
 TOOL_GROUPS = [
     ("🌐 浏览器与网页", ["browser_navigate", "web_screenshot", "fetch_url", "fetch_url_smart", "net_diagnose", "fetch_blocked", "search_web", "search_realtime", "search_github", "webdav", "download_file", "rss_fetch"]),
-    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "get_status", "git", "project_map", "find_symbol"]),
+    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "run_lint", "verify_project", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "get_status", "git", "project_map", "find_symbol"]),
     ("📁 文件与目录", ["read_file", "write_file", "edit_file", "list_dir", "search_local", "delete_file", "archive_files", "extract_archive", "batch_rename", "clipboard_get", "clipboard_set"]),
     ("📊 数据与文档", ["read_csv", "write_csv", "read_excel", "write_excel", "chart_data", "database_query", "database_query_mysql", "database_query_postgres", "database_execute", "create_doc", "docx_read", "pptx_read", "pdf_extract", "pdf_create", "epub_read", "mobi_read", "doc_read", "archive_list", "secret_store", "kv_store"]),
     ("📧 邮件与消息", ["send_email", "read_email", "email_summary", "agent_mail", "msg_read", "im_send", "telegram_poll_updates", "send_webhook", "publish_draft", "run_wechat_writer", "daily_brief"]),
@@ -10690,6 +10850,8 @@ _PREACTIVATE_HINTS = [
     (("全局", "概况", "整体情况", "运行情况", "什么情况", "进展", "状态", "工作台"), ["get_status"]),
     (("git", "commit", "提交", "回滚", "版本控制", "版本管理", "仓库"), ["git"]),
     (("依赖图", "符号表", "项目结构", "代码地图", "函数定义", "调用关系", "引用"), ["project_map", "find_symbol"]),
+    (("lint", "静态检查", "语法检查", "代码规范", "ruff"), ["run_lint"]),
+    (("一键验证", "验证项目", "自测", "检查一下", "跑测试"), ["verify_project", "run_tests"]),
     (("搜索", "搜一下", "查一下", "新闻", "资讯", "最新"), ["search_web", "search_realtime", "fetch_url"]),
     (("天气", "气温", "台风", "预报"), ["get_weather"]),
     (("下载",), ["download_file", "fetch_url"]),
@@ -10759,6 +10921,8 @@ _TOOL_ACTION_PHRASES = {
     "git": "本地 Git 版本管理",
     "project_map": "项目结构地图",
     "find_symbol": "符号定位",
+    "run_lint": "静态检查",
+    "verify_project": "一键验证",
     "read_file": "读取文件内容",
     "write_file": "写入文件",
     "edit_file": "编辑文件（局部修改）",
