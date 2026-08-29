@@ -12,9 +12,16 @@ const SLASH_COMMANDS = [
 const DRAFT_KEY = "whaletalk.draft";
 const HIST_KEY = "whaletalk.input.history";
 
+function todayStr() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask = true }, ref) {
   const [text, setText] = React.useState("");
   const [slashOpen, setSlashOpen] = React.useState(false);
+  const [slashQuery, setSlashQuery] = React.useState("");  // 输入 /xxx 时的指令过滤词
   const [promptOpen, setPromptOpen] = React.useState(false);
   const [dirOpen, setDirOpen] = React.useState(false);
   const [prompts, setPrompts] = React.useState([]);
@@ -29,6 +36,52 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   const histRef = React.useRef([]);
   const histIdxRef = React.useRef(-1);
   const histDraftRef = React.useRef("");
+
+  // ── 应用指令：变量填充（{{TEXT}}/{{DATE}}/{ASK:}）+ 选中文本 + 自动发送 ──
+  const applyPrompt = (p, replaceAll = false) => {
+    const ta = taRef.current;
+    const sel = ta ? String(text).slice(ta.selectionStart || 0, ta.selectionEnd || 0) : "";
+    const seed = sel || (replaceAll ? "" : String(text || "").trim());
+    let t = String(p.text || "")
+      .replace(/\{\{TEXT\}\}/g, seed)
+      .replace(/\{\{DATE\}\}/g, todayStr());
+    for (const a of t.match(/\{ASK:([^}]+)\}/g) || []) {
+      const ans = window.prompt(a.slice(5, -1), "");
+      t = t.replace(a, ans || "");
+    }
+    setSlashOpen(false);
+    setPromptOpen(false);
+    setSlashQuery("");
+    if (p.auto_send && String(t).trim()) {
+      setText("");
+      onSend(t);
+    } else {
+      setText(t);
+      setTimeout(() => taRef.current?.focus(), 30);
+    }
+    if (p.id && !p.builtin) api.usePrompt(p.id).catch(() => {});
+  };
+
+  // 可用指令（禁用的不出现在调用列表）
+  const usablePrompts = React.useMemo(
+    () => (prompts || []).filter((p) => p.enabled !== false),
+    [prompts]
+  );
+
+  // 斜杠过滤：输入 /周报 或 /weekly 都能命中
+  const slashPrompts = React.useMemo(() => {
+    const q = String(slashQuery || "").toLowerCase();
+    if (!q) return usablePrompts;
+    return usablePrompts.filter((p) =>
+      `${p.name} ${p.shortcut} ${p.desc} ${(p.tags || []).join(" ")}`.toLowerCase().includes(q)
+    );
+  }, [usablePrompts, slashQuery]);
+
+  const slashCmds = React.useMemo(() => {
+    const q = String(slashQuery || "").toLowerCase();
+    if (!q) return SLASH_COMMANDS;
+    return SLASH_COMMANDS.filter((s) => `${s.cmd} ${s.desc}`.toLowerCase().includes(q));
+  }, [slashQuery]);
 
   // ── 草稿持久化（对齐原程序：停止输入后保存，启动恢复）──
   React.useEffect(() => {
@@ -379,21 +432,20 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
             </button>
             {promptOpen && (
               <div className="slash-menu prompt-menu">
-                {prompts.map((p) => (
+                {usablePrompts.map((p) => (
                   <div
                     className="slash-item"
-                    key={p.name}
-                    onClick={() => {
-                      setText(p.text.replace("{{TEXT}}", text.trim()));
-                      setPromptOpen(false);
-                      taRef.current?.focus();
-                    }}
+                    key={p.id}
+                    title={p.desc || ""}
+                    onClick={() => applyPrompt(p)}
                   >
-                    <b>{p.name}</b>
-                    <span>{p.text.slice(0, 34)}</span>
+                    <b>{p.icon ? `${p.icon} ` : ""}{p.name}</b>
+                    <span>{p.desc || String(p.text || "").slice(0, 26)}</span>
                   </div>
                 ))}
-                {prompts.length === 0 && <div className="slash-item"><span>指令库为空</span></div>}
+                {usablePrompts.length === 0 && (
+                  <div className="slash-item"><span>暂无指令（侧栏「指令库」可新建）</span></div>
+                )}
               </div>
             )}
           </div>
@@ -405,13 +457,28 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
             </button>
             {slashOpen && (
               <div className="slash-menu">
-                {SLASH_COMMANDS.map((s) => (
+                {slashPrompts.map((p) => (
+                  <div
+                    className="slash-item"
+                    key={p.id}
+                    title={p.desc || ""}
+                    onClick={() => applyPrompt(p, true)}
+                  >
+                    <b>{p.icon ? `${p.icon} ` : ""}{p.name}</b>
+                    <span>{p.shortcut || p.desc || String(p.text || "").slice(0, 22)}</span>
+                  </div>
+                ))}
+                {slashPrompts.length === 0 && slashQuery && (
+                  <div className="slash-item"><span>无匹配指令</span></div>
+                )}
+                {slashCmds.map((s) => (
                   <div
                     className="slash-item"
                     key={s.cmd}
                     onClick={() => {
                       setText(s.cmd === "/clear" ? "" : s.text);
                       setSlashOpen(false);
+                      setSlashQuery("");
                       taRef.current?.focus();
                     }}
                   >
@@ -442,7 +509,18 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
           className="composer-input"
           placeholder={isTask ? "输入任务，Enter 发送，Shift+Enter 换行，/ 唤起命令" : "输入消息，Enter 发送（对话模式 · 纯问答）"}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setText(v);
+            // 输入 /xxx 自动唤起指令搜索（整行以 / 开头时）
+            const m = /^\/(\S*)$/.exec(v);
+            if (m) {
+              setSlashQuery(m[1]);
+              setSlashOpen(true);
+            } else if (!v.startsWith("/")) {
+              setSlashQuery("");
+            }
+          }}
           onKeyDown={onKey}
           rows={1}
         />

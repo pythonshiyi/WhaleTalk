@@ -529,11 +529,219 @@ def _evolutions():
     return {"evolutions": out[:40]}
 
 
-def _prompts():
-    """指令列表（prompts.json：{name, text}）。"""
+# ── 指令库（prompts.json：用户指令 + 内置指令，统一管理与调用）──────────
+# 数据模型向后兼容：老数据仅 {name, text}，缺字段一律补默认值（绝不丢数据）。
+_PROMPT_MAX_TEXT = 4000
+_PROMPT_MAX_NAME = 40
+
+
+def _prompt_new_id():
+    import uuid
+    return "p_" + uuid.uuid4().hex[:10]
+
+
+def _prompt_normalize(p):
+    """规范化单条指令：老数据（仅 name/text）自动补全新字段。"""
+    if not isinstance(p, dict):
+        return None
+    name = str(p.get("name") or "").strip()[:_PROMPT_MAX_NAME]
+    if not name:
+        return None
+    try:
+        cnt = int(p.get("use_count") or 0)
+    except (TypeError, ValueError):
+        cnt = 0
+    sc = str(p.get("shortcut") or "").strip()[:30]
+    if sc and not sc.startswith("/"):
+        sc = "/" + sc.lstrip("/")
+    item = {
+        "id": str(p.get("id") or "").strip() or _prompt_new_id(),
+        "name": name,
+        "text": str(p.get("text") or "")[:_PROMPT_MAX_TEXT],
+        "desc": str(p.get("desc") or "").strip()[:200],
+        "category": str(p.get("category") or "").strip()[:20] or "未分类",
+        "tags": [str(t).strip()[:20] for t in (p.get("tags") or []) if str(t).strip()][:10],
+        "icon": str(p.get("icon") or "").strip()[:8],
+        "shortcut": sc,
+        "enabled": p.get("enabled", True) is not False,
+        "auto_send": bool(p.get("auto_send")),
+        "use_count": max(0, cnt),
+        "created": str(p.get("created") or ""),
+        "updated": str(p.get("updated") or ""),
+    }
+    from datetime import datetime
+    now = datetime.now().isoformat(timespec="seconds")
+    if not item["created"]:
+        item["created"] = now
+    item["updated"] = now
+    return item
+
+
+def _prompts_load_user():
+    """用户指令（prompts.json），已规范化。"""
     import stores
     items = stores.load_patterns(PROMPTS_PATH)
-    return {"prompts": [{"name": str(p.get("name") or ""), "text": str(p.get("text") or "")} for p in items if isinstance(p, dict)][:50]}
+    out = []
+    for p in items:
+        n = _prompt_normalize(p)
+        if n:
+            out.append(n)
+    return out
+
+
+def _prompts_builtin():
+    """内置指令（config_defaults.BUILTIN_PROMPTS）：只读，可复制为我的指令。"""
+    import config_defaults as cd
+    out = []
+    for p in list(getattr(cd, "BUILTIN_PROMPTS", []) or []):
+        n = _prompt_normalize(p)
+        if n:
+            n["builtin"] = True
+            out.append(n)
+    return out
+
+
+def _prompts_full():
+    """内置 + 用户（内置在前，带 builtin 标记）。"""
+    return _prompts_builtin() + _prompts_load_user()
+
+
+def _prompts_save_user(items):
+    import stores
+    clean = []
+    for p in items:
+        n = _prompt_normalize(p)
+        if n:
+            n.pop("builtin", None)
+            clean.append(n)
+    stores.save_patterns(PROMPTS_PATH, clean)
+    return clean
+
+
+def _plugin_skills():
+    """已启用插件的提示词技能（只读来源：可在指令库「复制」为我的指令后修改）。"""
+    import plugins as plugins_mod
+    out = []
+    try:
+        for p in plugins_mod.list_plugins(_plugin_paths()["plugins_dir"]):
+            if not p.get("enabled", True):
+                continue
+            pname = str((p.get("meta") or {}).get("name") or "")
+            for s in ((p.get("contents") or {}).get("skills") or []):
+                if isinstance(s, dict) and str(s.get("name") or "").strip():
+                    out.append({
+                        "name": str(s.get("name") or "").strip()[:40],
+                        "text": str(s.get("text") or "")[:_PROMPT_MAX_TEXT],
+                        "plugin": pname,
+                    })
+    except Exception:
+        logger.exception("读取插件技能失败")
+    return {"skills": out}
+
+
+def _prompts():
+    """指令列表（内置 + 用户）。"""
+    return {"prompts": _prompts_full()}
+
+
+def _prompt_upsert(body):
+    """新增/修改单条用户指令（按 id 定位；无 id 或 id 不存在则新建）。"""
+    p = body.get("prompt")
+    if not isinstance(p, dict):
+        return None, "prompt 必须是对象"
+    items = _prompts_load_user()
+    n = _prompt_normalize(p)
+    if not n:
+        return None, "指令名称不能为空"
+    pid = str(p.get("id") or "").strip()
+    hit = False
+    for i, old in enumerate(items):
+        if old["id"] == pid:
+            n["created"] = old.get("created") or n["created"]
+            n["use_count"] = old.get("use_count", 0)
+            items[i] = n
+            hit = True
+            break
+    if not hit:
+        items.append(n)
+    _prompts_save_user(items)
+    return {"ok": True, "id": n["id"], "created": not hit}, None
+
+
+def _prompt_delete(body):
+    """删除单条用户指令（内置指令不可删）。"""
+    pid = str(body.get("id") or "").strip()
+    if not pid:
+        return None, "id 必填"
+    items = _prompts_load_user()
+    left = [p for p in items if p["id"] != pid]
+    if len(left) == len(items):
+        return None, "未找到该指令（内置指令不可删除）"
+    _prompts_save_user(left)
+    return {"ok": True}, None
+
+
+def _prompts_reorder(body):
+    """排序：按给定 id 顺序重排用户指令（未列出的保持相对顺序附在末尾）。"""
+    ids = body.get("ids")
+    if not isinstance(ids, list):
+        return None, "ids 必须是列表"
+    items = _prompts_load_user()
+    by_id = {p["id"]: p for p in items}
+    out = [by_id.pop(i) for i in ids if i in by_id]
+    out += [p for p in items if p["id"] in by_id]
+    _prompts_save_user(out)
+    return {"ok": True}, None
+
+
+def _prompts_import(body):
+    """导入指令：mode=merge（默认，跳过同名）/ replace（覆盖全部用户指令）。"""
+    incoming = body.get("prompts")
+    if not isinstance(incoming, list):
+        return None, "prompts 必须是列表"
+    mode = str(body.get("mode") or "merge").strip().lower()
+    items = _prompts_load_user()
+    if mode == "replace":
+        items = []
+    added = 0
+    for p in incoming:
+        n = _prompt_normalize(p)
+        if not n:
+            continue
+        if mode == "merge" and any(x["name"] == n["name"] for x in items):
+            continue
+        items.append(n)
+        added += 1
+    _prompts_save_user(items)
+    return {"ok": True, "added": added, "total": len(items)}, None
+
+
+def _prompt_use(body):
+    """使用计数（常用指令置顶排序用）。"""
+    pid = str(body.get("id") or "").strip()
+    items = _prompts_load_user()
+    for p in items:
+        if p["id"] == pid:
+            p["use_count"] = int(p.get("use_count") or 0) + 1
+            break
+    _prompts_save_user(items)
+    return {"ok": True}, None
+
+
+def _prompts_restore_builtin():
+    """恢复内置指令：只补缺失项（按名称），绝不覆盖用户已有/改动过的指令。"""
+    import config_defaults as cd
+    items = _prompts_load_user()
+    have = {p["name"] for p in items}
+    added = 0
+    for p in list(getattr(cd, "BUILTIN_PROMPTS", []) or []):
+        n = _prompt_normalize(p)
+        if n and n["name"] not in have:
+            items.append(n)
+            have.add(n["name"])
+            added += 1
+    _prompts_save_user(items)
+    return {"ok": True, "added": added}, None
 
 
 def _dirs():
@@ -3678,6 +3886,10 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(200, _permissions_get())
                 elif self.path == "/v1/prompts":
                     self._json(200, _prompts())
+                elif self.path == "/v1/prompts/export":
+                    self._json(200, {"prompts": _prompts_load_user(), "exported_at": time.strftime("%Y-%m-%d %H:%M:%S")})
+                elif self.path == "/v1/plugin_skills":
+                    self._json(200, _plugin_skills())
                 elif self.path == "/v1/dir":
                     self._json(200, _dirs())
                 elif self.path == "/v1/roles":
@@ -4214,6 +4426,7 @@ class _Handler(BaseHTTPRequestHandler):
                     logger.exception("POST /v1/config 失败")
                     self._json(500, {"error": str(e)})
             elif self.path == "/v1/prompts":
+                # 兼容旧接口：整表覆盖用户指令（内置指令不入库，过滤掉）
                 body = self._read_body()
                 if body is None:
                     self._json(400, {"error": "invalid json or body too large"})
@@ -4222,13 +4435,34 @@ class _Handler(BaseHTTPRequestHandler):
                 if not isinstance(items, list):
                     self._json(400, {"error": "prompts 必须是列表"})
                     return
-                clean = []
-                for p in items:
-                    if isinstance(p, dict) and str(p.get("name") or "").strip():
-                        clean.append({"name": str(p["name"]).strip()[:40], "text": str(p.get("text") or "")[:4000]})
-                import stores
-                stores.save_patterns(PROMPTS_PATH, clean)
+                _prompts_save_user([p for p in items if not p.get("builtin")] if all(isinstance(p, dict) for p in items) else items)
                 self._json(200, {"ok": True})
+            elif self.path in ("/v1/prompts/save", "/v1/prompts/delete", "/v1/prompts/reorder",
+                               "/v1/prompts/import", "/v1/prompts/use", "/v1/prompts/restore_builtin"):
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                try:
+                    if self.path == "/v1/prompts/save":
+                        result, err = _prompt_upsert(body)
+                    elif self.path == "/v1/prompts/delete":
+                        result, err = _prompt_delete(body)
+                    elif self.path == "/v1/prompts/reorder":
+                        result, err = _prompts_reorder(body)
+                    elif self.path == "/v1/prompts/import":
+                        result, err = _prompts_import(body)
+                    elif self.path == "/v1/prompts/use":
+                        result, err = _prompt_use(body)
+                    else:
+                        result, err = _prompts_restore_builtin()
+                except Exception as e:
+                    logger.exception("指令库操作失败 %s", self.path)
+                    result, err = None, f"操作失败：{e}"
+                if err:
+                    self._json(400, {"error": err})
+                else:
+                    self._json(200, result)
             elif self.path == "/v1/sessions":
                 body = self._read_body()
                 if body is None:

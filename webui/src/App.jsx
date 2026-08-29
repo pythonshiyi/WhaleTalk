@@ -2,6 +2,7 @@ import React from "react";
 import Sidebar from "./components/Sidebar.jsx";
 import ChatPage, { BackendBanner } from "./components/ChatPage.jsx";
 import { AbilitiesPage, PluginsPage, MemoryPage, SettingsPage, WorkbenchPage } from "./components/Pages.jsx";
+import PromptsPage from "./components/PromptsPage.jsx";
 import { FlashProvider, ToastProvider } from "./components/FlashToast.jsx";
 import * as api from "./api.js";
 
@@ -70,6 +71,8 @@ export default function App() {
     }
   });
   const [mode, setMode] = React.useState("task");
+  // 指令库「应用」→ 把指令内容带进会话输入框（试跑用）
+  const [applyPrompt, setApplyPrompt] = React.useState(null);
 
   React.useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -122,12 +125,27 @@ export default function App() {
                 <main className="app-main">
                   <BackendBanner />
                   <ErrorBoundary>
-                    {page === "chat" && <ChatPage onGoWorkbench={() => setPage("workbench")} onGoSettings={() => setPage("settings")} />}
+                    {page === "chat" && (
+                      <ChatPage
+                        onGoWorkbench={() => setPage("workbench")}
+                        onGoSettings={() => setPage("settings")}
+                        applyPrompt={applyPrompt}
+                        onApplyDone={() => setApplyPrompt(null)}
+                      />
+                    )}
                     {page === "workbench" && <WorkbenchPage onGoChat={() => setPage("chat")} />}
                     {page === "abilities" && <AbilitiesPage />}
                     {page === "plugins" && <PluginsPage />}
+                    {page === "prompts" && (
+                      <PromptsPage
+                        onApply={(text) => {
+                          setApplyPrompt(text);
+                          setPage("chat");
+                        }}
+                      />
+                    )}
                     {page === "memory" && <MemoryPage />}
-                    {page === "settings" && <SettingsPage />}
+                    {page === "settings" && <SettingsPage onGoPrompts={() => setPage("prompts")} />}
                   </ErrorBoundary>
                 </main>
               </div>

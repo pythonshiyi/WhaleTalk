@@ -278,6 +278,40 @@ export async function getPrompts() {
   return d.prompts || [];
 }
 
+export async function savePrompt(prompt) {
+  return api("/v1/prompts/save", { method: "POST", body: JSON.stringify({ prompt }) });
+}
+
+export async function deletePrompt(id) {
+  return api("/v1/prompts/delete", { method: "POST", body: JSON.stringify({ id }) });
+}
+
+export async function reorderPrompts(ids) {
+  return api("/v1/prompts/reorder", { method: "POST", body: JSON.stringify({ ids }) });
+}
+
+export async function importPrompts(prompts, mode = "merge") {
+  return api("/v1/prompts/import", { method: "POST", body: JSON.stringify({ prompts, mode }) });
+}
+
+export async function exportPrompts() {
+  const d = await api("/v1/prompts/export");
+  return d.prompts || [];
+}
+
+export async function usePrompt(id) {
+  return api("/v1/prompts/use", { method: "POST", body: JSON.stringify({ id }) });
+}
+
+export async function restoreBuiltinPrompts() {
+  return api("/v1/prompts/restore_builtin", { method: "POST", body: JSON.stringify({}) });
+}
+
+export async function getPluginSkills() {
+  const d = await api("/v1/plugin_skills");
+  return d.skills || [];
+}
+
 export async function getDirs() {
   return api("/v1/dir");
 }

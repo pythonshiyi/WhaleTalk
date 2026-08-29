@@ -473,7 +473,7 @@ function useDataSources() {
   return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr, peakInfo };
 }
 
-export default function ChatPage({ onGoWorkbench, onGoSettings }) {
+export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone }) {
   const { mode, switchMode } = React.useContext(ModeContext);
   const { density, fontSize } = React.useContext(DisplayContext);
   const { flash } = React.useContext(FlashContext);
@@ -535,6 +535,12 @@ export default function ChatPage({ onGoWorkbench, onGoSettings }) {
   const stopSignalRef = React.useRef(null);
   const scrollRef = React.useRef(null);
   const composerRef = React.useRef(null);
+  // 指令库「应用」带入的指令内容：填入输入框并聚焦，用户补充内容后发送
+  React.useEffect(() => {
+    if (!applyPrompt) return;
+    composerRef.current?.insertText(applyPrompt);
+    onApplyDone?.();
+  }, [applyPrompt, onApplyDone]);
   const resendIdxRef = React.useRef(null);
   const starsRef = React.useRef(new Set());
   const pinsRef = React.useRef(new Set());

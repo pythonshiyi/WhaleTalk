@@ -292,19 +292,7 @@ function ServicesTab({ cfg, onTip }) {
 }
 
 // ── 高级参数 ────────────────────────────────────────
-function AdvancedTab({ cfg, saveField, onReset }) {
-  const [prompts, setPrompts] = React.useState(null);
-  React.useEffect(() => {
-    apiGet("/v1/prompts").then((d) => d && setPrompts(d.prompts || []));
-  }, []);
-
-  const savePrompts = async () => {
-    const r = await apiPost("/v1/prompts", { prompts });
-    if (r && r.ok) {
-      saveField({ _prompts: prompts }, true);
-    }
-  };
-
+function AdvancedTab({ cfg, saveField, onReset, onGoPrompts }) {
   return (
     <div className="svc-wrap">
       <div className="svc-group">
@@ -329,19 +317,12 @@ function AdvancedTab({ cfg, saveField, onReset }) {
         </Row>
       </div>
       <div className="svc-group">
-        <div className="svc-title">📋 指令库（⚡ 指令菜单）</div>
-        {(prompts || []).map((p, i) => (
-          <div className="svc-prompt-row" key={i}>
-            <input className="set-select set-combo" value={p.name} placeholder="名称"
-              onChange={(e) => setPrompts(prompts.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
-            <input className="set-select set-combo" value={p.text} placeholder="内容（{{TEXT}} 占位）"
-              onChange={(e) => setPrompts(prompts.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} />
-            <button className="msg-op" onClick={() => setPrompts(prompts.filter((_, j) => j !== i))}>✕</button>
-          </div>
-        ))}
+        <div className="svc-title">📋 指令库</div>
+        <div className="svc-desc">
+          指令已升级为独立栏目：可在侧栏「指令库」中增删改、分类管理、导入导出，输入框打 <code>/</code> 即可调用。
+        </div>
         <div className="svc-actions">
-          <button className="confirm-btn" onClick={() => setPrompts([...(prompts || []), { name: "", text: "" }])}>＋ 新增指令</button>
-          <button className="confirm-btn confirm-primary" onClick={savePrompts}>保存指令库</button>
+          <button className="confirm-btn confirm-primary" onClick={() => onGoPrompts?.()}>在指令库中管理 →</button>
         </div>
       </div>
       <div className="svc-group">
@@ -616,7 +597,7 @@ function AuditBlock() {
 }
 
 // ── 设置页主组件 ────────────────────────────────────
-export default function SettingsPage() {
+export default function SettingsPage({ onGoPrompts }) {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { density, setDensity, fontSize, setFontSize } = React.useContext(DisplayContext);
   const [mode, setMode] = React.useState(() => {
@@ -956,7 +937,7 @@ export default function SettingsPage() {
                 </Row>
               </>
             )}
-            {tab === "adv" && <AdvancedTab cfg={cfg} saveField={saveField} onReset={resetAll} />}
+            {tab === "adv" && <AdvancedTab cfg={cfg} saveField={saveField} onReset={resetAll} onGoPrompts={onGoPrompts} />}
           </div>
         </>
       )}
