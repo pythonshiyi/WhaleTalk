@@ -1589,6 +1589,7 @@ def _init_dc_paths():
     import profiles as profiles_mod
     profiles_mod.DEFAULT_PROFILES_PATH = os.path.join(DATA_DIR, "profiles.json")
     dc.MEMORY_FILE = MEMORY_PATH
+    dc.SELF_PROFILE_FILE = os.path.join(DATA_DIR, "self_profile.json")
     dc.WEBHOOK_CONFIG_FILE = os.path.join(DATA_DIR, "webhooks.json")
     dc.IM_CONFIG_FILE = os.path.join(DATA_DIR, "im_config.json")
     dc.DB_CONFIG_FILE = os.path.join(DATA_DIR, "db_config.json")
@@ -4942,6 +4943,14 @@ class _Handler(BaseHTTPRequestHandler):
                 facts = [f["text"] for f in mem.get("facts", []) if f.get("text")]
                 if facts:
                     parts.append("[长期记忆]\n" + "\n".join("- " + t for t in facts[-6:]))
+        except Exception:
+            pass
+        # 核心自我状态注入（跨会话连续自我；有实质内容才注入，空则不占 token）
+        try:
+            import deepseek_client as dc
+            sp = dc.self_profile("get")
+            if sp and sp.strip() and "核心自我状态]" in sp and "为空" not in sp:
+                parts.append(sp)
         except Exception:
             pass
         active_dir = str(cfg.get("active_dir") or "").strip()

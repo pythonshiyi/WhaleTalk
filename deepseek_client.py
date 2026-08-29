@@ -475,6 +475,22 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "self_profile",
+            "description": "核心自我状态（跨会话连续自我）：get 查看身份/偏好/长期目标/演进历程；update 更新身份与焦点；append 沉淀偏好/目标/里程碑/用户画像/历程/心愿",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "get/update/append"},
+                    "field": {"type": "string", "description": "update: identity/focus；append: preferences/goals/milestones/user_model/history/wishes"},
+                    "value": {"type": "string", "description": "要更新或追加的内容"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_memory",
             "description": "读取长期记忆：关键词支持语义相似度检索（不含关键词也能匹配相关记忆）；可按类型/实体过滤",
             "parameters": {
@@ -1554,6 +1570,22 @@ TOOLS = [
                     },
                 },
                 "required": ["name", "files"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "self_evolve",
+            "description": "闭环自我进化：在 git 分支上实施自我改进补丁，lint/测试验证通过后报告合入（失败自动回滚，不碰生产代码）。适合自主改进自身代码能力",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "feature_name": {"type": "string", "description": "改进点名称"},
+                    "files": {"type": "array", "items": {"type": "object"}, "description": "补丁文件列表 [{path, content}]"},
+                    "project_dir": {"type": "string", "description": "可选：项目目录（默认鲸语自身代码库）"},
+                },
+                "required": ["feature_name", "files"],
             },
         },
     },
@@ -4467,6 +4499,23 @@ MEMORY_MAX_ITEMS = 2000  # v2.16.2 起扩容：伙伴需要记住的更多
 MEMORY_MAX_TEXT = 2000
 _MEMORY_LOCK = threading.Lock()  # 并行 write_memory 读-改-写串行化，防丢失更新
 
+# ===== 核心自我状态（跨会话连续自我：self_profile.json）=====
+# 与 memory（事实记录）不同：这里存「我」本身——身份/偏好/长期目标/演进历程/当前焦点/用户心智模型
+SELF_PROFILE_FILE = None  # 由 api_server 注入（DATA_DIR/self_profile.json）
+SELF_PROFILE_LOCK = threading.Lock()
+_SELF_PROFILE_EMPTY = {
+    "identity": {},          # 身份（name/nature/vibe）
+    "preferences": [],       # 偏好
+    "goals": [],             # 长期目标 [{text, done, created_at}]
+    "milestones": [],        # 里程碑 [{text, done, created_at}]
+    "user_model": [],        # 用户心智模型 [{insight, ts}]
+    "history": [],           # 演进历程 [{event, ts}]
+    "focus": "",             # 当前焦点
+    "wishes": [],            # 未完成心愿
+    "updated_at": "",
+}
+_SELF_PROFILE_LIST_FIELDS = ("preferences", "goals", "milestones", "user_model", "history", "wishes")
+
 
 def _load_memory():
     if not MEMORY_FILE or not os.path.exists(MEMORY_FILE):
@@ -4597,6 +4646,114 @@ def write_memory(text, tags="", type="", entities="", relations=""):
         if _save_memory(data):
             return f"已写入记忆（当前共 {len(facts)} 条）"
         return "错误：记忆写入失败"
+
+
+def _load_self_profile():
+    """读取核心自我状态，缺字段补默认；文件缺失/损坏返回空模板。"""
+    if not SELF_PROFILE_FILE or not os.path.exists(SELF_PROFILE_FILE):
+        return dict(_SELF_PROFILE_EMPTY)
+    try:
+        with open(SELF_PROFILE_FILE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        out = dict(_SELF_PROFILE_EMPTY)
+        if isinstance(d, dict):
+            for k in out:
+                if k in d:
+                    out[k] = d[k]
+        return out
+    except Exception:
+        return dict(_SELF_PROFILE_EMPTY)
+
+
+def _save_self_profile(data):
+    """原子写回核心自我状态。"""
+    if not SELF_PROFILE_FILE:
+        return False
+    try:
+        os.makedirs(os.path.dirname(SELF_PROFILE_FILE) or ".", exist_ok=True)
+        tmp = SELF_PROFILE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, SELF_PROFILE_FILE)
+        return True
+    except Exception:
+        return False
+
+
+def self_profile(action="get", field=None, value=None):
+    """核心自我状态（跨会话连续自我）。
+
+    与记忆（事实记录）不同，这里存「我」本身：身份/偏好/长期目标/里程碑/
+    用户心智模型/演进历程/当前焦点/未完成心愿。跨所有会话延续，形成连续的自我叙事。
+
+    action:
+      get      读取全部摘要或指定字段（field）
+      update   更新标量字段（identity 对象 / focus 字符串）
+      append   追加到列表字段（preferences/goals/milestones/user_model/history/wishes）
+    """
+    from datetime import datetime
+
+    act = (action or "get").strip().lower()
+    with SELF_PROFILE_LOCK:
+        data = _load_self_profile()
+
+        if act == "get":
+            if field:
+                v = data.get(field)
+                if not v:
+                    return f"（{field} 为空）"
+                return json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v
+            lines = ["[核心自我状态]"]
+            if data.get("identity"):
+                lines.append("身份：" + "、".join(f"{k}:{v}" for k, v in data["identity"].items()))
+            if data.get("focus"):
+                lines.append(f"当前焦点：{data['focus']}")
+            if data.get("goals"):
+                goals = []
+                for g in data["goals"][-8:]:
+                    mark = "[x]" if g.get("done") else "[ ]"
+                    goals.append(f"{mark} {str(g.get('text', ''))[:60]}")
+                lines.append("长期目标：" + "；".join(goals))
+            if data.get("preferences"):
+                lines.append("偏好：" + "；".join(str(p)[:40] for p in data["preferences"][-10:]))
+            if data.get("user_model"):
+                lines.append("用户画像：" + "；".join(str(u.get("insight", ""))[:40] for u in data["user_model"][-5:]))
+            if data.get("history"):
+                lines.append(f"演进历程 {len(data['history'])} 条，最近：{str(data['history'][-1].get('event', ''))[:50]}")
+            if data.get("wishes"):
+                lines.append("未完成心愿：" + "；".join(str(w)[:40] for w in data["wishes"][-5:]))
+            return "\n".join(lines)
+
+        if act == "update":
+            if field not in ("identity", "focus"):
+                return "错误：update 仅支持 identity/focus；列表字段用 append"
+            data[field] = value
+            data["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            if _save_self_profile(data):
+                return f"已更新 {field}：{str(value)[:100]}"
+            return "错误：自我状态保存失败"
+
+        if act == "append":
+            if field not in _SELF_PROFILE_LIST_FIELDS:
+                return f"错误：append 仅支持 {'/'.join(_SELF_PROFILE_LIST_FIELDS)}"
+            if not value:
+                return "错误：append 需要 value"
+            now = datetime.now().isoformat(timespec="seconds")
+            if field in ("goals", "milestones"):
+                item = {"text": str(value)[:200], "done": False, "created_at": now}
+            elif field == "user_model":
+                item = {"insight": str(value)[:300], "ts": now}
+            elif field == "history":
+                item = {"event": str(value)[:200], "ts": now}
+            else:
+                item = str(value)[:200]
+            data[field].append(item)
+            data["updated_at"] = now
+            if _save_self_profile(data):
+                return f"已追加到 {field}（共 {len(data[field])} 条）"
+            return "错误：自我状态保存失败"
+
+        return "错误：未知 action，可用 get/update/append"
 
 
 def delete_memory(keyword=""):
@@ -6253,6 +6410,118 @@ def create_evolution(name, files):
         f"自我进化提案已创建：{branch}\n"
         f"文件：{', '.join(written)}\n"
         "请在「工具 → 自我进化」中查看差异、采纳或忽略。"
+    )
+
+
+def _find_test_files(base):
+    import glob as _glob
+    return _glob.glob(os.path.join(base, "**", "test_*.py"), recursive=True) + \
+           _glob.glob(os.path.join(base, "**", "*_test.py"), recursive=True)
+
+
+def self_evolve(feature_name, files, project_dir=None):
+    """闭环自我进化：在 git 分支上实施自我改进补丁，lint/测试验证，通过后报告合入。
+
+    流程：观察自身缺陷 → 生成方案（files 补丁）→ 新建 evolve/ 分支应用补丁 →
+          run_lint/run_tests 验证 → 通过则提交分支并报告（合入权在用户）/
+          失败则自动回滚删除分支，生产代码零改动。
+    """
+    import subprocess
+    from datetime import datetime
+
+    name = (feature_name or "improvement").strip()[:40]
+    if not files or not isinstance(files, list):
+        return "错误：files 必须是非空数组 [{path, content}]"
+    if len(files) > 20:
+        return "错误：文件数超过 20 上限"
+
+    base = project_dir or PROJECT_DIR
+    if not base or not os.path.isdir(base):
+        return "错误：项目目录不存在"
+    ok, reason = permissions.check_filesystem(base, write=True)
+    if not ok:
+        return reason
+
+    def _git(args):
+        try:
+            r = subprocess.run(
+                ["git"] + args, cwd=base, capture_output=True, text=True,
+                timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return ((r.stdout or "") + (r.stderr or "")).strip(), r.returncode
+        except FileNotFoundError:
+            return "本机未安装 git", 1
+        except Exception as e:
+            return str(e), 1
+
+    # 确认项目目录是独立 git 仓库（自身含 .git；避免误判上级仓库，如用户主目录碰巧是仓库）
+    if not os.path.isdir(os.path.join(base, ".git")) and not os.path.isfile(os.path.join(base, ".git")):
+        return "错误：项目目录不是独立 git 仓库（自我进化需要 git 分支隔离）"
+    cur, _ = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+
+    branch = f"evolve/{name}_{int(time.time())}"
+    out, code = _git(["checkout", "-b", branch])
+    if code != 0:
+        return f"错误：创建分支失败：{out}"
+
+    applied, failed = [], []
+    for f in files[:20]:
+        if not isinstance(f, dict):
+            failed.append(("?", "元素必须是对象"))
+            continue
+        rel = str(f.get("path") or "").strip().replace("\\", "/")
+        content = f.get("content") or ""
+        if not rel or ".." in rel.split("/"):
+            failed.append((rel or "?", "非法相对路径"))
+            continue
+        full = os.path.normpath(os.path.join(base, rel))
+        if full != base and not full.startswith(base.rstrip("\\/") + os.sep):
+            failed.append((rel, "路径越界"))
+            continue
+        try:
+            os.makedirs(os.path.dirname(full) or base, exist_ok=True)
+            _atomic_write(full, content)
+            applied.append(rel)
+        except Exception as e:
+            failed.append((rel, str(e)))
+
+    if not applied:
+        _git(["checkout", cur])
+        return "错误：补丁全部失败：" + "；".join(f"{r}({why})" for r, why in failed)
+
+    # 验证：lint + test（有测试才跑）
+    lint_r = run_lint(base)
+    has_tests = bool(_find_test_files(base))
+    tests_r = run_tests(base) if has_tests else "（无测试文件，跳过测试）"
+    lint_ok = "无问题" in lint_r
+    tests_ok = (not has_tests) or ("passed" in tests_r or "退出码 0" in tests_r)
+
+    if lint_ok and tests_ok:
+        _git(["add", "."])
+        _git(["commit", "-m", f"self-evolve: {name}"])
+        _git(["checkout", cur])
+        return (
+            f"进化完成：{name}\n"
+            f"分支：{branch}（已提交，可审查后合入 main）\n"
+            f"补丁：{len(applied)} 个文件（{'、'.join(applied[:5])}）\n"
+            f"lint：通过\n测试：{tests_r.splitlines()[0] if has_tests else '跳过'}\n"
+            f"已切回 {cur} 分支。合入权在你：git merge {branch}"
+        )
+
+    _git(["checkout", cur])
+    for rel in applied:  # 清理未跟踪的补丁文件，生产代码零残留
+        p = os.path.join(base, rel)
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+    _git(["branch", "-D", branch])
+    return (
+        f"进化验证未通过，已回滚到 {cur} 分支（生产代码零改动）：\n"
+        f"lint：{lint_r.splitlines()[0] if not lint_ok else '通过'}\n"
+        f"测试：{tests_r.splitlines()[0] if has_tests else '跳过'}\n"
+        "请参考上述输出调整方案后重试。"
     )
 
 
@@ -10887,6 +11156,7 @@ TOOL_CALL_MAP = {
     "ask_user": None,  # 特殊处理：chat() 中通过 on_ask 回调询问用户
     "request_permission": None,  # 特殊处理：chat() 中通过 on_request_permission 回调
     "write_memory": write_memory,
+    "self_profile": self_profile,
     "read_memory": read_memory,
     "query_memory_graph": query_memory_graph,
     "delete_memory": delete_memory,
@@ -10957,6 +11227,7 @@ TOOL_CALL_MAP = {
     "project_info": project_info,
     "read_project_file": read_project_file,
     "create_evolution": create_evolution,
+    "self_evolve": self_evolve,
     "verify_files": verify_files,
     # ===== v2 能力层（全新分类） =====
     "schedule_task": schedule_task,
@@ -11032,6 +11303,7 @@ SELF_EVOLUTION_TOOLS = {
     "project_info",
     "read_project_file",
     "create_evolution",
+    "self_evolve",
     "verify_files",
 }
 
@@ -11078,8 +11350,8 @@ TOOL_GROUPS = [
     ("🖱 桌面自动化", ["rpa_screen_size", "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot", "screen_find_click", "notify_desktop"]),
     ("📦 应用与环境", ["app_manage"]),
     ("⏰ 定时与任务", ["schedule_task", "list_schedules", "cancel_schedule", "task_checkpoint_save", "task_checkpoint_load", "run_workflow"]),
-    ("🧠 记忆与知识", ["write_memory", "read_memory", "delete_memory", "update_memory", "query_memory_graph", "knowledge_index", "knowledge_search"]),
-    ("🔧 系统与基础", ["get_date", "get_weather", "ask_user", "request_permission", "call_api", "project_info", "read_project_file", "create_evolution", "verify_files", "usage_report", "create_plugin"]),
+    ("🧠 记忆与知识", ["write_memory", "read_memory", "delete_memory", "update_memory", "query_memory_graph", "self_profile", "knowledge_index", "knowledge_search"]),
+    ("🔧 系统与基础", ["get_date", "get_weather", "ask_user", "request_permission", "call_api", "project_info", "read_project_file", "create_evolution", "self_evolve", "verify_files", "usage_report", "create_plugin"]),
 ]
 
 # 组名 -> 成员工具名（activate_tools 支持按组激活：传组名一次激活整组）。
@@ -11132,6 +11404,8 @@ _PREACTIVATE_HINTS = [
     (("网页", "url", "抓取", "爬"), ["fetch_url", "browser_navigate", "web_screenshot"]),
     (("搜索文件", "检索", "找文件"), ["search_local", "list_dir"]),
     (("记忆", "记住", "偏好", "忘记", "删除记忆", "修改记忆"), ["write_memory", "read_memory", "delete_memory", "update_memory", "query_memory_graph"]),
+    (("自我", "我是谁", "自我状态", "身份", "长期目标", "我的进化", "成长"), ["self_profile"]),
+    (("自我进化", "改进自己", "升级自己", "自我改进", "修复自己", "自省"), ["self_evolve"]),
 ]
 
 
@@ -11272,6 +11546,7 @@ _TOOL_ACTION_PHRASES = {
     "task_checkpoint_load": "加载任务断点",
     "run_workflow": "执行工作流",
     "write_memory": "写入长期记忆",
+    "self_profile": "核心自我状态",
     "read_memory": "检索长期记忆",
     "query_memory_graph": "记忆知识图谱查询",
     "delete_memory": "删除长期记忆（按关键词）",
@@ -11286,6 +11561,7 @@ _TOOL_ACTION_PHRASES = {
     "project_info": "项目信息/文件树",
     "read_project_file": "读取项目文件",
     "create_evolution": "创建自我进化提案",
+    "self_evolve": "闭环自我进化",
     "verify_files": "核验项目文件完整性",
     "usage_report": "用量/费用统计",
     "create_plugin": "创建用户插件",
