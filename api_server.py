@@ -5050,6 +5050,7 @@ class _Handler(BaseHTTPRequestHandler):
         if messages is None:
             self._json(400, {"error": "invalid messages"})
             return
+        sid = str(body.get("session_id") or "").strip()  # 已有会话继续对话时由前端携带，用于完成后自动落盘
         _sync_full_auto()
         self._sse_start()
         stop_event = threading.Event()
@@ -5093,6 +5094,19 @@ class _Handler(BaseHTTPRequestHandler):
                 "stop_event": stop_event,
             })
             client.chat(messages, **kwargs)
+            # 后端自动落盘（架构兜底）：chat() 返回后 messages 已含本轮完整历史
+            # （assistant 回复 + tool 结果，content 已还原纯文本）。前端正常时
+            # onFinished 也会保存（双保险）；前端卸载/断连/刷新时本处兜底，
+            # 正在生成的会话结果不丢失。过滤 system（前端历史不含注入的 system 消息）。
+            if sid:
+                try:
+                    self._save_session({
+                        "id": sid,
+                        "name": str(body.get("session_name") or "")[:80],
+                        "messages": [m for m in messages if m.get("role") != "system"],
+                    })
+                except Exception:
+                    logger.exception("后端自动落盘失败（不影响本次会话）")
             # 任务记录：工具链写入工作目录 tasklog（对齐原程序 _record_tasklog）
             try:
                 chain = [t.get("name") for t in _LAST_TOOL_CHAIN[:20]]

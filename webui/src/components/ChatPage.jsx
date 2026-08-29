@@ -106,7 +106,7 @@ function buildMessageChain(msgs) {
 }
 
 // ── 真实后端流式对话 ────────────────────────────────
-function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef, chatMode, onFinished, stopSignalRef, onPrompt, setGenState, continueRef) {
+function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef, chatMode, onFinished, stopSignalRef, onPrompt, setGenState, continueRef, sessionIdRef) {
   const stopRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -178,6 +178,8 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
             // 不传 thinking：后端 _chat_kwargs 使用 config.json 的 thinking（控制台/设置选择的档位即时生效）
             mode: chatMode,
             toolsEnabled: chatMode === "task",
+            // 已有会话继续对话时带上会话 id：后端生成完成后自动落盘（前端卸载/断连不丢结果）
+            session_id: (sessionIdRef && sessionIdRef.current) || undefined,
             continue_prefix: isContinue,
           },
           {
@@ -480,6 +482,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const { toast } = React.useContext(ToastContext);
   const [genState, setGenState] = React.useState({ on: false, text: "" });
   const [activeId, setActiveId] = React.useState(null);
+  // 最新会话 id 转发给 useBackendChat（避免 effect 闭包过期）：已有会话生成完成后由后端自动落盘
+  const activeIdRef = React.useRef(null);
+  activeIdRef.current = activeId;
   const [msgs, setMsgs] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
   const [ctxOpen, setCtxOpen] = React.useState(false);
@@ -584,7 +589,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     stopSignalRef,
     setPromptReq,
     setGenStateThrottled,
-    continueRef
+    continueRef,
+    activeIdRef
   );
 
   // 会话保存：每次 render 同步到 ref，保证 useBackendChat 用的是最新闭包
