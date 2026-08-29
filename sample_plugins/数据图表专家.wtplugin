@@ -1,0 +1,54 @@
+{
+ "format": "wtplugin",
+ "version": 2,
+ "meta": {
+  "name": "数据图表专家",
+  "description": "Excel/CSV/JSON 数据分析并生成可视化图表（matplotlib）：读取数据 → 统计分析 → 图表 PNG → 报告。输入 /图表 或 /分析",
+  "author": "鲸语",
+  "version": "1.0.0",
+  "icon": "📈",
+  "trigger": "/图表",
+  "triggers": [
+   "/图表",
+   "/分析",
+   "/可视化"
+  ]
+ },
+ "requires": [],
+ "enabled": true,
+ "applied": {},
+ "contents": {
+  "skills": [
+   {
+    "name": "数据分析图表",
+    "text": "分析以下数据文件并生成可视化：\n1. 读取数据（read_file/openpyxl 或 pandas）\n2. 识别关键指标与趋势\n3. 用 matplotlib 生成 2-3 张图表（中文标题、保存 PNG 到 workspace）\n4. 输出分析结论（趋势/异常/建议）\n数据：{{TEXT}}"
+   },
+   {
+    "name": "图表报告",
+    "text": "把数据结论整理为带图表的 Markdown 报告：数据概览表 + 关键图表引用 + 分析结论 + 行动建议。数据要点：{{TEXT}}"
+   }
+  ],
+  "workflows": {
+   "图表生成流程": {
+    "steps": [
+     {
+      "text": "数据来源：{{TEXT}}。用「数据分析图表」技能完成：读数据→分析→生成图表 PNG→写报告，产物存 workspace。"
+     }
+    ]
+   }
+  }
+ },
+ "permissions": {
+  "tools": [
+   "read_file",
+   "write_file",
+   "run_python",
+   "verify_files"
+  ],
+  "files": [
+   "workspace"
+  ],
+  "net": false,
+  "notes": "数据分析与图表生成"
+ }
+}

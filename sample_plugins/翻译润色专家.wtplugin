@@ -1,0 +1,42 @@
+{
+ "format": "wtplugin",
+ "version": 2,
+ "meta": {
+  "name": "翻译润色专家",
+  "description": "中英互译 + 商务/学术/口语多风格润色，保留语气与术语准确性。输入 /翻译 或 /润色",
+  "author": "鲸语",
+  "version": "1.0.0",
+  "icon": "🌐",
+  "trigger": "/翻译",
+  "triggers": [
+   "/翻译",
+   "/润色",
+   "/translate"
+  ]
+ },
+ "requires": [],
+ "enabled": true,
+ "applied": {},
+ "contents": {
+  "skills": [
+   {
+    "name": "中英互译",
+    "text": "翻译以下内容（目标语言：{{TEXT}} 中说明或默认中文↔英文）。要求：术语准确、语气自然、保留原文风格，长文分段翻译并校对一致性。"
+   },
+   {
+    "name": "商务润色",
+    "text": "把以下文本润色为商务风格（正式、精炼、逻辑清晰），保留原意与关键数据：\n{{TEXT}}"
+   },
+   {
+    "name": "学术润色",
+    "text": "把以下段落润色为学术风格（客观、严谨、逻辑连贯），避免口语化：\n{{TEXT}}"
+   }
+  ]
+ },
+ "permissions": {
+  "tools": [],
+  "files": [],
+  "net": false,
+  "notes": "文本翻译与润色（纯语言处理）"
+ }
+}

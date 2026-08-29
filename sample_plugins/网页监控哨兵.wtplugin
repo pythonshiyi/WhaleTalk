@@ -1,0 +1,54 @@
+{
+ "format": "wtplugin",
+ "version": 2,
+ "meta": {
+  "name": "网页监控哨兵",
+  "description": "追踪指定网页/目录变化：track_web 检测网页更新、watch_files 监听工作区新文件，有动静主动汇报。输入 /监控 或 /哨兵 开始",
+  "author": "鲸语",
+  "version": "1.0.0",
+  "icon": "📡",
+  "trigger": "/监控",
+  "triggers": [
+   "/监控",
+   "/哨兵",
+   "/watch"
+  ]
+ },
+ "requires": [],
+ "enabled": true,
+ "applied": {},
+ "contents": {
+  "skills": [
+   {
+    "name": "网页更新检测",
+    "text": "用 track_web 检查下列网页是否有更新（首次建立基线，之后对比指纹）：\n{{TEXT}}\n有更新则总结变化内容并汇报；无变化简短说明。"
+   },
+   {
+    "name": "目录变化监听",
+    "text": "用 watch_files 检查目录文件变化（新增/修改/删除），路径：{{TEXT}}\n汇报变化清单，新文件按需读取摘要。"
+   }
+  ],
+  "workflows": {
+   "网页监控流程": {
+    "steps": [
+     {
+      "text": "对 {{TEXT}} 执行网页监控：先 track_web 建立/对比基线，再 watch_files 检查工作区变化，汇总后汇报（有更新/无变化都要说明）。"
+     }
+    ]
+   }
+  }
+ },
+ "permissions": {
+  "tools": [
+   "track_web",
+   "watch_files",
+   "fetch_url",
+   "read_file"
+  ],
+  "files": [
+   "workspace"
+  ],
+  "net": true,
+  "notes": "追踪网页与目录变化"
+ }
+}

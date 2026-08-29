@@ -1,0 +1,50 @@
+{
+ "format": "wtplugin",
+ "version": 2,
+ "meta": {
+  "name": "SQL数据查询助手",
+  "description": "数据库查询与解读：编写 SQL → 执行（database_execute）→ 结果解读 → 结论。输入 /查数",
+  "author": "鲸语",
+  "version": "1.0.0",
+  "icon": "🗄",
+  "trigger": "/查数",
+  "triggers": [
+   "/查数",
+   "/sql",
+   "/数据"
+  ]
+ },
+ "requires": [],
+ "enabled": true,
+ "applied": {},
+ "contents": {
+  "skills": [
+   {
+    "name": "SQL查询生成",
+    "text": "根据需求编写 SQL（数据库类型见配置），先说明表结构假设再给 SQL，执行后解读结果：\n需求：{{TEXT}}"
+   },
+   {
+    "name": "查询结果解读",
+    "text": "解读以下查询结果（数据/统计），提炼业务结论与异常点：\n{{TEXT}}"
+   }
+  ],
+  "workflows": {
+   "查询流程": {
+    "steps": [
+     {
+      "text": "查询需求：{{TEXT}}。用「SQL查询生成」编写并执行 SQL，再「查询结果解读」输出结论。"
+     }
+    ]
+   }
+  }
+ },
+ "permissions": {
+  "tools": [
+   "database_execute",
+   "database_query"
+  ],
+  "files": [],
+  "net": false,
+  "notes": "数据库查询与分析"
+ }
+}

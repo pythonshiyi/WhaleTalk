@@ -1,0 +1,51 @@
+{
+ "format": "wtplugin",
+ "version": 2,
+ "meta": {
+  "name": "公众号排版助手",
+  "description": "Markdown 转公众号风格排版：标题层级/加粗强调/引用块/分割线/小标题，输出可直接粘贴的 HTML。输入 /排版",
+  "author": "鲸语",
+  "version": "1.0.0",
+  "icon": "📰",
+  "trigger": "/排版",
+  "triggers": [
+   "/排版",
+   "/公众号"
+  ]
+ },
+ "requires": [],
+ "enabled": true,
+ "applied": {},
+ "contents": {
+  "skills": [
+   {
+    "name": "公众号排版",
+    "text": "把以下 Markdown 排版为公众号风格 HTML：\n- 一级标题做醒目开头，二级标题加底色小标题\n- 重点句加粗，引用用浅色底块\n- 段落间适度分割，代码块等宽字体\n- 输出完整 HTML（含 style），可直接粘贴公众号编辑器\n内容：\n{{TEXT}}"
+   },
+   {
+    "name": "文案分段润色",
+    "text": "把长文按公众号阅读习惯分段：每段 ≤4 行，段首金句，段间留白，结尾行动引导。内容：{{TEXT}}"
+   }
+  ],
+  "workflows": {
+   "排版流程": {
+    "steps": [
+     {
+      "text": "对 {{TEXT}} 执行公众号排版：先「文案分段润色」再「公众号排版」，产物 HTML 存 workspace/wechat-articles/。"
+     }
+    ]
+   }
+  }
+ },
+ "permissions": {
+  "tools": [
+   "write_file",
+   "verify_files"
+  ],
+  "files": [
+   "workspace"
+  ],
+  "net": false,
+  "notes": "公众号 HTML 排版"
+ }
+}

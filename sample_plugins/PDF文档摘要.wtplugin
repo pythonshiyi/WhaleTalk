@@ -1,0 +1,52 @@
+{
+ "format": "wtplugin",
+ "version": 2,
+ "meta": {
+  "name": "PDF文档摘要",
+  "description": "PDF/长文结构化摘要：提取要点 → 章节概览 → 关键数据 → 结论建议。输入 /摘要",
+  "author": "鲸语",
+  "version": "1.0.0",
+  "icon": "📄",
+  "trigger": "/摘要",
+  "triggers": [
+   "/摘要",
+   "/pdf"
+  ]
+ },
+ "requires": [],
+ "enabled": true,
+ "applied": {},
+ "contents": {
+  "skills": [
+   {
+    "name": "文档结构化摘要",
+    "text": "对文档（路径或粘贴内容）生成结构化摘要：\n1. 一句话核心结论\n2. 章节要点（分节概括）\n3. 关键数据/数字提取\n4. 结论与建议\n文档：{{TEXT}}"
+   },
+   {
+    "name": "要点问答",
+    "text": "基于文档内容回答以下问题，回答引用原文依据（路径或内容）：{{TEXT}}"
+   }
+  ],
+  "workflows": {
+   "摘要流程": {
+    "steps": [
+     {
+      "text": "对 {{TEXT}} 执行摘要：先提取文档内容（read_file/PDF 读取），再「文档结构化摘要」，产物存 workspace/summaries/。"
+     }
+    ]
+   }
+  }
+ },
+ "permissions": {
+  "tools": [
+   "read_file",
+   "write_file",
+   "verify_files"
+  ],
+  "files": [
+   "workspace"
+  ],
+  "net": false,
+  "notes": "文档摘要与问答"
+ }
+}
