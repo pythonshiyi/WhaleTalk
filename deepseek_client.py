@@ -3689,10 +3689,20 @@ def run_tests(path=None, framework="auto"):
         cmd = [sys.executable, "-m", "pytest", "-q"]
         if target:
             cmd.append(str(target))
-    else:
-        cmd = [sys.executable, "-m", "pytest", "-q", str(target)]
-        if not os.path.isfile(target):
-            cmd = [sys.executable, "-m", "unittest", "discover", "-v", str(target)]
+    else:  # auto：优先 pytest（函数测试与 unittest 类都能跑）；pytest 缺失时回退 unittest discover
+        try:
+            import pytest  # noqa: F401
+            _has_pytest = True
+        except ImportError:
+            _has_pytest = False
+        if _has_pytest:
+            cmd = [sys.executable, "-m", "pytest", "-q"]
+            if target:
+                cmd.append(str(target))
+        else:
+            cmd = [sys.executable, "-m", "unittest", "discover", "-v"]
+            if target:
+                cmd.append(str(target))
     try:
         # SpooledTemporaryFile 限流：pytest -v / unittest 输出可达 MB 级，
         # capture_output 全量进内存会 OOM；内存峰值限 1MB 后自动转磁盘
