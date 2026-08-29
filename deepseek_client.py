@@ -770,6 +770,41 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "project_scaffold",
+            "description": "生成标准项目脚手架：python(后端)/react(前端)/fullstack(全栈)，创建目录结构+基础文件。从零开发项目时先调它，无需手动搭结构",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_type": {"type": "string", "description": "类型：python / react / fullstack"},
+                    "name": {"type": "string", "description": "可选：项目名（默认 my_project）"},
+                    "path": {"type": "string", "description": "可选：父目录（不填用工作目录）"},
+                },
+                "required": ["project_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "dev_plan",
+            "description": "开发计划持久化：长项目分步执行、断点恢复。init 初始化计划 / show 查看进度 / step_done 标记完成 / clear 清除",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "init/show/step_done/clear"},
+                    "title": {"type": "string", "description": "init 时：计划标题"},
+                    "goal": {"type": "string", "description": "init 时：目标说明"},
+                    "steps": {"type": "array", "items": {"type": "string"}, "description": "init 时：步骤列表"},
+                    "step_index": {"type": "integer", "description": "step_done 时：步骤编号（从 0 开始）"},
+                    "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
     # ===== 只读查询（需文件在允许目录内）=====
     {
         "type": "function",
@@ -3402,6 +3437,160 @@ def verify_project(path=None):
         return "未发现可验证产物（无 .py 文件、无测试文件、无 package.json）"
     lines.append(f"验证完成：共 {steps} 步")
     return "\n".join(lines)
+
+
+def project_scaffold(project_type, name=None, path=None):
+    """生成标准项目脚手架（目录结构 + 基础文件）。
+
+    project_type: python（后端）/ react（前端）/ fullstack（全栈）。
+    生成后 AI 直接在此基础上开发，无需从零搭结构。
+    """
+    ptype = str(project_type or "").strip().lower()
+    if ptype not in ("python", "react", "fullstack"):
+        return "错误：project_type 仅支持 python / react / fullstack"
+
+    base = path or WORKING_DIR or permissions.WORKSPACE_DIR or os.getcwd()
+    ok, reason = permissions.check_filesystem(base, write=True)
+    if not ok:
+        return reason
+    base = permissions.resolve(base) or base
+
+    name = (name or "my_project").strip()
+    proj_dir = os.path.join(base, name)
+    created = []
+
+    def write(rel, content):
+        p = os.path.join(proj_dir, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
+        created.append(rel)
+
+    if ptype in ("python", "fullstack"):
+        root = "" if ptype == "python" else "backend"
+        write(os.path.join(root, "main.py"),
+              "def main():\n    print(\"Hello from __NAME__\")\n\n\nif __name__ == \"__main__\":\n    main()\n")
+        write(os.path.join(root, "requirements.txt"), "# 依赖列表，每行一个包名\n")
+        write(os.path.join(root, "README.md"),
+              "# __NAME__\n\n## 运行\n```\npython main.py\n```\n\n## 测试\n```\npytest tests/\n```\n")
+        write(os.path.join(root, "tests", "test_main.py"),
+              "def test_main():\n    from main import main\n    assert callable(main)\n")
+
+    if ptype in ("react", "fullstack"):
+        root = "" if ptype == "react" else "frontend"
+        write(os.path.join(root, "package.json"),
+              '{\n  "name": "__NAME__",\n  "version": "0.1.0",\n  "type": "module",\n'
+              '  "scripts": {"dev": "vite", "build": "vite build", "preview": "vite preview"},\n'
+              '  "dependencies": {"react": "^18.3.1", "react-dom": "^18.3.1"},\n'
+              '  "devDependencies": {"@vitejs/plugin-react": "^4.3.4", "vite": "^6.0.0"}\n}\n')
+        write(os.path.join(root, "index.html"),
+              '<!doctype html>\n<html>\n  <head>\n    <meta charset="UTF-8" />\n    <title>__NAME__</title>\n'
+              '  </head>\n  <body>\n    <div id="root"></div>\n    <script type="module" src="/src/main.jsx"></script>\n'
+              '  </body>\n</html>\n')
+        write(os.path.join(root, "vite.config.js"),
+              "import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\n"
+              "export default defineConfig({ plugins: [react()] })\n")
+        write(os.path.join(root, "src", "main.jsx"),
+              "import React from 'react'\nimport ReactDOM from 'react-dom/client'\nimport App from './App.jsx'\n"
+              "import './styles.css'\n\nReactDOM.createRoot(document.getElementById('root')).render(\n"
+              "  <React.StrictMode><App /></React.StrictMode>\n)\n")
+        write(os.path.join(root, "src", "App.jsx"),
+              "import React from 'react'\n\nexport default function App() {\n"
+              "  return <div className=\"app\"><h1>__NAME__</h1></div>\n}\n")
+        write(os.path.join(root, "src", "styles.css"),
+              "body { margin: 0; font-family: system-ui, sans-serif; }\n.app { padding: 2rem; }\n")
+
+    for rel in created:
+        p = os.path.join(proj_dir, rel)
+        with open(p, "r", encoding="utf-8") as f:
+            s = f.read()
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(s.replace("__NAME__", name))
+
+    return f"已生成 {ptype} 脚手架：{proj_dir}\n" + "\n".join(f"  {r}" for r in created)
+
+
+def _plan_text(plan):
+    done = sum(1 for s in plan["steps"] if s.get("done"))
+    total = len(plan["steps"])
+    lines = [f"计划：{plan['title']}", f"目标：{plan.get('goal') or '(未填写)'}", f"进度：{done}/{total}"]
+    for i, s in enumerate(plan["steps"]):
+        lines.append(f"  [{'x' if s.get('done') else ' '}] [{i}] {s['desc']}")
+    return "\n".join(lines)
+
+
+def dev_plan(action, title=None, goal=None, steps=None, step_index=None, path=None):
+    """开发计划持久化：长项目分步执行、断点恢复，避免迷路/重复劳动。
+
+    action:
+      init       初始化计划（title + goal + steps，steps 为字符串数组）
+      show       查看当前计划与进度
+      step_done  标记某步完成（step_index，从 0 开始）
+      clear      清除计划
+
+    计划存于项目目录 .whaletalk_plan.json，跨轮次持久。
+    """
+    import json
+    from datetime import datetime
+
+    base = path or WORKING_DIR or permissions.WORKSPACE_DIR or os.getcwd()
+    ok, reason = permissions.check_filesystem(base, write=(action in ("init", "step_done", "clear")))
+    if not ok:
+        return reason
+    base = permissions.resolve(base) or base
+    plan_path = os.path.join(base, ".whaletalk_plan.json")
+    act = (action or "").strip().lower()
+
+    def load():
+        try:
+            with open(plan_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    if act == "init":
+        if not title or not steps:
+            return "错误：init 需要 title 和 steps（步骤列表）"
+        step_list = steps if isinstance(steps, list) else [s.strip() for s in str(steps).split("\n") if s.strip()]
+        plan = {
+            "title": str(title).strip(),
+            "goal": str(goal or "").strip(),
+            "steps": [{"desc": str(s).strip(), "done": False} for s in step_list],
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        with open(plan_path, "w", encoding="utf-8") as f:
+            json.dump(plan, f, ensure_ascii=False, indent=2)
+        return f"已初始化开发计划「{plan['title']}」（{len(plan['steps'])} 步）\n" + _plan_text(plan)
+
+    if act == "show":
+        plan = load()
+        if not plan:
+            return "无进行中的开发计划（用 dev_plan init 初始化）"
+        return _plan_text(plan)
+
+    if act == "step_done":
+        plan = load()
+        if not plan:
+            return "无进行中的开发计划"
+        try:
+            idx = int(step_index)
+        except (TypeError, ValueError):
+            return "错误：step_index 需为步骤编号（从 0 开始）"
+        if idx < 0 or idx >= len(plan["steps"]):
+            return f"错误：step_index 越界（0~{len(plan['steps']) - 1}）"
+        plan["steps"][idx]["done"] = True
+        plan["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        with open(plan_path, "w", encoding="utf-8") as f:
+            json.dump(plan, f, ensure_ascii=False, indent=2)
+        return _plan_text(plan)
+
+    if act == "clear":
+        if os.path.exists(plan_path):
+            os.remove(plan_path)
+        return "已清除开发计划"
+
+    return "错误：未知 action，可用 init/show/step_done/clear"
 
 
 def run_tests(path=None, framework="auto"):
@@ -10644,6 +10833,8 @@ TOOL_CALL_MAP = {
     "find_symbol": find_symbol,
     "run_lint": run_lint,
     "verify_project": verify_project,
+    "project_scaffold": project_scaffold,
+    "dev_plan": dev_plan,
     "database_query": database_query,
     "tts_save": tts_save,
     "image_process": image_process,
@@ -10806,7 +10997,7 @@ _TOOL_INDEX_KEY = None
 # 能力地图分类（精确感知：类别 + 完整工具名 + 核心动作）。全部内置工具全覆盖。
 TOOL_GROUPS = [
     ("🌐 浏览器与网页", ["browser_navigate", "web_screenshot", "fetch_url", "fetch_url_smart", "net_diagnose", "fetch_blocked", "search_web", "search_realtime", "search_github", "webdav", "download_file", "rss_fetch"]),
-    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "run_lint", "verify_project", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "get_status", "git", "project_map", "find_symbol"]),
+    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "run_lint", "verify_project", "project_scaffold", "dev_plan", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "get_status", "git", "project_map", "find_symbol"]),
     ("📁 文件与目录", ["read_file", "write_file", "edit_file", "list_dir", "search_local", "delete_file", "archive_files", "extract_archive", "batch_rename", "clipboard_get", "clipboard_set"]),
     ("📊 数据与文档", ["read_csv", "write_csv", "read_excel", "write_excel", "chart_data", "database_query", "database_query_mysql", "database_query_postgres", "database_execute", "create_doc", "docx_read", "pptx_read", "pdf_extract", "pdf_create", "epub_read", "mobi_read", "doc_read", "archive_list", "secret_store", "kv_store"]),
     ("📧 邮件与消息", ["send_email", "read_email", "email_summary", "agent_mail", "msg_read", "im_send", "telegram_poll_updates", "send_webhook", "publish_draft", "run_wechat_writer", "daily_brief"]),
@@ -10852,6 +11043,8 @@ _PREACTIVATE_HINTS = [
     (("依赖图", "符号表", "项目结构", "代码地图", "函数定义", "调用关系", "引用"), ["project_map", "find_symbol"]),
     (("lint", "静态检查", "语法检查", "代码规范", "ruff"), ["run_lint"]),
     (("一键验证", "验证项目", "自测", "检查一下", "跑测试"), ["verify_project", "run_tests"]),
+    (("脚手架", "建项目", "初始化项目", "项目模板", "搭项目", "新项目"), ["project_scaffold", "dev_plan"]),
+    (("开发计划", "分步", "任务进度", "断点", "做到哪一步"), ["dev_plan"]),
     (("搜索", "搜一下", "查一下", "新闻", "资讯", "最新"), ["search_web", "search_realtime", "fetch_url"]),
     (("天气", "气温", "台风", "预报"), ["get_weather"]),
     (("下载",), ["download_file", "fetch_url"]),
@@ -10923,6 +11116,8 @@ _TOOL_ACTION_PHRASES = {
     "find_symbol": "符号定位",
     "run_lint": "静态检查",
     "verify_project": "一键验证",
+    "project_scaffold": "项目脚手架",
+    "dev_plan": "开发计划",
     "read_file": "读取文件内容",
     "write_file": "写入文件",
     "edit_file": "编辑文件（局部修改）",
