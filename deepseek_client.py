@@ -694,6 +694,53 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "git",
+            "description": "本地 Git 版本管理：init/status/add/commit/diff/log/checkout/branch。开发项目时 init 建仓、改一段 commit 一段、改坏用 checkout 回滚",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "操作：init/status/add/commit/diff/log/checkout/branch"},
+                    "path": {"type": "string", "description": "可选：目标目录（不填用工作目录）"},
+                    "message": {"type": "string", "description": "commit 时的提交说明"},
+                    "target": {"type": "string", "description": "checkout 的文件路径或分支名；branch 的分支名"},
+                    "files": {"type": "string", "description": "add 时要暂存的文件（默认 .）"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "project_map",
+            "description": "生成项目结构地图：文件树 + Python 符号表（函数/类+行号）+ import 依赖图。开发多文件项目前先调它掌握全貌，避免逐文件读全文、漏改跨文件依赖",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_symbol",
+            "description": "定位 Python 符号（函数/类）的定义与引用位置（文件:行号）。改某个函数前先定位它的所有引用，避免漏改",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "符号名（函数名或类名）"},
+                    "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
     # ===== 只读查询（需文件在允许目录内）=====
     {
         "type": "function",
@@ -5088,6 +5135,208 @@ def edit_file(path, old="", new="", regex=None):
         return f"已替换 {n} 处，写入 {p}（已备份 .bak，已核验存在）"
     except Exception as e:
         return f"错误：写入失败: {e}"
+
+
+def git_tool(action, path=None, message=None, target=None, files=None):
+    """本地 Git 版本管理（项目开发的安全网）。
+
+    action:
+      init      初始化仓库
+      status    查看未提交改动（git status --short）
+      add       暂存文件（files 或 target 指定，默认 .）
+      commit    提交（需 message）
+      diff      查看差异（git diff）
+      log       提交历史（最近 20 条）
+      checkout  回滚文件（target=文件路径，git checkout -- file）或切换分支（target=分支名）
+      branch    列出分支 / 创建分支（target=分支名）
+
+    操作限定在允许目录内；不提供 reset --hard 等破坏性命令，回退一律走 checkout。
+    """
+    import subprocess
+
+    base = path or WORKING_DIR or permissions.WORKSPACE_DIR or os.getcwd()
+    write_op = action in ("init", "add", "commit", "checkout", "branch")
+    ok, reason = permissions.check_filesystem(base, write=write_op)
+    if not ok:
+        return reason
+    base = permissions.resolve(base) or base
+    if os.path.isfile(base):
+        base = os.path.dirname(base)
+
+    def _run(args, cwd):
+        try:
+            r = subprocess.run(
+                ["git"] + args, cwd=cwd, capture_output=True, text=True,
+                timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            out = ((r.stdout or "") + (r.stderr or "")).strip()
+            return out, r.returncode
+        except FileNotFoundError:
+            return "错误：本机未安装 git（或不在 PATH 中）", 1
+        except Exception as e:
+            return f"git 执行失败：{e}", 1
+
+    a = (action or "").strip().lower()
+    if a == "init":
+        out, _ = _run(["init"], base)
+        return out or "仓库已初始化"
+    if a == "status":
+        out, _ = _run(["status", "--short"], base)
+        return out or "工作区干净（无未提交改动）"
+    if a == "add":
+        tgt = files or target or "."
+        out, _ = _run(["add", "--", tgt], base)
+        return out or "已暂存"
+    if a == "commit":
+        if not (message or "").strip():
+            return "错误：commit 需要 message（提交说明）"
+        out, _ = _run(["commit", "-m", message.strip()], base)
+        return out or "已提交"
+    if a == "diff":
+        out, _ = _run(["diff"], base)
+        return out or "无未提交改动"
+    if a == "log":
+        out, _ = _run(["log", "--oneline", "-20"], base)
+        return out or "暂无提交"
+    if a == "checkout":
+        if not target:
+            return "错误：checkout 需要 target（文件路径或分支名）"
+        if os.path.isfile(os.path.join(base, target)):
+            out, _ = _run(["checkout", "--", target], base)
+        else:
+            out, _ = _run(["checkout", target], base)
+        return out or "已回滚/切换"
+    if a == "branch":
+        if target:
+            out, _ = _run(["branch", target], base)
+        else:
+            out, _ = _run(["branch"], base)
+        return out or "（无分支）"
+    return "错误：未知 action，可用 init/status/add/commit/diff/log/checkout/branch"
+
+
+def project_map(path=None, max_files=150):
+    """生成项目结构地图：文件树 + Python 符号表（函数/类+行号）+ import 依赖图。
+
+    让 AI 无需逐文件读全文即可掌握多文件项目的结构，避免跨文件漏改。
+    """
+    import ast
+
+    base = path or WORKING_DIR or permissions.WORKSPACE_DIR or os.getcwd()
+    ok, reason = permissions.check_filesystem(base, write=False)
+    if not ok:
+        return reason
+    base = permissions.resolve(base) or base
+    if not os.path.isdir(base):
+        return f"错误：目录不存在：{base}"
+
+    py_files = []
+    for root, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build")]
+        for fn in files:
+            if fn.endswith(".py"):
+                py_files.append(os.path.join(root, fn))
+        if len(py_files) >= max_files:
+            break
+    py_files = py_files[:max_files]
+
+    lines = [f"项目地图：{base}", f"Python 文件数：{len(py_files)}", "", "[文件树]"]
+    for p in py_files:
+        lines.append(f"  {os.path.relpath(p, base)}")
+
+    symbols = {}
+    imports = {}
+    for p in py_files:
+        rel = os.path.relpath(p, base)
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                tree = ast.parse(f.read())
+        except Exception:
+            continue
+        syms, deps = [], []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                syms.append(f"def {node.name} (L{node.lineno})")
+            elif isinstance(node, ast.ClassDef):
+                syms.append(f"class {node.name} (L{node.lineno})")
+            elif isinstance(node, ast.Import):
+                deps.extend(a.name for a in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                deps.append("." * node.level + (node.module or ""))
+        if syms:
+            symbols[rel] = syms
+        if deps:
+            imports[rel] = deps
+
+    if symbols:
+        lines += ["", "[符号表]"]
+        for rel, syms in symbols.items():
+            lines.append(f"  {rel}:")
+            for s in syms:
+                lines.append(f"    - {s}")
+    if imports:
+        lines += ["", "[依赖图]"]
+        for rel, deps in imports.items():
+            lines.append(f"  {rel} -> {', '.join(deps[:10])}")
+    if not symbols and not imports:
+        lines += ["", "（未发现 Python 符号或 import）"]
+    return "\n".join(lines)
+
+
+def find_symbol(name, path=None, max_files=150):
+    """定位符号（函数/类）的定义与引用位置（Python ast）。
+
+    返回「定义（文件:行号 def/class ...）」与「引用（文件:行号）」，供精确修改前定位。
+    """
+    import ast
+
+    name = (name or "").strip()
+    if not name:
+        return "错误：缺少符号名（函数/类名）"
+    base = path or WORKING_DIR or permissions.WORKSPACE_DIR or os.getcwd()
+    ok, reason = permissions.check_filesystem(base, write=False)
+    if not ok:
+        return reason
+    base = permissions.resolve(base) or base
+    if not os.path.isdir(base):
+        return f"错误：目录不存在：{base}"
+
+    py_files = []
+    for root, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build")]
+        for fn in files:
+            if fn.endswith(".py"):
+                py_files.append(os.path.join(root, fn))
+        if len(py_files) >= max_files:
+            break
+
+    defs, refs = [], []
+    for p in py_files[:max_files]:
+        rel = os.path.relpath(p, base)
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                tree = ast.parse(f.read())
+        except Exception:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                defs.append(f"{rel}:{node.lineno}  def {node.name}(...)")
+            elif isinstance(node, ast.ClassDef) and node.name == name:
+                defs.append(f"{rel}:{node.lineno}  class {node.name}")
+            elif isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Load):
+                refs.append(f"{rel}:{node.lineno}")
+            elif isinstance(node, ast.Attribute) and node.attr == name:
+                refs.append(f"{rel}:{node.lineno}")
+            elif isinstance(node, ast.ImportFrom):
+                for a in node.names:
+                    if a.name == name:
+                        refs.append(f"{rel}:{node.lineno}")
+
+    lines = [f"符号「{name}」定位结果：", f"  定义（{len(defs)}）："]
+    lines += [f"    - {d}" for d in defs[:20]] or ["    - （未找到定义）"]
+    lines.append(f"  引用（{len(refs)}）：")
+    lines += [f"    - {r}" for r in refs[:30]] or ["    - （未找到引用）"]
+    return "\n".join(lines)
 
 
 def list_dir(path):
@@ -10232,6 +10481,9 @@ TOOL_CALL_MAP = {
     "search_realtime": search_realtime,
     "call_api": call_api,
     "get_status": get_status,
+    "git": git_tool,
+    "project_map": project_map,
+    "find_symbol": find_symbol,
     "database_query": database_query,
     "tts_save": tts_save,
     "image_process": image_process,
@@ -10394,7 +10646,7 @@ _TOOL_INDEX_KEY = None
 # 能力地图分类（精确感知：类别 + 完整工具名 + 核心动作）。全部内置工具全覆盖。
 TOOL_GROUPS = [
     ("🌐 浏览器与网页", ["browser_navigate", "web_screenshot", "fetch_url", "fetch_url_smart", "net_diagnose", "fetch_blocked", "search_web", "search_realtime", "search_github", "webdav", "download_file", "rss_fetch"]),
-    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "get_status"]),
+    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "get_status", "git", "project_map", "find_symbol"]),
     ("📁 文件与目录", ["read_file", "write_file", "edit_file", "list_dir", "search_local", "delete_file", "archive_files", "extract_archive", "batch_rename", "clipboard_get", "clipboard_set"]),
     ("📊 数据与文档", ["read_csv", "write_csv", "read_excel", "write_excel", "chart_data", "database_query", "database_query_mysql", "database_query_postgres", "database_execute", "create_doc", "docx_read", "pptx_read", "pdf_extract", "pdf_create", "epub_read", "mobi_read", "doc_read", "archive_list", "secret_store", "kv_store"]),
     ("📧 邮件与消息", ["send_email", "read_email", "email_summary", "agent_mail", "msg_read", "im_send", "telegram_poll_updates", "send_webhook", "publish_draft", "run_wechat_writer", "daily_brief"]),
@@ -10436,6 +10688,8 @@ def _expand_activation(wanted, available_names, activated):
 # 预激活对应工具，让常见任务免点菜直接可用（仅提前加载定义，不改变权限）。
 _PREACTIVATE_HINTS = [
     (("全局", "概况", "整体情况", "运行情况", "什么情况", "进展", "状态", "工作台"), ["get_status"]),
+    (("git", "commit", "提交", "回滚", "版本控制", "版本管理", "仓库"), ["git"]),
+    (("依赖图", "符号表", "项目结构", "代码地图", "函数定义", "调用关系", "引用"), ["project_map", "find_symbol"]),
     (("搜索", "搜一下", "查一下", "新闻", "资讯", "最新"), ["search_web", "search_realtime", "fetch_url"]),
     (("天气", "气温", "台风", "预报"), ["get_weather"]),
     (("下载",), ["download_file", "fetch_url"]),
@@ -10502,6 +10756,9 @@ _TOOL_ACTION_PHRASES = {
     "list_processes": "查看后台进程列表",
     "environment_info": "环境/依赖信息",
     "get_status": "全局态势总览",
+    "git": "本地 Git 版本管理",
+    "project_map": "项目结构地图",
+    "find_symbol": "符号定位",
     "read_file": "读取文件内容",
     "write_file": "写入文件",
     "edit_file": "编辑文件（局部修改）",
