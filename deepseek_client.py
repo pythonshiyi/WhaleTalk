@@ -11986,7 +11986,26 @@ class DeepSeekClient:
             if content is None:
                 m["content"] = ""
             cleaned.append(m)
-        return cleaned
+        # pass 2：删除「悬空 tool」——tool 消息必须紧跟声明了对应 id 的 assistant(tool_calls)。
+        # 历史保存错位（压缩裁剪/异常中断/并行轮次丢失 assistant 层）会产生孤立 tool 消息，
+        # 不清理则 DeepSeek API 以 400 拒绝（tool must be a response to preceding tool_calls）。
+        pending = set()
+        final = []
+        for m in cleaned:
+            if not isinstance(m, dict) or m.get("role") == "assistant":
+                tcs = m.get("tool_calls") if isinstance(m, dict) else None
+                pending = {t.get("id") for t in tcs} if tcs else set()
+                final.append(m)
+            elif m.get("role") == "tool":
+                tid = m.get("tool_call_id")
+                if tid and tid in pending:
+                    pending.discard(tid)
+                    final.append(m)
+                else:
+                    continue  # 悬空 tool：丢弃，避免 400
+            else:
+                final.append(m)
+        return final
 
     def chat(
         self,

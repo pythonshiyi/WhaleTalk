@@ -5316,13 +5316,17 @@ class _Handler(BaseHTTPRequestHandler):
             # 后端自动落盘（架构兜底）：chat() 返回后 messages 已含本轮完整历史
             # （assistant 回复 + tool 结果，content 已还原纯文本）。前端正常时
             # onFinished 也会保存（双保险）；前端卸载/断连/刷新时本处兜底，
-            # 正在生成的会话结果不丢失。过滤 system（前端历史不含注入的 system 消息）。
+            # 正在生成的会话结果不丢失。过滤 system + 清洗悬空 tool（防止坏状态落盘）。
             if sid:
                 try:
+                    import deepseek_client as _dc
+                    clean = _dc.DeepSeekClient._sanitize_messages(
+                        [m for m in messages if m.get("role") != "system"]
+                    )
                     self._save_session({
                         "id": sid,
                         "name": str(body.get("session_name") or "")[:80],
-                        "messages": [m for m in messages if m.get("role") != "system"],
+                        "messages": clean,
                     })
                 except Exception:
                     logger.exception("后端自动落盘失败（不影响本次会话）")
