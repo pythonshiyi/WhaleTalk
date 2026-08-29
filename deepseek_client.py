@@ -944,7 +944,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "write_code_project",
-            "description": "创建多文件代码工程（批量写文件，自动建目录，需 write 权限，单次最多 50 个文件）",
+            "description": "创建多文件代码工程（批量写文件，自动建目录，需 write 权限；单文件 ≤50MB、单次 ≤50 文件，无需担心内容字符上限）",
             "parameters": {
                 "type": "object",
                 "properties": {
