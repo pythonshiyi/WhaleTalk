@@ -407,14 +407,19 @@ button {
 .slash-menu {
   position: absolute; bottom: 40px; left: 0;
   width: 300px;
+  max-height: 340px;
+  overflow-y: auto;
+  overflow-x: hidden;
   background: var(--bg-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-3);
-  overflow: hidden;
   z-index: 20;
   animation: slideIn .15s var(--ease);
 }
+.slash-menu::-webkit-scrollbar { width: 6px; }
+.slash-menu::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 3px; }
+.slash-menu::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
 .slash-item {
   display: flex; align-items: baseline; gap: 10px;
   padding: 9px 12px; cursor: pointer;
