@@ -345,4 +345,42 @@ export async function fimComplete(prompt, suffix = "") {
   return api("/v1/fim", { method: "POST", body: JSON.stringify({ prompt, suffix }) });
 }
 
+// ── 自主能力（进化/审批/行为/自我） ──
+export async function getEvolutions() {
+  return api("/v1/evolutions");
+}
+export async function applyEvolution(name) {
+  return api("/v1/evolutions/apply", { method: "POST", body: JSON.stringify({ name }) });
+}
+export async function ignoreEvolution(name) {
+  return api("/v1/evolutions/ignore", { method: "POST", body: JSON.stringify({ name }) });
+}
+export async function getApprovals() {
+  return api("/v1/approvals");
+}
+export async function getEvolveBranches() {
+  return api("/v1/evolve_branches");
+}
+export async function getEvolveBranchDetail(name) {
+  return api("/v1/evolve_branches/detail", { method: "POST", body: JSON.stringify({ name }) });
+}
+export async function mergeEvolveBranch(name) {
+  return api("/v1/evolve_branches/merge", { method: "POST", body: JSON.stringify({ name }) });
+}
+export async function deleteEvolveBranch(name) {
+  return api("/v1/evolve_branches/delete", { method: "POST", body: JSON.stringify({ name }) });
+}
+export async function getSelfProfile() {
+  return api("/v1/self_profile");
+}
+export async function getFailures() {
+  return api("/v1/failures");
+}
+export async function getTasklog() {
+  return api("/v1/tasklog");
+}
+export async function getAudit() {
+  return api("/v1/audit");
+}
+
 export { getToken, getBase, api };

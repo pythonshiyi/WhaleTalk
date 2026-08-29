@@ -103,6 +103,14 @@ def _make_approval_cb(send, stop_event):
                 break
         with _PENDING_LOCK:
             _PENDING.pop(rid, None)
+        _record_approval({
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "type": "approval",
+            "name": str(name or "")[:60],
+            "args": str(args or "")[:200],
+            "result": "允许" if box["allow"] else "拒绝",
+            "reason": str(box.get("reason") or "")[:200],
+        })
         return box["allow"], box.get("reason", "")
 
     def cb(name, args):
@@ -133,6 +141,13 @@ def _make_ask_cb(send, stop_event):
         deadline = time.monotonic() + ASK_TIMEOUT
         while not ev.wait(0.5):
             if stop_event and stop_event.is_set():
+                _record_approval({
+                    "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "type": "ask",
+                    "prompt": str(prompt)[:200],
+                    "result": "中断",
+                    "reason": "（用户停止了生成）",
+                })
                 return "（用户停止了生成）"
             if time.monotonic() >= deadline:
                 break
@@ -140,7 +155,21 @@ def _make_ask_cb(send, stop_event):
             _PENDING.pop(rid, None)
         answer = box.get("answer")
         if answer is None:
+            _record_approval({
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "type": "ask",
+                "prompt": str(prompt)[:200],
+                "result": "超时未回答",
+                "reason": "（用户未在限时内回答）",
+            })
             return "（用户未在限时内回答，请简化问题或改用其他方式）"
+        _record_approval({
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "type": "ask",
+            "prompt": str(prompt)[:200],
+            "result": "已回答",
+            "reason": str(answer)[:200],
+        })
         return str(answer)
 
     return cb
@@ -3015,6 +3044,144 @@ def _audit_get():
     return {"entries": lines}
 
 
+def _record_approval(entry):
+    """审批/询问历史落盘（append，上限 200 条，带锁防并发写）。"""
+    try:
+        with _CACHE_LOCK:
+            items = []
+            if os.path.exists(APPROVALS_PATH):
+                try:
+                    with open(APPROVALS_PATH, "r", encoding="utf-8") as f:
+                        items = json.load(f)
+                except Exception:
+                    items = []
+                if not isinstance(items, list):
+                    items = []
+            items.append(entry)
+            items = items[-200:]
+            with open(APPROVALS_PATH, "w", encoding="utf-8") as f:
+                json.dump(items, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _approvals_get():
+    """审批/询问历史（最近 200 条，倒序）。"""
+    items = []
+    if os.path.exists(APPROVALS_PATH):
+        try:
+            with open(APPROVALS_PATH, "r", encoding="utf-8") as f:
+                items = json.load(f)
+        except Exception:
+            items = []
+    if not isinstance(items, list):
+        items = []
+    return {"approvals": list(reversed(items[-200:]))}
+
+
+def _git_run(args, cwd):
+    """在项目目录跑 git（读操作用），返回 (out, code)。"""
+    import subprocess as _sp
+    try:
+        r = _sp.run(
+            ["git"] + args, cwd=cwd, capture_output=True, text=True,
+            timeout=30, creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+        )
+        return ((r.stdout or "") + (r.stderr or "")).strip(), r.returncode
+    except Exception as e:
+        return str(e), 1
+
+
+def _evolve_branches():
+    """self_evolve 提交的 evolve/ 分支列表（含与 main 的 diff 摘要）。"""
+    if not os.path.isdir(os.path.join(_ORIG_DIR, ".git")):
+        return {"branches": [], "error": "项目目录不是 git 仓库"}
+    out, code = _git_run(["branch", "--list", "evolve/*", "--format=%(refname:short)"], _ORIG_DIR)
+    if code != 0:
+        return {"branches": [], "error": out}
+    base_ref, _ = _git_run(["symbolic-ref", "--short", "HEAD"], _ORIG_DIR)
+    if not base_ref or base_ref == "HEAD":
+        base_ref = "main"
+    branches = []
+    for b in [x.strip() for x in out.splitlines() if x.strip()]:
+        dout, dcode = _git_run(["diff", "--stat", base_ref + "..." + b], _ORIG_DIR)
+        files_changed = 0
+        insertions = deletions = 0
+        if dcode == 0:
+            import re as _re
+            for line in dout.splitlines():
+                m = _re.search(r"(\d+) files? changed", line)
+                if m:
+                    files_changed = int(m.group(1))
+                m2 = _re.search(r"(\d+) insertions?", line)
+                if m2:
+                    insertions = int(m2.group(1))
+                m3 = _re.search(r"(\d+) deletions?", line)
+                if m3:
+                    deletions = int(m3.group(1))
+        # 分支最近提交时间与主题
+        last_subject, _ = _git_run(["log", "-1", "--format=%s", b], _ORIG_DIR)
+        last_date, _ = _git_run(["log", "-1", "--format=%ci", b], _ORIG_DIR)
+        branches.append({
+            "name": b,
+            "subject": last_subject[:120],
+            "date": (last_date or "")[:19].replace("T", " "),
+            "files_changed": files_changed,
+            "insertions": insertions,
+            "deletions": deletions,
+            "ahead": files_changed,
+        })
+    return {"branches": branches}
+
+
+def _evolve_branch_detail(name):
+    """单个 evolve 分支的详细 diff（与 main 比较）。"""
+    name = str(name or "").strip()
+    if not name.startswith("evolve/"):
+        return None, "仅允许查看 evolve/ 前缀分支"
+    if not os.path.isdir(os.path.join(_ORIG_DIR, ".git")):
+        return None, "项目目录不是 git 仓库"
+    base_ref, _ = _git_run(["symbolic-ref", "--short", "HEAD"], _ORIG_DIR)
+    if not base_ref or base_ref == "HEAD":
+        base_ref = "main"
+    out, code = _git_run(["diff", base_ref + "..." + name], _ORIG_DIR)
+    if code != 0:
+        return None, out
+    stat, _ = _git_run(["diff", "--stat", base_ref + "..." + name], _ORIG_DIR)
+    return {"stat": stat, "diff": out[:20000]}, None
+
+
+def _evolve_branch_merge(name):
+    """合入 evolve 分支到当前分支（先看 diff 后确认的写操作）。"""
+    name = str(name or "").strip()
+    if not name.startswith("evolve/"):
+        return None, "仅允许合入 evolve/ 前缀分支"
+    if not os.path.isdir(os.path.join(_ORIG_DIR, ".git")):
+        return None, "项目目录不是 git 仓库"
+    cur, code = _git_run(["rev-parse", "--abbrev-ref", "HEAD"], _ORIG_DIR)
+    if code != 0 or cur in ("HEAD", ""):
+        return None, "无法确定当前分支"
+    if cur not in ("main", "master"):
+        return None, f"当前在 {cur} 分支，请先切回 main/master 再合入"
+    out, mcode = _git_run(["merge", "--no-ff", "-m", f"merge self-evolve: {name}", name], _ORIG_DIR)
+    if mcode != 0:
+        return None, f"合并失败（可能有冲突）：\n{out}"
+    return {"ok": True, "merged": name, "output": out[:500]}, None
+
+
+def _evolve_branch_delete(name):
+    """删除 evolve 分支（仅删除已合入或用户确认放弃的分支）。"""
+    name = str(name or "").strip()
+    if not name.startswith("evolve/"):
+        return None, "仅允许删除 evolve/ 前缀分支"
+    if not os.path.isdir(os.path.join(_ORIG_DIR, ".git")):
+        return None, "项目目录不是 git 仓库"
+    out, code = _git_run(["branch", "-D", name], _ORIG_DIR)
+    if code != 0:
+        return None, f"删除失败：\n{out}"
+    return {"ok": True, "deleted": name}, None
+
+
 def _backup_list():
     """备份列表。"""
     import backup as backup_mod
@@ -3539,6 +3706,7 @@ WORKSPACE_DIR = os.path.join(DATA_DIR, "workspace")
 EVOLUTIONS_DIR = os.path.join(_ORIG_DIR, "evolutions")
 ARCHIVES_DIR = os.path.join(DATA_DIR, "archives")
 FAILURES_PATH = os.path.join(DATA_DIR, "failures.json")
+APPROVALS_PATH = os.path.join(DATA_DIR, "approvals.json")  # 审批/询问历史（上限 200 条）
 PATTERNS_PATH = os.path.join(DATA_DIR, "patterns.json")
 WORKFLOWS_PATH = os.path.join(DATA_DIR, "workflows.json")
 CHECKPOINT_PATH = os.path.join(DATA_DIR, "task_checkpoint.json")
@@ -4085,6 +4253,27 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(200, _profiles_get())
                 elif self.path == "/v1/audit":
                     self._json(200, _audit_get())
+                elif self.path == "/v1/approvals":
+                    self._json(200, _approvals_get())
+                elif self.path == "/v1/evolve_branches":
+                    self._json(200, _evolve_branches())
+                elif self.path == "/v1/self_profile":
+                    try:
+                        import deepseek_client as dc
+                        self._json(200, {"text": dc.self_profile("get")})
+                    except Exception as e:
+                        self._json(200, {"text": f"（自我状态读取失败：{e}）"})
+                elif self.path == "/v1/failures":
+                    items = []
+                    if os.path.exists(FAILURES_PATH):
+                        try:
+                            with open(FAILURES_PATH, "r", encoding="utf-8") as f:
+                                items = json.load(f)
+                        except Exception:
+                            items = []
+                    if not isinstance(items, list):
+                        items = []
+                    self._json(200, {"failures": items[-100:]})
                 elif self.path == "/v1/schedules":
                     self._json(200, _schedules_get())
                 elif self.path == "/v1/services":
@@ -4398,6 +4587,36 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(400, {"error": "invalid json or body too large"})
                     return
                 result, err = _evolution_ignore(body.get("name") or "")
+                if err:
+                    self._json(400, {"error": err})
+                else:
+                    self._json(200, result)
+            elif self.path == "/v1/evolve_branches/detail":
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                result, err = _evolve_branch_detail(body.get("name") or "")
+                if err:
+                    self._json(400, {"error": err})
+                else:
+                    self._json(200, result)
+            elif self.path == "/v1/evolve_branches/merge":
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                result, err = _evolve_branch_merge(body.get("name") or "")
+                if err:
+                    self._json(400, {"error": err})
+                else:
+                    self._json(200, result)
+            elif self.path == "/v1/evolve_branches/delete":
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                result, err = _evolve_branch_delete(body.get("name") or "")
                 if err:
                     self._json(400, {"error": err})
                 else:

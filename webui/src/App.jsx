@@ -2,6 +2,7 @@ import React from "react";
 import Sidebar from "./components/Sidebar.jsx";
 import ChatPage, { BackendBanner } from "./components/ChatPage.jsx";
 import { AbilitiesPage, PluginsPage, MemoryPage, SettingsPage, WorkbenchPage } from "./components/Pages.jsx";
+import AutonomyPage from "./components/AutonomyPage.jsx";
 import PromptsPage from "./components/PromptsPage.jsx";
 import { FlashProvider, ToastProvider } from "./components/FlashToast.jsx";
 import * as api from "./api.js";
@@ -160,6 +161,7 @@ export default function App() {
                       />
                     )}
                     {page === "memory" && <MemoryPage />}
+                    {page === "autonomy" && <AutonomyPage />}
                     {page === "settings" && <SettingsPage onGoPrompts={() => setPage("prompts")} />}
                   </ErrorBoundary>
                 </main>
