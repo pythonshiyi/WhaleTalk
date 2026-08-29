@@ -56,18 +56,22 @@ export default function ContextPanel({ data, onClose }) {
             <button className="ctx-action">检索记忆库</button>
           </>
         )}
-        {tab === "用量" && (
-          <div className="usage">
-            <div className="usage-row"><span>输入 tokens</span><b>{data.usage.prompt.toLocaleString()}</b></div>
-            <div className="usage-row"><span>输出 tokens</span><b>{data.usage.completion.toLocaleString()}</b></div>
-            <div className="usage-row"><span>前缀缓存命中</span><b className="usage-ok">{data.usage.cached}</b></div>
-            <div className="usage-row"><span>本会话成本</span><b>{data.usage.cost}</b></div>
-            <div className="usage-bar">
-              <div className="usage-bar-fill" style={{ width: "62%" }} />
+        {tab === "用量" && (() => {
+          const usage = (data || {}).usage || {};
+          const hitRate = Math.min(100, Math.max(0, parseFloat(String(usage.cached || "").replace("%", "")) || 0));
+          return (
+            <div className="usage">
+              <div className="usage-row"><span>本月输入 tokens</span><b>{(usage.prompt || 0).toLocaleString()}</b></div>
+              <div className="usage-row"><span>本月输出 tokens</span><b>{(usage.completion || 0).toLocaleString()}</b></div>
+              <div className="usage-row"><span>前缀缓存命中率</span><b className="usage-ok">{usage.cached || "—"}</b></div>
+              <div className="usage-row"><span>本月成本</span><b>¥{Number(usage.cost || 0).toFixed(2)}</b></div>
+              <div className="usage-bar">
+                <div className="usage-bar-fill" style={{ width: `${hitRate}%` }} />
+              </div>
+              <div className="usage-bar-label">前缀缓存命中率 {Math.round(hitRate)}%</div>
             </div>
-            <div className="usage-bar-label">上下文使用 62% · 31.2k / 50k tokens</div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </aside>
   );

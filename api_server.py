@@ -405,6 +405,26 @@ def _monthly_cost():
         return 0.0
 
 
+def _usage_month_summary():
+    """本月真实 token 累计（stats.json 按天累计）：返回 (输入, 输出, 缓存命中率字符串)。"""
+    import stats as stats_mod
+    from datetime import date
+    acc = {"prompt": 0, "completion": 0, "cache_hit": 0}
+    try:
+        data = stats_mod.load_stats(STATS_PATH)
+        month_key = date.today().strftime("%Y-%m")
+        for day, models in data.items():
+            if day.startswith(month_key):
+                for u in models.values():
+                    acc["prompt"] += int(u.get("prompt", 0) or 0)
+                    acc["completion"] += int(u.get("completion", 0) or 0)
+                    acc["cache_hit"] += int(u.get("cache_hit", 0) or 0)
+    except Exception:
+        pass
+    cached = f"{acc['cache_hit'] / acc['prompt'] * 100:.1f}%" if acc["prompt"] else "—"
+    return acc["prompt"], acc["completion"], cached
+
+
 _CACHE = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_TTL = {
@@ -443,15 +463,18 @@ def _status():
     active_dir = str(cfg.get("active_dir") or "").strip()
     if not active_dir or not os.path.isdir(active_dir):
         active_dir = os.path.join(DATA_DIR, "workspace")
+    # 累计 token：从 stats.json 读真实累计（v3.0 重构后 session_latest.json 已无写入方，弃用）
     usage_total = {"prompt": 0, "completion": 0, "cache_hit": 0}
-    latest = os.path.join(HISTORY_DIR, "session_latest.json")
-    if os.path.exists(latest):
-        try:
-            with open(latest, "r", encoding="utf-8") as f:
-                latest_data = json.load(f)
-            usage_total.update(latest_data.get("usage_total") or {})
-        except Exception:
-            pass
+    try:
+        import stats as stats_mod
+        total = stats_mod.all_total(stats_mod.load_stats(STATS_PATH))
+        usage_total = {
+            "prompt": total["prompt"],
+            "completion": total["completion"],
+            "cache_hit": total["cache_hit"],
+        }
+    except Exception:
+        pass
     return {
         "mode": mode,
         "full_auto": full_auto,
@@ -4135,11 +4158,13 @@ class _Handler(BaseHTTPRequestHandler):
                         costv = _status()["monthly_cost"]
                     except Exception:
                         costv = None
+                    prompt_n, completion_n, cached = _usage_month_summary()
                     self._json(200, {
                         "tools": tools,
                         "memory": self._memory_summary(),
-                        # 上下文占用/累计 token 无实时来源时如实置 null，前端显示为“—”（不编造 0）
-                        "usage": {"prompt": None, "completion": None, "cached": None, "cost": costv},
+                        # 本月真实累计 token（stats.json）+ 缓存命中率 + 本月成本
+                        "usage": {"prompt": prompt_n, "completion": completion_n,
+                                  "cached": cached, "cost": costv},
                     })
                 elif self.path == "/v1/config":
                     import config_utils

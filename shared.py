@@ -10,15 +10,22 @@ import re
 from datetime import datetime, timedelta
 
 # ============================ 峰谷定价 ============================
-# DeepSeek 峰谷定价：高峰时段（北京时间 9:00-12:00 / 14:00-18:00），
-# 空闲时段价格为高峰时段价格的一半（2026-08-17 起生效）
+# DeepSeek 峰谷定价：工作日高峰时段（北京时间 9:00-12:00 / 14:00-18:00），
+# 其余为低谷；周六、周日全天统一按低谷计费（2026-08-23 起生效的规则）
 PEAK_HOURS = ((9, 12), (14, 18))
 
 
 def is_peak_hour(now=None):
-    """判断当前是否为 DeepSeek 高峰计费时段。"""
+    """判断当前是否为 DeepSeek 高峰计费时段。
+
+    规则（2026-08-23 起）：工作日高峰 9:00-12:00、14:00-18:00；
+    周六、周日全天低谷（不区分峰谷）。
+    """
     try:
-        h = (now or datetime.now()).hour
+        now = now or datetime.now()
+        if now.weekday() >= 5:  # 周六(5)/周日(6) 全天低谷
+            return False
+        h = now.hour
         return any(a <= h < b for a, b in PEAK_HOURS)
     except Exception:
         return False
