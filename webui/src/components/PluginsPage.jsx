@@ -205,7 +205,7 @@ function DetailOverlay({ name, onClose }) {
   );
 }
 
-export default function PluginsPage() {
+export default function PluginsPage({ onApply }) {
   const [tab, setTab] = React.useState("gallery");
   const [installed, setInstalled] = React.useState([]);
   const [gallery, setGallery] = React.useState([]);
@@ -278,6 +278,17 @@ export default function PluginsPage() {
         {p.trigger ? <span className="plugin-trigger">{p.trigger}</span> : <span />}
         <div style={{ display: "flex", gap: 6 }}>
           <button className="msg-op" onClick={() => setDetail(p.name)}>🔍 详情</button>
+          {isInstalled(p.name) && (
+            <button
+              className="msg-op plugin-use"
+              onClick={() => {
+                const text = p.trigger ? `${p.trigger} ` : `用「${p.name}」插件：`;
+                onApply && onApply(text);
+              }}
+            >
+              🚀 使用
+            </button>
+          )}
           <button
             className={`install-btn ${isInstalled(p.name) ? "install-on" : ""}`}
             disabled={busy === p.name}

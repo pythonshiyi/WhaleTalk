@@ -151,7 +151,14 @@ export default function App() {
                       />
                     )}
                     {page === "abilities" && <AbilitiesPage />}
-                    {page === "plugins" && <PluginsPage />}
+                    {page === "plugins" && (
+                      <PluginsPage
+                        onApply={(text) => {
+                          setApplyPrompt(text);
+                          setPage("chat");
+                        }}
+                      />
+                    )}
                     {page === "prompts" && (
                       <PromptsPage
                         onApply={(text) => {

@@ -2094,3 +2094,7 @@ button {
   padding: 1px 7px;
 }
 .plugin-perm-warn { color: var(--warn); border-color: var(--warn); }
+
+/* 插件「使用」按钮 */
+.plugin-use { color: var(--brand-strong); border-color: var(--brand); }
+.plugin-use:hover { background: var(--brand-soft); }
