@@ -5,6 +5,7 @@ import threading
 from datetime import date
 
 from shared import is_peak_hour
+import persistence
 
 # 元 / 百万 tokens（2026-08-17 起生效的 V4 正式版峰谷定价——此处为高峰时段价格，
 # 空闲时段价格为高峰的一半，estimate_cost 按当前时段自动打折）
@@ -65,12 +66,9 @@ def load_stats(path):
 
 
 def save_stats(path, data):
+    """保存用量统计（委托 persistence.atomic_json_write：唯一临时文件防并发写截断 + 失败自动清理）。"""
     try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, path)  # 原子替换：读者永远看到完整文件（旧版或新版）
+        persistence.atomic_json_write(path, data, indent=1)
     except Exception:
         logging.exception("保存用量统计失败")
 

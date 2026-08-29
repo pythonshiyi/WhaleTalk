@@ -1619,6 +1619,8 @@ def _init_dc_paths():
     profiles_mod.DEFAULT_PROFILES_PATH = os.path.join(DATA_DIR, "profiles.json")
     dc.MEMORY_FILE = MEMORY_PATH
     dc.SELF_PROFILE_FILE = os.path.join(DATA_DIR, "self_profile.json")
+    dc.SESSIONS_DIR = SESSIONS_DIR
+    dc.WATCH_STATE_PATH = os.path.join(DATA_DIR, "watch_state.json")
     dc.WEBHOOK_CONFIG_FILE = os.path.join(DATA_DIR, "webhooks.json")
     dc.IM_CONFIG_FILE = os.path.join(DATA_DIR, "im_config.json")
     dc.DB_CONFIG_FILE = os.path.join(DATA_DIR, "db_config.json")

@@ -915,6 +915,50 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "watch_files",
+            "description": "持续感知：监听目录文件变化（新增/修改/删除），首次建立基线、之后返回与上次的差异；适合定期查看产出目录/项目目录有没有新东西",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "要监听的目录绝对路径"},
+                    "pattern": {"type": "string", "description": "可选：文件通配符过滤，如 *.md"},
+                    "max_items": {"type": "integer", "description": "可选：每类变化最多列出条数（默认 50）"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "track_web",
+            "description": "持续感知：追踪网页内容变化（抓取页面计算指纹对比上次）；首次建立基线、之后返回无变化或已更新；适合追踪公告/文档/价格页",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "要追踪的 http(s) 网页 URL"}},
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_session",
+            "description": "情景记忆：回顾历史会话时间线（按日期或关键词过滤），返回名称/时间/消息数/首问/末答；跨会话延续上下文",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "可选：关键词（匹配会话名或开头内容）"},
+                    "date": {"type": "string", "description": "可选：日期 YYYY-MM-DD 过滤"},
+                    "limit": {"type": "integer", "description": "可选：最多返回几个会话（默认 5，最多 20）"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_command",
             "description": "执行白名单命令（python/pip/pytest/git 等，禁止 shell 拼接），需开启 shell 权限并可能需确认",
             "parameters": {
@@ -4495,6 +4539,8 @@ def chart_data(data, path, kind="line", title="", x_label="", y_label=""):
 MEMORY_FILE = None  # 由 main 初始化时注入（DATA_DIR/memory.json）
 MEMORY_ENABLED = True  # 长期记忆总开关（api_server 启动时按 config.memory_enabled 注入；False 时停止写入）
 BUILD_SITUATION = None  # 由 api_server 注入的态势快照函数（get_status 工具调用，人+AI 同源）
+SESSIONS_DIR = None  # 由 api_server 注入（会话库目录，recall_session 回溯历史用）
+WATCH_STATE_PATH = None  # 由 api_server 注入（watch_files/track_web 状态持久化）
 MEMORY_MAX_ITEMS = 2000  # v2.16.2 起扩容：伙伴需要记住的更多
 MEMORY_MAX_TEXT = 2000
 _MEMORY_LOCK = threading.Lock()  # 并行 write_memory 读-改-写串行化，防丢失更新
@@ -5921,6 +5967,162 @@ def find_symbol(name, path=None, max_files=150):
     lines += [f"    - {d}" for d in defs[:20]] or ["    - （未找到定义）"]
     lines.append(f"  引用（{len(refs)}）：")
     lines += [f"    - {r}" for r in refs[:30]] or ["    - （未找到引用）"]
+    return "\n".join(lines)
+
+
+def _load_watch_state():
+    """读取 watch_files/track_web 的持久化状态。"""
+    if not WATCH_STATE_PATH or not os.path.exists(WATCH_STATE_PATH):
+        return {}
+    try:
+        return json.load(open(WATCH_STATE_PATH, encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_watch_state(state):
+    """写 watch 状态（原子写）。"""
+    if not WATCH_STATE_PATH:
+        return
+    try:
+        os.makedirs(os.path.dirname(WATCH_STATE_PATH) or ".", exist_ok=True)
+        tmp = WATCH_STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+        os.replace(tmp, WATCH_STATE_PATH)
+    except Exception:
+        pass
+
+
+def watch_files(path, pattern="", max_items=50):
+    """持续感知：监听目录文件变化（新增/修改/删除），跨调用对比状态。
+    首次调用建立基线快照；之后返回与上次的差异。适合定期查看产出目录有没有新东西。"""
+    ok, reason = permissions.check_filesystem(path, write=False)
+    if not ok:
+        return reason
+    p = permissions.resolve(path)
+    if not os.path.isdir(p):
+        return f"错误：目录不存在：{p}"
+    import fnmatch
+    snap = {}
+    for root, dirs, files in os.walk(p):
+        dirs[:] = [d for d in dirs if d not in _SEARCH_SKIP_DIRS]
+        for fn in files:
+            if pattern and not fnmatch.fnmatch(fn, pattern):
+                continue
+            full = os.path.join(root, fn)
+            rel = os.path.relpath(full, p)
+            try:
+                st = os.stat(full)
+                snap[rel] = [int(st.st_mtime), st.st_size]  # list：与 JSON 读回类型一致（tuple 会永远 !=）
+            except OSError:
+                continue
+    state = _load_watch_state()
+    prev = (state.get("files") or {}).get(p, {})
+    if not prev:
+        state.setdefault("files", {})[p] = snap
+        _save_watch_state(state)
+        return f"已建立监听基线：{p}（{len(snap)} 个文件）"
+    added = sorted(k for k in snap if k not in prev)
+    removed = sorted(k for k in prev if k not in snap)
+    modified = sorted(k for k in snap if k in prev and snap[k] != prev[k])
+    if pattern:  # pattern 统一作用于三类变化（含删除，否则删除列表泄漏范围外文件）
+        added = [k for k in added if fnmatch.fnmatch(k, pattern)]
+        removed = [k for k in removed if fnmatch.fnmatch(k, pattern)]
+        modified = [k for k in modified if fnmatch.fnmatch(k, pattern)]
+    state.setdefault("files", {})[p] = snap
+    _save_watch_state(state)
+    if not (added or removed or modified):
+        return f"无变化（{len(snap)} 个文件，自上次检查后无新增/修改/删除）"
+    try:
+        limit = max(1, min(100, int(max_items or 50)))
+    except (TypeError, ValueError):
+        limit = 50
+    lines = [f"文件变化（{p}）："]
+    if added:
+        lines.append(f"  + 新增 {len(added)} 个")
+        lines += [f"    {k}" for k in added[:limit]]
+    if modified:
+        lines.append(f"  ~ 修改 {len(modified)} 个")
+        lines += [f"    {k}" for k in modified[:limit]]
+    if removed:
+        lines.append(f"  - 删除 {len(removed)} 个")
+        lines += [f"    {k}" for k in removed[:limit]]
+    return "\n".join(lines)
+
+
+def track_web(url):
+    """持续感知：追踪网页内容变化。抓取页面内容并计算指纹，与上次对比。
+    首次建立基线；之后返回「无变化」或「已更新」。适合追踪公告/文档/价格页。"""
+    err = _safe_url(url)
+    if err:
+        return f"错误：{err}"
+    try:
+        text = fetch_url(url)
+        if text.startswith("错误"):
+            return text
+        import hashlib
+        digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
+        title = text[:80].replace("\n", " ")
+    except Exception as e:
+        return f"错误：{e}"
+    state = _load_watch_state()
+    webs = state.setdefault("web", {})
+    prev = webs.get(url)
+    if prev is None:
+        webs[url] = {"hash": digest, "title": title}
+        _save_watch_state(state)
+        return f"已建立网页基线：{url}\n内容摘要：{title}…"
+    if prev.get("hash") == digest:
+        return f"无变化：{url}\n内容与上次一致（摘要：{title}…）"
+    webs[url] = {"hash": digest, "title": title}
+    _save_watch_state(state)
+    return f"🔔 网页已更新：{url}\n旧摘要：{str(prev.get('title', ''))[:60]}…\n新摘要：{title}…"
+
+
+def recall_session(query="", date="", limit=5):
+    """情景记忆：回顾历史会话时间线。按日期（YYYY-MM-DD）或关键词过滤，
+    返回最近会话的名称/时间/消息数/首问/末答，延续跨会话上下文。"""
+    if not SESSIONS_DIR or not os.path.isdir(SESSIONS_DIR):
+        return "（会话库不可用，无法回顾）"
+    import glob as _glob
+    try:
+        limit = max(1, min(20, int(limit or 5)))
+    except (TypeError, ValueError):
+        limit = 5
+    q = str(query or "").strip().lower()
+    dt = str(date or "").strip()
+    items = []
+    for fn in _glob.glob(os.path.join(SESSIONS_DIR, "*.json")):
+        if fn.endswith(".bak"):
+            continue
+        try:
+            d = json.load(open(fn, encoding="utf-8"))
+            msgs = d.get("messages") or []
+            name = str(d.get("name") or "未命名会话")
+            saved = str(d.get("saved_at") or "")
+            if dt and not saved.startswith(dt):
+                continue
+            if q:
+                hay = (name + " " + " ".join(str(m.get("content", ""))[:80] for m in msgs[:3])).lower()
+                if q not in hay:
+                    continue
+            first_user = next((str(m.get("content", ""))[:60] for m in msgs if m.get("role") == "user"), "")
+            last_asm = next((str(m.get("content", ""))[:60] for m in reversed(msgs) if m.get("role") == "assistant"), "")
+            items.append({"name": name, "saved": saved, "msgs": len(msgs), "first": first_user, "last": last_asm})
+        except Exception:
+            continue
+    items.sort(key=lambda x: x["saved"] or "", reverse=True)
+    items = items[:limit]
+    if not items:
+        return f"未找到相关会话（日期={dt or '任意'}，关键词={q or '任意'}）"
+    lines = [f"历史会话时间线（{len(items)} 个）："]
+    for it in items:
+        lines.append(f"· {it['saved'][:16]} {it['name']}（{it['msgs']} 条）")
+        if it["first"]:
+            lines.append(f"    首问：{it['first']}")
+        if it["last"]:
+            lines.append(f"    末答：{it['last']}")
     return "\n".join(lines)
 
 
@@ -11333,6 +11535,9 @@ TOOL_CALL_MAP = {
     "write_file": write_file,
     "edit_file": edit_file,
     "list_dir": list_dir,
+    "watch_files": watch_files,
+    "track_web": track_web,
+    "recall_session": recall_session,
     "run_command": run_command,
     "search_local": search_local,
     "create_doc": create_doc,
@@ -11478,7 +11683,7 @@ TOOL_GROUPS = [
     ("📦 应用与环境", ["app_manage"]),
     ("⏰ 定时与任务", ["schedule_task", "list_schedules", "cancel_schedule", "task_checkpoint_save", "task_checkpoint_load", "run_workflow"]),
     ("🧠 记忆与知识", ["write_memory", "read_memory", "delete_memory", "update_memory", "query_memory_graph", "self_profile", "knowledge_index", "knowledge_search"]),
-    ("🔧 系统与基础", ["get_date", "get_weather", "ask_user", "request_permission", "call_api", "project_info", "read_project_file", "create_evolution", "self_evolve", "verify_files", "usage_report", "create_plugin"]),
+    ("🔧 系统与基础", ["get_date", "get_weather", "ask_user", "request_permission", "call_api", "project_info", "read_project_file", "create_evolution", "self_evolve", "verify_files", "usage_report", "create_plugin", "watch_files", "track_web", "recall_session"]),
 ]
 
 # 组名 -> 成员工具名（activate_tools 支持按组激活：传组名一次激活整组）。
@@ -11511,6 +11716,9 @@ def _expand_activation(wanted, available_names, activated):
 # 预激活对应工具，让常见任务免点菜直接可用（仅提前加载定义，不改变权限）。
 _PREACTIVATE_HINTS = [
     (("全局", "概况", "整体情况", "运行情况", "什么情况", "进展", "状态", "工作台"), ["get_status"]),
+    (("文件变化", "监听", "有没有新文件", "新东西", "持续感知", "看看变化"), ["watch_files"]),
+    (("网页更新", "追踪网页", "页面变化", "监控网址", "网页变化"), ["track_web"]),
+    (("之前聊过", "上次说", "回顾会话", "历史会话", "前几天", "之前的对话", "记得我们"), ["recall_session"]),
     (("git", "commit", "提交", "回滚", "版本控制", "版本管理", "仓库"), ["git"]),
     (("依赖图", "符号表", "项目结构", "代码地图", "函数定义", "调用关系", "引用"), ["project_map", "find_symbol"]),
     (("lint", "静态检查", "语法检查", "代码规范", "ruff"), ["run_lint"]),
@@ -11596,6 +11804,9 @@ _TOOL_ACTION_PHRASES = {
     "write_file": "写入文件",
     "edit_file": "编辑文件（局部修改）",
     "list_dir": "列出目录",
+    "watch_files": "文件变化监听",
+    "track_web": "网页更新追踪",
+    "recall_session": "历史会话回顾",
     "search_local": "在允许目录内全文检索文件",
     "delete_file": "删除文件/目录",
     "archive_files": "打包压缩",
