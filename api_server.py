@@ -470,6 +470,188 @@ def _status():
     }
 
 
+def _full_health(active_dir):
+    """完整健康探测：CPU/内存/磁盘/网络（实时，略慢；仅 section=health/full 触发）。"""
+    out = {}
+    try:
+        import psutil
+        out["cpu_percent"] = round(psutil.cpu_percent(interval=0.5))
+        mem = psutil.virtual_memory()
+        out["mem_used_gb"] = round(mem.used / 1024 ** 3, 1)
+        out["mem_total_gb"] = round(mem.total / 1024 ** 3, 1)
+        out["mem_percent"] = round(mem.percent)
+    except Exception:
+        out["cpu_percent"] = None
+    try:
+        import shutil
+        base = active_dir if (active_dir and os.path.isdir(active_dir)) else os.getcwd()
+        du = shutil.disk_usage(base)
+        out["disk_free_gb"] = round(du.free / 1024 ** 3, 1)
+        out["disk_total_gb"] = round(du.total / 1024 ** 3, 1)
+    except Exception:
+        pass
+    net = {}
+    import socket
+    for host in ("api.deepseek.com", "api.github.com"):
+        try:
+            s = socket.create_connection((host, 443), timeout=1.0)
+            s.close()
+            net[host] = True
+        except Exception:
+            net[host] = False
+    out["network"] = net
+    return out
+
+
+def build_situation(section=None):
+    """全局态势快照 —— 人（前端工作台）与 AI（get_status 工具）共用的单一事实源。
+
+    一次聚合系统/用量/运行中/健康/待办/项目（含 git），保证「人看到的」与「AI 查到的」永远同源。
+
+    section:
+      None         核心摘要层（默认，轻量，无实时网络/CPU 探测）—— AI 调一次即掌握全局
+      "recent"     最近会话 + 最近产物
+      "processes"  后台进程详情
+      "schedules"  定时任务详情
+      "checkpoint" 任务检查点详情
+      "health"     完整健康（含 CPU/内存/网络实时探测）
+      "full"       摘要 + 全部详情（前端工作台一次取全）
+    """
+    import deepseek_client as dc
+
+    st = _status()
+    u = st.get("usage_total") or {}
+
+    # ── 项目/工作内容：active_dir + git 状态（非 git 目录静默降级）──
+    active_dir = str(st.get("active_dir") or "")
+    git_branch = git_dirty = git_last_commit = None
+    git_changes = 0
+    if active_dir and os.path.isdir(active_dir):
+        try:
+            import subprocess
+
+            def _git(args):
+                return subprocess.run(
+                    ["git", "-C", active_dir] + args,
+                    capture_output=True, text=True, timeout=3,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+
+            rb = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+            if rb.returncode == 0 and rb.stdout.strip():
+                git_branch = rb.stdout.strip()
+            stp = _git(["status", "--porcelain"])
+            if stp.returncode == 0:
+                git_changes = len([l for l in stp.stdout.splitlines() if l.strip()])
+                git_dirty = git_changes > 0
+            lg = _git(["log", "-1", "--pretty=%h %s"])
+            if lg.returncode == 0 and lg.stdout.strip():
+                git_last_commit = lg.stdout.strip()[:80]
+        except Exception:
+            pass
+
+    # ── 运行中 ──
+    procs = (_processes() or {}).get("processes") or {}
+    running_procs = [p for p in procs.values() if isinstance(p, dict) and not p.get("exited")]
+    scheds = (_schedules_get() or {}).get("schedules") or []
+    enabled_scheds = [s for s in scheds if s.get("enabled")]
+    cp = _checkpoint_get() or {}
+    has_cp = bool(cp.get("name") or cp.get("status") or cp.get("pending") or cp.get("notes"))
+
+    # ── 健康（即时项，无实时探测）──
+    deps = (_deps() or {}).get("deps") or []
+    missing_deps = [d for d in deps if not d.get("ok")]
+    backups = (_backup_list() or {}).get("backups") or []
+    disk_free_gb = None
+    try:
+        import shutil
+        du = shutil.disk_usage(active_dir if (active_dir and os.path.isdir(active_dir)) else os.getcwd())
+        disk_free_gb = round(du.free / 1024 ** 3, 1)
+    except Exception:
+        pass
+
+    core = {
+        "system": {
+            "mode": st.get("mode"),
+            "full_auto": st.get("full_auto"),
+            "pure_chat": st.get("pure_chat"),
+            "privacy": st.get("privacy"),
+            "model": st.get("model"),
+            "role": st.get("role"),
+            "scenario": st.get("scenario"),
+            "thinking": st.get("thinking"),
+        },
+        "usage": {
+            "month_cost": st.get("monthly_cost"),
+            "month_budget": st.get("monthly_budget"),
+            "prompt_tokens": u.get("prompt", 0),
+            "completion_tokens": u.get("completion", 0),
+            "cache_hit": u.get("cache_hit", 0),
+            "peak_hour": st.get("peak_hour"),
+        },
+        "running": {
+            "process_count": len(running_procs),
+            "process_total": len(procs),
+            "schedule_count": len(enabled_scheds),
+            "next_schedule": (enabled_scheds[0].get("next_run") if enabled_scheds else None),
+            "has_checkpoint": has_cp,
+        },
+        "health": {
+            "deps_missing": len(missing_deps),
+            "deps_total": len(deps),
+            "missing_deps": [d.get("name") for d in missing_deps][:10],
+            "last_backup": (backups[0].get("mtime") if backups else None),
+            "disk_free_gb": disk_free_gb,
+        },
+        "todo": {
+            "checkpoint_name": cp.get("name"),
+            "checkpoint_pending": (len(cp.get("pending") or []) if isinstance(cp.get("pending"), list) else 0),
+        },
+        "project": {
+            "active_dir": active_dir,
+            "git_branch": git_branch,
+            "git_dirty": git_dirty,
+            "git_changes": git_changes,
+            "git_last_commit": git_last_commit,
+        },
+    }
+
+    if not section:
+        return core
+
+    out = dict(core)
+
+    if section in ("recent", "full"):
+        _ensure_session_index()
+        metas = [v[2] for v in _SESSIONS_INDEX.values() if isinstance(v, list) and len(v) == 3]
+        metas.sort(key=lambda s: s.get("saved_at") or "", reverse=True)
+        files = _files()
+        out["recent"] = {
+            "sessions": [{
+                "id": m.get("id"),
+                "name": m.get("name"),
+                "msg_count": m.get("msg_count"),
+                "saved_at": m.get("saved_at"),
+            } for m in metas[:8]],
+            "files": (files.get("recent") or [])[-8:],
+            "active_dir": files.get("active_dir"),
+        }
+
+    if section in ("processes", "full"):
+        out["processes"] = procs
+
+    if section in ("schedules", "full"):
+        out["schedules"] = scheds
+
+    if section in ("checkpoint", "full"):
+        out["checkpoint"] = cp
+
+    if section in ("health", "full"):
+        out["health"] = _full_health(active_dir)
+
+    return out
+
+
 def _files():
     """文件与产物：最近产物 + 工作区顶层条目。"""
     import stores
@@ -1401,6 +1583,7 @@ def _init_dc_paths():
     dc.KV_CACHE_DIR = os.path.join(DATA_DIR, "kv_cache")
     dc.WEBDAV_CONFIG_FILE = os.path.join(DATA_DIR, "webdav_config.json")
     dc.PLUGIN_PATHS = _plugin_paths()
+    dc.BUILD_SITUATION = build_situation  # 态势快照单一事实源（get_status 工具与前端 /v1/situation 共用）
     os.environ.setdefault("WHALETALK_DATA_DIR", DATA_DIR)  # 应用型插件数据目录（flybot.db 等）
     try:
         cfg = config_utils.load_config()
@@ -3927,6 +4110,8 @@ class _Handler(BaseHTTPRequestHandler):
                         self._json(200, detail)
                 elif self.path == "/v1/status":
                     self._json(200, _status())
+                elif self.path == "/v1/situation":
+                    self._json(200, build_situation("full"))
                 elif self.path == "/v1/mode":
                     self._json(200, {"mode": _status()["mode"]})
                 elif self.path == "/v1/abilities":

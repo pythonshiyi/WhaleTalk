@@ -752,20 +752,30 @@ export function WorkbenchPage({ onApply, onPickSession }) {
   const [templates, setTemplates] = React.useState({});
   const [updatedAt, setUpdatedAt] = React.useState("");
 
-  // 全量刷新：一次并行拉取全部数据，30s 轮询
+  // 全量刷新：态势走 /v1/situation 单一事实源（人+AI 同源），快捷行动资产单独拉，30s 轮询
   const refresh = React.useCallback(async () => {
     const g = (p) => apiGet(p).catch(() => null);
-    const [s, sess, f, pr, cp, d, bk, pm, tk] = await Promise.all([
-      g("/v1/status"), g("/v1/sessions"), g("/v1/files"), g("/v1/processes"),
-      g("/v1/checkpoint"), g("/v1/deps"), g("/v1/backup"), g("/v1/prompts"), g("/v1/tasks"),
+    const [sit, pm, tk] = await Promise.all([
+      g("/v1/situation"), g("/v1/prompts"), g("/v1/tasks"),
     ]);
-    if (s) setStatus(s);
-    if (sess && sess.sessions) setSessions(sess.sessions.slice(0, 6));
-    if (f) setFiles(f);
-    if (pr && pr.processes) setProcs(pr.processes);
-    if (cp && (cp.name || cp.status || cp.pending || cp.notes)) setCheckpoint(cp);
-    if (d && d.deps) setDeps(d.deps);
-    if (bk && bk.backups) setBackups(bk.backups);
+    if (sit) {
+      setStatus({
+        monthly_cost: (sit.usage && sit.usage.month_cost) || 0,
+        usage_total: {
+          cache_hit: (sit.usage && sit.usage.cache_hit) || 0,
+          prompt: (sit.usage && sit.usage.prompt_tokens) || 0,
+          completion: (sit.usage && sit.usage.completion_tokens) || 0,
+        },
+        mode: (sit.system && sit.system.mode) || "dialog",
+        model: (sit.system && sit.system.model) || "",
+      });
+      setSessions(((sit.recent && sit.recent.sessions) || []).slice(0, 6));
+      setFiles({ recent: (sit.recent && sit.recent.files) || [] });
+      setProcs(sit.processes || {});
+      setCheckpoint(sit.checkpoint && (sit.checkpoint.name || sit.checkpoint.status || sit.checkpoint.pending || sit.checkpoint.notes) ? sit.checkpoint : null);
+      setDeps(((sit.health && sit.health.missing_deps) || []).map((n) => ({ name: n, ok: false })));
+      setBackups(sit.health && sit.health.last_backup ? [{ mtime: sit.health.last_backup }] : []);
+    }
     if (pm && pm.prompts) setPrompts(pm.prompts);
     if (tk && tk.templates) setTemplates(tk.templates);
     setUpdatedAt(new Date().toTimeString().slice(0, 5));

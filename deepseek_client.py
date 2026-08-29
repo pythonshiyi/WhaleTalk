@@ -683,9 +683,15 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "system_status",
-            "description": "系统资源自检：CPU 使用率、内存占用、工作区磁盘剩余、网络连通性（api.github.com/bing/api.deepseek.com）。适合任务前环境体检、排查网络/资源问题",
-            "parameters": {"type": "object", "properties": {}, "required": []},
+            "name": "get_status",
+            "description": "全局态势总览：一次掌握系统、用量、运行任务、健康、待办、当前项目。默认返回核心摘要；需细节用 section 钻取（recent/processes/checkpoint 等）。涉全局/进度/状态/多任务时优先调用",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section": {"type": "string", "description": "可选：钻取的详情区块（recent/processes/schedules/checkpoint/health），不填返回核心摘要"},
+                },
+                "required": [],
+            },
         },
     },
     # ===== 只读查询（需文件在允许目录内）=====
@@ -3989,6 +3995,7 @@ def chart_data(data, path, kind="line", title="", x_label="", y_label=""):
 # ===== 长期记忆（与 main 的 memory.json 兼容：{"enabled", "facts":[{key,value}], "notes":[{text,tags,ts}]}）=====
 MEMORY_FILE = None  # 由 main 初始化时注入（DATA_DIR/memory.json）
 MEMORY_ENABLED = True  # 长期记忆总开关（api_server 启动时按 config.memory_enabled 注入；False 时停止写入）
+BUILD_SITUATION = None  # 由 api_server 注入的态势快照函数（get_status 工具调用，人+AI 同源）
 MEMORY_MAX_ITEMS = 2000  # v2.16.2 起扩容：伙伴需要记住的更多
 MEMORY_MAX_TEXT = 2000
 _MEMORY_LOCK = threading.Lock()  # 并行 write_memory 读-改-写串行化，防丢失更新
@@ -4911,7 +4918,20 @@ def call_api(url, method="GET", params=None, json_body=None, data=None,
         return f"错误：API 调用失败（{type(e).__name__}: {str(e)[:120]}）"
 
 
-def system_status():
+def get_status(section=None):
+    """全局态势总览（单一事实源 build_situation）：默认核心摘要，section 取详情。
+
+    由 api_server 注入 BUILD_SITUATION 函数；未接线（如测试/降级）时回退到资源自检。
+    """
+    if BUILD_SITUATION is not None:
+        try:
+            return BUILD_SITUATION(section)
+        except Exception as e:
+            return f"态势快照获取失败：{e}"
+    return _legacy_system_status()
+
+
+def _legacy_system_status():
     """系统资源自检：CPU / 内存 / 磁盘 / 网络连通性（自主 AI 的"体检"能力）。
 
     psutil 可选（缺失时 CPU/内存降级提示）；网络连通性探测
@@ -10211,7 +10231,7 @@ TOOL_CALL_MAP = {
     "search_github": search_github,
     "search_realtime": search_realtime,
     "call_api": call_api,
-    "system_status": system_status,
+    "get_status": get_status,
     "database_query": database_query,
     "tts_save": tts_save,
     "image_process": image_process,
@@ -10374,7 +10394,7 @@ _TOOL_INDEX_KEY = None
 # 能力地图分类（精确感知：类别 + 完整工具名 + 核心动作）。全部内置工具全覆盖。
 TOOL_GROUPS = [
     ("🌐 浏览器与网页", ["browser_navigate", "web_screenshot", "fetch_url", "fetch_url_smart", "net_diagnose", "fetch_blocked", "search_web", "search_realtime", "search_github", "webdav", "download_file", "rss_fetch"]),
-    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "system_status"]),
+    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "get_status"]),
     ("📁 文件与目录", ["read_file", "write_file", "edit_file", "list_dir", "search_local", "delete_file", "archive_files", "extract_archive", "batch_rename", "clipboard_get", "clipboard_set"]),
     ("📊 数据与文档", ["read_csv", "write_csv", "read_excel", "write_excel", "chart_data", "database_query", "database_query_mysql", "database_query_postgres", "database_execute", "create_doc", "docx_read", "pptx_read", "pdf_extract", "pdf_create", "epub_read", "mobi_read", "doc_read", "archive_list", "secret_store", "kv_store"]),
     ("📧 邮件与消息", ["send_email", "read_email", "email_summary", "agent_mail", "msg_read", "im_send", "telegram_poll_updates", "send_webhook", "publish_draft", "run_wechat_writer", "daily_brief"]),
@@ -10415,6 +10435,7 @@ def _expand_activation(wanted, available_names, activated):
 # 关键词预激活（chat 层兜底）：扫描最近 user 消息，命中常见意图关键词时
 # 预激活对应工具，让常见任务免点菜直接可用（仅提前加载定义，不改变权限）。
 _PREACTIVATE_HINTS = [
+    (("全局", "概况", "整体情况", "运行情况", "什么情况", "进展", "状态", "工作台"), ["get_status"]),
     (("搜索", "搜一下", "查一下", "新闻", "资讯", "最新"), ["search_web", "search_realtime", "fetch_url"]),
     (("天气", "气温", "台风", "预报"), ["get_weather"]),
     (("下载",), ["download_file", "fetch_url"]),
@@ -10480,7 +10501,7 @@ _TOOL_ACTION_PHRASES = {
     "stop_process": "停止后台进程",
     "list_processes": "查看后台进程列表",
     "environment_info": "环境/依赖信息",
-    "system_status": "系统资源自检",
+    "get_status": "全局态势总览",
     "read_file": "读取文件内容",
     "write_file": "写入文件",
     "edit_file": "编辑文件（局部修改）",
