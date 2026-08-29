@@ -473,7 +473,7 @@ function useDataSources() {
   return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr, peakInfo };
 }
 
-export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone }) {
+export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone, openSessionId, onOpenSessionDone }) {
   const { mode, switchMode } = React.useContext(ModeContext);
   const { density, fontSize } = React.useContext(DisplayContext);
   const { flash } = React.useContext(FlashContext);
@@ -773,6 +773,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       setMsgs((history[id] || []).map((m) => ({ ...m, tools: [], streaming: false })));
     }
   };
+
+  // 工作台「最近会话」直达：onPickSession 已定义，这里引用最新闭包
+  React.useEffect(() => {
+    if (!openSessionId) return;
+    onPickSession(openSessionId);
+    onOpenSessionDone?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSessionId, onOpenSessionDone]);
 
   const onDeleteSession = async (id) => {
     try {

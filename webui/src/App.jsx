@@ -71,8 +71,10 @@ export default function App() {
     }
   });
   const [mode, setMode] = React.useState("task");
-  // 指令库「应用」→ 把指令内容带进会话输入框（试跑用）
+  // 指令库/工作台「应用」→ 把指令内容带进会话输入框（试跑用）
   const [applyPrompt, setApplyPrompt] = React.useState(null);
+  // 工作台「最近会话」→ 直达对应会话
+  const [openSessionId, setOpenSessionId] = React.useState(null);
 
   React.useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -131,9 +133,22 @@ export default function App() {
                         onGoSettings={() => setPage("settings")}
                         applyPrompt={applyPrompt}
                         onApplyDone={() => setApplyPrompt(null)}
+                        openSessionId={openSessionId}
+                        onOpenSessionDone={() => setOpenSessionId(null)}
                       />
                     )}
-                    {page === "workbench" && <WorkbenchPage onGoChat={() => setPage("chat")} />}
+                    {page === "workbench" && (
+                      <WorkbenchPage
+                        onApply={(text) => {
+                          setApplyPrompt(text);
+                          setPage("chat");
+                        }}
+                        onPickSession={(id) => {
+                          setOpenSessionId(id);
+                          setPage("chat");
+                        }}
+                      />
+                    )}
                     {page === "abilities" && <AbilitiesPage />}
                     {page === "plugins" && <PluginsPage />}
                     {page === "prompts" && (

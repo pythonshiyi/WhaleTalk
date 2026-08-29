@@ -1771,3 +1771,82 @@ button {
   border-radius: var(--r-sm, 6px);
   padding: 0 4px;
 }
+
+/* ═══ 工作台（WorkbenchPage v2） ═══════════════════ */
+.wb-sense {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--sp-2, 8px);
+  margin-bottom: var(--sp-4, 16px);
+}
+.wb-sense-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--sp-3, 12px) var(--sp-3, 12px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 10px);
+  background: var(--bg-1);
+}
+.wb-sense-label { font-size: var(--fs-xs, 11px); color: var(--text-3); }
+.wb-sense-item b { font-size: var(--fs-md, 14px); color: var(--text-1); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.warn-text { color: var(--warn); }
+
+.wb-quick-grid { display: flex; flex-wrap: wrap; gap: var(--sp-2, 8px); }
+.wb-chip-tpl { opacity: 0.88; }
+
+.wb-sess-list, .wb-file-list, .wb-proc-list { display: flex; flex-direction: column; gap: 2px; }
+.wb-sess-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-2, 8px);
+  padding: var(--sp-2, 8px) var(--sp-3, 12px);
+  border-radius: var(--r-sm, 6px);
+  cursor: pointer;
+  transition: background var(--ease, 0.2s);
+}
+.wb-sess-item:hover { background: var(--bg-hover); }
+.wb-sess-item b { font-size: var(--fs-sm, 12.5px); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-sess-item span { color: var(--text-3); font-size: var(--fs-xs, 11px); white-space: nowrap; }
+
+.wb-file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-2, 8px);
+  padding: 5px var(--sp-3, 12px);
+  border-radius: var(--r-sm, 6px);
+}
+.wb-file-item:hover { background: var(--bg-hover); }
+.wb-file-name {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs, 11.5px);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 62%;
+}
+.wb-file-ops { display: flex; gap: 4px; }
+
+.wb-ongoing { display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
+.wb-checkpoint {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2, 8px);
+  padding: var(--sp-3, 12px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md, 10px);
+  background: var(--bg-2);
+}
+.wb-checkpoint .confirm-btn { align-self: flex-start; }
+.wb-proc-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3, 12px);
+  padding: 6px var(--sp-3, 12px);
+  border-radius: var(--r-sm, 6px);
+}
+.wb-proc-item:hover { background: var(--bg-hover); }
+.wb-proc-item b { font-family: var(--font-mono); font-size: var(--fs-xs, 11.5px); color: var(--text-1); }

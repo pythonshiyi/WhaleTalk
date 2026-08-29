@@ -720,49 +720,208 @@ function SchedulesBlock() {
   );
 }
 
-export function WorkbenchPage({ onGoChat }) {
+export function WorkbenchPage({ onApply, onPickSession }) {
   const [status, setStatus] = React.useState(null);
-  React.useEffect(() => {
-    let alive = true;
-    (async () => {
-      const s = await apiGet("/v1/status");
-      if (alive && s) setStatus(s);
-    })();
-    return () => {
-      alive = false;
-    };
+  const [sessions, setSessions] = React.useState([]);
+  const [files, setFiles] = React.useState(null);
+  const [procs, setProcs] = React.useState({});
+  const [checkpoint, setCheckpoint] = React.useState(null);
+  const [deps, setDeps] = React.useState([]);
+  const [backups, setBackups] = React.useState([]);
+  const [prompts, setPrompts] = React.useState([]);
+  const [templates, setTemplates] = React.useState({});
+
+  // 全量刷新：一次并行拉取全部数据，30s 轮询
+  const refresh = React.useCallback(async () => {
+    const g = (p) => apiGet(p).catch(() => null);
+    const [s, sess, f, pr, cp, d, bk, pm, tk] = await Promise.all([
+      g("/v1/status"), g("/v1/sessions"), g("/v1/files"), g("/v1/processes"),
+      g("/v1/checkpoint"), g("/v1/deps"), g("/v1/backup"), g("/v1/prompts"), g("/v1/tasks"),
+    ]);
+    if (s) setStatus(s);
+    if (sess && sess.sessions) setSessions(sess.sessions.slice(0, 8));
+    if (f) setFiles(f);
+    if (pr && pr.processes) setProcs(pr.processes);
+    if (cp && (cp.name || cp.status || cp.pending || cp.notes)) setCheckpoint(cp);
+    if (d && d.deps) setDeps(d.deps);
+    if (bk && bk.backups) setBackups(bk.backups);
+    if (pm && pm.prompts) setPrompts(pm.prompts);
+    if (tk && tk.templates) setTemplates(tk.templates);
   }, []);
-  const u = status?.usage_total || {};
+
+  React.useEffect(() => {
+    refresh();
+    const iv = setInterval(refresh, 30000);
+    return () => clearInterval(iv);
+  }, [refresh]);
+
+  const u = (status && status.usage_total) || {};
+  const running = Object.values(procs || {}).filter((p) => !p.exited);
+  const missingDeps = (deps || []).filter((d) => !d.ok);
+  const recentFiles = (files && files.recent) || [];
+  // 快捷指令：高频（use_count）优先，不足用零次使用的补齐
+  const used = (prompts || []).filter((p) => p.enabled !== false && p.use_count > 0)
+    .sort((a, b) => (b.use_count || 0) - (a.use_count || 0));
+  const unused = (prompts || []).filter((p) => p.enabled !== false && !p.use_count);
+  const quickActs = used.slice(0, 6).concat(unused.slice(0, Math.max(0, 6 - used.length)));
+  const tplEntries = Object.entries(templates || {}).slice(0, 4);
+
+  const stopProc = async (name) => {
+    try {
+      await apiPost("/v1/processes/stop", { name });
+      refresh();
+    } catch {}
+  };
+  const openFile = async (path, dir = false) => {
+    try {
+      await apiPost(dir ? "/v1/files/opendir" : "/v1/files/open", { path });
+    } catch {}
+  };
+  const resumeCheckpoint = () => {
+    if (!checkpoint) return;
+    const lines = [
+      `任务：${checkpoint.name || "未命名任务"}`,
+      checkpoint.status ? `状态：${checkpoint.status}` : "",
+      checkpoint.pending && checkpoint.pending.length ? `剩余待办：${checkpoint.pending.join("；")}` : "",
+      checkpoint.notes ? `备注：${checkpoint.notes}` : "",
+    ].filter(Boolean);
+    onApply && onApply(`请继续完成以下任务（从检查点恢复）：\n${lines.join("\n")}`);
+  };
+
   return (
     <div className="page">
       <div className="page-head">
         <h1>工作台</h1>
-        <p>快捷指令 · 最近会话 · 系统概览</p>
+        <p>
+          行动中枢 · 态势感知 · 连续性 · 每 30 秒自动刷新
+          {status ? ` · ${status.model || ""}` : ""}
+        </p>
       </div>
-      <div className="wb-grid">
-        <div className="wb-card wb-quick">
-          <div className="wb-card-title">快捷指令</div>
-          {["📝 公众号写作", "✈️ 智能飞侠巡航", "📊 图表解读", "🔍 深度调研报告", "⏰ 定时巡检", "🧪 运行测试"].map((c) => (
-            <button className="wb-chip" key={c} onClick={() => onGoChat && onGoChat()}>{c}</button>
+
+      {/* ① 态势带：现在发生了什么 */}
+      <div className="wb-sense">
+        <div className="wb-sense-item" title="运行中的后台进程">
+          <span className="wb-sense-label">进程</span>
+          <b className={running.length ? "ok-text" : ""}>{running.length} 运行中</b>
+        </div>
+        <div className="wb-sense-item" title="本月累计成本">
+          <span className="wb-sense-label">本月成本</span>
+          <b>¥{status ? status.monthly_cost || 0 : "…"}</b>
+        </div>
+        <div className="wb-sense-item" title="累计缓存命中 token">
+          <span className="wb-sense-label">缓存命中</span>
+          <b className="ok-text">{(u.cache_hit || 0).toLocaleString()}</b>
+        </div>
+        <div className="wb-sense-item" title="缺失的可选依赖">
+          <span className="wb-sense-label">依赖</span>
+          <b className={missingDeps.length ? "warn-text" : "ok-text"}>
+            {missingDeps.length ? `${missingDeps.length} 缺失` : "完整"}
+          </b>
+        </div>
+        <div className="wb-sense-item" title="最近备份">
+          <span className="wb-sense-label">备份</span>
+          <b>{backups.length ? backups[0].mtime : "未备份"}</b>
+        </div>
+        <div className="wb-sense-item" title="当前工作模式">
+          <span className="wb-sense-label">模式</span>
+          <b>{status && status.mode === "task" ? "🚀 任务" : "💬 对话"}</b>
+        </div>
+      </div>
+
+      {/* ② 快捷行动：一键发起 */}
+      <div className="wb-card">
+        <div className="wb-card-title">⚡ 快捷行动（高频指令 · 任务模板）</div>
+        <div className="wb-quick-grid">
+          {quickActs.map((p) => (
+            <button className="wb-chip" key={p.id} title={p.desc || p.text}
+              onClick={() => onApply && onApply(p.text)}>
+              {p.icon ? `${p.icon} ` : ""}{p.name}
+            </button>
+          ))}
+          {tplEntries.map(([n, txt]) => (
+            <button className="wb-chip wb-chip-tpl" key={n} title={String(txt).slice(0, 60)}
+              onClick={() => onApply && onApply(txt)}>
+              🧩 {n}
+            </button>
           ))}
         </div>
-        <div className="wb-card wb-sys">
-          <div className="wb-card-title">系统概览</div>
-          <div className="sys-row"><span>工作模式</span><b>{status?.mode === "task" ? "🚀 任务模式" : "💬 对话模式"}</b></div>
-          <div className="sys-row"><span>模型</span><b>{status?.model || "…"}</b></div>
-          <div className="sys-row"><span>角色</span><b>{status?.role || "…"}</b></div>
-          <div className="sys-row"><span>累计输入</span><b>{(u.prompt || 0).toLocaleString()} tokens</b></div>
-          <div className="sys-row"><span>累计输出</span><b>{(u.completion || 0).toLocaleString()} tokens</b></div>
-          <div className="sys-row"><span>缓存命中</span><b className="ok-text">{(u.cache_hit || 0).toLocaleString()}</b></div>
-          <div className="sys-row"><span>本月成本</span><b>¥{status?.monthly_cost || 0}{status?.monthly_budget ? ` / ¥${status.monthly_budget}` : ""}</b></div>
-          <div className="sys-row"><span>工具数</span><b>115（12 域）</b></div>
-          <div className="sys-row"><span>网络</span><b className="ok-text">● 正常</b></div>
+        {quickActs.length === 0 && tplEntries.length === 0 && (
+          <div className="empty-tip">暂无快捷行动——在「指令库」添加指令，或使用后高频指令会自动出现在这里</div>
+        )}
+      </div>
+
+      {/* ③ 最近会话：真实列表 */}
+      <div className="wb-card">
+        <div className="wb-card-title">💬 最近会话（{sessions.length}）</div>
+        <div className="wb-sess-list">
+          {sessions.map((s) => (
+            <div className="wb-sess-item" key={s.id} onClick={() => onPickSession && onPickSession(s.id)}>
+              <b>{s.name || "未命名会话"}</b>
+              <span>
+                {s.msg_count} 条消息
+                {s.saved_at ? ` · ${String(s.saved_at).slice(0, 16).replace("T", " ")}` : ""}
+              </span>
+            </div>
+          ))}
+          {sessions.length === 0 && <div className="empty-tip">暂无历史会话——开始一段对话后会自动出现在这里</div>}
         </div>
       </div>
-      <div className="wb-card wb-recent">
-        <div className="wb-card-title">最近会话</div>
-        <div className="wb-recent-row" onClick={onGoChat}>💬 点击进入会话页开始对话</div>
+
+      {/* ④ 最近产物：文件联动 */}
+      <div className="wb-card">
+        <div className="wb-card-title">📦 最近产物（{recentFiles.length}）</div>
+        <div className="wb-file-list">
+          {recentFiles.slice(0, 8).map((p) => (
+            <div className="wb-file-item" key={p}>
+              <span className="wb-file-name" title={p}>{String(p).split(/[\\/]/).pop()}</span>
+              <div className="wb-file-ops">
+                <button className="pm-op" onClick={() => openFile(p)}>打开</button>
+                <button className="pm-op" onClick={() => openFile(p, true)}>定位</button>
+              </div>
+            </div>
+          ))}
+          {recentFiles.length === 0 && <div className="empty-tip">暂无产物——AI 生成的文件会出现在这里</div>}
+        </div>
       </div>
+
+      {/* ⑤ 进行中：未完成的事 */}
+      <div className="wb-card">
+        <div className="wb-card-title">⏳ 进行中</div>
+        <div className="wb-ongoing">
+          {checkpoint ? (
+            <div className="wb-checkpoint">
+              <div>
+                <b>{checkpoint.name || "未命名任务"}</b>
+                {checkpoint.status && <span className="pm-cat"> · {checkpoint.status}</span>}
+              </div>
+              {checkpoint.pending && checkpoint.pending.length > 0 && (
+                <div className="pm-text">待办：{checkpoint.pending.join("；")}</div>
+              )}
+              {checkpoint.notes && <div className="pm-text">{checkpoint.notes}</div>}
+              <div>
+                <button className="confirm-btn confirm-primary" onClick={resumeCheckpoint}>▶ 恢复任务</button>
+              </div>
+            </div>
+          ) : (
+            <div className="empty-tip">无进行中的任务检查点——长任务用 task_checkpoint_save 保存进度后可在这里一键恢复</div>
+          )}
+          {Object.keys(procs || {}).length > 0 && (
+            <div className="wb-proc-list">
+              {Object.entries(procs).map(([name, p]) => (
+                <div className="wb-proc-item" key={name}>
+                  <b>{name}</b>
+                  <span className="pm-cat">
+                    {p.exited ? `已退出${p.code !== null && p.code !== undefined ? `（${p.code}）` : ""}` : `运行中 · ${p.started || ""}`}
+                  </span>
+                  {!p.exited && <button className="pm-op" onClick={() => stopProc(name)}>停止</button>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ⑥ 计划区 */}
       <div style={{ marginTop: 12 }}>
         <SchedulesBlock />
       </div>
