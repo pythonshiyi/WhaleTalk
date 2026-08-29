@@ -5635,6 +5635,14 @@ def _atomic_write(path, content):
                 os.unlink(tmp)
             except OSError:
                 pass
+    # 写成功：清理覆盖前备份。os.replace 原子落盘后旧内容已无保留价值，
+    # 此前只备份不清理，导致 AI 反复修改文件时工作区被 .bak 残留污染。
+    if not created:
+        try:
+            if os.path.exists(path + ".bak"):
+                os.remove(path + ".bak")
+        except Exception:
+            pass
     try:
         real_size = os.path.getsize(path)
     except OSError:
