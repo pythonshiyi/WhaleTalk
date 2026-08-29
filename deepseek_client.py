@@ -1551,7 +1551,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_evolution",
-            "description": "自我进化：把改进后的代码作为提案写入 evolutions/<名称>_<时间戳>/ 分支（绝不修改原文件），用户可在「工具 → 自我进化」查看/采纳/忽略",
+            "description": "自我进化提案：发现项目改进点（尤其方案性、需人决策、或不确定是否该直接改的）时，把改进后的代码写入 evolutions/ 分支（不改原文件），供人审阅采纳/忽略。确定要改且能验证的改动用 self_evolve 分支实施",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -11687,7 +11687,7 @@ _TOOL_ACTION_PHRASES = {
     "call_api": "调用任意 HTTP API",
     "project_info": "项目信息/文件树",
     "read_project_file": "读取项目文件",
-    "create_evolution": "创建自我进化提案",
+    "create_evolution": "提进化提案（方案审阅）",
     "self_evolve": "闭环自我进化",
     "verify_files": "核验项目文件完整性",
     "usage_report": "用量/费用统计",

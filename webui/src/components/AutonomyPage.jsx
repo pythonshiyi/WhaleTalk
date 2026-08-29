@@ -84,7 +84,7 @@ function EvTab({ onToast }) {
         {evs === null ? (
           <div className="empty-tip">加载中…</div>
         ) : evs.length === 0 ? (
-          <div className="empty-tip">暂无提案 —— AI 调用 create_evolution 提出的改进方案会出现在这里</div>
+          <div className="empty-tip">暂无提案 —— 让 AI 用 create_evolution 提改进方案（如"对 X 提出改进提案"），方案会出现在这里供你审阅采纳</div>
         ) : (
           <div className="au-list">
             {evs.map((e) => (
