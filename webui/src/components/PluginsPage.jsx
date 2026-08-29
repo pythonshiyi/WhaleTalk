@@ -263,6 +263,17 @@ export default function PluginsPage() {
         <span className={`plugin-tag ${isInstalled(p.name) ? "plugin-tag-on" : ""}`}>{p.kind}</span>
       </div>
       <div className="plugin-desc">{p.description}</div>
+      <div className="plugin-perms">
+        {p.permissions && p.permissions.declared ? (
+          <>
+            <span className="plugin-perm-tag">🔐 {p.permissions.tools.length} 工具</span>
+            {p.permissions.net && <span className="plugin-perm-tag">🌐 联网</span>}
+            {p.permissions.files.length > 0 && <span className="plugin-perm-tag">📁 {p.permissions.files.join("/")}</span>}
+          </>
+        ) : (
+          <span className="plugin-perm-tag plugin-perm-warn">⚠️ 未声明权限</span>
+        )}
+      </div>
       <div className="plugin-foot">
         {p.trigger ? <span className="plugin-trigger">{p.trigger}</span> : <span />}
         <div style={{ display: "flex", gap: 6 }}>

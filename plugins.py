@@ -129,7 +129,31 @@ def validate_plugin(data):
             return False, "files 必须是 {相对路径: 源码}"
         if files and not any(str(k).endswith(".py") for k in files):
             return False, "files 至少需要一个 .py 文件"
+    perms = data.get("permissions")
+    if perms is not None:
+        if not isinstance(perms, dict):
+            return False, "permissions 必须是对象（可选：tools / files / net）"
+        if "tools" in perms and not isinstance(perms["tools"], list):
+            return False, "permissions.tools 必须是工具名列表"
+        if "files" in perms and not isinstance(perms["files"], list):
+            return False, "permissions.files 必须是目录名列表"
+        if "net" in perms and not isinstance(perms["net"], bool):
+            return False, "permissions.net 必须是布尔值"
     return True, ""
+
+
+def plugin_permissions(p):
+    """规范化插件权限声明。缺省视为『未声明』（保守：不假设任何权限）。
+    返回 {declared, tools, files, net, notes}。"""
+    perms = (p.get("permissions") or {}) if isinstance(p, dict) else {}
+    if not isinstance(perms, dict):
+        perms = {}
+    tools = [str(t) for t in (perms.get("tools") or []) if str(t).strip()]
+    files = [str(f) for f in (perms.get("files") or []) if str(f).strip()]
+    net = bool(perms.get("net"))
+    notes = str(perms.get("notes") or "")
+    declared = bool(tools or files or net or notes)
+    return {"declared": declared, "tools": tools, "files": files, "net": net, "notes": notes}
 
 
 def parse_plugin_file(path):

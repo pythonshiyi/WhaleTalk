@@ -2082,3 +2082,15 @@ button {
   max-height: 60vh;
   flex: 1;
 }
+
+/* 插件权限声明（PluginsPage） */
+.plugin-perms { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+.plugin-perm-tag {
+  font-size: 10.5px;
+  color: var(--text-2);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full, 999px);
+  padding: 1px 7px;
+}
+.plugin-perm-warn { color: var(--warn); border-color: var(--warn); }

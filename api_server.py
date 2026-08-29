@@ -282,6 +282,11 @@ def _plugin_summary(p):
     meta = p.get("meta") or {}
     contents = p.get("contents") or {}
     kind = "应用型" if contents.get("app") else ("流程" if contents.get("workflows") else ("技能" if contents.get("skills") else "工具"))
+    try:
+        import plugins as plugins_mod
+        perms = plugins_mod.plugin_permissions(p)
+    except Exception:
+        perms = {"declared": False, "tools": [], "files": [], "net": False, "notes": ""}
     return {
         "name": str(meta.get("name") or "未命名插件"),
         "description": str(meta.get("description") or ""),
@@ -291,6 +296,7 @@ def _plugin_summary(p):
         "trigger": str((meta.get("triggers") or [meta.get("trigger")] or [""])[0] if isinstance(meta.get("triggers"), list) else (meta.get("trigger") or "")),
         "slug": str(p.get("slug") or ""),
         "kind": kind,
+        "permissions": perms,
     }
 
 
@@ -346,13 +352,19 @@ def _plugins_action(body):
                     if p is not None and (p.get("meta") or {}).get("name") == name:
                         src = p
                         break
-                except Exception:
-                    continue
+                except Exception:                    continue
         if src is None:
             return None, "画廊中未找到该插件"
         res = plugins_mod.apply_plugin(src, paths)
         if res.get("ok"):
-            return {"ok": True, "added": res.get("added")}, None
+            ret = {"ok": True, "added": res.get("added")}
+            try:
+                perms = plugins_mod.plugin_permissions(src)
+                if not perms["declared"]:
+                    ret["warning"] = "⚠️ 该插件未声明权限（tools/files/net），调用其能力时权限按系统默认执行"
+            except Exception:
+                pass
+            return ret, None
         return None, str(res.get("error") or "安装失败")
     if not target:
         return None, "插件未安装"
@@ -3631,7 +3643,14 @@ def _studio_install(body):
     if not res.get("ok"):
         return None, str(res.get("error") or "安装失败")
     added = res.get("added") or {}
-    return {"ok": True, "added": added, "name": (plugin.get("meta") or {}).get("name")}, None
+    ret = {"ok": True, "added": added, "name": (plugin.get("meta") or {}).get("name")}
+    try:
+        perms = plugins_mod.plugin_permissions(plugin)
+        if not perms["declared"]:
+            ret["warning"] = "⚠️ 该插件未声明权限（tools/files/net），调用其能力时权限按系统默认执行"
+    except Exception:
+        pass
+    return ret, None
 
 
 def _abilities():
