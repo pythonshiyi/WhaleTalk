@@ -408,20 +408,25 @@ function BrainBlock() {
   const [resolving, setResolving] = React.useState(false);
   const [genesis, setGenesis] = React.useState("");
   const [createWithKeyring, setCreateWithKeyring] = React.useState(true);
+  const [connErr, setConnErr] = React.useState("");
 
   const createBrain = async () => {
     setBusy(true);
     setMsg("");
     const d = await apiPost("/v1/brain", { action: "init", genesis, enable_keyring: createWithKeyring });
-    setMsg(d?.message || "创建失败（后端未连接？）");
+    setMsg(d?.message || "创建失败：请确认鲸语后端已重启（旧版后端不认识大脑接口）");
     setBusy(false);
     load(true);
   };
 
   const load = async (quiet) => {
     const d = await apiGet("/v1/brain");
-    if (d && d.ok) setBrain(d.brain);
-    else if (!quiet) setMsg("无法读取大脑状态：" + (d?.error || "后端未连接"));
+    if (d && d.ok) { setBrain(d.brain); setConnErr(""); }
+    else {
+      const why = "后端未运行或版本过旧（还没有大脑接口）。请重启鲸语：托盘「✕ 退出」后重新运行 web_app.py（或双击桌面快捷方式），再回到本页。";
+      setConnErr(why);
+      if (!quiet) setMsg(why);
+    }
   };
   React.useEffect(() => { load(true); }, []);
 
@@ -526,6 +531,12 @@ function BrainBlock() {
       </div>
 
       {noBrain ? (
+        connErr ? (
+          <div className="sched-text" style={{ color: "var(--danger)" }}>
+            ⚠ {connErr}
+            <div style={{ marginTop: 6 }}><button className="msg-op" onClick={() => load(false)}>重试</button></div>
+          </div>
+        ) : (
         <div className="sched-text" style={{ display: "block" }}>
           <div>大脑尚未诞生。点击下方按钮即可在本机创建——无需命令行。</div>
           <div className="sched-line1" style={{ marginTop: 8 }}>
@@ -538,6 +549,7 @@ function BrainBlock() {
             </label>
           </div>
         </div>
+        )
       ) : (
         <>
           <div className="sched-text">
