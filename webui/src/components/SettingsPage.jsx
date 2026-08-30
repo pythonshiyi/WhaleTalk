@@ -750,7 +750,9 @@ function CleanupBlock() {
   );
 }
 
-// ── B10 依赖状态 ───────────────────────────────────
+// ── B10 依赖状态（能力市场卡片）────────────────────
+const DEPS_ICONS = { playwright: "🖥", faster_whisper: "🎙", pyzbar: "▦", rarfile: "🗜" };
+
 function DepsBlock() {
   const showBlock = useBlockFilter("可选能力 依赖 安装 组件 浏览器 语音转写 二维码 rar 能力");
   const [deps, setDeps] = React.useState(null);
@@ -760,9 +762,10 @@ function DepsBlock() {
   const load = () => apiGet("/v1/deps").then((d) => { if (d) { setDeps(d.deps || []); setHeavy(d.heavy || []); } });
   React.useEffect(() => { load(); }, []);
   if (!showBlock) return null;
+
   const install = async (key) => {
     setBusyKey(key);
-    setMsg("正在安装（大组件可能需数分钟，请稍候）…");
+    setMsg("正在安装（大组件可能需数分钟）…");
     try {
       // 直连 fetch：不走 15s 超时封装，下载 Chromium 等需更久
       const r = await fetch(`${api.getBase()}/v1/deps/install`, {
@@ -771,37 +774,71 @@ function DepsBlock() {
         body: JSON.stringify({ key }),
       });
       const d = await r.json();
-      setMsg(d?.message || (d?.ok ? "完成" : "失败"));
+      setMsg(d?.message || (d?.ok ? "安装完成" : "安装失败"));
     } catch (e) {
       setMsg("安装请求失败：" + String(e));
     }
     setBusyKey("");
     load();
   };
-  const heavyOk = heavy.filter((d) => d.ok).length;
+
+  const okCount = (heavy || []).filter((d) => d.ok).length;
+  const total = (heavy || []).length;
+  const pct = total ? Math.round((okCount / total) * 100) : 0;
+  const otherMissing = (deps || []).filter((d) => !d.ok);
+
   return (
-    <div className="svc-actions" style={{ display: "block" }}>
-      <div className="sched-line1">
-        <b>🔌 可选能力</b>
-        <span className="sched-action">{heavyOk}/{heavy.length} 已启用</span>
-      </div>
-      {(heavy || []).map((d) => (
-        <div className="sched-text" key={d.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
-          <span style={{ flex: 1 }}>
-            {d.ok ? "✓" : "○"} {d.label}　<span style={{ opacity: 0.7 }}>{d.desc}</span>{d.note ? `（${d.note}）` : ""}
-          </span>
-          {!d.ok && (
-            <button className="msg-op" disabled={busyKey === d.key} onClick={() => install(d.key)}>
-              {busyKey === d.key ? "安装中…" : "安装"}
-            </button>
-          )}
+    <div className="deps-page">
+      <div className="deps-head">
+        <div className="deps-head-title">
+          <h2>可选能力</h2>
+          <p>按需安装的扩展能力，不装不影响鲸语核心使用；装好即用，随时可在此管理。</p>
         </div>
-      ))}
-      {deps && deps.filter((d) => !d.ok).length > 0 && (
-        <div className="sched-text" style={{ fontSize: 12, opacity: 0.7 }}>
-          {(deps || []).filter((d) => !d.ok).slice(0, 6).map((d) => <div key={d.import}>• {d.name}（{d.install}）</div>)}
+        <div className="deps-stat">
+          <b>{okCount}/{total}</b>
+          <span>已启用</span>
+          <div className="deps-progress"><i style={{ width: pct + "%" }} /></div>
+        </div>
+      </div>
+
+      <div className="deps-grid">
+        {(heavy || []).map((d) => {
+          const busy = busyKey === d.key;
+          return (
+            <div key={d.key} className={`deps-card ${d.ok ? "deps-card-on" : ""}`}>
+              <div className="deps-card-top">
+                <span className="deps-icon">{DEPS_ICONS[d.key] || "🧩"}</span>
+                <span className={`deps-badge ${d.ok ? "deps-badge-on" : ""}`}>
+                  {d.ok ? "✓ 已启用" : "未启用"}
+                </span>
+              </div>
+              <div className="deps-name">{d.label}</div>
+              <div className="deps-desc">{d.desc}</div>
+              {d.note && <div className="deps-note">{d.note}</div>}
+              <div className="deps-card-foot">
+                {d.ok ? (
+                  <button className="deps-btn deps-btn-done" disabled>已就绪</button>
+                ) : (
+                  <button className="deps-btn deps-btn-install" disabled={busy} onClick={() => install(d.key)}>
+                    {busy ? "安装中…" : "安装"}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {otherMissing.length > 0 && (
+        <div className="deps-other">
+          <div className="deps-other-title">其他未就绪组件</div>
+          <div className="deps-other-list">
+            {otherMissing.map((d) => <span key={d.import} className="deps-other-chip">{d.name}</span>)}
+          </div>
+          <div className="deps-other-hint">缺失时相关功能会提示；多数组件在首次启动时自动补齐。</div>
         </div>
       )}
+
       {msg && <div className="px-tip">{msg}</div>}
     </div>
   );

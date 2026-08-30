@@ -734,6 +734,71 @@ button {
 }
 .set-content .msg-op:hover { color: var(--brand-strong); border-color: rgba(14,165,233,.4); background: var(--bg-hover); }
 
+/* ===== 可选能力（能力市场卡片）===== */
+.deps-page { display: flex; flex-direction: column; gap: var(--sp-5); }
+.deps-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: var(--sp-4); flex-wrap: wrap;
+}
+.deps-head-title h2 { font-size: var(--fs-xl); margin: 0 0 4px; }
+.deps-head-title p { font-size: var(--fs-sm); color: var(--text-3); margin: 0; max-width: 520px; }
+.deps-stat { text-align: right; min-width: 130px; }
+.deps-stat b { font-size: var(--fs-2xl); color: var(--brand-strong); font-weight: 700; }
+.deps-stat span { font-size: var(--fs-xs); color: var(--text-3); display: block; margin-top: -2px; }
+.deps-progress { width: 130px; height: 5px; background: var(--bg-3); border-radius: var(--r-full); margin-top: 8px; overflow: hidden; }
+.deps-progress i { display: block; height: 100%; background: linear-gradient(90deg, var(--brand), #0284c7); border-radius: var(--r-full); transition: width .4s var(--ease); }
+.deps-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: var(--sp-4);
+}
+.deps-card {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--r-xl); padding: var(--sp-5);
+  display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 1px 0 rgba(255,255,255,.03) inset;
+  transition: all .18s var(--ease);
+}
+.deps-card:hover { border-color: var(--border-strong); transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0,0,0,.18); }
+.deps-card-top { display: flex; align-items: center; justify-content: space-between; }
+.deps-icon {
+  width: 46px; height: 46px; border-radius: var(--r-lg);
+  background: var(--brand-soft); color: var(--brand-strong);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px;
+}
+.deps-card-on .deps-icon { background: var(--ok-soft); color: var(--ok); }
+.deps-badge {
+  font-size: var(--fs-xs); color: var(--text-3);
+  border: 1px solid var(--border-strong); border-radius: var(--r-full);
+  padding: 3px 12px;
+}
+.deps-badge-on { color: var(--ok); border-color: rgba(16,185,129,.35); background: var(--ok-soft); }
+.deps-name { font-size: var(--fs-lg); font-weight: 700; color: var(--text-1); }
+.deps-desc { font-size: var(--fs-sm); color: var(--text-2); line-height: 1.6; }
+.deps-note { font-size: var(--fs-xs); color: var(--warn); }
+.deps-card-foot { margin-top: auto; padding-top: 6px; }
+.deps-btn {
+  width: 100%; padding: 10px; border-radius: var(--r-md);
+  font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
+  transition: all .15s var(--ease);
+}
+.deps-btn-install { background: linear-gradient(135deg, var(--brand), #0284c7); border: none; color: #fff; }
+.deps-btn-install:hover:not(:disabled) { box-shadow: 0 4px 18px rgba(14,165,233,.4); }
+.deps-btn-install:disabled { opacity: .6; cursor: wait; }
+.deps-btn-done { background: var(--bg-3); border: 1px solid var(--border); color: var(--text-3); cursor: default; }
+.deps-other {
+  border: 1px dashed var(--border-strong); border-radius: var(--r-lg);
+  padding: var(--sp-3) var(--sp-4);
+}
+.deps-other-title { font-size: var(--fs-sm); font-weight: 600; margin-bottom: 8px; color: var(--text-2); }
+.deps-other-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.deps-other-chip {
+  font-size: var(--fs-xs); color: var(--text-2);
+  border: 1px solid var(--border-strong); border-radius: var(--r-full);
+  padding: 3px 10px;
+}
+.deps-other-hint { font-size: var(--fs-xs); color: var(--text-3); margin-top: 8px; }
+
 /* 设置页已保存提示 */
 .set-saved-tip {
   position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
