@@ -2317,7 +2317,7 @@ button {
 }
 @keyframes brain-ecg-flow { to { stroke-dashoffset: -64; } }
 
-.brain-vitals { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.brain-vitals { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-3); margin-bottom: var(--sp-4); }
 .brain-vital {
   border: 1px solid var(--border); border-radius: var(--r-xl);
   padding: 14px 16px; text-align: center;
@@ -2422,5 +2422,5 @@ button {
   background: linear-gradient(135deg, rgba(14,165,233,.14), rgba(99,102,241,.12));
   border-color: rgba(14,165,233,.45); color: var(--brand-strong);
 }
-.brain-page-body { max-width: 960px; }
+.brain-page-body { max-width: none; }
 .page-embedded { animation: msgIn .25s var(--ease); }
