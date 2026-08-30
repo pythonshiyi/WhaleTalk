@@ -228,10 +228,17 @@ def run_verbose(cmd, on_line=None, timeout=PIP_INSTALL_TIMEOUT):
 def pip_install(pkg, on_line=None):
     """用清华源安装包：带超时 + 失败重试，防单包卡死拖停全部依赖。
 
+    pkg 支持空格分隔的多包名（如 "piper-tts[zh] g2pW sentence_stream unicode_rbnf"），
+    会拆分为独立参数一次安装；单包名同样兼容。
     显式 --timeout/--retries 让 pip 自身网络超时可控；
     外层 subprocess 超时（PIP_INSTALL_TIMEOUT）兜底防挂起。
     """
-    base = [sys.executable, "-m", "pip", "install", pkg, "-i", PIP_MIRROR,
+    pkgs = [p for p in str(pkg).split() if p.strip()]
+    if not pkgs:
+        if on_line:
+            on_line("[pip] 包名为空，跳过")
+        return False
+    base = [sys.executable, "-m", "pip", "install"] + pkgs + ["-i", PIP_MIRROR,
             "--timeout", "20", "--retries", "2",
             "--disable-pip-version-check", "--no-warn-script-location"]
     last_err = ""

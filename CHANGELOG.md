@@ -2,6 +2,16 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.5.6（2026-08-30）—— 🐛 修复：Piper 可选能力安装失败
+
+- **根因**：「可选能力 → Piper 本地语音」的 `pip` 字段是多包（`piper-tts[zh] g2pW sentence_stream unicode_rbnf` 空格分隔），
+  但 `deps.py::pip_install` 把整串作为一个参数传给 `pip install` → pip 解析到空格后的包名即报
+  `(after name with no version specifier) or end`，安装中断。
+- **修复**：`pip_install` 将包名按空白拆分为**独立参数**一次安装（`pip install A B C D`），单包调用完全兼容；
+  另加空包名防护。
+- 验证：多包拆分/单包兼容/空包名单元测试通过；真实 pip 调用 4 包全部正确解析；`/v1/deps/install`（key=piper）
+  全流程 NDJSON 验证 `done ok=True`（装依赖 → 自动下模型 → 就绪）。
+
 ## v3.5.5（2026-08-30）—— 🧩 Piper 语音并入「可选能力」
 
 - Piper 本地语音从语音设置独立部署区**并入「🔌 可选能力」面板**（与浏览器自动化/语音转写等同级卡片）：
