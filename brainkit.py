@@ -488,9 +488,14 @@ def _zip_stage(stage: Path, zip_path: Path) -> None:
 
 
 def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
+    base = dest.resolve()
     for name in zf.namelist():
-        target = (dest / name).resolve()
-        if not str(target).startswith(str(dest.resolve())):
+        target = (base / name).resolve()
+        # 严格子路径判定：relative_to 要求目标必须在 base 之下（含分隔符边界，
+        # 避免旧版 startswith 前缀误判，如 /a/bc 被当作 /a/b 的子路径）
+        try:
+            target.relative_to(base)
+        except ValueError:
             raise ValueError(f"快照包含非法路径: {name}")
     zf.extractall(dest)
 

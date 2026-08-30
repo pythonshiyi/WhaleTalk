@@ -8526,7 +8526,7 @@ def database_execute(db_type="sqlite", connection="default", sql="", backup=True
     stmt = str(sql or "").strip()
     if not stmt:
         return "错误：sql 必填"
-    if not stmt.lstrip()[:6].upper().startswith(("UPDATE", "INSERT", "DELETE", "CREATE", "DROP", "ALTER", "REPLACE")):
+    if not stmt.lstrip().upper().startswith(("UPDATE", "INSERT", "DELETE", "CREATE", "DROP", "ALTER", "REPLACE")):
         return "错误：database_execute 仅用于写操作；只读查询请用 database_query*"
     dbtype = str(db_type or "sqlite").lower()
     try:
@@ -11625,6 +11625,9 @@ _RESULT_INTO_CONTEXT_MAX = 40000  # 工具结果写入历史的字符上限（�
 # 停止后等待已提交工具结果的宽限期：副作用已发生的工具（发信/写文件/启进程）
 # 要拿到真实结果写回历史，模型下轮才不会重试造成重复执行
 _STOP_TOOL_GRACE_S = 1.5
+# 工具执行总超时（秒）：防止个别无内部超时的工具把整轮生成永久卡死。
+# 超时后聊天继续（该工具结果如实标记超时），worker 由工具自带超时最终释放。
+_TOOL_TOTAL_TIMEOUT = 300
 
 
 class _StopRequested(Exception):
@@ -12784,7 +12787,8 @@ class DeepSeekClient:
                         for tc in parallel_tools
                     }
                     pending = set(futs.values())
-                    while pending:
+                    deadline = time.monotonic() + _TOOL_TOTAL_TIMEOUT
+                    while pending and time.monotonic() < deadline:
                         if stop_event and stop_event.is_set():
                             # 停止感知：给已提交工具短宽限期，副作用已发生的工具
                             # （发信/写文件/启进程）如实记录结果——历史写"已中断"会让
@@ -12813,6 +12817,7 @@ class DeepSeekClient:
                                     on_tool(name, args, result)
                                 if on_tool_duration:
                                     on_tool_duration(name, duration)
+                            pending = set()  # 已决定后台跑：剩余工具不标超时
                             break  # 仍未完成的工具后台继续跑（自带超时兜底）
                         done, pending = wait(
                             pending, timeout=0.25, return_when=FIRST_COMPLETED
@@ -12826,6 +12831,15 @@ class DeepSeekClient:
                                 on_tool(name, args, result)
                             if on_tool_duration:
                                 on_tool_duration(name, duration)
+                # 总超时兜底：仍未完成的工具标记超时，不再等待（聊天继续）
+                if pending:
+                    for f in list(pending):
+                        tcid = next((k for k, v in futs.items() if v is f), "?")
+                        nm = next((t["name"] for k2, t in futs.items() if futs[k2] is f), "?")
+                        exec_results[tcid] = (nm, {}, f"工具执行超时（超过 {_TOOL_TOTAL_TIMEOUT // 60} 分钟），已放弃等待", None)
+                        if on_tool:
+                            on_tool(nm, {}, exec_results[tcid][2])
+                    pending = set()
                 for tc in serial_tools:
                     name, args, result, duration = execute_tool(tc)
                     exec_results[tc["id"]] = (name, args, result, duration)

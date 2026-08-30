@@ -52,6 +52,7 @@ def _cu_load(key, default=None):
 _PENDING = {}
 _PENDING_LOCK = threading.Lock()
 _APPROVAL_LOCK = threading.Lock()
+_TOOL_CHAIN_LOCK = threading.Lock()  # 保护 _LAST_TOOL_CHAIN（多会话并发读写）
 _LAST_TOOL_CHAIN = []
 
 ASK_TIMEOUT = 180.0
@@ -2426,8 +2427,10 @@ def _scheduler_loop():
                 elif s.get("cron"):
                     if shared.cron_match(s["cron"], now):
                         key = ("cron", s["cron"])
-                        if key not in last_checked_minute:
-                            last_checked_minute[key] = now.strftime("%Y%m%d%H%M")
+                        cur = now.strftime("%Y%m%d%H%M")
+                        # 同一分钟只触发一次；下一匹配分钟（或跨天后同分钟）再次触发
+                        if last_checked_minute.get(key) != cur:
+                            last_checked_minute[key] = cur
                             fired = True
                 if fired:
                     if s.get("off_peak") and shared.is_peak_hour(now):
@@ -3542,7 +3545,8 @@ def _tool_bookkeeping(name, args, result):
     """工具记账：失败/成功模式 + 审计 + 最近产物（对齐原程序记录体系）。"""
     _audit("tool", str(name), str(args or "")[:100])
     try:
-        _LAST_TOOL_CHAIN.append(str(name))
+        with _TOOL_CHAIN_LOCK:
+            _LAST_TOOL_CHAIN.append(str(name))
     except Exception:
         pass
     rs = str(result or "")
@@ -3753,6 +3757,16 @@ MAX_BODY = 1_000_000
 # 图片上传专用请求体上限：base64 会把原图放大 4/3，需容纳 ≤48MB 原图直传
 # （超出部分由 _upload 的自动压缩兜底）；仅 /v1/upload 使用，其余接口保持 1MB 基线。
 UPLOAD_BODY_MAX = 64 * 1024 * 1024
+
+# ── CORS 白名单（安全）：仅对本机可信来源回显 CORS 头 ────────────────
+# 前端由本服务同端口加载（同源请求无需 CORS）；vite dev 服务器另加。
+# 其它 Origin（含任意恶意网页）拿不到 CORS 头 → 浏览器拒绝跨源读取响应，
+# 从而堵住「恶意网页读取本地 token 进而调用本地 API」的整条攻击链。
+_CORS_ALLOWED_ORIGINS = {
+    "http://127.0.0.1:5173", "http://localhost:5173",   # vite dev
+    "http://127.0.0.1:8745", "http://localhost:8745",   # 本服务同源（显式）
+    "http://127.0.0.1:5174", "http://localhost:5174",   # vite dev 备用端口
+}
 MAX_ROUNDS = 10
 MAX_MESSAGES = 200
 MAX_MSG_CHARS = 100_000
@@ -3865,7 +3879,7 @@ def _session_meta(d, fn):
         "model": str(d.get("model") or ""),
         "scenario": str(d.get("scenario") or ""),
         "saved_at": str(d.get("saved_at") or ""),
-        "pinned": bool(d.get("pinned")),
+        "pinned": bool(d.get("top") or (isinstance(d.get("pinned"), bool) and d["pinned"])),
         "top": bool(d.get("top")),
         "tags": [str(x) for x in (d.get("tags") or [])][:20],
         "msg_count": len(msgs),
@@ -3988,6 +4002,17 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def _cors_headers(self):
+        """仅对本机可信 Origin 回显 CORS 头；无 Origin 或非白名单不加头。
+
+        浏览器跨源请求若拿不到 Access-Control-Allow-Origin，会拒绝读取响应——
+        这是堵住恶意网页攻击链的关键（同源请求本就不需要 CORS）。
+        """
+        origin = self.headers.get("Origin", "")
+        if origin in _CORS_ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+
     def _auth(self):
         auth = self.headers.get("Authorization", "")
         expected = f"Bearer {_TOKEN}"
@@ -4002,7 +4027,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._cors_headers()
         self.end_headers()
         self.wfile.write(data)
 
@@ -4011,7 +4036,14 @@ class _Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0) or 0)
             if length <= 0 or length > (max_len or MAX_BODY):
                 return None
-            return json.loads(self.rfile.read(length).decode("utf-8", errors="replace"))
+            # 防挂起：恶意客户端声明 Content-Length 却不发完，30s 内放弃，
+            # 避免连接被永久占用导致线程累积（SSE 长连接不经过这里，不受影响）
+            self.connection.settimeout(30)
+            try:
+                raw = self.rfile.read(length)
+            finally:
+                self.connection.settimeout(None)
+            return json.loads(raw.decode("utf-8", errors="replace"))
         except Exception:
             return None
 
@@ -4121,7 +4153,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "messages": msgs,
                 "usage_total": d.get("usage_total") or {},
                 "stars": [{"role": str(s.get("role") or ""), "content": str(s.get("content") or ""), "time": str(s.get("time") or "")} for s in (d.get("stars") or []) if isinstance(s, dict)][:200],
-                "pinned": [str(p) for p in (d.get("pinned") or [])][:200],
+                "pinned": [str(p) for p in ((d.get("pinned") or []) if isinstance(d.get("pinned"), list) else [])][:200],
+                "top": bool(d.get("top") or (isinstance(d.get("pinned"), bool) and d["pinned"])),
                 "tags": [str(x) for x in (d.get("tags") or [])][:20],
             }
         except Exception:
@@ -4164,7 +4197,11 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 d = json.load(f)
-            d["pinned"] = bool(body.get("pinned"))
+            # 置顶语义写入 top（bool）；pinned 专用于「消息固定」(list)
+            d["top"] = bool(body.get("pinned"))
+            # 迁移：旧版本曾把置顶误写入 pinned(bool)，清掉避免与消息固定(list)冲突
+            if isinstance(d.get("pinned"), bool):
+                d["pinned"] = []
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(d, f, ensure_ascii=False, separators=(",", ":"))
             _index_session_locked(f"{sid}.json")
@@ -4296,14 +4333,20 @@ class _Handler(BaseHTTPRequestHandler):
     # ── 路由 ─────────────────────────────────────
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._cors_headers()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.end_headers()
 
     def do_GET(self):
         # 本机专用：token 自取（仅监听 127.0.0.1；本机进程本可读 config.json，无额外暴露）
+        # 安全：仅同源或白名单来源可取 token——恶意网页（跨源、带非白名单 Origin）一律 403，
+        # 浏览器同源请求不带 Origin 头，天然放行。
         if self.path == "/v1/token" or self.path == "/api/v1/token":
+            origin = self.headers.get("Origin", "")
+            if origin and origin not in _CORS_ALLOWED_ORIGINS:
+                self._json(403, {"error": "forbidden"})
+                return
             self._json(200, {"token": _TOKEN})
             return
         stripped = self._strip_api_prefix(self.path)
@@ -4321,8 +4364,6 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(200, _models())
                 elif self.path == "/v1/deps":
                     self._json(200, _deps())
-                elif self.path == "/v1/config/reset":
-                    self._json(200, _config_reset())
                 elif self.path == "/v1/update/check":
                     self._json(200, _update_check())
                 elif self.path == "/v1/backup":
@@ -4448,6 +4489,9 @@ class _Handler(BaseHTTPRequestHandler):
                         "usage": {"prompt": prompt_n, "completion": completion_n,
                                   "cached": cached, "cost": costv},
                     })
+                elif self.path == "/v1/config/reset":
+                    # 带副作用的操作只允许 POST（GET 可能被预加载/误触）
+                    self._json(200, _config_reset())
                 elif self.path == "/v1/config":
                     import config_utils
                     import deepseek_client as dc
@@ -4516,7 +4560,7 @@ class _Handler(BaseHTTPRequestHandler):
                     self.send_response(200)
                     self.send_header("Content-Type", "audio/wav" if ext == "wav" else "audio/mpeg")
                     self.send_header("Content-Length", str(len(data)))
-                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self._cors_headers()
                     self.end_headers()
                     self.wfile.write(data)
                 elif self.path == "/v1/tts/voices":
@@ -5484,13 +5528,15 @@ class _Handler(BaseHTTPRequestHandler):
                     logger.exception("后端自动落盘失败（不影响本次会话）")
             # 任务记录：工具链写入工作目录 tasklog（对齐原程序 _record_tasklog）
             try:
-                chain = [t.get("name") for t in _LAST_TOOL_CHAIN[:20]]
+                with _TOOL_CHAIN_LOCK:
+                    chain = list(_LAST_TOOL_CHAIN[:20])
                 user_msgs = [m for m in messages if m.get("role") == "user"]
                 if chain and user_msgs:
                     _record_tasklog(str(user_msgs[-1].get("content") or "")[:40], chain)
             except Exception:
                 pass
-            _LAST_TOOL_CHAIN.clear()
+            with _TOOL_CHAIN_LOCK:
+                _LAST_TOOL_CHAIN.clear()
             _notify_completed(ok=not stop_event.is_set())
             send("done", {})
         except Exception as e:

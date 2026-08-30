@@ -218,10 +218,19 @@ export async function listSessions() {
   return d.sessions || [];
 }
 
-export async function saveSession({ id, name, messages, model, append }) {
+export async function saveSession({ id, name, messages, model, append, stars, pinned, tags }) {
   const d = await api("/v1/sessions", {
     method: "POST",
-    body: JSON.stringify({ id, name, messages, model, append }),
+    body: JSON.stringify({
+      id,
+      name,
+      messages,
+      model,
+      append,
+      ...(stars !== undefined ? { stars } : {}),
+      ...(pinned !== undefined ? { pinned } : {}),
+      ...(tags !== undefined ? { tags } : {}),
+    }),
   });
   return d.id;
 }

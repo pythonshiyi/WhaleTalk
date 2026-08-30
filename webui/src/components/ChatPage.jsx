@@ -106,7 +106,12 @@ function buildMessageChain(msgs) {
 }
 
 // ── 真实后端流式对话 ────────────────────────────────
-function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef, chatMode, onFinished, stopSignalRef, onPrompt, setGenState, continueRef, sessionIdRef) {
+function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef, chatMode, onFinished, stopSignalRef, onPrompt, setGenState, continueRef, sessionIdRef, msgsRef, toast) {
+
+  const updateMsgs = (fn) => {
+    setMsgs(fn);
+    msgsRef.current = typeof fn === "function" ? fn(msgsRef.current) : fn;
+  };
   const stopRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -120,10 +125,10 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
 
     let msg = null;
     if (isContinue) {
-      setMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, streaming: true } : x)));
+      updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, streaming: true } : x)));
     } else {
       msg = { role: "assistant", think: "", tools: [], text: "", streaming: true, time: new Date().toTimeString().slice(0, 8) };
-      setMsgs((m) => [...m, { role: "user", text: userText, time: new Date().toTimeString().slice(0, 8) }, msg]);
+      updateMsgs((m) => [...m, { role: "user", text: userText, time: new Date().toTimeString().slice(0, 8) }, msg]);
     }
     if (stopSignalRef.current) stopSignalRef.current = new AbortController();
 
@@ -148,7 +153,7 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
       const finish = (ok) => {
         if (done || !alive) return;
         done = true;
-        setMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, streaming: false } : x)));
+        updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, streaming: false } : x)));
         setBusy(false);
         setGenState({ on: false, text: "" });
         // 自动朗读收尾：full 一次性读整段；sentence 补读最后半截句
@@ -186,10 +191,10 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
             onReasoning: (t) => {
               if (!alive || stopRef.current) return;
               if (isContinue) {
-                setMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, think: (x.think || "") + t } : x)));
+                updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, think: (x.think || "") + t } : x)));
               } else {
                 msg.think += t;
-                setMsgs((m) => [...m]);
+                updateMsgs((m) => [...m]);
               }
               setGenState({ on: true, text: "🤔 思考中…" });
             },
@@ -198,10 +203,10 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
               acc += t;
               feedAuto();
               if (isContinue) {
-                setMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, text: (x.text || "") + t } : x)));
+                updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, text: (x.text || "") + t } : x)));
               } else {
                 msg.text += t;
-                setMsgs((m) => [...m]);
+                updateMsgs((m) => [...m]);
               }
               setGenState({ on: true, text: "⏳ 等待模型响应…" });
             },
@@ -212,17 +217,17 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
                 parsed = typeof args === "string" && args ? JSON.parse(args) : args;
               } catch {}
               if (isContinue) {
-                setMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, tools: [...(x.tools || []), { tool: name, args: parsed, status: "running" }] } : x)));
+                updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, tools: [...(x.tools || []), { tool: name, args: parsed, status: "running" }] } : x)));
               } else {
                 msg.tools.push({ tool: name, args: parsed, status: "running" });
-                setMsgs((m) => [...m]);
+                updateMsgs((m) => [...m]);
               }
               setGenState({ on: true, text: "⚙ 正在执行「" + name + "」…" });
             },
             onTool: ({ name, result }) => {
               if (!alive || stopRef.current) return;
               if (isContinue) {
-                setMsgs((m) => m.map((x, i) => {
+                updateMsgs((m) => m.map((x, i) => {
                   if (i !== continueIdx) return x;
                   const tools = [...(x.tools || [])];
                   const card = [...tools].reverse().find((t) => t.tool === name && t.status === "running");
@@ -242,13 +247,13 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
                 } else {
                   msg.tools.push({ tool: name, result: String(result || "").slice(0, 8000), status: "done" });
                 }
-                setMsgs((m) => [...m]);
+                updateMsgs((m) => [...m]);
               }
             },
             onToolDuration: ({ name, duration }) => {
               if (!alive || stopRef.current) return;
               if (isContinue) {
-                setMsgs((m) => m.map((x, i) => {
+                updateMsgs((m) => m.map((x, i) => {
                   if (i !== continueIdx) return x;
                   const tools = [...(x.tools || [])];
                   const card = [...tools].reverse().find((t) => t.tool === name && t.status === "done");
@@ -262,7 +267,7 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
             },
             onUsage: (u) => {
               if (alive) {
-                if (isContinue) setMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, usage: u } : x)));
+                if (isContinue) updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, usage: u } : x)));
                 else msg.usage = u;
               }
             },
@@ -294,7 +299,7 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
             onDone: () => finish(true),
             onError: (e) => {
               if (!alive) return;
-              setMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, text: (x.text || "") + "\n\n⚠️ 后端错误：" + e, streaming: false } : x)));
+              updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, text: (x.text || "") + "\n\n⚠️ 后端错误：" + e, streaming: false } : x)));
               setBusy(false);
               setGenState({ on: false, text: "" });
             },
@@ -321,6 +326,10 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
     return () => {
       alive = false;
       stopRef.current = true;
+      // 中止进行中的流式请求：组件卸载/切换页面时立即断开，避免后台空跑
+      try {
+        if (stopSignalRef.current) stopSignalRef.current.abort();
+      } catch {}
     };
   }, [busy]);
 }
@@ -485,6 +494,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   // 最新会话 id 转发给 useBackendChat（避免 effect 闭包过期）：已有会话生成完成后由后端自动落盘
   const activeIdRef = React.useRef(null);
   activeIdRef.current = activeId;
+  // 实时镜像 msgs：hook 内函数式更新 + 组件体 onFinished 共用，保证续写/保存拿到最新消息
+  const msgsRef = React.useRef([]);
   const [msgs, setMsgs] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
   const [ctxOpen, setCtxOpen] = React.useState(false);
@@ -590,7 +601,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     setPromptReq,
     setGenStateThrottled,
     continueRef,
-    activeIdRef
+    activeIdRef,
+    msgsRef,
+    toast
   );
 
   // 会话保存：每次 render 同步到 ref，保证 useBackendChat 用的是最新闭包
@@ -606,13 +619,12 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       if (!ok) return;
       if (dataMode !== "backend") return;
       if (isContinue) {
-        // 续写：保存更新后的完整消息链（用实参 msg 而非陈旧闭包 msgs）
+        // 续写：用 msgsRef 实时镜像（含续写流式内容）重建完整消息链保存；
+        // 续写不产生新 user 消息、msg 为空，直接以镜像消息链为准
         try {
-          const updated = buildMessageChain([
-            ...(msgs.length ? msgs : []),
-            { role: "user", text: userText, time: new Date().toTimeString().slice(0, 8) },
-            msg,
-          ]);
+          const updated = buildMessageChain(
+            msgsRef.current.length ? msgsRef.current : msgs
+          );
           await api.saveSession({
             id: activeId || undefined,
             name: activeSession?.title || userText.replace(/\s+/g, " ").slice(0, 24),
@@ -664,11 +676,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         });
         if (sid) {
           setActiveId(sid);
-          historyRef.current = buildMessageChain([
-            ...(msgs.length ? msgs : []),
-            { role: "user", text: userText, time: new Date().toTimeString().slice(0, 8) },
-            msg,
-          ]).slice(-80);
+          historyRef.current = buildMessageChain(
+            msgsRef.current.length ? msgsRef.current : [userText, msg]
+          ).slice(-80);
           refreshSessions();
         }
       } catch {}

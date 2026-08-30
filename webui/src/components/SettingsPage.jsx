@@ -882,7 +882,7 @@ export default function SettingsPage({ onGoPrompts }) {
 
   const resetAll = async () => {
     if (!window.confirm("恢复全部默认配置？（API Key 会保留）")) return;
-    const d = await apiGet("/v1/config/reset");
+    const d = await apiPost("/v1/config/reset", {});
     if (d && d.ok) {
       window.location.reload();
     }

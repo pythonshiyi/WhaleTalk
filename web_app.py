@@ -574,7 +574,11 @@ def main():
     args = parser.parse_args()
 
     if not args.no_deps_check:
-        _ensure_python_deps()
+        # 硬依赖安装失败 = API 无法启动，明确报错退出，避免带病运行
+        if not _ensure_python_deps():
+            print("❌ 必需依赖安装失败，程序未启动。请检查网络后重新运行（或加 --no-deps-check 强制启动调试）。")
+            input("按回车退出…") if not args.server else None
+            return 1
     if not args.server:
         _hide_console()
     # 快捷方式：强制 / 首次启动自动创建（不指定 --no-shortcuts）
