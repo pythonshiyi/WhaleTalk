@@ -948,6 +948,21 @@ export default function SettingsPage({ onGoPrompts }) {
     };
   }, []);
 
+  // 来自「可选能力提示条」的直达跳转：#deps → 高级模式 + 高级标签（可选能力面板）
+  React.useEffect(() => {
+    try {
+      if (window.location.hash === "#deps") {
+        setMode("advanced");
+        setTab("adv");
+        window.location.hash = "";
+        setTimeout(() => {
+          const el = document.querySelector(".svc-group");
+          if (el) el.scrollIntoView({ behavior: "smooth" });
+        }, 120);
+      }
+    } catch {}
+  }, []);
+
   // 文本输入本地草稿：编辑不落盘，失焦/回车才保存（避免打字过程写半截模型名）
   const modelText = modelDraft ?? cfg?.model ?? "";
   const baseUrlText = baseUrlDraft ?? cfg?.base_url ?? "";

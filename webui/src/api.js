@@ -390,5 +390,8 @@ export async function getBrain() {
 export async function brainAction(payload) {
   return api("/v1/brain", { method: "POST", body: JSON.stringify(payload) });
 }
+export async function getDeps() {
+  return api("/v1/deps");
+}
 
 export { getToken, getBase, api };
