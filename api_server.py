@@ -5170,7 +5170,7 @@ class _Handler(BaseHTTPRequestHandler):
                                     dep = {"import": imp, "label": label, "pip": pkg, "post_cmd": None, "note": ""}
                                     break
                         if dep is None:
-                            emit({"type": "item_done", "ok": False, "index": i, "label": str(key), "message": f"未找到依赖：{key}"})
+                            emit({"type": "item_done", "ok": False, "index": i, "label": str(key), "key": str(key), "message": f"未找到依赖：{key}"})
                             failed.append(str(key))
                             continue
                         emit({"type": "item_start", "index": i, "label": dep["label"]})
@@ -5186,7 +5186,7 @@ class _Handler(BaseHTTPRequestHandler):
                                 ok = False
                         if not ok:
                             failed.append(dep["label"])
-                        emit({"type": "item_done", "ok": ok, "index": i, "label": dep["label"]})
+                        emit({"type": "item_done", "ok": ok, "index": i, "label": dep["label"], "key": dep["import"]})
                     emit({"type": "batch_done", "ok": len(failed) == 0, "failed": failed})
                 except Exception as e:  # noqa: BLE001
                     try:
