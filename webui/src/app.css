@@ -1053,7 +1053,16 @@ button {
 .perm-note { font-size: var(--fs-xs); color: var(--text-3); margin-top: var(--sp-4); }
 
 /* ═══ 能力中心 tab（工具 / 黑名单） ════════════════ */
-.ab-tabs { display: flex; gap: 6px; margin-bottom: var(--sp-4); }
+.ab-tabs { display: flex; gap: 6px; margin-bottom: var(--sp-4); flex-wrap: wrap; }
+.set-searchbar { display: flex; align-items: center; gap: 8px; margin-bottom: var(--sp-3); }
+.set-searchbar .set-select { flex: 1; max-width: 420px; }
+.set-search-hint {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 8px 12px; margin-bottom: var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--bg-2); border: 1px dashed var(--border-strong);
+  font-size: var(--fs-sm); color: var(--text-2);
+}
 .ab-tab {
   padding: 7px 18px; border-radius: var(--r-full);
   font-size: var(--fs-sm); font-weight: 600;

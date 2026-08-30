@@ -18,6 +18,23 @@ const apiPost = async (path, body) => {
   }
 };
 
+// ── 设置搜索：搜索词通过 Context 下发，Row / 大块按需过滤 ────────────
+const SearchCtx = React.createContext("");
+const TAB_INDEX = [
+  { id: "model", label: "🎛 模型与网关", keys: "模型 api key 网关 思考 输出 token 预设 角色" },
+  { id: "service", label: "🔌 外部服务", keys: "服务 外部 连接 webhook 工作流" },
+  { id: "persona", label: "🧠 人格与工具", keys: "人格 角色 工具 插件 提示词 能力" },
+  { id: "notice", label: "🔔 通知与安全", keys: "通知 安全 提示音 朗读 语音" },
+  { id: "look", label: "🎨 外观", keys: "外观 主题 密度 字号 字体 界面" },
+  { id: "brain", label: "🧠 大脑", keys: "大脑 挂载 快照 密钥 合并 恢复 心跳 记忆 免密 备份" },
+  { id: "deps", label: "🔌 可选能力", keys: "可选能力 依赖 安装 组件 浏览器 语音转写 二维码 rar" },
+  { id: "adv", label: "⚙ 高级", keys: "高级 备份 更新 清理 流程 检查点 知识库 审计 工具链" },
+];
+function useBlockFilter(keys) {
+  const q = React.useContext(SearchCtx);
+  return !(q && !keys.toLowerCase().includes(q));
+}
+
 // ── 一键预设（新手懒人）──────────────────────────────
 const PRESETS = [
   { id: "balanced", name: "🎯 均衡", desc: "Pro + 高思考，全能平衡，日常推荐", cfg: { model: "deepseek-v4-pro", thinking: "high", max_tokens: 16384, temperature: 1.0, top_p: 1.0, json_output: false } },
@@ -34,6 +51,8 @@ const THEMES = [
 
 // ── 通用小组件 ──────────────────────────────────────
 function Row({ label, desc, children }) {
+  const q = React.useContext(SearchCtx);
+  if (q && !`${label} ${desc || ""}`.toLowerCase().includes(q)) return null;
   return (
     <div className="set-row">
       <div className="set-info"><b>{label}</b>{desc && <span>{desc}</span>}</div>
@@ -334,7 +353,6 @@ function AdvancedTab({ cfg, saveField, onReset, onGoPrompts }) {
         <CheckpointBlock />
         <KnowledgeBlock />
         <AuditBlock />
-        <DepsBlock />
       </div>
       <div className="svc-group">
         <div className="svc-title">📦 备份 / 🚀 更新 / 🧹 清理</div>
@@ -734,12 +752,14 @@ function CleanupBlock() {
 
 // ── B10 依赖状态 ───────────────────────────────────
 function DepsBlock() {
+  const showBlock = useBlockFilter("可选能力 依赖 安装 组件 浏览器 语音转写 二维码 rar 能力");
   const [deps, setDeps] = React.useState(null);
   const [heavy, setHeavy] = React.useState([]);
   const [busyKey, setBusyKey] = React.useState("");
   const [msg, setMsg] = React.useState("");
   const load = () => apiGet("/v1/deps").then((d) => { if (d) { setDeps(d.deps || []); setHeavy(d.heavy || []); } });
   React.useEffect(() => { load(); }, []);
+  if (!showBlock) return null;
   const install = async (key) => {
     setBusyKey(key);
     setMsg("正在安装（大组件可能需数分钟，请稍候）…");
@@ -913,6 +933,9 @@ export default function SettingsPage({ onGoPrompts }) {
     }
   });
   const [tab, setTab] = React.useState("model");
+  const [search, setSearch] = React.useState("");
+  const q = search.trim().toLowerCase();
+  const matchedOtherTabs = q ? TAB_INDEX.filter((t) => t.keys.toLowerCase().includes(q) && t.id !== tab) : [];
   const [cfg, setCfg] = React.useState(null);
   const [models, setModels] = React.useState([]);
   const [roles, setRoles] = React.useState([]);
@@ -1038,6 +1061,7 @@ export default function SettingsPage({ onGoPrompts }) {
     { id: "notice", label: "🔔 通知与安全" },
     { id: "look", label: "🎨 外观" },
     { id: "brain", label: "🧠 大脑" },
+    { id: "deps", label: "🔌 可选能力" },
     { id: "adv", label: "⚙ 高级" },
   ];
 
@@ -1101,11 +1125,33 @@ export default function SettingsPage({ onGoPrompts }) {
         </div>
       ) : (
         <>
+          <div className="set-searchbar">
+            <input
+              className="set-select set-combo"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="🔍 搜索设置（如：依赖、大脑、语音、备份…）"
+            />
+            {search && <button className="msg-op" onClick={() => setSearch("")}>✕</button>}
+          </div>
+          {q && (
+            matchedOtherTabs.length > 0 ? (
+              <div className="set-search-hint">
+                🔎 相关设置位于：
+                {matchedOtherTabs.map((t) => (
+                  <button key={t.id} className="msg-op" style={{ marginLeft: 8 }} onClick={() => setTab(t.id)}>前往 {t.label}</button>
+                ))}
+              </div>
+            ) : (
+              <div className="set-search-hint">没有匹配的设置项，换个关键词试试</div>
+            )
+          )}
           <div className="ab-tabs">
             {TABS.map((t) => (
               <button key={t.id} className={`ab-tab ${tab === t.id ? "ab-tab-on" : ""}`} onClick={() => setTab(t.id)}>{t.label}</button>
             ))}
           </div>
+          <SearchCtx.Provider value={q}>
           <div className="set-card">
             {tab === "model" && (
               <>
@@ -1260,7 +1306,9 @@ export default function SettingsPage({ onGoPrompts }) {
             )}
             {tab === "adv" && <AdvancedTab cfg={cfg} saveField={saveField} onReset={resetAll} onGoPrompts={onGoPrompts} />}
             {tab === "brain" && <BrainBlock />}
+            {tab === "deps" && <DepsBlock />}
           </div>
+          </SearchCtx.Provider>
         </>
       )}
       {tip && <div className="set-saved-tip">{tip}</div>}
