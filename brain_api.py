@@ -50,21 +50,32 @@ def brain_status():
     versions = sorted(bk.ARCHIVE_DIR.glob("brain_v*.whale")) if bk.ARCHIVE_DIR.exists() else []
     conflicts = bk.load_json(bk.MERGE_CONFLICT_FILE, {})
     lineage = bk.load_json(bk.LINEAGE_FILE, {})
+    context_preview = None
+    try:
+        context_preview = brain_context(max_memories=3)
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "brain_id": m.get("brain_id"),
         "fingerprint_ok": bk.verify_fingerprint(m),
         "fingerprint": str(m.get("fingerprint", ""))[:16] + "…",
         "name": ident.get("name") or "未命名",
         "vessel": ident.get("vessel") or "",
+        "nature": ident.get("nature") or "",
         "keyring": bk._keyring_ready(),
         "pubkey": m.get("pubkey_fingerprint"),
+        "created_at": m.get("created_at"),
+        "genesis": m.get("genesis"),
         "memories": mem_count,
         "thinking_days": think_files,
         "last_mount": hb.get("last_mount"),
         "last_unmount": hb.get("last_unmount"),
+        "last_beat": hb.get("last_beat"),
         "resume_hint": hb.get("resume_hint"),
         "lineage": lineage,
         "open_conflicts": len(conflicts.get("conflicts", [])) if conflicts else 0,
+        "current_version": int(versions[-1].stem.rsplit("_v", 1)[-1]) if versions else 0,
+        "context_preview": context_preview,
         "snapshots": [
             {
                 "name": v.name,
