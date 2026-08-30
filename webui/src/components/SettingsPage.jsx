@@ -134,8 +134,8 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
   };
   const hasEdge = !!(voices?.edge || []).length;
   const hasPiper = !!(voices?.piper || []).length;
+  const piperReady = (voices?.piper || []).some((v) => v.ready);
   const [piperBusy, setPiperBusy] = React.useState(false);
-  const [setupLog, setSetupLog] = React.useState([]);
   return (
     <div className="svc-group">
       <div className="svc-title">🗣 语音朗读</div>
@@ -146,7 +146,7 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
           <option value="full">自动 · 整段读完</option>
         </select>
       </Row>
-      <Row label="合成引擎" desc="Piper=本地离线（免费·中文自然，需装 piper-tts 并下载模型）；Edge=在线自然；SAPI=系统自带">
+      <Row label="合成引擎" desc="Piper=本地离线（安装见下方「可选能力」）；Edge=在线自然；SAPI=系统自带">
         <select className="set-select" value={vc.engine || "auto"} onChange={(e) => setV({ engine: e.target.value })}>
           <option value="auto">自动（Piper→Edge→系统）</option>
           <option value="piper">Piper（本地离线）</option>
@@ -161,72 +161,30 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
               <option key={v.id} value={v.id}>{v.name}</option>
             ))}
           </select>
-          <button
-            className="confirm-btn confirm-primary"
-            style={{ marginLeft: 6 }}
-            disabled={piperBusy}
-            onClick={async () => {
-              // 一键部署：装依赖 + 下模型 + 下 g2pW + 合成验证（NDJSON 流式进度）
-              setPiperBusy(true);
-              setSetupLog([]);
-              try {
-                const r = await fetch(`${window.location.origin}/v1/tts/setup_piper`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("whaletalk.api.token") || ""}` },
-                  body: "{}",
-                });
-                const reader = r.body.getReader();
-                const dec = new TextDecoder();
-                let buf = "";
-                for (;;) {
-                  const { done, value } = await reader.read();
-                  if (done) break;
-                  buf += dec.decode(value, { stream: true });
-                  let nl;
-                  while ((nl = buf.indexOf("\n")) !== -1) {
-                    const line = buf.slice(0, nl).trim();
-                    buf = buf.slice(nl + 1);
-                    if (!line) continue;
-                    try {
-                      const ev = JSON.parse(line);
-                      if (ev.message) setSetupLog((l) => [...l.slice(-40), ev.message]);
-                      if (ev.type === "done") {
-                        onTip(ev.ok ? "✅ Piper 部署完成，可离线朗读" : "⚠ 部署未完全就绪，见日志");
-                        setTimeout(() => onTip(""), 4000);
-                        apiGet("/v1/tts/voices").then((x) => x && setVoices(x));
-                      }
-                      if (ev.type === "error") { onTip("❌ " + ev.message); setTimeout(() => onTip(""), 4000); }
-                    } catch {}
-                  }
-                }
-              } catch (e) { onTip("❌ 部署失败：" + e.message); setTimeout(() => onTip(""), 3000); }
-              setPiperBusy(false);
-            }}
-          >
-            {piperBusy ? "⏳ 部署中…" : "⚡ 一键部署"}
-          </button>
-          <button
-            className="confirm-btn"
-            style={{ marginLeft: 6 }}
-            disabled={piperBusy}
-            onClick={async () => {
-              setPiperBusy(true);
-              try {
-                const d = await apiPost("/v1/tts/download_piper", { voice: vc.piper_voice || "zh_CN-chaowen-medium" });
-                onTip((d && d.ok ? "✅ " : "❌ ") + (d?.message || "下载失败"));
-                setTimeout(() => { onTip(""); apiGet("/v1/tts/voices").then((x) => x && setVoices(x)); }, 2600);
-              } catch (e) { onTip("❌ 下载失败：" + e.message); }
-              setPiperBusy(false);
-            }}
-          >
-            {piperBusy ? "⏳ 下载中…" : "⬇ 仅下模型"}
-          </button>
-          {setupLog.length > 0 && (
-            <div className="sched-text" style={{ marginTop: 8, padding: 8, background: "var(--bg-1)", borderRadius: 8, maxHeight: 160, overflowY: "auto", fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "pre-wrap" }}>
-              {setupLog.join("\n")}
-            </div>
+          {!piperReady && (
+            <button
+              className="confirm-btn"
+              style={{ marginLeft: 6 }}
+              disabled={piperBusy}
+              onClick={async () => {
+                setPiperBusy(true);
+                try {
+                  const d = await apiPost("/v1/tts/download_piper", { voice: vc.piper_voice || "zh_CN-chaowen-medium" });
+                  onTip((d && d.ok ? "✅ " : "❌ ") + (d?.message || "下载失败"));
+                  setTimeout(() => { onTip(""); apiGet("/v1/tts/voices").then((x) => x && setVoices(x)); }, 3200);
+                } catch (e) { onTip("❌ 下载失败：" + e.message); setTimeout(() => onTip(""), 3000); }
+                setPiperBusy(false);
+              }}
+            >
+              {piperBusy ? "⏳ 下载中…" : "⬇ 下载模型"}
+            </button>
           )}
         </Row>
+      )}
+      {!hasPiper && (
+        <div className="svc-note" style={{ fontSize: 12, color: "var(--text-3)", padding: "2px 0 10px" }}>
+          💡 想要完全本地离线的自然语音？到 <b>「🔌 可选能力 → Piper 本地语音」</b> 一键安装（自动装依赖并下载中文模型，之后断网也能朗读）。
+        </div>
       )}
       <Row label="语速" desc="-10 慢 ~ 10 快，0 正常">
         <NumInput min={-10} max={10} value={vc.rate} onChange={(v) => setV({ rate: v })} />
@@ -564,7 +522,7 @@ function CleanupBlock() {
 }
 
 // ── B10 依赖状态（完整清单 + 能力市场 + 流式进度）────
-const DEPS_ICONS = { playwright: "🖥", faster_whisper: "🎙", pyzbar: "▦", rarfile: "🗜" };
+const DEPS_ICONS = { playwright: "🖥", piper: "🔊", faster_whisper: "🎙", pyzbar: "▦", rarfile: "🗜" };
 
 function DepsBlock() {
   const showBlock = useBlockFilter("可选能力 依赖 安装 组件 浏览器 语音转写 二维码 rar 能力 进度");

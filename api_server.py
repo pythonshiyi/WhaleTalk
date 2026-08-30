@@ -5085,6 +5085,16 @@ class _Handler(BaseHTTPRequestHandler):
                     else:
                         emit({"type": "start", "label": dep["label"]})
                         ok = deps_mod.install_optional(dep, on_line=lambda s: emit({"type": "line", "message": s}))
+                        # Piper 可选能力：依赖装完后自动下载中文语音模型 + g2pW（免折腾，镜像回退）
+                        if ok and dep.get("import") == "piper":
+                            emit({"type": "line", "message": "Piper 依赖就绪，正在下载中文语音模型（约 220MB，含 g2pW 音素模型）…"})
+                            try:
+                                ok_v, msg_v = _piper_download("zh_CN-chaowen-medium")
+                                emit({"type": "line", "message": msg_v})
+                                ok = ok and ok_v
+                            except Exception as e:  # noqa: BLE001
+                                emit({"type": "line", "message": f"模型下载异常：{e}"})
+                                ok = False
                         emit({"type": "done", "ok": ok, "label": dep["label"]})
                 except Exception as e:  # noqa: BLE001
                     try:

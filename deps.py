@@ -24,7 +24,6 @@ OPTIONAL_DEPS = [
     ("imageio_ffmpeg", "imageio-ffmpeg", "音视频处理（内置 ffmpeg）", "pip install imageio-ffmpeg"),
     ("markdown", "markdown", "公众号写作 HTML 输出", "pip install markdown"),
     ("win32com", "pywin32", "语音朗读/语音合成", "pip install pywin32"),
-    ("piper", "piper-tts[zh]", "本地离线神经语音（Piper：中文模型 20-60MB，断网可用；[zh] 含中文音素依赖）", "pip install piper-tts[zh] g2pW sentence_stream unicode_rbnf"),
     ("tiktoken", "tiktoken", "精确 token 估算（缺省回退字符估算）", "pip install tiktoken"),
     ("pygments", "Pygments", "代码块语法高亮", "pip install pygments"),
     ("ebooklib", "ebooklib", "EPUB 电子书阅读", "pip install ebooklib"),
@@ -81,6 +80,14 @@ HEAVY_DEPS = [
         "pip": "playwright",
         "post_cmd": ["playwright", "install", "chromium"],
         "note": "会额外下载 Chromium（约 150 MB）",
+    },
+    {
+        "import": "piper",
+        "label": "Piper 本地语音",
+        "desc": "完全本地离线神经 TTS：中文模型 20-60MB、断网可用、CPU 实时（VITS+ONNX）",
+        "pip": "piper-tts[zh] g2pW sentence_stream unicode_rbnf",
+        "post_cmd": None,
+        "note": "安装完成后自动下载中文语音模型（约 220MB，含 g2pW 音素模型，官方源超时自动回退镜像）",
     },
     {
         "import": "faster_whisper",
