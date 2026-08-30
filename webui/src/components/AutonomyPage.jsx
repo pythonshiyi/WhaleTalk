@@ -1,5 +1,6 @@
 import React from "react";
 import * as api from "../api.js";
+import EmptyState from "./EmptyState.jsx";
 
 function EvTab({ onToast }) {
   const [evs, setEvs] = React.useState(null);
@@ -84,7 +85,7 @@ function EvTab({ onToast }) {
         {evs === null ? (
           <div className="empty-tip">加载中…</div>
         ) : evs.length === 0 ? (
-          <div className="empty-tip">暂无提案 —— 让 AI 用 create_evolution 提改进方案（如"对 X 提出改进提案"），方案会出现在这里供你审阅采纳</div>
+          <EmptyState icon="💡" title="还没有进化提案" hint="让 AI 用 create_evolution 提出改进方案（如：对 X 提出改进提案），方案会出现在这里供你审阅采纳。" compact />
         ) : (
           <div className="au-list">
             {evs.map((e) => (
@@ -118,7 +119,7 @@ function EvTab({ onToast }) {
         {branches === null ? (
           <div className="empty-tip">加载中…</div>
         ) : branches.length === 0 ? (
-          <div className="empty-tip">暂无 evolve 分支 —— AI 用 self_evolve 提交的改进分支会出现在这里，可查看 diff 后合并</div>
+          <EmptyState icon="🌿" title="还没有改进分支" hint="AI 用 self_evolve 提交的改进分支会出现在这里，可查看 diff 后合并。" compact />
         ) : (
           <div className="au-list">
             {branches.map((b) => (
@@ -169,7 +170,7 @@ function ApprovalTab({ onToast }) {
       {items === null ? (
         <div className="empty-tip">加载中…</div>
       ) : items.length === 0 ? (
-        <div className="empty-tip">暂无记录 —— AI 请求权限或向你提问时会记录在这里</div>
+        <EmptyState icon="📋" title="还没有审批记录" hint="AI 请求权限或向你提问时，记录会出现在这里。" compact />
       ) : (
         <div className="au-list">
           {items.map((a, i) => (

@@ -67,7 +67,7 @@ export default function Sidebar({ page, onPage }) {
             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
               {ICONS[n.icon]}
             </svg>
-            <span>{n.label}</span>
+            <span className="sb-item-label">{n.label}</span>
           </button>
         ))}
       </div>

@@ -1,5 +1,18 @@
 /* ═══ 布局骨架 ═══════════════════════════════════ */
 * { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  line-height: 1.6;
+  color: var(--text-1);
+  background: var(--bg-0);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-synthesis: none;              /* 避免伪粗体/伪斜体，用真实字重 */
+  overscroll-behavior: none;
+}
+h1, h2, h3, h4 { font-weight: 700; line-height: 1.3; letter-spacing: -0.2px; margin: 0; }
 button {
   font: inherit;
   color: inherit;
@@ -11,7 +24,7 @@ button {
 .app { display: flex; height: 100vh; }
 .app-main { flex: 1; min-width: 0; display: flex; }
 
-/* ═══ 侧边栏（图标导航） ═════════════════════════ */
+/* ═══ 侧边栏（图标导航 · hover 可展开） ═══════════════ */
 .sidebar {
   width: 64px;
   flex-shrink: 0;
@@ -20,9 +33,13 @@ button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: var(--sp-3) 0;
+  padding: var(--sp-3) var(--sp-2);
   gap: var(--sp-2);
+  transition: width .22s var(--ease);
+  overflow: hidden;
+  z-index: 20;
 }
+.sidebar:hover { width: 188px; }
 .sb-logo {
   width: 40px; height: 40px;
   display: grid; place-items: center;
@@ -30,43 +47,54 @@ button {
   background: linear-gradient(135deg, rgba(14,165,233,.18), rgba(139,92,246,.14));
   border: 1px solid rgba(14,165,233,.28);
   margin-bottom: var(--sp-2);
+  flex-shrink: 0;
 }
-.sb-items { flex: 1; display: flex; flex-direction: column; gap: var(--sp-1); width: 100%; align-items: center; }
+.sb-items { flex: 1; display: flex; flex-direction: column; gap: 3px; width: 100%; align-items: center; }
 .sb-item {
-  width: 44px; height: 44px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 3px;
+  width: 48px; height: 44px;
+  display: flex; align-items: center; justify-content: center;
+  gap: 10px;
   background: none; border: none; cursor: pointer;
   color: var(--text-3);
   border-radius: var(--r-md);
-  font-size: 9.5px;
+  font-size: 12.5px;
   transition: all .18s var(--ease);
   position: relative;
+  flex-shrink: 0;
 }
-.sb-item:hover { color: var(--text-2); background: var(--bg-hover); }
+.sb-item:hover { color: var(--text-1); background: var(--bg-hover); }
 .sb-item-on { color: var(--brand-strong); background: var(--bg-active); }
 .sb-item-on::before {
-  content: ""; position: absolute; left: -10px; top: 50%; transform: translateY(-50%);
+  content: ""; position: absolute; left: -8px; top: 50%; transform: translateY(-50%);
   width: 3px; height: 20px; border-radius: 3px; background: var(--brand);
   box-shadow: 0 0 8px var(--brand);
 }
-.sb-bottom { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); }
+.sb-item-label { display: none; white-space: nowrap; font-weight: 500; }
+.sidebar:hover .sb-items { align-items: stretch; }
+.sidebar:hover .sb-item { width: auto; justify-content: flex-start; padding: 0 12px; }
+.sidebar:hover .sb-item-label { display: inline-block; }
+.sb-bottom { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); width: 100%; }
 .sb-status {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 6px 8px; border-radius: var(--r-md);
+  padding: 6px 4px; border-radius: var(--r-md);
   background: var(--bg-2); border: 1px solid var(--border);
   cursor: pointer; transition: all .18s var(--ease);
+  width: 48px; flex-shrink: 0;
 }
 .sb-status:hover { border-color: var(--border-strong); }
 .sb-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); animation: pulse 2.4s infinite; }
-.sb-status-model { font-size: 9px; color: var(--text-2); font-family: var(--font-mono); }
-.sb-status-sub { font-size: 8.5px; color: var(--text-3); }
+.sb-status-model { display: none; font-size: 11px; color: var(--text-2); font-family: var(--font-mono); }
+.sb-status-sub { display: none; font-size: 10px; color: var(--text-3); }
+.sidebar:hover .sb-status { width: 100%; flex-direction: row; justify-content: flex-start; gap: 8px; padding: 6px 12px; }
+.sidebar:hover .sb-status-model { display: block; }
+.sidebar:hover .sb-status-sub { display: block; }
 .sb-avatar {
   width: 34px; height: 34px; display: grid; place-items: center;
   font-size: 16px; border-radius: 50%;
   background: linear-gradient(135deg, var(--bg-3), var(--bg-2));
   border: 1px solid var(--border-strong);
   cursor: pointer;
+  flex-shrink: 0;
 }
 .sb-status.sb-status:focus-visible, .sb-avatar.sb-avatar:focus-visible {
   outline: 2px solid var(--brand); outline-offset: 2px;
@@ -2424,3 +2452,37 @@ button {
 }
 .brain-page-body { max-width: none; }
 .page-embedded { animation: msgIn .25s var(--ease); }
+
+/* ═══ 按钮体系规范（三层统一：主 / 次 / 图标+最小操作） ════════ */
+button { -webkit-tap-highlight-color: transparent; }
+/* 聚焦可见性（键盘可达）：所有交互控件统一品牌色光环 */
+.confirm-btn:focus-visible, .msg-op:focus-visible, .icon-btn:focus-visible,
+.deps-btn:focus-visible, .send-btn:focus-visible, .sl-act:focus-visible,
+.brain-tab:focus-visible, .acc-head:focus-visible, .set-select:focus-visible {
+  outline: 2px solid var(--brand); outline-offset: 2px;
+}
+/* 禁用态统一 */
+.confirm-btn:disabled, .msg-op:disabled, .icon-btn:disabled,
+.deps-btn:disabled, .send-btn:disabled, .sl-act:disabled {
+  opacity: .45; cursor: not-allowed;
+}
+/* 最小操作层：消息操作按钮可读性提升（原 10px 过小） */
+.msg-op { font-size: 11.5px; padding: 3.5px 9px; }
+
+/* ═══ 空状态（统一图标化） ═══════════════════════ */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: 6px;
+  padding: 48px 24px;
+}
+.empty-state-compact { padding: 28px 16px; }
+.empty-state-icon {
+  width: 56px; height: 56px; display: grid; place-items: center;
+  font-size: 26px; border-radius: var(--r-xl);
+  background: var(--brand-soft); border: 1px solid var(--border);
+  margin-bottom: 6px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+}
+.empty-state-title { font-size: var(--fs-lg); font-weight: 700; color: var(--text-1); }
+.empty-state-hint { font-size: var(--fs-sm); color: var(--text-3); max-width: 380px; line-height: 1.6; }
+.empty-state-action { margin-top: 10px; }

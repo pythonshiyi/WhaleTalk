@@ -2,6 +2,7 @@ import React from "react";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import ToolTest from "./ToolTest.jsx";
+import EmptyState from "./EmptyState.jsx";
 
 const apiGet = async (path) => {
   try {
@@ -229,7 +230,11 @@ export function MemoryPage({ embedded }) {
           </div>
         ))}
         {items.length === 0 && (
-          <div className="empty-tip">{err || "暂无记忆（对话中记录的事实会出现在这里）"}</div>
+          err ? (
+            <EmptyState icon="⚠️" title="记忆加载失败" hint={err} compact />
+          ) : (
+            <EmptyState icon="🧠" title="记忆库还是空的" hint="对话中记录的重要事实会自动沉淀到这里；与 AI 多聊几次，记忆就开始生长。" compact />
+          )
         )}
       </div>
       <KnowledgeBaseBlock />
@@ -490,7 +495,7 @@ export function FilesPage() {
           <div className="files-row" key={i}>📦 {r}</div>
         ))}
         {!err && files && (files.recent || []).length === 0 && (
-          <div className="empty-tip">暂无产物——工具生成文件后自动出现在这里</div>
+          <EmptyState icon="📦" title="还没有产物" hint="工具生成的文件会自动出现在这里。" compact />
         )}
       </div>
       <div className="wb-card-title" style={{ marginTop: 16 }}>工作区（{files?.entries?.length || 0} 项）</div>
@@ -594,7 +599,7 @@ export function EvolutionPage() {
               )}
             </div>
           ))}
-          {(!evos || evos.length === 0) && <div className="empty-tip">暂无进化提案（AI 自我审查后自动生成）</div>}
+          {(!evos || evos.length === 0) && <EmptyState icon="💡" title="还没有进化提案" hint="AI 自我审查后会在这里自动生成改进提案。" compact />}
         </div>
       )}
     </div>
@@ -696,7 +701,7 @@ function SchedulesBlock() {
             {s.text && <div className="sched-text">{s.text}</div>}
           </div>
         ))}
-        {schedules.length === 0 && <div className="empty-tip">暂无定时任务——AI 用 schedule_task 工具也能创建</div>}
+        {schedules.length === 0 && <EmptyState icon="⏰" title="还没有定时任务" hint="AI 用 schedule_task 工具也能创建定时任务。" compact />}
       </div>
       <div className="sched-form">
         <input className="set-select set-combo" placeholder="名称（可选）" value={newS.name} onChange={(e) => setNewS({ ...newS, name: e.target.value })} />

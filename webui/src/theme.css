@@ -29,8 +29,8 @@
   --sp-5: 24px;
   --sp-6: 32px;
 
-  --fs-xs: 11px;
-  --fs-sm: 12.5px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
   --fs-md: 14px;
   --fs-lg: 16px;
   --fs-xl: 20px;
@@ -38,8 +38,9 @@
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 
-  --font-ui: "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+  /* 字体栈：西文优先（各平台最优系统字体）、中文优雅回退；全部本机字体，离线零依赖 */
+  --font-ui: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
 }
 
 /* ── 星空黑（默认）：极黑冷底 + 亮青点缀 ─────────── */
@@ -115,18 +116,18 @@
 
 /* ── 北极冰：冰白底 + 深海蓝文字 ─────────────────── */
 [data-theme="arctic"] {
-  --bg-0: #edf2f9;
+  --bg-0: #eef3fa;
   --bg-1: #f6f9fe;
   --bg-2: #ffffff;
-  --bg-3: #e2ebf6;
-  --bg-hover: rgba(30, 64, 110, 0.06);
-  --bg-active: rgba(2, 132, 199, 0.09);
-  --border: rgba(30, 64, 110, 0.10);
-  --border-strong: rgba(30, 64, 110, 0.20);
+  --bg-3: #e0e9f5;
+  --bg-hover: rgba(30, 64, 110, 0.07);
+  --bg-active: rgba(2, 132, 199, 0.10);
+  --border: rgba(30, 64, 110, 0.13);
+  --border-strong: rgba(30, 64, 110, 0.26);
 
-  --text-1: #1c2b45;
-  --text-2: #54637f;
-  --text-3: #8595b2;
+  --text-1: #182640;
+  --text-2: #4d5d7c;
+  --text-3: #7486a5;
   --text-link: #0284c7;
 
   --brand: #0284c7;
@@ -134,18 +135,18 @@
   --brand-soft: rgba(2, 132, 199, 0.10);
   --ai: #7c3aed;
 
-  --scroll-thumb: rgba(30, 64, 110, 0.18);
-  --scroll-thumb-hover: rgba(30, 64, 110, 0.32);
-  --header-bg: rgba(246, 249, 254, 0.88);
+  --scroll-thumb: rgba(30, 64, 110, 0.24);
+  --scroll-thumb-hover: rgba(30, 64, 110, 0.40);
+  --header-bg: rgba(246, 249, 254, 0.9);
   --bubble-bg: linear-gradient(135deg, rgba(2, 132, 199, 0.16), rgba(56, 189, 248, 0.10));
   --composer-fade: linear-gradient(180deg, transparent, rgba(246, 249, 254, 0.7) 30%);
   --code-inline-bg: rgba(2, 132, 199, 0.08);
   --code-inline-border: rgba(2, 132, 199, 0.14);
   --code-bg: #0f1b30;
   --code-text: #c9d8f5;
-  --shadow-1: 0 1px 2px rgba(30, 64, 110, 0.10);
-  --shadow-2: 0 8px 24px rgba(30, 64, 110, 0.12);
-  --shadow-3: 0 20px 60px rgba(30, 64, 110, 0.16);
+  --shadow-1: 0 1px 3px rgba(30, 64, 110, 0.12);
+  --shadow-2: 0 10px 28px rgba(30, 64, 110, 0.16);
+  --shadow-3: 0 24px 64px rgba(30, 64, 110, 0.22);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

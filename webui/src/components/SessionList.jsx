@@ -1,4 +1,5 @@
 import React from "react";
+import EmptyState from "./EmptyState.jsx";
 
 export default function SessionList({ sessions, activeId, onPick, onClose, onDelete, onPin, onRename, onEditTags, onExport, onImport, onBatchDelete }) {
   const [q, setQ] = React.useState("");
@@ -162,6 +163,14 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
       </div>
 
       <div className="sl-items">
+        {filtered.length === 0 && (
+          <EmptyState
+            icon="💬"
+            title={sessions.length === 0 ? "还没有会话" : "没有匹配的会话"}
+            hint={sessions.length === 0 ? "点击上方「新对话」开始，或直接在下方向 AI 提问。" : "换个关键词或标签再试试。"}
+            compact
+          />
+        )}
         {filtered.map((s) => {
           const isSel = selected.has(s.id);
           return (
