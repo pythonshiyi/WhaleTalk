@@ -32,3 +32,42 @@ OPTIONAL_DEPS = [
     ("py7zr", "py7zr", "7z 压缩包", "pip install py7zr"),
     ("rarfile", "rarfile", "RAR 压缩包（另需 unrar/unar）", "pip install rarfile"),
 ]
+
+# ── 启动自检：自动安装清单（缺了影响基础体验，首启用清华源自动装）────
+# 格式：(导入名, pip 包名, 显示名)
+AUTO_INSTALL_DEPS = [
+    ("openai", "openai", "核心 API 网关"),
+    ("httpx", "httpx", "网络请求"),
+    ("pystray", "pystray", "系统托盘图标"),
+    ("win32com", "pywin32", "托盘 / 语音"),
+    ("PIL", "Pillow", "图片处理 / 图标"),
+    ("cryptography", "cryptography", "大脑免密快照"),
+    ("tiktoken", "tiktoken", "token 精确估算"),
+    ("pygments", "pygments", "代码高亮"),
+    ("markdown", "markdown", "公众号 HTML 输出"),
+    ("diskcache", "diskcache", "KV 存储"),
+    ("psutil", "psutil", "系统自检"),
+    ("pyautogui", "pyautogui", "桌面 RPA"),
+    ("fitz", "PyMuPDF", "PDF 提取"),
+    ("reportlab", "reportlab", "PDF 生成"),
+    ("docx", "python-docx", "Word 读写"),
+    ("pptx", "python-pptx", "PPT 读取"),
+    ("feedparser", "feedparser", "RSS 聚合"),
+    ("qrcode", "qrcode", "二维码生成"),
+    ("imageio_ffmpeg", "imageio-ffmpeg", "音视频处理"),
+    ("openpyxl", "openpyxl", "Excel 读写"),
+    ("matplotlib", "matplotlib", "数据图表"),
+    ("curl_cffi", "curl_cffi", "被墙站点抓取"),
+    ("sounddevice", "sounddevice", "实时语音录音"),
+    ("edge_tts", "edge-tts", "在线神经音色"),
+]
+
+# ── 重型 / 需系统组件：仅检测提示，不自动安装 ──────────────────────────
+# 格式：(导入名, 显示名, 安装说明)
+HEAVY_DEPS = [
+    ("playwright", "浏览器自动化 / 网页截图", "pip install playwright && playwright install chromium"),
+    ("faster_whisper", "本地语音转写", "pip install faster-whisper"),
+    ("pyzbar", "二维码识别", "pip install pyzbar（另需系统 zbar 库）"),
+    ("rarfile", "RAR 解压", "pip install rarfile（另需 unrar 命令）"),
+]
+

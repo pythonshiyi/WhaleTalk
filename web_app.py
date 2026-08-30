@@ -37,6 +37,8 @@ sys.path.insert(0, BASE_DIR)
 APP_NAME = "鲸语 WhaleTalk"
 API_PORT = 8745
 WEBUI_DIR = os.path.join(BASE_DIR, "webui")
+# 依赖安装镜像：默认清华源（可 WHALETALK_PIP_MIRROR 覆盖，如换阿里源/内网源）
+PIP_MIRROR = os.environ.get("WHALETALK_PIP_MIRROR", "https://pypi.tuna.tsinghua.edu.cn/simple")
 
 
 def _start_api(port):
@@ -416,6 +418,113 @@ def _serve_forever(port, open_browser=False, tray=True):
     return 0
 
 
+# ── Python 依赖自检（首启自动安装，显式感知） ──────────────
+def _missing_auto_deps():
+    """返回缺失的自动安装依赖列表 [(pip包名, 显示名)]。"""
+    import importlib.util
+    try:
+        import deps
+    except Exception:
+        return []
+    miss = []
+    for imp, pkg, label in deps.AUTO_INSTALL_DEPS:
+        try:
+            if importlib.util.find_spec(imp) is None:
+                miss.append((pkg, label))
+        except Exception:
+            miss.append((pkg, label))
+    return miss
+
+
+def _heavy_deps_report():
+    """返回缺失的重型依赖列表 [(显示名, 安装说明)]。"""
+    import importlib.util
+    try:
+        import deps
+    except Exception:
+        return []
+    out = []
+    for imp, label, cmd in deps.HEAVY_DEPS:
+        try:
+            if importlib.util.find_spec(imp) is None:
+                out.append((label, cmd))
+        except Exception:
+            out.append((label, cmd))
+    return out
+
+
+def _pip_install(pkg):
+    """用清华源安装单个包，返回是否成功。"""
+    r = subprocess.run(
+        [sys.executable, "-m", "pip", "install", pkg, "-i", PIP_MIRROR,
+         "--disable-pip-version-check", "--no-warn-script-location"],
+        capture_output=True, text=True,
+    )
+    return r.returncode == 0
+
+
+def _install_deps_console(miss):
+    ok_all = True
+    for i, (pkg, label) in enumerate(miss, 1):
+        print(f"  [{i}/{len(miss)}] 安装 {label}（{pkg}）…", flush=True)
+        ok = _pip_install(pkg)
+        ok_all = ok_all and ok
+        print(f"    {'✅' if ok else '❌ 失败'} {label}")
+    return ok_all
+
+
+def _install_deps_window(miss, tk):
+    root = tk.Tk()
+    root.title("鲸语 · 首次初始化")
+    root.geometry("440x170")
+    root.resizable(False, False)
+    try:
+        root.attributes("-topmost", True)
+    except Exception:
+        pass
+    tk.Label(root, text="🐋 鲸语 · 首次启动初始化", font=("Microsoft YaHei", 13, "bold")).pack(pady=(18, 6))
+    status = tk.StringVar(value="正在准备…")
+    tk.Label(root, textvariable=status, font=("Microsoft YaHei", 10)).pack()
+    tk.Label(root, text=f"共 {len(miss)} 个依赖，使用清华源镜像，请稍候", font=("Microsoft YaHei", 9)).pack(pady=(4, 0))
+    import threading
+    result = {"ok": True}
+
+    def worker():
+        for i, (pkg, label) in enumerate(miss, 1):
+            status.set(f"({i}/{len(miss)}) 正在安装 {label}…")
+            if not _pip_install(pkg):
+                result["ok"] = False
+        status.set("✅ 依赖就绪，即将启动鲸语…" if result["ok"] else "⚠ 部分依赖安装失败，可稍后重试")
+        root.after(1400, root.destroy)
+
+    threading.Thread(target=worker, daemon=True).start()
+    root.mainloop()
+    return result["ok"]
+
+
+def _ensure_python_deps():
+    """启动时检测并安装缺失的 Python 依赖，返回 True 表示可继续。"""
+    miss = _missing_auto_deps()
+    if not miss:
+        print("✅ Python 依赖完整")
+        heavy = _heavy_deps_report()
+        if heavy:
+            print("💡 可选功能未启用（需额外系统组件，可手动安装）：")
+            for label, cmd in heavy:
+                print(f"   - {label}：{cmd}")
+        return True
+    print(f"⚠️ 检测到 {len(miss)} 个缺失依赖，正在通过清华源安装…")
+    for _pkg, label in miss:
+        print(f"   缺失：{label}")
+    if os.environ.get("WHALETALK_DEPS_CONSOLE") == "1":
+        return _install_deps_console(miss)
+    try:
+        import tkinter as tk
+        return _install_deps_window(miss, tk)
+    except Exception:
+        return _install_deps_console(miss)
+
+
 def main():
     _harden_stdio()
     parser = argparse.ArgumentParser(prog="whaletalk", description=APP_NAME + " · 纯 Web + 托盘常驻")
@@ -426,8 +535,11 @@ def main():
     parser.add_argument("--no-webui-build", action="store_true", help="不自动构建 WebUI（产物缺失时界面不可用）")
     parser.add_argument("--install-shortcuts", action="store_true", help="强制重建桌面/开始菜单快捷方式")
     parser.add_argument("--port", type=int, default=API_PORT, help=f"API 端口（默认 {API_PORT}）")
+    parser.add_argument("--no-deps-check", action="store_true", help="跳过 Python 依赖自检/自动安装")
     args = parser.parse_args()
 
+    if not args.no_deps_check:
+        _ensure_python_deps()
     if not args.server:
         _hide_console()
     # 快捷方式：强制 / 首次启动自动创建（不指定 --no-shortcuts）
