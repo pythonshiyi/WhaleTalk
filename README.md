@@ -180,7 +180,11 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 # 方式三：双击 build_exe.bat 打包为 dist\WhaleTalk.exe（WhaleTalk.spec）
 ```
 
-要求：**Python 3.9+，Windows 10/11**。**首次启动自动弹出依赖安装向导**：核心组件默认全部安装、可选能力按需勾选，一键装完后自动进入主界面（此后启动不再弹出，可在「设置 → 可选能力」单独管理）。首次启动还会自动构建 WebUI：`web_app.py` 检测到 `webui/dist` 缺失或源码有更新时自动执行 `npm run build`（缺依赖先 `npm ci/install`），已构建则跳过；打包版 exe 前端已内置，无需 Node。前端单独开发：`cd webui && npm i && npm run dev` / `build`（可加 `--no-webui-build` 跳过自动构建）。
+要求：**Python 3.9+，Windows 10/11**。依赖策略（小白零配置）：
+
+- **核心组件（31 项）全自动安装**：首次启动 `web_app.py` 自动弹出依赖安装向导——核心组件**零操作自动安装**（进度条+日志实时显示），装完**自动进入主界面**；`start.bat` / `pip install -r requirements.txt` 同样一次装齐全部核心（requirements.txt 与核心清单严格一致）。
+- **大型可选能力（5 项）按需安装**：浏览器自动化（playwright）、本地语音转写（faster-whisper）、Piper 本地离线语音、二维码识别（pyzbar）、RAR 解压（rarfile）——不随核心强制安装，进入程序后在「设置 → 🔌 可选能力」一键安装。
+- 首次启动还会自动构建 WebUI：`web_app.py` 检测到 `webui/dist` 缺失或源码有更新时自动执行 `npm run build`（缺依赖先 `npm ci/install`），已构建则跳过；打包版 exe 前端已内置，无需 Node。前端单独开发：`cd webui && npm i && npm run dev` / `build`（可加 `--no-webui-build` 跳过自动构建）。
 
 ### 配置
 

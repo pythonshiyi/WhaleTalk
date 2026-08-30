@@ -2,6 +2,12 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.6.3（2026-08-30）—— 📦 核心依赖全量盘点与对齐
+
+- **AST 全量扫描**项目代码 import：实际使用 36 个第三方模块（+win32com 同包），**31 个核心已 100% 覆盖于 AUTO_INSTALL_DEPS，5 个大型可选（playwright/faster-whisper/piper/pyzbar/rarfile）在 HEAVY_DEPS，零遗漏**（动态 import 仅标准库）。
+- **requirements.txt 重写对齐核心清单**：补入缺失的 9 个核心包（ebooklib/edge-tts/extract-msg/mobi/numpy/py7zr/pyautogui/PyMySQL/sounddevice），移除误入必装清单的大型可选（playwright/faster-whisper/pyzbar）——现在 `start.bat` / `pip install -r` 一次装齐全部核心，大小写归一后与 AUTO 31 项完全一致。
+- README 更新依赖策略说明（核心全自动 + 大型可选按需装）。
+
 ## v3.6.2（2026-08-30）—— ⚡ 核心依赖启动全自动安装
 
 - **核心组件零操作全自动**：首次启动向导加载后**立即自动安装全部核心依赖**（无需选择/点击）——纯进度展示（进度条 + 当前包 + 实时日志），装完**自动进入主界面**。
