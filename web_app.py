@@ -437,19 +437,20 @@ def _missing_auto_deps():
 
 
 def _heavy_deps_report():
-    """返回缺失的重型依赖列表 [(显示名, 安装说明)]。"""
+    """返回缺失的可选（重型）依赖 dict 列表。"""
     import importlib.util
     try:
         import deps
     except Exception:
         return []
     out = []
-    for imp, label, cmd in deps.HEAVY_DEPS:
+    for d in deps.HEAVY_DEPS:
+        imp = d.get("import", "")
         try:
             if importlib.util.find_spec(imp) is None:
-                out.append((label, cmd))
+                out.append(d)
         except Exception:
-            out.append((label, cmd))
+            out.append(d)
     return out
 
 
@@ -463,6 +464,21 @@ def _pip_install(pkg):
     return r.returncode == 0
 
 
+def _install_optional(dep):
+    """安装一个可选（重型）依赖：pip 装 + 可选的后续命令（如下载 Chromium）。"""
+    ok = True
+    if dep.get("pip"):
+        ok = _pip_install(dep["pip"]) and ok
+    if ok and dep.get("post_cmd"):
+        try:
+            r = subprocess.run([sys.executable, "-m"] + list(dep["post_cmd"]),
+                               capture_output=True, text=True, timeout=1800)
+            ok = r.returncode == 0
+        except Exception:
+            ok = False
+    return ok
+
+
 def _install_deps_console(miss):
     ok_all = True
     for i, (pkg, label) in enumerate(miss, 1):
@@ -473,31 +489,87 @@ def _install_deps_console(miss):
     return ok_all
 
 
-def _install_deps_window(miss, tk):
+def _deps_dialog(miss, heavy, tk):
+    """首启依赖弹窗：核心自动装 + 可选能力勾选（用户取舍）。"""
     root = tk.Tk()
-    root.title("鲸语 · 首次初始化")
-    root.geometry("440x170")
+    root.title("鲸语 · 首次启动初始化")
+    root.geometry("500x340")
     root.resizable(False, False)
     try:
         root.attributes("-topmost", True)
     except Exception:
         pass
-    tk.Label(root, text="🐋 鲸语 · 首次启动初始化", font=("Microsoft YaHei", 13, "bold")).pack(pady=(18, 6))
-    status = tk.StringVar(value="正在准备…")
-    tk.Label(root, textvariable=status, font=("Microsoft YaHei", 10)).pack()
-    tk.Label(root, text=f"共 {len(miss)} 个依赖，使用清华源镜像，请稍候", font=("Microsoft YaHei", 9)).pack(pady=(4, 0))
-    import threading
+    tk.Label(root, text="🐋 鲸语 · 启动前准备", font=("Microsoft YaHei", 13, "bold")).pack(pady=(14, 4))
+    tk.Label(root, text="使用清华源镜像，全程可见进度", font=("Microsoft YaHei", 9), fg="#666").pack()
+
+    body = tk.Frame(root)
+    body.pack(fill="both", expand=True, padx=18, pady=(6, 0))
+
+    if miss:
+        tk.Label(body, text=f"将自动安装 {len(miss)} 个核心依赖：", font=("Microsoft YaHei", 10, "bold")).pack(anchor="w")
+        tk.Label(body, text="、".join(m[1] for m in miss), font=("Microsoft YaHei", 9),
+                 fg="#555", wraplength=450, justify="left").pack(anchor="w", pady=(2, 6))
+
+    check_vars = {}
+    if heavy:
+        tk.Label(body, text="可选能力（勾选后一并安装，之后也可在设置里再装）：",
+                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", pady=(6, 2))
+        for d in heavy:
+            var = tk.BooleanVar(value=False)
+            check_vars[d["import"]] = var
+            line = tk.Frame(body)
+            line.pack(anchor="w", fill="x", pady=1)
+            tk.Checkbutton(line, variable=var).pack(side="left")
+            tk.Label(line, text=d["label"], font=("Microsoft YaHei", 10)).pack(side="left")
+            note = d.get("note") or d.get("desc") or ""
+            tk.Label(line, text=f"　{note}", font=("Microsoft YaHei", 8), fg="#888").pack(side="left")
+
+    status = tk.StringVar(value="准备就绪")
+    tk.Label(root, textvariable=status, font=("Microsoft YaHei", 9), fg="#0a84ff").pack(pady=(6, 8))
+
+    btnrow = tk.Frame(root)
+    btnrow.pack(pady=(0, 14))
     result = {"ok": True}
 
-    def worker():
-        for i, (pkg, label) in enumerate(miss, 1):
-            status.set(f"({i}/{len(miss)}) 正在安装 {label}…")
-            if not _pip_install(pkg):
-                result["ok"] = False
-        status.set("✅ 依赖就绪，即将启动鲸语…" if result["ok"] else "⚠ 部分依赖安装失败，可稍后重试")
-        root.after(1400, root.destroy)
+    def _run(chosen):
+        import threading
 
-    threading.Thread(target=worker, daemon=True).start()
+        def worker():
+            total = len(miss) + len(chosen)
+            done = 0
+            result["ok"] = True
+            for i, (pkg, label) in enumerate(miss, 1):
+                done += 1
+                status.set(f"[{done}/{total}] 安装核心 {label}…")
+                if not _pip_install(pkg):
+                    result["ok"] = False
+            for d in chosen:
+                done += 1
+                status.set(f"[{done}/{total}] 安装 {d['label']}…")
+                if not _install_optional(d):
+                    result["ok"] = False
+            status.set("✅ 依赖就绪，即将启动鲸语…" if result["ok"] else "⚠ 部分依赖失败，可稍后重试")
+            root.after(1300, root.destroy)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def start():
+        chosen = [d for d in heavy if check_vars.get(d["import"]) and check_vars[d["import"]].get()]
+        btn_start.config(state="disabled")
+        btn_skip.config(state="disabled")
+        _run(chosen)
+
+    def skip():
+        btn_start.config(state="disabled")
+        btn_skip.config(state="disabled")
+        _run([])  # 只装核心（若有），不装可选
+
+    btn_start = tk.Button(btnrow, text="开始安装", command=start, width=14, font=("Microsoft YaHei", 10))
+    btn_start.pack(side="left", padx=5)
+    btn_skip = tk.Button(btnrow, text=("跳过可选，仅装核心" if miss else "暂不安装"), command=skip,
+                         width=18, font=("Microsoft YaHei", 10))
+    btn_skip.pack(side="left", padx=5)
+
     root.mainloop()
     return result["ok"]
 
@@ -505,24 +577,25 @@ def _install_deps_window(miss, tk):
 def _ensure_python_deps():
     """启动时检测并安装缺失的 Python 依赖，返回 True 表示可继续。"""
     miss = _missing_auto_deps()
-    if not miss:
+    heavy = _heavy_deps_report()
+    if not miss and not heavy:
         print("✅ Python 依赖完整")
-        heavy = _heavy_deps_report()
-        if heavy:
-            print("💡 可选功能未启用（需额外系统组件，可手动安装）：")
-            for label, cmd in heavy:
-                print(f"   - {label}：{cmd}")
         return True
-    print(f"⚠️ 检测到 {len(miss)} 个缺失依赖，正在通过清华源安装…")
-    for _pkg, label in miss:
-        print(f"   缺失：{label}")
     if os.environ.get("WHALETALK_DEPS_CONSOLE") == "1":
-        return _install_deps_console(miss)
+        if miss:
+            print(f"⚠️ 检测到 {len(miss)} 个缺失依赖，正在安装…")
+            return _install_deps_console(miss)
+        print("⚠️ 核心依赖完整，以下可选能力未安装（可稍后在设置中安装）：")
+        for d in heavy:
+            print(f"   - {d['label']}：{d['desc']}（pip install {d['pip']}）")
+        return True
     try:
         import tkinter as tk
-        return _install_deps_window(miss, tk)
+        return _deps_dialog(miss, heavy, tk)
     except Exception:
-        return _install_deps_console(miss)
+        if miss:
+            return _install_deps_console(miss)
+        return True
 
 
 def main():

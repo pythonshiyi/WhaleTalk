@@ -62,12 +62,41 @@ AUTO_INSTALL_DEPS = [
     ("edge_tts", "edge-tts", "在线神经音色"),
 ]
 
-# ── 重型 / 需系统组件：仅检测提示，不自动安装 ──────────────────────────
-# 格式：(导入名, 显示名, 安装说明)
+# ── 重型 / 需系统组件：可选安装（首启弹窗勾选，用户取舍）──────────────────
+# 字段：import(导入名) label(能力名) desc(能力说明) pip(pip包名, 可空)
+#       post_cmd(装后额外命令, 可空) note(补充提示)
 HEAVY_DEPS = [
-    ("playwright", "浏览器自动化 / 网页截图", "pip install playwright && playwright install chromium"),
-    ("faster_whisper", "本地语音转写", "pip install faster-whisper"),
-    ("pyzbar", "二维码识别", "pip install pyzbar（另需系统 zbar 库）"),
-    ("rarfile", "RAR 解压", "pip install rarfile（另需 unrar 命令）"),
+    {
+        "import": "playwright",
+        "label": "浏览器自动化 / 网页截图",
+        "desc": "控制浏览器、抓取网页、页面截图",
+        "pip": "playwright",
+        "post_cmd": ["playwright", "install", "chromium"],
+        "note": "会额外下载 Chromium（约 150 MB）",
+    },
+    {
+        "import": "faster_whisper",
+        "label": "本地语音转写",
+        "desc": "离线把语音转成文字（不联网）",
+        "pip": "faster-whisper",
+        "post_cmd": None,
+        "note": "首次转写时下载模型（约 300 MB）",
+    },
+    {
+        "import": "pyzbar",
+        "label": "二维码识别",
+        "desc": "识别图片中的二维码 / 条码",
+        "pip": "pyzbar",
+        "post_cmd": None,
+        "note": "另需系统 zbar 库（pip 不含 DLL，可能仍需手动装）",
+    },
+    {
+        "import": "rarfile",
+        "label": "RAR 解压",
+        "desc": "解压 RAR 压缩包",
+        "pip": "rarfile",
+        "post_cmd": None,
+        "note": "另需 unrar 命令（可下载 UnRAR.exe 放 PATH）",
+    },
 ]
 
