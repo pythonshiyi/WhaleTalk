@@ -268,6 +268,7 @@ DEFAULT_CONFIG = {
     "evolution_reminder_days": 7,
     "suggestions_enabled": True,
     "memory_enabled": True,  # 长期记忆总开关：关闭后停止记忆注入与自动写入（工具仍可手动调用）
+    "auto_memory": True,     # 对话回写：每次对话后自动提炼值得记住的写入长期记忆（并同步大脑）
     "pure_chat": False,
     # v2 能力层配置
     "inbound_port": 0,        # Webhook 接收端端口（0=关闭）

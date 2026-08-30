@@ -4758,8 +4758,49 @@ def write_memory(text, tags="", type="", entities="", relations=""):
             del facts[: len(facts) - MEMORY_MAX_ITEMS]
         data["facts"] = facts
         if _save_memory(data):
+            _brain_sync_memory(text, key, str(type or "").strip(), ent, rels)
             return f"已写入记忆（当前共 {len(facts)} 条）"
         return "错误：记忆写入失败"
+
+
+def _brain_sync_memory(text, key, type, entities, relations):
+    """记忆同步进鲸语大脑（memories/memory.jsonl）；大脑未初始化时静默跳过。"""
+    try:
+        import brainkit as bk
+        bk.remember_structured(
+            text,
+            type=str(type or key or "")[:20],
+            importance=4 if str(type or "") in ("偏好", "规则", "联系") else 3,
+            tags=[str(key)[:20]] if key else [],
+            entities=[e for e in (entities or []) if isinstance(e, str)],
+            relations=[r for r in (relations or []) if isinstance(r, dict)],
+            source="对话",
+        )
+    except Exception:
+        pass
+
+
+def _brain_sync_delete(keyword):
+    """删除大脑中匹配的记忆条目（与 memory.json 同步）。"""
+    try:
+        import brainkit as bk
+        for e in bk.load_memories():
+            if str(keyword or "").lower() in (e.get("text") or "").lower():
+                bk.delete_memory(e["id"])
+    except Exception:
+        pass
+
+
+def _brain_sync_update(old, new):
+    """更新大脑中匹配的记忆条目（与 memory.json 同步）。"""
+    try:
+        import brainkit as bk
+        for e in bk.load_memories():
+            if str(old or "").lower() in (e.get("text") or "").lower():
+                bk.update_memory(e["id"], text=new)
+                break
+    except Exception:
+        pass
 
 
 def _load_self_profile():
@@ -4893,6 +4934,7 @@ def delete_memory(keyword=""):
             return "（未找到匹配的记忆，未删除任何条目）"
         data["facts"] = kept
         if _save_memory(data):
+            _brain_sync_delete(kw)
             return f"已删除 {removed} 条相关记忆（剩余 {len(kept)} 条）"
         return "错误：记忆删除失败"
 
@@ -4934,6 +4976,7 @@ def update_memory(old, new, tags="", type="", entities="", relations=""):
             entry["relations"] = rels
         entry["ts"] = datetime.now().isoformat(timespec="seconds")
         if _save_memory(data):
+            _brain_sync_update(old, str(new)[:MEMORY_MAX_TEXT])
             return f"已修改记忆（当前共 {len(facts)} 条）"
         return "错误：记忆修改失败"
 

@@ -111,12 +111,14 @@
 brain/
 ├─ manifest.json      出生证明：brain_id + SHA-256 指纹（防篡改）
 ├─ identity.json      人格基线（我是谁、我的准则）
-├─ memories/          长期记忆库（海马体，按日追加）
-├─ self_model.json    自我模型（知道什么 / 不知道什么）
+├─ memories/          长期记忆库（海马体，结构化 memory.jsonl + 旧版按日 md 兼容）
+├─ self_model.json    自我模型（知道什么 / 不知道什么，LLM 动态校准）
+├─ goals.json         进行中目标（对话自动注入，可管理进度）
+├─ decisions.jsonl    决策日志（决策/理由/预期/结果回执，可回溯）
 ├─ thinking_log/      思考日志（前额叶，想法与断点）
 ├─ evolution.json     演化账本（提案→采纳→实施）
 ├─ heartbeat.json     心跳（上次醒在哪、在想什么，跨会话接续）
-├─ archive/           快照库 brain_v{n}.whale
+├─ archive/           快照库 brain_v{n}.whale（RSA 签名防伪造）
 ├─ .keys/             密钥库（DPAPI 包裹，绝不出库）
 └─ merge_log.json     合并史（血缘 / 冲突 / 裁决留痕）
 ```
@@ -126,7 +128,8 @@ brain/
 - **免密快照**：内容用主密钥加密，本机经 Windows DPAPI 自动解锁——存档永远加密，用起来却不需要口令。
 - **跨躯体迁移**：`export-key` 导出一次性口令保护的密钥包 → 新机器 `import-key` 后免密解开全部快照。
 - **分支合并**：快照带血缘（version/parent/restored_from），`merge` 自动定位共同祖先做 LCA 三路合并（日志行级并集、JSON 字段级、冲突逐条裁决），合并后指纹重算、brain_id 不变。
-- **恢复/回滚**：`restore` 可从任意快照复活，旧大脑自动备份为 `brain.bak-*`。
+- **恢复/回滚**：`restore` 可从任意快照复活，旧大脑自动备份为 `brain.bak-*`；`diff` 可先对比两个快照差异再决定。
+- **学习闭环（v3.7）**：对话中写的记忆**自动同步进大脑**；会话结束后自动提炼「偏好/决定/事实」写入；`consolidate` 睡眠巩固（归档旧记忆 + 合并相似 + LLM 提炼）；目标/决策/动态自我模型；每 6h 自动心跳 + 每日自动快照。
 
 常用命令（项目根目录）：
 
@@ -135,9 +138,14 @@ python brainkit.py init                     # 首次创建大脑
 python brainkit.py keyring-setup            # 启用免密加密
 python brainkit.py status                   # 心跳/断点/快照/密钥状态
 python brainkit.py heartbeat --thought "…"  # 会话结束前留断点
-python brainkit.py archive                  # 免密快照（每日 22:00 自动执行）
+python brainkit.py archive                  # 免密快照（每日自动执行）
+python brainkit.py remember "…" --type 偏好 --importance 4   # 结构化记忆
+python brainkit.py consolidate              # 睡眠巩固（归档+合并）
+python brainkit.py goal add "完成报价目录" --progress 40%    # 目标管理
+python brainkit.py decision add "采用镜像源" --reason "直连超时"  # 决策日志
 python brainkit.py merge A.whale B.whale --dir merged   # 分支合体
 python brainkit.py merge-resolve <id> --keep theirs --dir merged
+python brainkit.py diff A.whale B.whale     # 对比两个快照
 python brainkit.py export-key --out seed.whale          # 迁移仪式（导出）
 python brainkit.py import-key seed.whale                # 迁移仪式（导入）
 ```

@@ -169,38 +169,102 @@ export function MemoryPage({ embedded }) {
   const [focused, setFocused] = React.useState(false);
   const [memories, setMemories] = React.useState(null);
   const [err, setErr] = React.useState("");
+  const [editingId, setEditingId] = React.useState(null);
+  const [editText, setEditText] = React.useState("");
+  const [editType, setEditType] = React.useState("");
+  const [editImportance, setEditImportance] = React.useState(3);
+  const [adding, setAdding] = React.useState(false);
+  const [addText, setAddText] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
 
-  React.useEffect(() => {
-    let alive = true;
-    (async () => {
-      const d = await apiGet("/v1/memory");
-      if (!alive) return;
-      if (d && d.facts) {
-        setMemories(
-          d.facts.map((f, i) => ({
-            id: `MEM#${String(d.facts.length - i).padStart(4, "0")}`,
-            text: f.text,
-            tag: f.type || (f.tags ? f.tags.split(",")[0] : "记忆"),
-            time: f.ts ? f.ts.slice(0, 16).replace("T", " ") : "",
-          }))
-        );
+  const load = React.useCallback(async (query) => {
+    try {
+      const d = await apiGet(`/v1/brain/memories?limit=100${query ? "&query=" + encodeURIComponent(query) : ""}`);
+      if (d && Array.isArray(d.items)) {
+        setMemories(d.items);
         setErr("");
-      } else {
-        setErr("记忆加载失败：后端未连接，请启动服务后刷新");
+        return;
       }
-    })();
-    return () => {
-      alive = false;
-    };
+      throw new Error(d?.error || "加载失败");
+    } catch (e) {
+      // 大脑未初始化时回退到通用长期记忆
+      try {
+        const d2 = await apiGet("/v1/memory");
+        if (d2 && d2.facts) {
+          setMemories(
+            d2.facts.map((f) => ({
+              id: `MEM#${f.ts || f.key || ""}`,
+              text: f.text || f.value || "",
+              type: f.type || (f.tags ? String(f.tags).split(",")[0] : "记忆"),
+              importance: 3,
+              ts: f.ts || "",
+            }))
+          );
+          setErr("");
+          return;
+        }
+      } catch {}
+      setErr(e.message || "记忆加载失败：后端未连接");
+    }
   }, []);
 
-  const items = (memories || []).filter((m) => m.text.includes(q) || m.tag.includes(q));
+  React.useEffect(() => {
+    load("");
+  }, [load]);
+
+  const items = (memories || []).filter(
+    (m) => !q || (m.text || "").includes(q) || (m.type || "").includes(q)
+  );
+
+  const doUpdate = async (id, patch) => {
+    setBusy(true);
+    try {
+      await apiPost("/v1/brain/memory", { action: "update", id, ...patch });
+      setEditingId(null);
+      load(q);
+    } catch (e) {
+      setErr(e.message);
+    }
+    setBusy(false);
+  };
+
+  const doDelete = async (id) => {
+    if (!window.confirm("删除这条记忆？")) return;
+    setBusy(true);
+    try {
+      await apiPost("/v1/brain/memory", { action: "delete", id });
+      load(q);
+    } catch (e) {
+      setErr(e.message);
+    }
+    setBusy(false);
+  };
+
+  const doAdd = async () => {
+    if (!addText.trim()) return;
+    setBusy(true);
+    try {
+      await apiPost("/v1/brain/memory", { action: "add", text: addText.trim(), type: "备忘", importance: 3 });
+      setAddText("");
+      setAdding(false);
+      load(q);
+    } catch (e) {
+      setErr(e.message);
+    }
+    setBusy(false);
+  };
+
+  const star = (m) => {
+    const imp = m.importance >= 5 ? 3 : 5;
+    doUpdate(m.id, { importance: imp });
+  };
+
   return (
     <div className={embedded ? "page-embedded" : "page"}>
       {!embedded && (
         <div className="page-head">
           <h1>记忆与知识</h1>
-          <p>分层记忆 · 混合检索 · 每条记忆可溯源到原始会话{memories ? ` · 共 ${memories.length} 条` : ""}</p>
+          <p>大脑记忆库 · 类型/重要度/实体标注 · 相关检索 · 可编辑管理{memories ? ` · 共 ${memories.length} 条` : ""}</p>
         </div>
       )}
       <div className={`mem-search ${focused ? "mem-search-focus" : ""}`}>
@@ -209,35 +273,164 @@ export function MemoryPage({ embedded }) {
           <path d="M21 21l-4-4" />
         </svg>
         <input
-          placeholder="检索长期记忆（混合检索：关键词 + 语义向量）"
+          placeholder="检索大脑记忆（本地 IDF 相关度）"
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => {
+            setQ(e.target.value);
+            load(e.target.value);
+          }}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
         />
         <span className="mem-search-count">{items.length} 条</span>
       </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "6px 0 2px" }}>
+        {!adding ? (
+          <button className="confirm-btn" onClick={() => setAdding(true)}>＋ 记录一条记忆</button>
+        ) : (
+          <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              style={{ width: 320, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: 13 }}
+              placeholder="要记住的内容…"
+              value={addText}
+              onChange={(e) => setAddText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && doAdd()}
+              autoFocus
+            />
+            <button className="confirm-btn confirm-primary" onClick={doAdd} disabled={busy || !addText.trim()}>保存</button>
+            <button className="confirm-btn" onClick={() => { setAdding(false); setAddText(""); }}>取消</button>
+          </span>
+        )}
+      </div>
+      <BrainGoals />
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "4px 0 8px" }}>
+        <button
+          className="confirm-btn"
+          style={{ fontSize: 12 }}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await apiPost("/v1/brain", { action: "consolidate" });
+              alert(r?.message || "巩固完成");
+              load(q);
+            } catch (e) {
+              setErr(e.message);
+            }
+            setBusy(false);
+          }}
+        >
+          🧹 睡眠巩固（归档旧记忆 + 合并相似 + LLM 提炼）
+        </button>
+      </div>
       <div className="mem-list">
         {items.map((m) => (
-          <div className="mem-card mem-card-lg" key={m.id}>
+          <div className={`mem-card mem-card-lg ${m.importance >= 4 ? "mem-card-star" : ""}`} key={m.id}>
             <div className="mem-card-head">
-              <span className="mem-id">{m.id}</span>
-              <span className="mem-tag">{m.tag}</span>
-              {typeof m.score === "number" && <span className="mem-score">相似度 {m.score.toFixed(2)}</span>}
-              {m.time && <span className="mem-time">{m.time}</span>}
+              <span className="mem-id">{m.type || "记忆"}</span>
+              {m.importance >= 4 && <span className="mem-tag" style={{ background: "var(--warn-soft)", color: "var(--warn)" }}>★ 重要</span>}
+              <span className="mem-tag">{m.source || "手动"}</span>
+              {m.ts && <span className="mem-time">{String(m.ts).slice(0, 16).replace("T", " ")}</span>}
             </div>
-            <div className="mem-text">{m.text}</div>
+            {editingId === m.id ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "4px 0" }}>
+                <textarea
+                  style={{ width: "100%", minHeight: 60, padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: 13 }}
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                />
+                <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  类型：
+                  <input style={{ width: 120, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: 12 }} value={editType} onChange={(e) => setEditType(e.target.value)} />
+                  重要度：
+                  <select className="set-select" style={{ fontSize: 12, padding: "4px 6px" }} value={editImportance} onChange={(e) => setEditImportance(Number(e.target.value))}>
+                    <option value={1}>1 低</option>
+                    <option value={2}>2</option>
+                    <option value={3}>3 普通</option>
+                    <option value={4}>4</option>
+                    <option value={5}>5 高</option>
+                  </select>
+                  <button className="confirm-btn confirm-primary" disabled={busy} onClick={() => doUpdate(m.id, { text: editText, type: editType, importance: editImportance })}>保存</button>
+                  <button className="confirm-btn" onClick={() => setEditingId(null)}>取消</button>
+                </span>
+              </div>
+            ) : (
+              <div className="mem-text">{m.text}</div>
+            )}
+            <div className="mem-card-foot" style={{ display: "flex", gap: 8, marginTop: 6 }}>
+              <button className="msg-op" disabled={busy} onClick={() => star(m)}>{m.importance >= 4 ? "☆ 取消重要" : "★ 标记重要"}</button>
+              <button className="msg-op" disabled={busy} onClick={() => { setEditingId(m.id); setEditText(m.text || ""); setEditType(m.type || ""); setEditImportance(Number(m.importance) || 3); }}>✏️ 编辑</button>
+              <button className="msg-op" style={{ color: "var(--danger)" }} disabled={busy} onClick={() => doDelete(m.id)}>🗑 删除</button>
+            </div>
           </div>
         ))}
         {items.length === 0 && (
           err ? (
             <EmptyState icon="⚠️" title="记忆加载失败" hint={err} compact />
           ) : (
-            <EmptyState icon="🧠" title="记忆库还是空的" hint="对话中记录的重要事实会自动沉淀到这里；与 AI 多聊几次，记忆就开始生长。" compact />
+            <EmptyState icon="🧠" title="大脑记忆库还是空的" hint="对话中记录的重要事实会自动同步到这里；点右上角「记录一条记忆」或与 AI 多聊几次，记忆就开始生长。" compact />
           )
         )}
       </div>
       <KnowledgeBaseBlock />
+    </div>
+  );
+}
+
+// ── 大脑进行中目标（goals.json，对话自动注入）──
+function BrainGoals() {
+  const [goals, setGoals] = React.useState([]);
+  const [newTitle, setNewTitle] = React.useState("");
+  const [showAdd, setShowAdd] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    try {
+      const d = await apiPost("/v1/brain", { action: "goals-list" });
+      if (d && d.ok) setGoals((d.data?.goals || []).filter((g) => g.status === "active"));
+    } catch {}
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+
+  const act = async (action, payload) => {
+    try {
+      await apiPost("/v1/brain", { action, ...payload });
+      load();
+    } catch {}
+  };
+
+  const active = goals.filter((g) => g.status === "active");
+  if (active.length === 0 && !showAdd) return null;
+  return (
+    <div style={{ margin: "4px 0 10px", padding: "10px 14px", borderRadius: 12, background: "var(--bg-1)", border: "1px solid var(--border)" }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-1)", marginBottom: 6 }}>🎯 进行中目标（对话中自动注入）</div>
+      {active.map((g) => (
+        <div key={g.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12.5, color: "var(--text-1)" }}>
+          <span style={{ flex: 1 }}>{g.title}</span>
+          {g.progress && <span style={{ color: "var(--brand)", fontSize: 11 }}>{g.progress}</span>}
+          <button className="msg-op" style={{ color: "var(--ok)" }} onClick={() => act("goals-update", { id: g.id, status: "done" })}>✓ 完成</button>
+          <button className="msg-op" style={{ color: "var(--danger)" }} onClick={() => act("goals-delete", { id: g.id })}>✕</button>
+        </div>
+      ))}
+      {showAdd ? (
+        <span style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          <input
+            style={{ flex: 1, padding: "5px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-2)", color: "var(--text-1)", fontSize: 12.5 }}
+            placeholder="新目标…"
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && newTitle.trim()) {
+                act("goals-add", { title: newTitle.trim() });
+                setNewTitle("");
+                setShowAdd(false);
+              }
+            }}
+            autoFocus
+          />
+          <button className="confirm-btn confirm-primary" style={{ fontSize: 12 }} onClick={() => { act("goals-add", { title: newTitle.trim() }); setNewTitle(""); setShowAdd(false); }}>保存</button>
+        </span>
+      ) : (
+        <button className="msg-op" onClick={() => setShowAdd(true)}>＋ 添加目标</button>
+      )}
     </div>
   );
 }

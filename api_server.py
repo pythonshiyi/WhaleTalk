@@ -4466,6 +4466,40 @@ def _ensure_session_index():
 _session_dir_mtime = 0
 
 
+# ── 对话回写（大脑学习闭环）：每次对话后提炼值得记住的 → 长期记忆 → 自动同步大脑 ──
+def _chat_harvest(reply: str, user_text: str, cfg: dict):
+    """后台线程：从本次对话提炼 0-3 条值得长期记住的信息写入记忆（自动入脑）。
+
+    config.auto_memory 控制开关（默认开）；无可用 LLM / 记忆关闭时静默跳过。
+    """
+    import threading
+
+    def _run():
+        try:
+            if not (cfg or {}).get("auto_memory", True):
+                return
+            import deepseek_client as dc
+            if not dc.MEMORY_ENABLED:
+                return
+            c = dc.get_active_client()
+            if c is None:
+                return
+            prompt = (
+                "从这段对话中提炼 0-3 条值得长期记住的信息（用户偏好、决定、重要事实、任务进展）。"
+                "没有实质内容就只输出「无」。每条一行，不要序号，不要引号，不要前缀。\n"
+                f"用户：{str(user_text)[:500]}\nAI：{str(reply)[:500]}"
+            )
+            out = c.chat([{"role": "user", "content": prompt}], max_tokens=200, thinking="low")
+            for line in str(out or "").splitlines():
+                s = line.strip().strip("-•*").strip()
+                if len(s) >= 8 and "无" not in s[:6]:
+                    dc.write_memory(s, tags="自动", type="对话")
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -4929,6 +4963,24 @@ class _Handler(BaseHTTPRequestHandler):
                         self._json(200, {"ok": True, "brain": brain_api.brain_status()})
                     except Exception as e:  # noqa: BLE001
                         self._json(200, {"ok": False, "brain": None, "error": str(e)})
+                elif self.path.split("?")[0] == "/v1/brain/memories":
+                    # 大脑记忆列表/搜索：?query=关键词&limit=N
+                    try:
+                        import brain_api
+                        import brainkit as bk
+                        from urllib.parse import parse_qs, urlparse
+                        qs = parse_qs(urlparse(self.path).query)
+                        q = (qs.get("query") or [""])[0]
+                        try:
+                            limit = int((qs.get("limit") or ["20"])[0])
+                        except (TypeError, ValueError):
+                            limit = 20
+                        limit = max(1, min(200, limit))
+                        items = bk.search_memories(q, limit) if q else bk.load_memories()
+                        items.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
+                        self._json(200, {"ok": True, "items": items[:limit], "total": len(bk.load_memories())})
+                    except Exception as e:  # noqa: BLE001
+                        self._json(200, {"ok": False, "error": str(e)})
                 elif self.path == "/v1/situation":
                     self._json(200, build_situation("full"))
                 elif self.path == "/v1/mode":
@@ -5076,6 +5128,41 @@ class _Handler(BaseHTTPRequestHandler):
                     action = str(body.get("action") or "")
                     result = brain_api.brain_action(action, body)
                     self._json(200, result)
+                except Exception as e:  # noqa: BLE001
+                    self._json(500, {"error": str(e)})
+            elif self.path == "/v1/brain/memory":
+                # 大脑记忆管理：action=add|update|delete
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                try:
+                    import brainkit as bk
+                    act = str(body.get("action") or "")
+                    if act == "add":
+                        e = bk.remember_structured(
+                            str(body.get("text") or ""),
+                            type=str(body.get("type") or ""),
+                            importance=int(body.get("importance") or 3),
+                            tags=body.get("tags") or [],
+                            entities=body.get("entities") or [],
+                            source="手动",
+                        )
+                        self._json(200, {"ok": bool(e), "item": e})
+                    elif act == "update":
+                        ok = bk.update_memory(
+                            str(body.get("id") or ""),
+                            text=body.get("text"),
+                            type=body.get("type"),
+                            importance=body.get("importance"),
+                            tags=body.get("tags"),
+                        )
+                        self._json(200, {"ok": ok, "message": "已更新" if ok else "未找到该记忆"})
+                    elif act == "delete":
+                        ok = bk.delete_memory(str(body.get("id") or ""))
+                        self._json(200, {"ok": ok, "message": "已删除" if ok else "未找到该记忆"})
+                    else:
+                        self._json(400, {"error": f"未知 action: {act}"})
                 except Exception as e:  # noqa: BLE001
                     self._json(500, {"error": str(e)})
             elif self.path == "/v1/deps/install":
@@ -6062,6 +6149,14 @@ class _Handler(BaseHTTPRequestHandler):
             client.chat(messages, **kwargs)
             text = "".join(p[1] for p in out if p[0] == "c")
             usage = next((p[1] for p in out if p[0] == "u"), None)
+            # 对话回写：提炼本次对话值得记住的 → 长期记忆（自动同步大脑），后台执行不阻塞响应
+            try:
+                last_user = next((m.get("content") for m in reversed(messages)
+                                  if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
+                if text and last_user:
+                    _chat_harvest(text, last_user[:600], cfg)
+            except Exception:
+                pass
             self._json(200, {"content": text or "", "usage": usage})
         except Exception as e:
             logger.exception("API chat 失败")
@@ -6218,8 +6313,37 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
     _SERVER = server
     _THREAD = threading.Thread(target=server.serve_forever, daemon=True)
     _THREAD.start()
+    _start_brain_guard()  # 大脑守护：自动心跳 + 定期快照（大脑未初始化时静默跳过）
     logger.info("本地 API 服务已启动：http://127.0.0.1:%s", _PORT)
     return _PORT, _TOKEN, None
+
+
+def _start_brain_guard():
+    """大脑守护线程：每 6h 心跳、每 24h 自动快照（大脑未初始化/密钥未就绪时跳过）。"""
+    import threading
+
+    def _loop():
+        import time as _t
+        import brainkit as _bk
+        beat = _t.time()
+        snap = _t.time()
+        while True:
+            _t.sleep(1800)  # 30 分钟粒度
+            now = _t.time()
+            try:
+                if _bk.load_manifest():
+                    if now - beat >= 6 * 3600:
+                        _bk.cmd_heartbeat(__import__("argparse").Namespace(thought="守护心跳：仍在运行"))
+                        beat = now
+                    if now - snap >= 24 * 3600 and _bk._keyring_ready():
+                        _bk.cmd_archive(__import__("argparse").Namespace(passphrase="", keep=_bk.DEFAULT_KEEP))
+                        snap = now
+            except SystemExit:
+                pass
+            except Exception:
+                pass
+
+    threading.Thread(target=_loop, daemon=True).start()
 
 
 def stop_server():

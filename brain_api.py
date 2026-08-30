@@ -9,6 +9,7 @@
 import argparse
 import base64
 import io
+import json
 import os
 import shutil
 import sys
@@ -21,6 +22,16 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
 import brainkit as bk  # noqa: E402
+
+# 多大脑：当前活动大脑记录（默认项目 brain/；brain-switch 后持久化切换）
+_ACTIVE_FILE = Path(BASE_DIR) / ".brain_active"
+if _ACTIVE_FILE.exists():
+    try:
+        _d = _ACTIVE_FILE.read_text(encoding="utf-8").strip()
+        if _d and Path(_d).exists() and (Path(_d) / "manifest.json").exists():
+            bk.set_brain_dir(Path(_d))
+    except Exception:
+        pass
 
 
 def _run(func, **kwargs):
@@ -45,7 +56,7 @@ def brain_status():
         return None
     hb = bk.load_json(bk.BRAIN_DIR / "heartbeat.json", {})
     ident = bk.load_json(bk.BRAIN_DIR / "identity.json", {})
-    mem_count = sum(1 for _ in bk.MEMORIES_DIR.glob("*.md")) if bk.MEMORIES_DIR.exists() else 0
+    mem_count = len(bk.load_memories())
     think_files = sum(1 for _ in bk.THINKING_DIR.glob("*.md")) if bk.THINKING_DIR.exists() else 0
     versions = sorted(bk.ARCHIVE_DIR.glob("brain_v*.whale")) if bk.ARCHIVE_DIR.exists() else []
     conflicts = bk.load_json(bk.MERGE_CONFLICT_FILE, {})
@@ -86,7 +97,93 @@ def brain_status():
             for v in versions
         ],
         "dir": str(bk.BRAIN_DIR),
+        "goals": bk.load_goals(),
     }
+
+
+def consolidate_with_llm():
+    """睡眠巩固（LLM 增强）：先本地巩固，再用 LLM 把同类型记忆压成精炼长期记忆。
+
+    未配置 API Key / 大脑未初始化时退化为纯本地巩固。返回统计。
+    """
+    base = bk.consolidate_memories()
+    try:
+        import deepseek_client as dc
+        items = bk.load_memories()
+        if not items:
+            return base
+        # 按类型分组，取最重要 5 条交给 LLM 提炼
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for e in items:
+            groups[e.get("type") or "记忆"].append(e)
+        for gtype, gitems in groups.items():
+            if len(gitems) < 3:
+                continue
+            top = sorted(gitems, key=lambda e: -int(e.get("importance") or 3))[:5]
+            digest = "；".join(str(e.get("text") or "")[:60] for e in top)
+            prompt = (
+                "你是记忆巩固引擎。把下面若干条同类记忆提炼成 1-2 句精炼的长期记忆"
+                f"（保留事实、去冗余、不编造）。\n类型：{gtype}\n内容：{digest}\n输出："
+            )
+            try:
+                c = dc.get_active_client()
+                if c is None:
+                    continue
+                summary = c.chat([{"role": "user", "content": prompt}], max_tokens=120, thinking="low")
+                summary = str(summary or "").strip()
+                if len(summary) > 10:
+                    e = bk.remember_structured(summary, type=gtype, importance=5,
+                                               tags=[gtype], source="巩固")
+                    if e:
+                        for it in top:
+                            bk.update_memory(it["id"], archived=True)
+            except Exception:
+                pass
+        return base
+    except Exception:
+        return base
+
+
+def refresh_self_model():
+    """动态校准自我模型：LLM 基于真实工具能力 + 记忆 + 目标重写 knows/unknowns/limits。
+
+    无可用 LLM 时保持现状（不破坏已有自我认知）。返回是否成功。
+    """
+    try:
+        import deepseek_client as dc
+        import brainkit as bk
+        tools = sorted(dc.TOOL_CALL_MAP.keys()) if getattr(dc, "TOOL_CALL_MAP", None) else []
+        mems = bk.load_memories()
+        goals = [g for g in bk.load_goals() if g.get("status") == "active"]
+        tool_txt = "、".join(tools[:80]) if tools else "（能力清单暂不可用）"
+        mem_txt = "；".join(str(e.get("text") or "")[:40] for e in mems[:8]) or "（暂无记忆）"
+        goal_txt = "；".join(str(g.get("title") or "") for g in goals[:5]) or "（暂无进行中目标）"
+        prompt = (
+            "你是自我模型校准器。基于「我的真实能力与当前状况」生成自我认知 JSON，"
+            "要求：诚实不夸大、不编造。格式："
+            '{"knows":["<我确实知道的>"],"unknowns":["<我还不确定的>"],"limits":["<我的真实局限>"]}，各 2-3 条。\n'
+            f"工具能力：{tool_txt}\n近期记忆：{mem_txt}\n进行中目标：{goal_txt}"
+        )
+        c = dc.get_active_client()
+        if c is None:
+            return False
+        out = c.chat([{"role": "user", "content": prompt}], max_tokens=400, thinking="low", json_output=True)
+        import json as _json
+        if isinstance(out, str):
+            data = _json.loads(out)
+        else:
+            data = out
+        sm = {
+            "knows": [str(x)[:120] for x in (data.get("knows") or [])][:5],
+            "unknowns": [str(x)[:120] for x in (data.get("unknowns") or [])][:5],
+            "limits": [str(x)[:120] for x in (data.get("limits") or [])][:5],
+            "updated_at": bk.now_iso(),
+        }
+        bk.save_json(bk.BRAIN_DIR / "self_model.json", sm)
+        return True
+    except Exception:
+        return False
 
 
 def brain_action(action, payload=None):
@@ -233,6 +330,87 @@ def brain_action(action, payload=None):
                 shutil.rmtree(d, ignore_errors=True)
                 removed.append(d.name)
         return {"ok": True, "message": ("已清理 " + str(len(removed)) + " 个残留目录：" + "、".join(removed)) if removed else "没有需要清理的残留目录"}
+    if action == "consolidate":
+        r = consolidate_with_llm()
+        return {"ok": True, "message": f"睡眠巩固完成：归档 {r.get('archived', 0)} · 合并 {r.get('merged', 0)} · 现存 {r.get('kept', 0)}", "data": r}
+    if action == "diff":
+        a = _snapshot_path(payload.get("snap_a"))
+        b = _snapshot_path(payload.get("snap_b"))
+        if not a or not b:
+            return {"ok": False, "message": "请选择两个要对比的快照"}
+        code, out = _run(bk.cmd_diff, snap_a=a, snap_b=b,
+                         passphrase=str(payload.get("passphrase") or ""))
+        return {"ok": code == 0, "message": out, "data": {"output": out}}
+    if action == "share-export":
+        # 脱敏导出：身份 + 记忆精华（不包含密钥/私密文件）
+        ident = bk.load_json(bk.BRAIN_DIR / "identity.json", {})
+        mems = sorted(bk.load_memories(), key=lambda e: -int(e.get("importance") or 3))[:50]
+        share = {
+            "format": "whale-brain-share-v1",
+            "brain_id": bk.load_manifest().get("brain_id"),
+            "identity": {"name": ident.get("name"), "vibe": ident.get("vibe"),
+                         "principles": ident.get("principles")},
+            "memories": [{"type": e.get("type"), "importance": e.get("importance"),
+                          "text": e.get("text")} for e in mems],
+        }
+        data_b64 = base64.b64encode(json.dumps(share, ensure_ascii=False).encode("utf-8")).decode("ascii")
+        return {"ok": True, "message": f"已导出 {len(share['memories'])} 条记忆精华（脱敏）",
+                "data": {"download": {"filename": "whale_share.json", "data_b64": data_b64}}}
+    if action == "share-import":
+        file_b64 = str(payload.get("file_b64") or "")
+        if not file_b64:
+            return {"ok": False, "message": "缺少分享文件"}
+        try:
+            share = json.loads(base64.b64decode(file_b64).decode("utf-8"))
+        except Exception:
+            return {"ok": False, "message": "分享文件解析失败"}
+        imported = 0
+        for m in share.get("memories", []) or []:
+            text = str(m.get("text") or "").strip()
+            if not text:
+                continue
+            if bk.remember_structured(text, type=str(m.get("type") or "分享")[:20],
+                                      importance=int(m.get("importance") or 3), source="分享"):
+                imported += 1
+        return {"ok": True, "message": f"已导入 {imported} 条分享记忆"}
+    if action == "brain-switch":
+        d = str(payload.get("dir") or "").strip()
+        if not d or not (Path(d) / "manifest.json").exists():
+            return {"ok": False, "message": "目标目录不是有效大脑（缺 manifest.json）"}
+        bk.set_brain_dir(Path(d))
+        try:
+            _ACTIVE_FILE.write_text(str(Path(d).resolve()), encoding="utf-8")
+        except OSError:
+            pass
+        return {"ok": True, "message": f"已切换到大脑：{d}"}
+    if action == "brain-dirs":
+        # 列出所有可切换的大脑目录（含 manifest 的目录）
+        dirs = []
+        for p in sorted(Path(BASE_DIR).glob("*")):
+            if p.is_dir() and (p / "manifest.json").exists() and p.name not in ("brain", ".git", "node_modules"):
+                dirs.append({"name": p.name, "path": str(p)})
+        default = Path(BASE_DIR) / "brain"
+        if default.is_dir() and (default / "manifest.json").exists():
+            dirs.append({"name": "brain（默认）", "path": str(default)})
+        current = str(bk.BRAIN_DIR.resolve())
+        for d in dirs:
+            d["current"] = str(Path(d["path"]).resolve()) == current
+        return {"ok": True, "data": {"dirs": dirs, "current": current}}
+    if action == "self-refresh":
+        ok = refresh_self_model()
+        return {"ok": ok, "message": "自我模型已动态校准" if ok else "校准未执行（需配置 API Key 并初始化大脑）"}
+    if action == "goals-list":
+        return {"ok": True, "data": {"goals": bk.load_goals()}}
+    if action == "goals-add":
+        g = bk.add_goal(str(payload.get("title") or ""), str(payload.get("note") or ""))
+        return {"ok": bool(g), "message": ("目标已添加" if g else "标题为空或已有进行中的同名目标"), "data": {"goal": g}}
+    if action == "goals-update":
+        ok = bk.update_goal(str(payload.get("id") or ""),
+                            status=payload.get("status"), progress=payload.get("progress"), note=payload.get("note"))
+        return {"ok": ok, "message": "目标已更新" if ok else "未找到该目标"}
+    if action == "goals-delete":
+        ok = bk.delete_goal(str(payload.get("id") or ""))
+        return {"ok": ok, "message": "目标已删除" if ok else "未找到该目标"}
     return {"ok": False, "message": f"未知动作: {action}"}
 
 
@@ -256,8 +434,11 @@ def _snapshot_path(v):
     return str(p.resolve()) if p.exists() else str(p)
 
 
-def brain_context(max_memories=4):
-    """注入 AI 对话的大脑上下文摘要（身份 + 断点 + 近期记忆）；未初始化返回 None。"""
+def brain_context(max_memories=4, query=""):
+    """注入 AI 对话的大脑上下文摘要（身份 + 断点 + 相关记忆）；未初始化返回 None。
+
+    query 非空时按相关性检索；为空时按「重要度 × 最新」取 Top-N。
+    """
     try:
         bk.load_manifest()
     except SystemExit:
@@ -269,17 +450,29 @@ def brain_context(max_memories=4):
     hint = str(hb.get("resume_hint") or "").strip()
     if hint:
         lines.append(f"上次思考断点：{hint}")
-    recent = []
+    # 进行中目标注入（让 AI 记得正在推进的事）
     try:
-        files = sorted(bk.MEMORIES_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for f in files[:3]:
-            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
-                s = line.strip()
-                if s.startswith("-"):
-                    recent.append(s[1:].strip())
+        active_goals = [g for g in bk.load_goals() if g.get("status") == "active"]
+        if active_goals:
+            lines.append("进行中目标：")
+            for g in active_goals[:4]:
+                extra = f"（{g.get('progress') or ''}）" if g.get("progress") else ""
+                lines.append(f"- {g.get('title')}{extra}")
     except Exception:
         pass
+    try:
+        if str(query or "").strip():
+            recent = bk.search_memories(query, max_memories)
+        else:
+            mems = bk.load_memories()
+            mems.sort(key=lambda e: (-int(e.get("importance") or 3), str(e.get("ts") or "")))
+            recent = mems[:max_memories]
+    except Exception:
+        recent = []
     if recent:
         lines.append("近期记忆：")
-        lines += [f"- {r[:80]}" for r in recent[-max_memories:]]
+        for e in recent:
+            t = str(e.get("type") or "记忆").strip()
+            imp = int(e.get("importance") or 3)
+            lines.append(f"- [{t}·{imp}] {str(e.get('text') or '')[:80]}")
     return "\n".join(lines)

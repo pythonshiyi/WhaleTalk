@@ -90,6 +90,8 @@ KEYS_DIR = BRAIN_DIR / ".keys"
 LINEAGE_FILE = BRAIN_DIR / ".lineage.json"
 MERGE_LOG_FILE = BRAIN_DIR / "merge_log.json"
 MERGE_CONFLICT_FILE = BRAIN_DIR / "merge_conflicts.json"
+MEMORY_JSONL = BRAIN_DIR / "memories" / "memory.jsonl"
+MEMORY_SOURCE_DIR = MODULE_DIR / ".workbuddy" / "memory"  # import-memory 的来源（Agent 工作日志）
 
 WHALE_MAGIC_V1 = b"WHALEBRAIN\x01"
 WHALE_MAGIC_V2 = b"WHALEBRAIN\x02"
@@ -97,6 +99,7 @@ SCHEMA_VERSION = 1
 DEFAULT_KEEP = 7
 PBKDF2_ITER = 200_000
 RSA_KEYSIZE = 2048
+SIGN_MAGIC = b"WHALEBRAIN-SIG\x00"  # 快照签名块分隔（文件 = data + magic + signature）
 
 # ---------------------------------------------------------------- 基础工具
 
@@ -138,7 +141,7 @@ def append_line(path: Path, text: str) -> None:
 def set_brain_dir(p: Path) -> None:
     """全局 --dir：让工具可指向任意大脑目录（分支演化 / 模拟他机）。"""
     global BRAIN_DIR, MEMORIES_DIR, THINKING_DIR, ARCHIVE_DIR, KEYS_DIR, LINEAGE_FILE
-    global MERGE_LOG_FILE, MERGE_CONFLICT_FILE
+    global MERGE_LOG_FILE, MERGE_CONFLICT_FILE, MEMORY_JSONL
     BRAIN_DIR = Path(p)
     MEMORIES_DIR = BRAIN_DIR / "memories"
     THINKING_DIR = BRAIN_DIR / "thinking_log"
@@ -147,6 +150,7 @@ def set_brain_dir(p: Path) -> None:
     LINEAGE_FILE = BRAIN_DIR / ".lineage.json"
     MERGE_LOG_FILE = BRAIN_DIR / "merge_log.json"
     MERGE_CONFLICT_FILE = BRAIN_DIR / "merge_conflicts.json"
+    MEMORY_JSONL = BRAIN_DIR / "memories" / "memory.jsonl"
 
 
 # ---------------------------------------------------------------- 指纹（防篡改）
@@ -273,6 +277,58 @@ def _rsa_decrypt(sk, data: bytes) -> bytes:
 
 def _keyring_ready() -> bool:
     return (KEYS_DIR / "mk.dpapi").exists()
+
+
+# ---------------------------------------------------------------- 快照签名（防伪造大脑）
+
+
+def _sign_bytes(data: bytes):
+    """用私钥对快照字节签名（PKCS1v15 + SHA256）；无密钥返回 None。"""
+    sk = _load_sk()
+    if sk is None:
+        return None
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+        return sk.sign(data, padding.PKCS1v15(), hashes.SHA256())
+    except Exception:
+        return None
+
+
+def verify_bytes_sig(data: bytes, sig, pub_der: bytes = b"") -> bool:
+    """用公钥验签；无签名视为未签名（True），有签名但验签失败为 False。"""
+    if not sig:
+        return True
+    pub = pub_der or _pub_der()
+    if not pub:
+        return True  # 无公钥可验 → 不阻断（迁移机先 import-key 才能解密）
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+        key = serialization.load_der_public_key(pub)
+        key.verify(sig, data, padding.PKCS1v15(), hashes.SHA256())
+        return True
+    except Exception:
+        return False
+
+
+def _write_snapshot_with_sig(path: Path, data: bytes) -> str:
+    """写快照文件（data + 可选签名块）。返回 'signed' / 'plain'。"""
+    sig = _sign_bytes(data)
+    if sig:
+        path.write_bytes(data + SIGN_MAGIC + sig)
+        return "signed"
+    path.write_bytes(data)
+    return "plain"
+
+
+def _read_snapshot_with_sig(path: Path):
+    """读快照文件 → (data, sig)；无签名块 sig=None。"""
+    raw = path.read_bytes()
+    if SIGN_MAGIC in raw:
+        data, _, sig = raw.rpartition(SIGN_MAGIC)
+        return data, sig
+    return raw, None
 
 
 def cmd_keyring_setup(args) -> int:
@@ -602,8 +658,8 @@ def cmd_init(args) -> int:
 
     append_line(THINKING_DIR / f"{today()}.md", f"## {now}\n【神经元 #1】{genesis}\n")
     # 新大脑不预置任何具体记忆（诚实原则：不假装记得没记过的事，不给用户塞无关历史）
-    append_line(MEMORIES_DIR / f"{today()}.md",
-                f"- {now} [系统] 大脑初始化完成，近期记忆为空，等待首次记录。")
+    remember_structured("大脑初始化完成，近期记忆为空，等待首次记录。", type="系统",
+                        importance=1, tags=["系统"], source="系统")
 
     print(f"[大脑已初始化] id = {brain_id}")
     print(f"  目录    : {BRAIN_DIR}")
@@ -683,12 +739,387 @@ def cmd_think(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- 结构化记忆（海马体 v2）
+# memory.jsonl：每行一条结构化记忆 {id, ts, type, importance, text, tags, entities, relations, source, archived}
+# 兼容旧版 memories/*.md 行（读取时自动解析），向后不破坏。
+
+
+def _mem_id() -> str:
+    return "m-" + uuid.uuid4().hex[:10]
+
+
+def load_memories(include_archived: bool = False) -> list:
+    """合并读取全部记忆：memory.jsonl 为主，旧版 memories/*.md 行自动兼容。
+
+    返回 [{id, ts, type, importance, text, tags, entities, relations, source, archived}]。
+    """
+    out, seen = [], set()
+    if MEMORY_JSONL.exists():
+        for line in MEMORY_JSONL.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            e.setdefault("id", _mem_id())
+            e.setdefault("type", "")
+            e.setdefault("importance", 3)
+            e.setdefault("tags", [])
+            e.setdefault("entities", [])
+            e.setdefault("relations", [])
+            e.setdefault("source", "手动")
+            e.setdefault("archived", False)
+            out.append(e)
+            seen.add(e["id"])
+    if MEMORIES_DIR.exists():
+        for f in sorted(MEMORIES_DIR.glob("*.md")):
+            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                s = line.strip()
+                if not s.startswith("- "):
+                    continue
+                body = s[2:].strip()
+                ts = ""
+                if len(body) > 19 and body[4] == "-" and body[10] == "T" and body[16] == ":":
+                    ts = body[:19]
+                    body = body[19:].strip()
+                tag = ""
+                if body.startswith("[") and "]" in body:
+                    tag, _, body = body[1:].partition("]")
+                    body = body.strip()
+                e = {"id": _mem_id(), "ts": ts, "type": tag, "importance": 3, "text": body,
+                     "tags": [tag] if tag else [], "entities": [], "relations": [],
+                     "source": "旧版", "archived": False}
+                if e["id"] not in seen:
+                    out.append(e)
+                    seen.add(e["id"])
+    return [e for e in out if include_archived or not e.get("archived")]
+
+
+def save_memories(items: list) -> None:
+    MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
+    with open(MEMORY_JSONL, "w", encoding="utf-8") as f:
+        for e in items:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+
+
+def remember_structured(text, type="", importance=3, tags=None, entities=None, relations=None, source="手动"):
+    """写入一条结构化记忆到 memory.jsonl（同文本去重）。返回条目 dict 或 None。"""
+    text = str(text or "").strip()
+    if not text:
+        return None
+    entry = {
+        "id": _mem_id(), "ts": now_iso(), "type": str(type or "")[:20],
+        "importance": max(1, min(5, int(importance or 3))),
+        "text": text,
+        "tags": [str(t).strip()[:20] for t in (tags or []) if str(t).strip()][:10],
+        "entities": [str(e).strip()[:30] for e in (entities or []) if str(e).strip()][:20],
+        "relations": [r for r in (relations or []) if isinstance(r, dict)][:20],
+        "source": str(source or "手动")[:10], "archived": False,
+    }
+    items = load_memories(include_archived=True)
+    for it in items:
+        if it.get("text") == entry["text"] and not it.get("archived"):
+            return it
+    items.append(entry)
+    save_memories(items)
+    return entry
+
+
+def update_memory(mid: str, text=None, type=None, importance=None, tags=None, archived=None) -> bool:
+    items = load_memories(include_archived=True)
+    hit = next((e for e in items if e["id"] == mid), None)
+    if not hit:
+        return False
+    if text is not None:
+        hit["text"] = str(text).strip()
+    if type is not None:
+        hit["type"] = str(type)[:20]
+    if importance is not None:
+        hit["importance"] = max(1, min(5, int(importance)))
+    if tags is not None:
+        hit["tags"] = [str(t).strip() for t in tags if str(t).strip()][:10]
+    if archived is not None:
+        hit["archived"] = bool(archived)
+    hit["ts"] = now_iso()
+    save_memories(items)
+    return True
+
+
+def delete_memory(mid: str) -> bool:
+    items = load_memories(include_archived=True)
+    n = len(items)
+    items = [e for e in items if e["id"] != mid]
+    if len(items) == n:
+        return False
+    save_memories(items)
+    return True
+
+
+def _mem_tokens(text: str) -> list:
+    """分词：英文/数字按词，中文按单字 + 相邻双字 bigram（保证中文检索命中）。"""
+    import re
+    s = str(text or "").lower()
+    toks = re.findall(r"[a-z0-9]+", s) + re.findall(r"[\u4e00-\u9fff]", s)
+    out = list(toks)
+    for i in range(len(toks) - 1):
+        out.append(toks[i] + toks[i + 1])
+    return out
+
+
+def search_memories(query: str, limit: int = 5) -> list:
+    """轻量相关性检索（IDF 加权余弦 + 覆盖率），无需外部依赖。空查询返回最新。"""
+    items = load_memories()
+    if not items:
+        return []
+    if not str(query or "").strip():
+        return sorted(items, key=lambda e: e.get("ts") or "", reverse=True)[:limit]
+    import math
+    q_toks = _mem_tokens(query)
+    doc_toks = [_mem_tokens(e["text"]) for e in items]
+    n = len(items)
+    idf = {}
+    for t in set(q_toks):
+        df = sum(1 for dt in doc_toks if t in dt)
+        idf[t] = math.log((n + 1) / (df + 1)) + 1.0
+    scored = []
+    for e, dt in zip(items, doc_toks):
+        common = set(q_toks) & set(dt)
+        if not common:
+            continue
+        w = sum(idf.get(t, 1.0) for t in common)
+        cosine = w / (len(set(q_toks)) ** 0.5 * len(set(dt)) ** 0.5)
+        recall = len(common) / len(set(q_toks))
+        scored.append((0.55 * cosine + 0.45 * recall, e))
+    scored.sort(key=lambda x: -x[0])
+    return [e for _, e in scored[:limit]]
+
+
+def consolidate_memories(min_importance=2, days=30):
+    """睡眠巩固（本地版）：低重要度旧记忆归档 + 同类型相似记忆合并。
+
+    返回 {"archived": n, "merged": n, "kept": n}。LLM 增强版见 brain_api.consolidate_with_llm。
+    """
+    items = load_memories(include_archived=True)
+    now = _dt.datetime.now()
+    archived = merged = 0
+    # 1) 低重要度 + 超过 days 天 → 归档（不删除，保留可查）
+    for e in items:
+        if e.get("archived"):
+            continue
+        try:
+            ts = _dt.datetime.fromisoformat(str(e.get("ts") or "").replace("Z", "+00:00"))
+            if ts.tzinfo is not None:
+                ts = ts.replace(tzinfo=None)  # 统一 naive 比较，避免 aware/naive 报错
+        except Exception:
+            continue
+        if int(e.get("importance") or 3) < min_importance and (now - ts).days > days:
+            e["archived"] = True
+            archived += 1
+    # 2) 同类型相似记忆合并（token Jaccard > 0.6）：保留重要度/时间更高的一方
+    active = [e for e in items if not e.get("archived")]
+    for i in range(len(active)):
+        a = active[i]
+        if a.get("archived"):
+            continue
+        for j in range(i + 1, len(active)):
+            b = active[j]
+            if b.get("archived"):
+                continue
+            if str(a.get("type")) != str(b.get("type")):
+                continue
+            ta, tb = set(_mem_tokens(a["text"])), set(_mem_tokens(b["text"]))
+            if not ta or not tb:
+                continue
+            if len(ta & tb) / len(ta | tb) > 0.6:
+                ka = (int(a.get("importance") or 3), str(a.get("ts") or ""))
+                kb = (int(b.get("importance") or 3), str(b.get("ts") or ""))
+                keep, drop = (a, b) if ka >= kb else (b, a)
+                if len(keep["text"]) < 160:
+                    keep["text"] = keep["text"] + "（并入:" + drop["text"][:36] + "…）"
+                drop["archived"] = True
+                merged += 1
+    save_memories(items)
+    return {
+        "archived": archived, "merged": merged,
+        "kept": sum(1 for e in items if not e.get("archived")),
+        "total": len(items),
+    }
+
+
+def cmd_consolidate(args) -> int:
+    load_manifest()
+    r = consolidate_memories(min_importance=args.min_importance or 2, days=args.days or 30)
+    print(f"[睡眠巩固完成] 归档 {r['archived']} · 合并 {r['merged']} · 现存 {r['kept']}/{r['total']}")
+    return 0
+
+
+# ---------------------------------------------------------------- 目标系统（goals.json）
+GOALS_FILE = BRAIN_DIR / "goals.json"
+
+
+def _goals_path():
+    return BRAIN_DIR / "goals.json"
+
+
+def load_goals():
+    return load_json(_goals_path(), {"goals": []}).get("goals", [])
+
+
+def save_goals(goals):
+    save_json(_goals_path(), {"goals": goals})
+
+
+def add_goal(title, note=""):
+    """新增目标（去重：同名 active 目标不重复创建）。"""
+    title = str(title or "").strip()
+    if not title:
+        return None
+    goals = load_goals()
+    for g in goals:
+        if g.get("title") == title and g.get("status") == "active":
+            return g
+    g = {"id": "g-" + uuid.uuid4().hex[:8], "title": title[:80],
+         "note": str(note or "")[:200], "status": "active",
+         "progress": "", "created_at": now_iso(), "updated_at": now_iso()}
+    goals.append(g)
+    save_goals(goals)
+    return g
+
+
+def update_goal(gid, status=None, progress=None, note=None):
+    goals = load_goals()
+    hit = next((g for g in goals if g["id"] == gid), None)
+    if not hit:
+        return False
+    if status in ("active", "done", "archived"):
+        hit["status"] = status
+    if progress is not None:
+        hit["progress"] = str(progress)[:40]
+    if note is not None:
+        hit["note"] = str(note)[:200]
+    hit["updated_at"] = now_iso()
+    save_goals(goals)
+    return True
+
+
+def delete_goal(gid):
+    goals = load_goals()
+    n = len(goals)
+    goals = [g for g in goals if g["id"] != gid]
+    if len(goals) == n:
+        return False
+    save_goals(goals)
+    return True
+
+
+def cmd_goal(args) -> int:
+    load_manifest()
+    sub = args.goal_cmd
+    if sub == "add":
+        g = add_goal(args.title, args.note or "")
+        print(f"[目标已添加] {g['id']}  {g['title']}" if g else "[重复] 已有进行中的同名目标")
+    elif sub == "list":
+        for g in load_goals():
+            print(f"  [{g['status']}] {g['id']}  {g['title']}  {g.get('progress') or ''}")
+    elif sub == "update":
+        ok = update_goal(args.id, status=args.status, progress=args.progress, note=args.note)
+        print("[已更新]" if ok else "[未找到]")
+    elif sub == "delete":
+        ok = delete_goal(args.id)
+        print("[已删除]" if ok else "[未找到]")
+    return 0
+
+
+# ---------------------------------------------------------------- 决策日志（前额叶 v2）
+DECISIONS_FILE = BRAIN_DIR / "decisions.jsonl"
+
+
+def _decisions_path():
+    return BRAIN_DIR / "decisions.jsonl"
+
+
+def record_decision(decision, reason="", expected=""):
+    """记录一条决策（决策 / 理由 / 预期结果）。返回条目 dict。"""
+    decision = str(decision or "").strip()
+    if not decision:
+        return None
+    d = {"id": "d-" + uuid.uuid4().hex[:8], "ts": now_iso(),
+         "decision": decision[:200], "reason": str(reason or "")[:200],
+         "expected": str(expected or "")[:200], "outcome": "", "status": "open"}
+    with open(_decisions_path(), "a", encoding="utf-8") as f:
+        f.write(json.dumps(d, ensure_ascii=False) + "\n")
+    return d
+
+
+def list_decisions(limit=20):
+    p = _decisions_path()
+    if not p.exists():
+        return []
+    out = []
+    for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            continue
+    return out[-limit:]
+
+
+def resolve_decision(did, outcome="", status="kept"):
+    """决策回执：记录实际结果与是否维持/反转。"""
+    p = _decisions_path()
+    if not p.exists():
+        return False
+    lines = []
+    hit = False
+    for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if e.get("id") == did:
+            e["outcome"] = str(outcome or "")[:200]
+            e["status"] = status if status in ("kept", "reversed") else "kept"
+            hit = True
+        lines.append(json.dumps(e, ensure_ascii=False))
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return hit
+
+
+def cmd_decision(args) -> int:
+    load_manifest()
+    sub = args.dec_cmd
+    if sub == "add":
+        d = record_decision(args.decision, args.reason or "", args.expected or "")
+        print(f"[决策已记录] {d['id']}  {d['decision'][:40]}" if d else "[错误] 决策内容为空")
+    elif sub == "list":
+        for d in list_decisions(args.limit or 20):
+            st = "✓" if d.get("status") == "kept" else ("↺" if d.get("status") == "reversed" else "·")
+            print(f"  {st} [{d['id']}] {d['decision'][:50]}  {d.get('outcome') or ''}")
+    elif sub == "resolve":
+        ok = resolve_decision(args.id, args.outcome or "", args.status or "kept")
+        print("[已回执]" if ok else "[未找到]")
+    return 0
+
+
 def cmd_remember(args) -> int:
     load_manifest()
-    now = now_iso()
-    tag = f"[{args.tag}] " if args.tag else ""
-    append_line(MEMORIES_DIR / f"{today()}.md", f"- {now} {tag}{args.text}")
-    print(f"[记忆已写入] {MEMORIES_DIR / (today() + '.md')}")
+    tag = str(args.tag or "").strip()
+    ents = [e.strip() for e in str(args.entities or "").split(",") if e.strip()]
+    entry = remember_structured(args.text, type=tag, importance=args.importance or 3,
+                                tags=[tag] if tag else [], entities=ents, source="手动")
+    if entry is None:
+        print("[错误] 记忆内容为空", file=sys.stderr)
+        return 1
+    print(f"[记忆已写入] {entry['id']}  {MEMORY_JSONL}")
     return 0
 
 
@@ -699,13 +1130,18 @@ def cmd_import_memory(args) -> int:
         return 0
     imported = 0
     for src in sorted(MEMORY_SOURCE_DIR.glob("*.md")):
-        dst = MEMORIES_DIR / f"import-{src.name}"
-        if dst.exists():
-            continue
-        shutil.copy2(src, dst)
-        imported += 1
+        for line in src.read_text(encoding="utf-8", errors="ignore").splitlines():
+            s = line.strip()
+            if not s.startswith("- ") and not s.startswith("* "):
+                continue
+            text = s[2:].strip()
+            if not text or text.startswith("#"):
+                continue
+            entry = remember_structured(text, type="导入", source="导入")
+            if entry:
+                imported += 1
         print(f"  + 导入 {src.name}")
-    print(f"[完成] 共导入 {imported} 份现有记忆。")
+    print(f"[完成] 共导入 {imported} 条现有记忆到 memory.jsonl。")
     return 0
 
 
@@ -747,7 +1183,9 @@ def cmd_archive(args) -> int:
     else:
         print("!! 未启用密钥体系，快照为明文压缩（建议 keyring-setup 或 import-key）。", file=sys.stderr)
         data = raw
-    target.write_bytes(data)
+    sig_mode = _write_snapshot_with_sig(target, data)
+    if sig_mode == "signed":
+        mode += "（已签名）"
 
     lineage = load_json(LINEAGE_FILE, {})
     lineage["last_archived"] = n
@@ -774,7 +1212,14 @@ def cmd_restore(args) -> int:
     if not src.exists():
         print(f"[错误] 找不到快照文件: {src}", file=sys.stderr)
         return 1
-    data = src.read_bytes()
+    data, sig = _read_snapshot_with_sig(src)
+    # 签名验证：有签名且验签失败 → 拒绝恢复（防伪造/篡改）
+    if sig and not verify_bytes_sig(data, sig):
+        print("!! 快照签名验证失败：文件可能被篡改或来源不可信。", file=sys.stderr)
+        if not args.force:
+            print("!! 拒绝恢复。若确需强恢复，请加 --force（不推荐）。", file=sys.stderr)
+            return 2
+        print("!! --force 强恢复：签名不匹配但继续。", file=sys.stderr)
     try:
         raw = decrypt_whale(data, args.passphrase or "")
     except (ValueError, RuntimeError) as e:
@@ -867,13 +1312,16 @@ def _find_lca(a_meta: dict, b_meta: dict):
 
 
 def _read_snapshot_to_dir(path: Path, passphrase: str, workdir: Path) -> Path:
-    """把 .whale 解包到 workdir/<name>，返回目录。"""
-    data = path.read_bytes()
+    """把 .whale 解包到 workdir/<hash>，返回目录。
+
+    用路径哈希命名，避免同名快照（如两个 brain_v1.whale）解包到同一目录互相覆盖。
+    """
+    data, _sig = _read_snapshot_with_sig(path)
     raw = decrypt_whale(data, passphrase)
     zpath = workdir / f"{path.stem}.zip"
     zpath.write_bytes(raw)
-    out = workdir / path.stem
-    out.mkdir(exist_ok=True)  # 同一快照可能既作输入又作共同祖先，重复解包允许覆盖
+    out = workdir / f"{path.stem}-{hashlib.sha256(str(path.resolve()).encode('utf-8')).hexdigest()[:8]}"
+    out.mkdir(exist_ok=True)
     with zipfile.ZipFile(zpath) as zf:
         _safe_extract(zf, out)
     return out
@@ -1003,6 +1451,65 @@ def _load_whale_or_none(path: Path, passphrase: str, workdir: Path):
     except Exception as e:
         print(f"  !! 无法读取 {path.name}: {e}", file=sys.stderr)
         return None
+
+
+def cmd_diff(args) -> int:
+    """diff <A> <B>：对比两个快照（文件级 + 记忆/思考日志行级）。"""
+    load_manifest()
+    a_path, b_path = Path(args.snap_a), Path(args.snap_b)
+    if not a_path.exists() or not b_path.exists():
+        print("[错误] 快照文件不存在", file=sys.stderr)
+        return 1
+    tmp_root = Path(tempfile.mkdtemp(prefix="whale-diff-"))
+    try:
+        a_dir = _load_whale_or_none(a_path, args.passphrase or "", tmp_root)
+        b_dir = _load_whale_or_none(b_path, args.passphrase or "", tmp_root)
+        if a_dir is None or b_dir is None:
+            return 1
+        rels = set()
+        for d in (a_dir, b_dir):
+            for p in d.rglob("*"):
+                if p.is_file() and p.name != "snapshot_meta.json":
+                    rels.add(p.relative_to(d).as_posix())
+        changed = same = 0
+        print(f"=== 快照对比 {a_path.name} ↔ {b_path.name} ===")
+        for rel in sorted(rels):
+            pa, pb = a_dir / rel, b_dir / rel
+            if not pa.exists():
+                print(f"  [+新增] {rel}")
+                changed += 1
+                continue
+            if not pb.exists():
+                print(f"  [-删除] {rel}")
+                changed += 1
+                continue
+            va, vb = pa.read_bytes(), pb.read_bytes()
+            if va == vb:
+                same += 1
+                continue
+            changed += 1
+            print(f"  [~修改] {rel}")
+            if ("memories" in rel or "thinking_log" in rel) and rel.endswith(".md"):
+                la = set(va.decode("utf-8", "ignore").splitlines())
+                lb = set(vb.decode("utf-8", "ignore").splitlines())
+                for line in sorted(lb - la)[:8]:
+                    print(f"      + {line.strip()[:70]}")
+                for line in sorted(la - lb)[:8]:
+                    print(f"      - {line.strip()[:70]}")
+            elif rel.endswith(".json"):
+                try:
+                    ja, jb = json.loads(va), json.loads(vb)
+                    if isinstance(ja, dict) and isinstance(jb, dict):
+                        keys = set(ja) | set(jb)
+                        for k in sorted(keys):
+                            if ja.get(k) != jb.get(k):
+                                print(f"      . {k}: {str(ja.get(k))[:40]} → {str(jb.get(k))[:40]}")
+                except Exception:
+                    pass
+        print(f"  结果: 变化 {changed} 处 · 相同 {same} 处")
+        return 0
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def cmd_merge(args) -> int:
@@ -1213,7 +1720,8 @@ def cmd_status(args) -> int:
     ok = verify_fingerprint(m)
     hb = load_json(BRAIN_DIR / "heartbeat.json", {})
     ident = load_json(BRAIN_DIR / "identity.json", {})
-    mem_count = sum(1 for _ in MEMORIES_DIR.glob("*.md")) if MEMORIES_DIR.exists() else 0
+    mem_items = load_memories()
+    mem_count = len(mem_items)
     think_files = sum(1 for _ in THINKING_DIR.glob("*.md")) if THINKING_DIR.exists() else 0
     versions = sorted(ARCHIVE_DIR.glob("brain_v*.whale")) if ARCHIVE_DIR.exists() else []
     conflicts = load_json(MERGE_CONFLICT_FILE, {})
@@ -1298,13 +1806,41 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("text", help="思考内容")
     sp.set_defaults(func=cmd_think)
 
-    sp = sub.add_parser("remember", help="写入一条长期记忆")
+    sp = sub.add_parser("remember", help="写入一条长期记忆（结构化：类型/重要度/实体）")
     sp.add_argument("text", help="记忆内容")
-    sp.add_argument("--tag", help="可选标签，如 工作/生活/约定")
+    sp.add_argument("--tag", help="可选标签/类型，如 工作/生活/约定")
+    sp.add_argument("--type", help="记忆类型（偏好/事实/项目/联系/规则 等）")
+    sp.add_argument("--importance", type=int, default=3, help="重要度 1-5（默认 3）")
+    sp.add_argument("--entities", help="涉及实体，逗号分隔（知识图谱节点）")
     sp.set_defaults(func=cmd_remember)
 
     sp = sub.add_parser("import-memory", help="导入 .workbuddy/memory 的现有记忆")
     sp.set_defaults(func=cmd_import_memory)
+
+    sp = sub.add_parser("consolidate", help="睡眠巩固：归档低价值旧记忆 + 合并相似记忆")
+    sp.add_argument("--min-importance", type=int, default=2, help="低于此重要度且超过 --days 天的记忆归档")
+    sp.add_argument("--days", type=int, default=30, help="多少天前的低重要度记忆归档")
+    sp.set_defaults(func=cmd_consolidate)
+
+    sp = sub.add_parser("goal", help="目标管理：add / list / update / delete")
+    sp.add_argument("goal_cmd", choices=["add", "list", "update", "delete"])
+    sp.add_argument("title", nargs="?", help="add: 目标标题")
+    sp.add_argument("--note", help="目标备注")
+    sp.add_argument("--id", help="update/delete: 目标 id")
+    sp.add_argument("--status", choices=["active", "done", "archived"], help="update: 新状态")
+    sp.add_argument("--progress", help="update: 进度说明")
+    sp.set_defaults(func=cmd_goal)
+
+    sp = sub.add_parser("decision", help="决策日志：add / list / resolve")
+    sp.add_argument("dec_cmd", choices=["add", "list", "resolve"])
+    sp.add_argument("decision", nargs="?", help="add: 决策内容")
+    sp.add_argument("--reason", help="add: 决策理由")
+    sp.add_argument("--expected", help="add: 预期结果")
+    sp.add_argument("--limit", type=int, default=20, help="list: 条数")
+    sp.add_argument("--id", help="resolve: 决策 id")
+    sp.add_argument("--outcome", help="resolve: 实际结果")
+    sp.add_argument("--status", choices=["kept", "reversed"], default="kept", help="resolve: 维持/反转")
+    sp.set_defaults(func=cmd_decision)
 
     sp = sub.add_parser("archive", help="生成快照 brain_v{n}.whale（默认免密加密）")
     sp.add_argument("--passphrase", help="额外附上口令包裹（fallback 解密路径）")
@@ -1339,6 +1875,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("list", help="列出全部快照")
     sp.set_defaults(func=cmd_list)
+
+    sp = sub.add_parser("diff", help="对比两个快照（文件级 + 记忆/日志行级）")
+    sp.add_argument("snap_a", help="快照 A .whale")
+    sp.add_argument("snap_b", help="快照 B .whale")
+    sp.add_argument("--passphrase", help="快照口令（若快照无本地密钥）")
+    sp.set_defaults(func=cmd_diff)
 
     return p
 

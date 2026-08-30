@@ -31,6 +31,10 @@ function BrainBlock() {
   const [strategy, setStrategy] = React.useState("auto");
   const [mergeOut, setMergeOut] = React.useState(null);
   const [resolving, setResolving] = React.useState(false);
+  const [diffA, setDiffA] = React.useState("");
+  const [diffB, setDiffB] = React.useState("");
+  const [brainDirs, setBrainDirs] = React.useState([]);
+  const [switchDir, setSwitchDir] = React.useState("");
   const [genesis, setGenesis] = React.useState("");
   const [createWithKeyring, setCreateWithKeyring] = React.useState(true);
   const [connErr, setConnErr] = React.useState("");
@@ -141,6 +145,32 @@ function BrainBlock() {
     setBusy(false);
     setMergeOut(null);
     load(true);
+  };
+
+  const doDiff = async () => {
+    if (!diffA || !diffB || diffA === diffB) return;
+    setBusy(true);
+    setMsg("");
+    const d = await apiPost("/v1/brain", { action: "diff", snap_a: diffA, snap_b: diffB });
+    setMsg(d?.message || "对比失败");
+    setBusy(false);
+  };
+
+  const fileToB64 = (file) =>
+    new Promise((resolve, reject) => {
+      const rd = new FileReader();
+      rd.onload = () => resolve(String(rd.result).split(",")[1] || "");
+      rd.onerror = reject;
+      rd.readAsDataURL(file);
+    });
+
+  const loadDirs = async () => {
+    const d = await apiPost("/v1/brain", { action: "brain-dirs" });
+    if (d && d.ok) {
+      setBrainDirs(d.data.dirs || []);
+      const cur = d.data.dirs?.find((x) => x.current);
+      if (cur) setSwitchDir(cur.path);
+    }
   };
 
   const b = brain;
@@ -300,26 +330,44 @@ function BrainBlock() {
         {snapOptions.length === 0 ? (
           <div className="sched-text" style={{ opacity: 0.7, padding: "6px 0" }}>还没有备份。点击「＋ 立即备份」记录现在的自己。</div>
         ) : (
-          <div className="brain-timeline">
-            {snapOptions.map((s) => (
-              <div className="tl-item" key={s.name}>
-                <span className={`tl-dot ${s.version === b.current_version ? "now" : ""}`} />
-                <div className="tl-body">
-                  <div className="tl-main">
-                    <b>v{s.version}</b>
-                    <span className="tl-meta">{s.mtime} · {s.size_kb} KB{s.version === b.current_version ? " · 当前" : ""}</span>
+          <>
+            <div className="brain-timeline">
+              {snapOptions.map((s) => (
+                <div className="tl-item" key={s.name}>
+                  <span className={`tl-dot ${s.version === b.current_version ? "now" : ""}`} />
+                  <div className="tl-body">
+                    <div className="tl-main">
+                      <b>v{s.version}</b>
+                      <span className="tl-meta">{s.mtime} · {s.size_kb} KB{s.version === b.current_version ? " · 当前" : ""}</span>
+                    </div>
+                    <button
+                      className="msg-op"
+                      disabled={busy || s.version === b.current_version}
+                      onClick={() => act("restore", { version: s.version, replace: true }, `回到 v${s.version} 的时刻？当前大脑会自动备份到 brain.bak-*，之后可用「清理」找回空间。`)}
+                    >
+                      {s.version === b.current_version ? "当前" : "回到此刻"}
+                    </button>
                   </div>
-                  <button
-                    className="msg-op"
-                    disabled={busy || s.version === b.current_version}
-                    onClick={() => act("restore", { version: s.version, replace: true }, `回到 v${s.version} 的时刻？当前大脑会自动备份到 brain.bak-*，之后可用「清理」找回空间。`)}
-                  >
-                    {s.version === b.current_version ? "当前" : "回到此刻"}
-                  </button>
                 </div>
+              ))}
+            </div>
+            {snapOptions.length >= 2 && (
+              <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, fontSize: 12 }}>
+                <span style={{ color: "var(--text-2)" }}>对比两个时刻：</span>
+                <select className="set-select" style={{ fontSize: 12, padding: "3px 6px" }} value={diffA} onChange={(e) => setDiffA(e.target.value)}>
+                  <option value="">A</option>
+                  {snapOptions.map((s) => <option key={"a" + s.version} value={s.name}>v{s.version}</option>)}
+                </select>
+                <select className="set-select" style={{ fontSize: 12, padding: "3px 6px" }} value={diffB} onChange={(e) => setDiffB(e.target.value)}>
+                  <option value="">B</option>
+                  {snapOptions.map((s) => <option key={"b" + s.version} value={s.name}>v{s.version}</option>)}
+                </select>
+                <button className="msg-op" disabled={busy || !diffA || !diffB || diffA === diffB} onClick={doDiff}>
+                  ⟲ 对比
+                </button>
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </div>
 
@@ -402,6 +450,38 @@ function BrainBlock() {
                 <button className="confirm-btn" disabled={busy || !fileB64} onClick={() => act("import-key", { file_b64: fileB64, passphrase: importPw })}>导入密钥</button>
               </div>
               <div className="brain-acc-hint">在新设备上导入密钥包后，即可免密解开这里的加密备份。种子文件与口令用后即焚。</div>
+            </div>
+          )}
+        </div>
+
+        {/* 分享与多大脑 */}
+        <div className={`acc-item ${acc === "share" ? "open" : ""}`}>
+          <button className="acc-head" onClick={() => { setAcc(acc === "share" ? "" : "share"); if (acc !== "share") loadDirs(); }}>
+            <span className="acc-arrow">▸</span> 分享大脑 · 多大脑切换
+            <span className="acc-desc">脱敏导出记忆精华分享；在多个大脑之间切换</span>
+          </button>
+          {acc === "share" && (
+            <div className="acc-body">
+              <div className="sched-line1">
+                <button className="confirm-btn" disabled={busy} onClick={() => act("share-export")}>📤 导出分享包（脱敏）</button>
+                <input type="file" accept=".json" style={{ flex: 1 }} onChange={async (e) => {
+                  const f = e.target.files && e.target.files[0];
+                  if (!f) return;
+                  act("share-import", { file_b64: await fileToB64(f) });
+                }} />
+              </div>
+              <div className="brain-acc-hint">导出只包含人格与记忆精华（脱敏，不含密钥/私密文件）；导入会把分享记忆并入当前大脑。</div>
+              <div className="sched-line1" style={{ marginTop: 8 }}>
+                <select className="set-select" style={{ flex: 1 }} value={switchDir} onChange={(e) => setSwitchDir(e.target.value)}>
+                  {brainDirs.map((d) => (
+                    <option key={d.path} value={d.path}>{d.name}{d.current ? "（当前）" : ""}</option>
+                  ))}
+                </select>
+                <button className="confirm-btn" disabled={busy || !switchDir} onClick={() => act("brain-switch", { dir: switchDir }, "切换到该大脑？（当前会话立即生效）")}>
+                  切换
+                </button>
+                <button className="msg-op" onClick={loadDirs}>刷新</button>
+              </div>
             </div>
           )}
         </div>

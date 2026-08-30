@@ -2,6 +2,33 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.7.0（2026-08-30）—— 🧠 大脑进化：从容器到会学习的灵魂
+
+### P0 · 记忆系统重构
+- **记忆结构化**：`memories/memory.jsonl`（id/ts/type/importance/tags/entities/relations/source/archived），旧 md 自动兼容读取；`remember_structured` 同文本去重
+- **对话记忆自动入脑**（核心闭环）：deepseek_client `write_memory/update/delete` 与大脑记忆**双向同步**——对话中写的记忆自动进大脑，删改同步
+- **语义检索**：本地 IDF 加权余弦 + 中文按字/双字 bigram 分词；`brain_context` 无查询按「重要度×最新」注入，有查询按相关性 Top-N（带 `[类型·重要度]` 标记）
+- **前端记忆库可编辑**：新增/编辑/删除/★标记重要/搜索（`GET /v1/brain/memories` + `POST /v1/brain/memory`）
+
+### P1 · 思考与自我
+- **睡眠巩固**：`consolidate` 命令——低重要度旧记忆归档 + 同类型相似合并（本地版）；brain_api `consolidate_with_llm` LLM 提炼增强；前端一键巩固按钮
+- **目标系统**：`goals.json`（add/list/update/delete/进度），**对话自动注入进行中目标**；前端目标管理区
+- **动态自我模型**：`self-refresh` 用 LLM 基于真实工具能力+记忆+目标重写 knows/unknowns/limits（无 key 优雅跳过）
+- **决策日志**：`decisions.jsonl`（决策/理由/预期/结果回执），`decision add/list/resolve` 命令
+
+### P2 · 自动化闭环
+- **对话回写**：chat 完成后台提炼「用户偏好/决定/事实」自动写记忆入脑（`auto_memory` 配置开关）
+- **自动心跳 + 定时快照**：大脑守护线程（每 6h 心跳、每 24h 自动归档，密钥就绪才归档）
+- **快照签名**：RSA 私钥签名 `.whale`（签名块追加文件尾），恢复/合并验签，篡改拒绝（`--force` 可强过）
+- **快照 diff + 前端**：`diff` 命令（文件级 + 记忆/日志行级 + JSON 字段级）；指挥舱快照「对比」按钮；融合冲突裁决 UI（已有）
+
+### P3 · 生态
+- **大脑分享**：脱敏导出（身份+记忆精华，不含密钥）`whale_share.json`；导入并入记忆
+- **多大脑**：`.brain_active` 持久化切换 + `brain-dirs/brain-switch`，指挥舱切换 UI（含分支/备份大脑）
+
+### 修复
+- `_read_snapshot_to_dir` 同名快照解包互相覆盖（路径哈希隔离）；`_query_get` 不存在改用 parse_qs；brain_api 缺 `import json`；`MEMORY_SOURCE_DIR` 未定义（import-memory 潜伏 NameError）
+
 ## v3.6.5（2026-08-30）—— 🐛 移除大脑初始化硬编码的示例记忆
 
 - **问题**：`brainkit.py` 的 `cmd_init`（大脑初始化）硬编码写入一条「用户正在推进『博视』报价目录整理」的示例记忆——**任何新用户初始化大脑都会被自动导入**，且违反大脑自身「诚实：不假装记得没记过的事」原则。
