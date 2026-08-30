@@ -170,14 +170,20 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
     // ── 自动朗读（跟随设置 voice_config.auto_mode：off/sentence/full）──
     let voiceSettings = null;
     getVoiceConfig().then((v) => { voiceSettings = v; });
-    let acc = "";            // 本轮流式全文累加
-    let spokenCount = 0;     // 已入队句数（sentence 模式游标）
+    let acc = "";              // 本轮流式全文累加
+    const spokenSet = new Set();  // 已入队句子（内容去重：流式边界漂移时防重复）
+    // 逐句对话式朗读（P3 优化）：句末标点优先、长句按逗号软切尽快开播；
+    // 尾段足够长（≥80 字）也直接播，避免无标点长句一直等句号造成延迟。
     const feedAuto = () => {
       if (!voiceSettings || voiceSettings.auto_mode !== "sentence") return;
       const all = splitSentences(cleanForSpeech(acc));
-      while (spokenCount < all.length - 1) {  // 末句可能是半截，等下一包/收尾
-        enqueueSpeak(all[spokenCount], voiceSettings).catch(() => {});
-        spokenCount += 1;
+      const end = all.length - 1;
+      const playable = end >= 0 && all[end].length >= 80 ? all.length : end;  // 长尾段也播
+      for (let i = 0; i < playable; i++) {
+        const s = all[i].trim();
+        if (!s || spokenSet.has(s)) continue;
+        spokenSet.add(s);
+        enqueueSpeak(s, voiceSettings).catch(() => {});
       }
     };
 
@@ -197,10 +203,13 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
               // 整段读完：用 speakText 分句流式播（长文不卡、可随时停止）
               speakText(acc, voiceSettings, {}).catch(() => {});
             } else {
+              // sentence 收尾：补读尚未入队的句子（含最后的半截长尾）
               const all = splitSentences(cleanForSpeech(acc));
-              while (spokenCount < all.length) {
-                enqueueSpeak(all[spokenCount], voiceSettings).catch(() => {});
-                spokenCount += 1;
+              for (let i = 0; i < all.length; i++) {
+                const s = all[i].trim();
+                if (!s || spokenSet.has(s)) continue;
+                spokenSet.add(s);
+                enqueueSpeak(s, voiceSettings).catch(() => {});
               }
             }
           }

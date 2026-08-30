@@ -135,6 +135,7 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
   const hasEdge = !!(voices?.edge || []).length;
   const hasPiper = !!(voices?.piper || []).length;
   const [piperBusy, setPiperBusy] = React.useState(false);
+  const [setupLog, setSetupLog] = React.useState([]);
   return (
     <div className="svc-group">
       <div className="svc-title">🗣 语音朗读</div>
@@ -161,6 +162,50 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
             ))}
           </select>
           <button
+            className="confirm-btn confirm-primary"
+            style={{ marginLeft: 6 }}
+            disabled={piperBusy}
+            onClick={async () => {
+              // 一键部署：装依赖 + 下模型 + 下 g2pW + 合成验证（NDJSON 流式进度）
+              setPiperBusy(true);
+              setSetupLog([]);
+              try {
+                const r = await fetch(`${window.location.origin}/v1/tts/setup_piper`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("whaletalk.api.token") || ""}` },
+                  body: "{}",
+                });
+                const reader = r.body.getReader();
+                const dec = new TextDecoder();
+                let buf = "";
+                for (;;) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  buf += dec.decode(value, { stream: true });
+                  let nl;
+                  while ((nl = buf.indexOf("\n")) !== -1) {
+                    const line = buf.slice(0, nl).trim();
+                    buf = buf.slice(nl + 1);
+                    if (!line) continue;
+                    try {
+                      const ev = JSON.parse(line);
+                      if (ev.message) setSetupLog((l) => [...l.slice(-40), ev.message]);
+                      if (ev.type === "done") {
+                        onTip(ev.ok ? "✅ Piper 部署完成，可离线朗读" : "⚠ 部署未完全就绪，见日志");
+                        setTimeout(() => onTip(""), 4000);
+                        apiGet("/v1/tts/voices").then((x) => x && setVoices(x));
+                      }
+                      if (ev.type === "error") { onTip("❌ " + ev.message); setTimeout(() => onTip(""), 4000); }
+                    } catch {}
+                  }
+                }
+              } catch (e) { onTip("❌ 部署失败：" + e.message); setTimeout(() => onTip(""), 3000); }
+              setPiperBusy(false);
+            }}
+          >
+            {piperBusy ? "⏳ 部署中…" : "⚡ 一键部署"}
+          </button>
+          <button
             className="confirm-btn"
             style={{ marginLeft: 6 }}
             disabled={piperBusy}
@@ -174,8 +219,13 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
               setPiperBusy(false);
             }}
           >
-            {piperBusy ? "⏳ 下载中…" : "⬇ 下载模型"}
+            {piperBusy ? "⏳ 下载中…" : "⬇ 仅下模型"}
           </button>
+          {setupLog.length > 0 && (
+            <div className="sched-text" style={{ marginTop: 8, padding: 8, background: "var(--bg-1)", borderRadius: 8, maxHeight: 160, overflowY: "auto", fontFamily: "var(--font-mono)", fontSize: 11, whiteSpace: "pre-wrap" }}>
+              {setupLog.join("\n")}
+            </div>
+          )}
         </Row>
       )}
       <Row label="语速" desc="-10 慢 ~ 10 快，0 正常">

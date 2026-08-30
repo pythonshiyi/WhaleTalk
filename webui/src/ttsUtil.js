@@ -18,27 +18,57 @@ export function cleanForSpeech(md) {
   return s.replace(/^\s*[-+*]\s+/gm, "").replace(/\n{2,}/g, "\n").trim();
 }
 
-// 按句末标点切句；短句合并、无标点超长句按逗号硬切（服务端同规则兜底）
+// 按句末标点切句；长句内部按逗号软切（流式朗读低延迟开播）、无标点超长句硬切。
+// 规则：句末标点（。！？；!?\n）优先；段内累积超过 SOFT（40 字）才按逗号/顿号软切，
+// 避免短句碎片化；单句上限 limit（默认 200）无标点硬切。
 export function splitSentences(text, limit = 200) {
+  const SOFT = 40;
   const raw = String(text || "").split(/(?<=[。！？；!?\n])\s*/);
   const out = [];
   let buf = "";
+  const flush = () => {
+    if (buf.trim()) out.push(buf.trim());
+    buf = "";
+  };
   for (let seg of raw) {
     seg = seg.trim();
     if (!seg) continue;
-    const cand = buf + seg;
-    if (cand.length <= limit) { buf = cand; continue; }
-    if (buf) out.push(buf);
-    while (seg.length > limit) {
-      let cut = seg.lastIndexOf("，", limit);
-      cut = cut > 20 ? cut + 1 : limit;
-      out.push(seg.slice(0, cut).trim());
-      seg = seg.slice(cut);
+    // 段内软切：长句（>SOFT）按逗号/顿号切开，让流式朗读尽快开播
+    let part = seg;
+    while (part.length > SOFT) {
+      const cut = Math.max(part.lastIndexOf("，", SOFT), part.lastIndexOf(",", SOFT), part.lastIndexOf("、", SOFT));
+      if (cut <= 0) break;
+      const piece = part.slice(0, cut + 1);
+      if ((buf + piece).length <= limit) {
+        buf += piece;
+        flush();
+      } else {
+        flush();
+        buf = piece;
+      }
+      part = part.slice(cut + 1);
     }
-    buf = seg.trim();
+    const cand = buf + part;
+    if (cand.length <= limit) {
+      buf = cand;
+      continue;
+    }
+    flush();
+    while (part.length > limit) {
+      let c = part.lastIndexOf("，", limit);
+      c = c > 20 ? c + 1 : limit;
+      out.push(part.slice(0, c).trim());
+      part = part.slice(c);
+    }
+    buf = part.trim();
   }
-  if (buf.trim()) out.push(buf.trim());
+  flush();
   return out.filter(Boolean);
+}
+
+// 流式自动朗读专用：同 splitSentences，但「尾段可能不完整」的判断交给调用方（长尾段也播）
+export function splitSentencesForStream(text) {
+  return splitSentences(text, 200);
 }
 
 // ── 全局串行播放队列 + 停止 ──

@@ -3206,6 +3206,53 @@ def _piper_dir():
     return os.path.join(DATA_DIR, "voice", "piper", "models")
 
 
+def _g2pw_dir():
+    """g2pW 中文音素模型目录：DATA_DIR/voice/piper/g2pW。"""
+    return os.path.join(DATA_DIR, "voice", "piper", "g2pW")
+
+
+# g2pW 中文音素模型（tar.gz）：官方源 + hf-mirror 镜像（国内网络回退）
+_G2PW_URLS = [
+    "https://huggingface.co/datasets/rhasspy/piper-checkpoints/resolve/main/zh/zh_CN/_resources/g2pw.tar.gz?download=true",
+    "https://hf-mirror.com/datasets/rhasspy/piper-checkpoints/resolve/main/zh/zh_CN/_resources/g2pw.tar.gz?download=true",
+]
+
+
+def _g2pw_ensure(on_line=None):
+    """确保中文音素模型 g2pW 就绪（g2pw.onnx 存在即 OK；否则镜像下载 tar.gz 自动解压）。"""
+    model_file = os.path.join(_g2pw_dir(), "g2pw.onnx")
+    if os.path.isfile(model_file):
+        return True, "g2pW 音素模型已就绪"
+    try:
+        os.makedirs(_g2pw_dir(), exist_ok=True)
+        tar_path = os.path.join(_g2pw_dir(), "g2pw.tar.gz")
+        last_err = ""
+        for url in _G2PW_URLS:
+            try:
+                if on_line:
+                    on_line(f"下载 g2pW 中文音素模型（{url.split('/')[2]}，约 110MB）…")
+                req = urllib.request.Request(url, headers={"User-Agent": "WhaleTalk/3.5"})
+                with urllib.request.urlopen(req, timeout=600) as r:
+                    data = r.read()
+                with open(tar_path, "wb") as f:
+                    f.write(data)
+                import tarfile
+                with tarfile.open(tar_path, "r:gz") as tar:
+                    tar.extractall(path=_g2pw_dir())
+                try:
+                    os.remove(tar_path)
+                except OSError:
+                    pass
+                if os.path.isfile(model_file):
+                    return True, "g2pW 音素模型就绪（约 160MB）"
+                last_err = "解压后未找到 g2pw.onnx"
+            except Exception as e:
+                last_err = f"{str(e)[:100]}（{url.split('/')[2]}）"
+        return False, f"g2pW 下载失败：{last_err}"
+    except Exception as e:
+        return False, f"g2pW 部署失败：{e}"
+
+
 def _piper_model_path(voice):
     """按模型名定位本地 .onnx 路径（不存在返回 None）。"""
     v = str(voice or "").strip() or "zh_CN-chaowen-medium"
@@ -3235,8 +3282,8 @@ def _piper_available(voice=""):
 def _piper_download(voice=""):
     """下载 Piper 语音模型（一次性联网，之后完全离线）。
 
-    官方源 huggingface.co 直连在国内常超时，自动回退 hf-mirror.com 镜像。
-    返回 (ok, message)。
+    官方源 huggingface.co 直连在国内常超时，自动回退 hf-mirror.com 镜像；
+    中文模型下载后自动补齐 g2pW 音素模型。返回 (ok, message)。
     """
     v = str(voice or "").strip() or "zh_CN-chaowen-medium"
     if _piper_model_path(v):
@@ -3291,7 +3338,70 @@ def _piper_download(voice=""):
         size = os.path.getsize(os.path.join(_piper_dir(), v + ".onnx")) // 1024 // 1024
     except OSError:
         size = 0
-    return True, f"模型 {v} 下载完成（约 {size}MB，此后完全离线可用）"
+    # 中文模型额外需要 g2pW 音素模型：语音模型就绪后自动补齐（一键部署体验）
+    g2pw_note = ""
+    if v.lower().startswith("zh"):
+        ok_g, msg_g = _g2pw_ensure()
+        g2pw_note = "；" + msg_g if ok_g else "；⚠ " + msg_g
+    return True, f"模型 {v} 下载完成（约 {size}MB，此后完全离线可用）{g2pw_note}"
+
+
+# Piper 一键部署所需 pip 依赖（import 名, pip 包名, 显示名）
+_PIPER_DEPS = [
+    ("piper", "piper-tts[zh]", "piper-tts"),
+    ("g2pw", "g2pW", "g2pW"),
+    ("sentence_stream", "sentence_stream", "sentence_stream"),
+    ("unicode_rbnf", "unicode_rbnf", "unicode_rbnf"),
+]
+
+
+def _piper_setup(emit):
+    """Piper 一键部署：装依赖 → 下语音模型 → 下 g2pW → 合成验证。
+
+    emit(obj) 回调推送进度（NDJSON 行）。clone 仓库的用户无需折腾，一键完成。
+    """
+    import importlib.util
+    try:
+        import deps as deps_mod
+    except Exception:
+        deps_mod = None
+    # 1. pip 依赖（逐个检查安装；清华源）
+    emit({"type": "line", "message": "① 检查 Piper 依赖…"})
+    for imp, pkg, label in _PIPER_DEPS:
+        try:
+            if importlib.util.find_spec(imp) is not None:
+                emit({"type": "line", "message": f"  ✓ {label} 已安装"})
+                continue
+        except (ImportError, ValueError):
+            pass
+        emit({"type": "line", "message": f"  ⏳ 安装 {label}（{pkg}）…"})
+        if deps_mod is not None:
+            ok = deps_mod.pip_install(pkg, on_line=lambda s: emit({"type": "line", "message": "    " + s[-200:]}))
+        else:
+            ok = False
+        emit({"type": "line", "message": ("  ✓ " if ok else "  ✗ ") + f"{label} 安装{'完成' if ok else '失败'}"})
+    # 2. 语音模型（默认中文模型）
+    v = "zh_CN-chaowen-medium"
+    if not _piper_model_path(v):
+        emit({"type": "line", "message": f"② 下载语音模型 {v}（约 60MB，官方/镜像自动选择）…"})
+        ok, msg = _piper_download(v)
+        emit({"type": "line", "message": "  " + msg})
+    else:
+        emit({"type": "line", "message": f"② 语音模型 {v} 已就绪"})
+    # 3. g2pW（中文音素模型）
+    ok_g, msg_g = _g2pw_ensure(lambda s: emit({"type": "line", "message": "  " + s}))
+    emit({"type": "line", "message": "③ " + msg_g})
+    # 4. 合成验证
+    emit({"type": "line", "message": "④ 合成验证…"})
+    try:
+        wav = os.path.join(_VOICE_CACHE_DIR, "setup_check.wav")
+        os.makedirs(_VOICE_CACHE_DIR, exist_ok=True)
+        r = _synthesize_piper("部署完成，这是鲸语的本地语音测试。", wav, voice=v)
+        emit({"type": "line", "message": "  " + (r if r else "✅ 合成成功（可离线使用）")})
+    except Exception as e:
+        emit({"type": "line", "message": f"  验证异常：{e}"})
+    ready = bool(_piper_model_path(v)) and os.path.isfile(os.path.join(_g2pw_dir(), "g2pw.onnx"))
+    emit({"type": "done", "ok": ready, "message": "Piper 一键部署" + ("完成 ✅" if ready else "未完全就绪，请查看上方日志")})
 
 
 def _synthesize_piper(text, path_wav, rate=0, voice="", volume=100):
@@ -5292,6 +5402,26 @@ class _Handler(BaseHTTPRequestHandler):
                 voice_dl = str((body or {}).get("voice") or "")[:80] or "zh_CN-chaowen-medium"
                 ok_dl, msg_dl = _piper_download(voice_dl)
                 self._json(200, {"ok": ok_dl, "message": msg_dl})
+            elif self.path == "/v1/tts/setup_piper":
+                # Piper 一键部署：NDJSON 流式推送进度（依赖安装 → 模型下载 → 合成验证）
+                body = self._read_body()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+
+                def emit(obj):
+                    try:
+                        self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+                        self.wfile.flush()
+                    except Exception:
+                        pass
+
+                try:
+                    _piper_setup(emit)
+                except Exception as e:  # noqa: BLE001
+                    logger.exception("Piper 一键部署失败")
+                    emit({"type": "error", "message": str(e)})
             elif self.path == "/v1/mode":
                 body = self._read_body()
                 if body is None:
