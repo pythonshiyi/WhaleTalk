@@ -163,7 +163,7 @@ function KnowledgeBaseBlock() {
   );
 }
 
-export function MemoryPage() {
+export function MemoryPage({ embedded }) {
   const [q, setQ] = React.useState("");
   const [focused, setFocused] = React.useState(false);
   const [memories, setMemories] = React.useState(null);
@@ -195,11 +195,13 @@ export function MemoryPage() {
 
   const items = (memories || []).filter((m) => m.text.includes(q) || m.tag.includes(q));
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>记忆与知识</h1>
-        <p>分层记忆 · 混合检索 · 每条记忆可溯源到原始会话{memories ? ` · 共 ${memories.length} 条` : ""}</p>
-      </div>
+    <div className={embedded ? "page-embedded" : "page"}>
+      {!embedded && (
+        <div className="page-head">
+          <h1>记忆与知识</h1>
+          <p>分层记忆 · 混合检索 · 每条记忆可溯源到原始会话{memories ? ` · 共 ${memories.length} 条` : ""}</p>
+        </div>
+      )}
       <div className={`mem-search ${focused ? "mem-search-focus" : ""}`}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
           <circle cx="11" cy="11" r="7" />

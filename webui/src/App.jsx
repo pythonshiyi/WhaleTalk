@@ -3,7 +3,8 @@ import Sidebar from "./components/Sidebar.jsx";
 import ChatPage, { BackendBanner } from "./components/ChatPage.jsx";
 import DepsBanner from "./components/DepsBanner.jsx";
 import InstallBanner from "./components/InstallBanner.jsx";
-import { AbilitiesPage, PluginsPage, MemoryPage, SettingsPage, WorkbenchPage } from "./components/Pages.jsx";
+import { AbilitiesPage, PluginsPage, SettingsPage, WorkbenchPage } from "./components/Pages.jsx";
+import BrainPage from "./components/BrainPage.jsx";
 import AutonomyPage from "./components/AutonomyPage.jsx";
 import PromptsPage from "./components/PromptsPage.jsx";
 import { FlashProvider, ToastProvider } from "./components/FlashToast.jsx";
@@ -176,7 +177,7 @@ export default function App() {
                         }}
                       />
                     )}
-                    {page === "memory" && <MemoryPage />}
+                    {page === "brain" && <BrainPage />}
                     {page === "autonomy" && <AutonomyPage />}
                     {page === "settings" && <SettingsPage onGoPrompts={() => setPage("prompts")} />}
                   </ErrorBoundary>

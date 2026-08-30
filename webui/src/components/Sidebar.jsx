@@ -8,7 +8,7 @@ const NAV_ITEMS = [
   { id: "abilities", label: "能力中心", icon: "grid" },
   { id: "plugins", label: "插件市场", icon: "puzzle" },
   { id: "prompts", label: "指令库", icon: "bolt" },
-  { id: "memory", label: "记忆与知识", icon: "brain" },
+  { id: "brain", label: "大脑", icon: "brain" },
   { id: "autonomy", label: "自主", icon: "spark" },
   { id: "settings", label: "设置", icon: "gear" },
 ];
