@@ -1951,7 +1951,7 @@ def _deps():
             "key": d["import"], "label": d["label"], "desc": d["desc"],
             "ok": ok, "note": d.get("note", ""),
         })
-    return {"deps": out, "heavy": heavy, "core": core}
+    return {"deps": out, "heavy": heavy, "core": core, "install": deps_mod.install_state()}
 
 
 def _deps_install(key):

@@ -450,11 +450,76 @@ HARD_DEPS = [
 ]
 
 
+def _hard_deps_window(hard_miss):
+    """硬依赖（openai/httpx，API 必需）缺失时的初始化进度窗。
+
+    API 服务未起、前端尚不可用，用系统窗口让用户明确感知「正在安装」，
+    避免双击后无任何反馈的干等。装完自动关闭进入程序。
+    """
+    import deps
+    import queue
+    import threading as _th
+    import tkinter as tk
+    from tkinter import ttk
+
+    root = tk.Tk()
+    root.title("鲸语 · 正在初始化")
+    root.geometry("460x170")
+    root.resizable(False, False)
+    try:
+        root.attributes("-topmost", True)
+    except Exception:
+        pass
+    tk.Label(root, text="🐋 鲸语 · 首次启动初始化", font=("Microsoft YaHei", 13, "bold")).pack(pady=(16, 4))
+    tk.Label(root, text="正在安装核心组件（清华源镜像），完成后自动进入程序", font=("Microsoft YaHei", 9), fg="#666").pack()
+    status = tk.StringVar(value="正在准备…")
+    tk.Label(root, textvariable=status, font=("Microsoft YaHei", 10)).pack(pady=(10, 2))
+    bar = ttk.Progressbar(root, length=380, mode="determinate")
+    bar.pack(pady=(2, 4))
+    tip = tk.StringVar(value="首次安装可能需要几分钟，请耐心等待")
+    tk.Label(root, textvariable=tip, font=("Microsoft YaHei", 8), fg="#999").pack()
+
+    result = {"ok": True}
+    q = queue.Queue()
+
+    def worker():
+        ok, failed = deps.install_many(hard_miss)
+        result["ok"] = ok and not failed
+        q.put("done")
+
+    _th.Thread(target=worker, daemon=True).start()
+
+    def poll():
+        st = deps.install_state()
+        if st["running"]:
+            status.set(f"({st['done']}/{st['total']}) 正在安装 {st['current']}…")
+            bar["maximum"] = max(st["total"], 1)
+            bar["value"] = st["done"]
+        else:
+            try:
+                q.get_nowait()
+                if result["ok"]:
+                    status.set("✅ 核心组件就绪，正在启动鲸语…")
+                else:
+                    status.set("⚠ 安装失败，请检查网络后重试")
+                root.after(1400, root.destroy)
+                return
+            except queue.Empty:
+                pass
+        root.after(120, poll)
+
+    root.after(120, poll)
+    root.mainloop()
+    return result["ok"]
+
+
 def _ensure_python_deps():
     """启动依赖保障：永不弹窗、永不阻塞用户。
 
-    - 硬依赖（openai/httpx）：缺失时同步静默安装（无弹窗），失败则明确报错；
-    - 软核心（功能依赖）：后台静默自动安装，不阻塞启动，装好后当前会话即可用；
+    - 硬依赖（openai/httpx）：缺失时同步安装——GUI 下弹系统进度窗明确感知，
+      console 模式逐行打印；失败则明确报错；
+    - 软核心（功能依赖）：后台自动安装，不阻塞启动，状态写入 deps 供前端
+      轮询展示进度（前端打开即可见「正在初始化组件 x/y」）；
     - 可选能力（重型）：完全静默，去设置页「可选能力」面板按需安装。
     """
     import deps
@@ -462,11 +527,13 @@ def _ensure_python_deps():
                  if not _importable(imp)]
     if hard_miss:
         print("⏳ 必需组件缺失，正在自动安装（清华源）…")
-        ok = True
-        for imp, pkg, label in hard_miss:
-            print(f"  [{label}] 安装中…", flush=True)
-            if not deps.pip_install(pkg, on_line=lambda s: print("    " + s, flush=True)):
-                ok = False
+        if os.environ.get("WHALETALK_DEPS_CONSOLE") == "1":
+            ok = deps.install_many(hard_miss, on_line=lambda s: print("    " + s, flush=True))[0]
+        else:
+            try:
+                ok = _hard_deps_window(hard_miss)
+            except Exception:  # noqa: BLE001 - 无 GUI 环境退回控制台
+                ok = deps.install_many(hard_miss)[0]
         if not ok:
             print("❌ 核心 API 组件安装失败，请检查网络后重试。")
             return False
@@ -481,15 +548,12 @@ def _ensure_python_deps():
 
 
 def _install_silent(miss):
-    """后台静默安装缺失的核心依赖（清华源），不打扰用户。"""
+    """后台静默安装缺失的核心依赖（清华源）。
+
+    状态实时写入 deps.install_state()，前端轮询 /v1/deps 即可显示进度。
+    """
     import deps
-    failed = []
-    for pkg, label in miss:
-        try:
-            if not deps.pip_install(pkg):
-                failed.append(label)
-        except Exception:
-            failed.append(label)
+    ok, failed = deps.install_many(miss, on_line=lambda s: print("    " + s, flush=True))
     if failed:
         print(f"⚠️ 后台安装部分失败：{'、'.join(failed)}（可在 设置 → 可选能力 重试）")
     else:

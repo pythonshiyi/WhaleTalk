@@ -64,6 +64,9 @@ AUTO_INSTALL_DEPS = [
     ("mobi", "mobi", "MOBI 电子书阅读"),
     ("extract_msg", "extract-msg", "Outlook .msg 邮件阅读"),
     ("py7zr", "py7zr", "7z 压缩包"),
+    ("numpy", "numpy", "数值计算 / 语音分析"),
+    ("pymysql", "pymysql", "MySQL 数据库"),
+    ("psycopg2", "psycopg2-binary", "PostgreSQL 数据库"),
 ]
 
 # ── 重型 / 需系统组件：可选安装（首启弹窗勾选，用户取舍）──────────────────
@@ -108,8 +111,45 @@ HEAVY_DEPS = [
 import os
 import subprocess
 import sys
+import threading
 
 PIP_MIRROR = os.environ.get("WHALETALK_PIP_MIRROR", "https://pypi.tuna.tsinghua.edu.cn/simple")
+
+# ── 安装状态（供前端轮询展示进度：启动后台安装时实时可见）────────────────
+_INSTALL_LOCK = threading.Lock()
+_INSTALL = {"running": False, "done": 0, "total": 0, "current": "", "failed": []}
+
+
+def install_state():
+    """当前安装状态副本：{running, done, total, current, failed}。"""
+    with _INSTALL_LOCK:
+        return dict(_INSTALL)
+
+
+def install_many(miss, on_line=None):
+    """批量安装并实时更新全局状态。
+
+    miss: [(pip 包名, 显示名)]；on_line: 每行输出回调。
+    返回 (全部成功?, 失败显示名列表)。
+    """
+    with _INSTALL_LOCK:
+        _INSTALL.update({"running": True, "done": 0, "total": len(miss),
+                         "current": miss[0][1] if miss else "", "failed": []})
+    failed = []
+    try:
+        for i, (pkg, label) in enumerate(miss, 1):
+            with _INSTALL_LOCK:
+                _INSTALL["done"] = i - 1
+                _INSTALL["current"] = label
+            ok = pip_install(pkg, on_line)
+            if not ok:
+                failed.append(label)
+            with _INSTALL_LOCK:
+                _INSTALL["done"] = i
+        return len(failed) == 0, failed
+    finally:
+        with _INSTALL_LOCK:
+            _INSTALL.update({"running": False, "current": "", "failed": failed})
 
 
 def run_verbose(cmd, on_line=None):

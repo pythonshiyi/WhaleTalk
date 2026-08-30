@@ -2,6 +2,7 @@ import React from "react";
 import Sidebar from "./components/Sidebar.jsx";
 import ChatPage, { BackendBanner } from "./components/ChatPage.jsx";
 import DepsBanner from "./components/DepsBanner.jsx";
+import InstallBanner from "./components/InstallBanner.jsx";
 import { AbilitiesPage, PluginsPage, MemoryPage, SettingsPage, WorkbenchPage } from "./components/Pages.jsx";
 import AutonomyPage from "./components/AutonomyPage.jsx";
 import PromptsPage from "./components/PromptsPage.jsx";
@@ -128,6 +129,7 @@ export default function App() {
                 <Sidebar page={page} onPage={setPage} />
                 <main className="app-main">
                   <BackendBanner />
+                  <InstallBanner />
                   <DepsBanner
                     onGoSettings={() => {
                       try { window.location.hash = "#deps"; } catch {}
