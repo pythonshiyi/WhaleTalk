@@ -2,6 +2,15 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.6.0（2026-08-30）—— 🚀 首次启动依赖安装向导
+
+- **新用户首次启动**：程序弹出**全屏依赖安装向导**（不再是"后台静默装、终端一行字"）——核心组件默认全部勾选、可选能力按需勾选，一键安装（NDJSON 流式进度：逐包进度条 + 实时日志），**安装完成才进入主界面**。
+- **后端**：
+  - 首次启动标志 `DATA_DIR/first_run_done`；`GET /v1/first_run`（是否首次 + 依赖全量清单）、`POST /v1/first_run/complete`（装完/跳过写标志）、`POST /v1/deps/install_many`（批量安装，NDJSON 流式，含 Piper 装后自动下模型）
+  - `web_app.py`：首次启动软核心**不再后台静默装**（交由向导），二次启动缺失时仍后台补装
+- **前端**：新增 `FirstRunPage.jsx` 全屏向导；App 启动检测首次状态，后端未就绪时轮询等待（硬依赖安装期间自动进入向导）；跳过/完成后刷新进主界面。
+- 验证：三端点全流程实测（install_many batch_done ok / complete / first_run 翻转）；前端构建通过。
+
 ## v3.5.6（2026-08-30）—— 🐛 修复：Piper 可选能力安装失败
 
 - **根因**：「可选能力 → Piper 本地语音」的 `pip` 字段是多包（`piper-tts[zh] g2pW sentence_stream unicode_rbnf` 空格分隔），

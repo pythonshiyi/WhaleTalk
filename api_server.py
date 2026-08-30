@@ -2090,6 +2090,29 @@ def _services_save(body):
         return None, str(e)
 
 
+# ── 首次启动引导 ─────────────────────────────
+def _first_run_marker():
+    """首次启动完成标志文件：存在 = 已完成首次引导。"""
+    return os.path.join(DATA_DIR, "first_run_done")
+
+
+def _is_first_run():
+    """是否首次启动（尚未完成依赖引导）。"""
+    return not os.path.isfile(_first_run_marker())
+
+
+def _mark_first_run_done():
+    """标记首次引导完成（写标志文件）。返回是否成功。"""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(_first_run_marker(), "w", encoding="utf-8") as f:
+            f.write("1")
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("写入首次启动标志失败: %s", e)
+        return False
+
+
 def _deps():
     """依赖全量清单：核心组件（AUTO）+ 可选能力（HEAVY）+ 常规（OPTIONAL）。"""
     import importlib.util
@@ -4811,6 +4834,9 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(200, _models())
                 elif self.path == "/v1/deps":
                     self._json(200, _deps())
+                elif self.path == "/v1/first_run":
+                    # 首次启动引导状态：是否首次 + 依赖全量清单（core/heavy/install）
+                    self._json(200, {"first_run": _is_first_run(), "deps": _deps()})
                 elif self.path == "/v1/update/check":
                     self._json(200, _update_check())
                 elif self.path == "/v1/backup":
@@ -5096,6 +5122,68 @@ class _Handler(BaseHTTPRequestHandler):
                                 emit({"type": "line", "message": f"模型下载异常：{e}"})
                                 ok = False
                         emit({"type": "done", "ok": ok, "label": dep["label"]})
+                except Exception as e:  # noqa: BLE001
+                    try:
+                        self.wfile.write((json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n").encode("utf-8"))
+                        self.wfile.flush()
+                    except Exception:
+                        pass
+            elif self.path == "/v1/first_run/complete":
+                # 首次引导完成（装完或跳过）→ 写标志，下次启动不再弹向导
+                self._json(200, {"ok": _mark_first_run_done()})
+            elif self.path == "/v1/deps/install_many":
+                # 批量安装（首次启动向导用）：body {keys: [import名/能力名...]}，NDJSON 逐项进度
+                body = self._read_body()
+                keys = (body or {}).get("keys") or []
+                if not isinstance(keys, list) or not keys:
+                    self._json(400, {"error": "keys 必须是非空数组"})
+                    return
+                try:
+                    import deps as deps_mod
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+
+                    def emit(obj):
+                        try:
+                            self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+                            self.wfile.flush()
+                        except Exception:
+                            pass
+
+                    emit({"type": "batch_start", "total": len(keys)})
+                    failed = []
+                    for i, key in enumerate(keys, 1):
+                        dep = None
+                        for d in deps_mod.HEAVY_DEPS:
+                            if str(key) in (d.get("import"), d.get("label")):
+                                dep = d
+                                break
+                        if dep is None:
+                            for imp, pkg, label in deps_mod.AUTO_INSTALL_DEPS:
+                                if str(key) in (imp, label):
+                                    dep = {"import": imp, "label": label, "pip": pkg, "post_cmd": None, "note": ""}
+                                    break
+                        if dep is None:
+                            emit({"type": "item_done", "ok": False, "index": i, "label": str(key), "message": f"未找到依赖：{key}"})
+                            failed.append(str(key))
+                            continue
+                        emit({"type": "item_start", "index": i, "label": dep["label"]})
+                        ok = deps_mod.install_optional(dep, on_line=lambda s: emit({"type": "line", "message": s}))
+                        if ok and dep.get("import") == "piper":
+                            emit({"type": "line", "message": "Piper 依赖就绪，正在下载中文语音模型（约 220MB，含 g2pW 音素模型）…"})
+                            try:
+                                ok_v, msg_v = _piper_download("zh_CN-chaowen-medium")
+                                emit({"type": "line", "message": msg_v})
+                                ok = ok and ok_v
+                            except Exception as e:  # noqa: BLE001
+                                emit({"type": "line", "message": f"模型下载异常：{e}"})
+                                ok = False
+                        if not ok:
+                            failed.append(dep["label"])
+                        emit({"type": "item_done", "ok": ok, "index": i, "label": dep["label"]})
+                    emit({"type": "batch_done", "ok": len(failed) == 0, "failed": failed})
                 except Exception as e:  # noqa: BLE001
                     try:
                         self.wfile.write((json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n").encode("utf-8"))

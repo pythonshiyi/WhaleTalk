@@ -1,5 +1,6 @@
 import React from "react";
 import Sidebar from "./components/Sidebar.jsx";
+import FirstRunPage from "./components/FirstRunPage.jsx";
 import ChatPage, { BackendBanner } from "./components/ChatPage.jsx";
 import DepsBanner from "./components/DepsBanner.jsx";
 import InstallBanner from "./components/InstallBanner.jsx";
@@ -75,6 +76,8 @@ export default function App() {
     }
   });
   const [mode, setMode] = React.useState("task");
+  // 首次启动引导：true 渲染全屏依赖安装向导，装完才进入主界面
+  const [firstRun, setFirstRun] = React.useState(null);
   // 指令库/工作台「应用」→ 把指令内容带进会话输入框（试跑用）
   const [applyPrompt, setApplyPrompt] = React.useState(null);
   // 工作台「最近会话」→ 直达对应会话
@@ -113,12 +116,53 @@ export default function App() {
     };
   }, []);
 
+  React.useEffect(() => {
+    // 首次启动检测：后端返回 first_run=true 时渲染全屏依赖安装向导。
+    // 后端暂未就绪（硬依赖安装中）→ 每 2s 重试，就绪后自动进入正确页面。
+    let alive = true;
+    let tries = 0;
+    const check = async () => {
+      if (!alive) return;
+      try {
+        const d = await api.getFirstRun();
+        if (alive) setFirstRun(!!(d && d.first_run));
+      } catch {
+        if (!alive) return;
+        tries += 1;
+        if (tries < 30) setTimeout(check, 2000);
+        else setFirstRun(false); // 后端长时间不可用：进主界面由 BackendBanner 提示
+      }
+    };
+    check();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const switchMode = async (m) => {
     setMode(m);
     try {
       await api.setMode(m);
     } catch {}
   };
+
+  // 首次启动：全屏依赖安装向导（装完/跳过 → 刷新进入主界面）
+  if (firstRun === null) {
+    return (
+      <div className="app" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+        <div style={{ color: "var(--text-3)", fontSize: 13 }}>正在初始化…</div>
+      </div>
+    );
+  }
+  if (firstRun) {
+    return (
+      <FirstRunPage
+        onDone={() => {
+          window.location.reload();
+        }}
+      />
+    );
+  }
 
   return (
     <ThemeContext.Provider value={{ theme, setTheme }}>

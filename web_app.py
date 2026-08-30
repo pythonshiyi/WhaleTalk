@@ -539,9 +539,19 @@ def _ensure_python_deps():
             return False
     miss = _missing_auto_deps()
     if miss:
-        import threading
-        threading.Thread(target=_install_silent, args=(miss,), daemon=True).start()
-        print(f"⏳ {len(miss)} 个功能组件缺失，正在后台自动安装（不影响启动，装好后即可用）。")
+        # 首次启动：不自动装，由前端「首次启动向导」统一引导安装（装完才进入程序）。
+        # 二次启动：缺失时后台静默补装（不阻塞），用户也可在 设置 → 可选能力 手动管理。
+        try:
+            import api_server
+            first_run = api_server._is_first_run()
+        except Exception:  # noqa: BLE001
+            first_run = False
+        if first_run:
+            print(f"ℹ️ 首次启动：{len(miss)} 个功能组件待安装，将由初始化向导引导完成。")
+        else:
+            import threading
+            threading.Thread(target=_install_silent, args=(miss,), daemon=True).start()
+            print(f"⏳ {len(miss)} 个功能组件缺失，正在后台自动安装（不影响启动，装好后即可用）。")
     else:
         print("✅ Python 依赖完整")
     return True

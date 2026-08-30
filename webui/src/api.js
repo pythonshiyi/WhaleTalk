@@ -403,4 +403,51 @@ export async function getDeps() {
   return api("/v1/deps");
 }
 
+// ── 首次启动引导 ─────────────────────────────────────
+export async function getFirstRun() {
+  return api("/v1/first_run");
+}
+
+export async function completeFirstRun() {
+  return api("/v1/first_run/complete", { method: "POST", body: JSON.stringify({}) });
+}
+
+// 批量安装依赖（首次启动向导）：NDJSON 流式进度。
+// handlers: { onBatchStart({total}), onItemStart({index,label}), onLine(msg), onItemDone({ok,index,label}), onBatchDone({ok,failed}), onError(msg) }
+export async function installMany(keys, handlers) {
+  const r = await fetch(`${getBase()}/v1/deps/install_many`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+    body: JSON.stringify({ keys }),
+    signal: AbortSignal.timeout(7200000),
+  });
+  if (!r.ok || !r.body) throw new Error(`install_many → ${r.status}`);
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let ev;
+      try {
+        ev = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (ev.type === "batch_start") handlers.onBatchStart?.(ev);
+      else if (ev.type === "item_start") handlers.onItemStart?.(ev);
+      else if (ev.type === "line") handlers.onLine?.(ev.message);
+      else if (ev.type === "item_done") handlers.onItemDone?.(ev);
+      else if (ev.type === "batch_done") handlers.onBatchDone?.(ev);
+      else if (ev.type === "error") handlers.onError?.(ev.message);
+    }
+  }
+}
+
 export { getToken, getBase, api };
