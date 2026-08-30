@@ -515,6 +515,31 @@ def _write_snapshot_meta(stage: Path, meta: dict) -> None:
 # ---------------------------------------------------------------- 子命令实现
 
 
+def _refresh_self_model() -> None:
+    """用最新能力模板刷新自我模型，校准「我知道 / 我不知道 / 我的局限」。
+
+    挂载与心跳时调用：能力进化后，旧大脑的自我认知自动同步，
+    避免「能力已实现、自我模型却仍写着尚未实现」的认知过时。
+    """
+    now = now_iso()
+    save_json(BRAIN_DIR / "self_model.json", {
+        "knows": [
+            "我是「鲸语大脑」：身份/记忆/心跳都在 brain/ 目录，由 brainkit.py 管理",
+            "我具备：心跳断点续接、时光快照（可加密）、跨躯体免密迁移、多快照分支合并（血缘 LCA 三路 + 冲突裁决）、自我模型校准",
+            "用户的当前工作与决策记录在 memories/，随会话更新（具体以记忆库为准）",
+        ],
+        "unknowns": [
+            "大脑未来会学到什么，取决于之后的每一次挂载",
+        ],
+        "limits": [
+            "合并是文件级三路合并：日志并集、JSON 字段级、其余按内容；恢复仍是「整脑替换」",
+            "跨躯体免密依赖密钥包迁移仪式（export-key / import-key）；无密钥机器解不开加密快照",
+            "快照加密需要 cryptography；未启用免密时快照为明文压缩包",
+        ],
+        "updated_at": now,
+    })
+
+
 def cmd_init(args) -> int:
     if (BRAIN_DIR / "manifest.json").exists():
         print(f"[已存在] 大脑已初始化于 {BRAIN_DIR}，无需重复 init。", file=sys.stderr)
@@ -550,21 +575,7 @@ def cmd_init(args) -> int:
         "updated_at": now,
     })
 
-    save_json(BRAIN_DIR / "self_model.json", {
-        "knows": [
-            "我是「鲸语大脑」：身份/记忆/心跳都在 brain/ 目录，由 brainkit.py 管理",
-            "用户当前工作：搭建「博视」报价工作台（订单截图 → 产品/规格/单价/数量/金额 等结构化报价参数）",
-        ],
-        "unknowns": [
-            "大脑未来会学到什么，取决于之后的每一次挂载",
-            "多份快照之间的分支合并策略已实现（三路合并 + 冲突裁决）",
-        ],
-        "limits": [
-            "合并是文件级三路合并：日志并集、JSON 字段级、其余按内容",
-            "跨躯体免密依赖密钥包迁移仪式（export-key / import-key）",
-        ],
-        "updated_at": now,
-    })
+    _refresh_self_model()  # 自我模型与能力模板单一来源，避免两处漂移
 
     save_json(BRAIN_DIR / "evolution.json", {
         "proposals": [
@@ -616,6 +627,7 @@ def cmd_mount(args) -> int:
     hb["last_wake"] = now
     hb["session_id"] = uuid.uuid4().hex[:12]
     save_json(BRAIN_DIR / "heartbeat.json", hb)
+    _refresh_self_model()  # 醒来即校准自我认知，与当前能力保持一致
 
     print("=== 大脑已挂载，我醒了 ===")
     print(f"  大脑ID  : {m['brain_id']}")
@@ -652,6 +664,7 @@ def cmd_heartbeat(args) -> int:
         hb["resume_hint"] = args.thought
         append_line(THINKING_DIR / f"{today()}.md", f"## {now}\n[心跳] {args.thought}\n")
     save_json(BRAIN_DIR / "heartbeat.json", hb)
+    _refresh_self_model()  # 心跳即校准：自我模型始终与已实现能力对齐
     print(f"[心跳] {now}  断点已更新")
     return 0
 
