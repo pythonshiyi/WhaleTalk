@@ -694,19 +694,45 @@ button {
 .toggle-on { background: var(--brand); border-color: var(--brand); }
 .toggle-on .toggle-knob { left: 21.5px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
 
-/* 设置页内 svc 块卡片化（仅作用于 .set-content 内，不影响其他页面） */
-.set-content .svc-group,
+/* ===== 设置页内 svc/sched 样式统一（对齐 set-* 精致风格）===== */
+/* svc-group：透明分组容器（分组标题在外 + 内部各卡片），避免双层嵌套 */
+.set-content .svc-group {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
+}
+.set-content .svc-title {
+  font-size: var(--fs-lg); font-weight: 700; color: var(--text-1);
+  padding: var(--sp-1) var(--sp-1) var(--sp-2);
+}
+/* 卡片容器：统一圆角/边框/阴影 */
 .set-content .svc-actions {
   background: var(--bg-2); border: 1px solid var(--border);
   border-radius: var(--r-xl); padding: var(--sp-4) var(--sp-5);
   margin-bottom: var(--sp-4);
   box-shadow: 0 2px 14px rgba(0,0,0,.10);
 }
-.set-content .svc-title {
-  font-size: var(--fs-lg); font-weight: 700; color: var(--text-1);
-  margin-bottom: var(--sp-3); padding-bottom: var(--sp-2);
-  border-bottom: 1px solid var(--border);
+/* 卡片内行：sched 系列提升到 set 风格 */
+.set-content .sched-line1 { display: flex; align-items: center; gap: 10px; margin-top: var(--sp-1); }
+.set-content .sched-line1 b { font-size: var(--fs-md); font-weight: 600; }
+.set-content .sched-text { font-size: var(--fs-sm); color: var(--text-2); margin-top: 6px; line-height: 1.6; }
+.set-content .sched-action { font-size: 11px; color: var(--text-3); margin-left: auto; }
+.set-content .sched-item {
+  padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--r-md); margin-bottom: 8px;
+  transition: background .15s var(--ease);
 }
+.set-content .sched-item:hover { background: var(--bg-hover); }
+.set-content .svc-prompt-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.set-content .svc-prompt-row .set-combo { flex: 1; }
+/* 按钮：主操作品牌色渐变；小操作描边胶囊 */
+.set-content .confirm-btn.confirm-primary { background: linear-gradient(135deg, var(--brand), #0284c7); border: none; color: #fff; }
+.set-content .msg-op {
+  background: transparent; border: 1px solid var(--border-strong);
+  color: var(--text-2); border-radius: var(--r-full);
+  padding: 3px 14px; font-size: var(--fs-xs); cursor: pointer;
+  transition: all .15s var(--ease);
+}
+.set-content .msg-op:hover { color: var(--brand-strong); border-color: rgba(14,165,233,.4); background: var(--bg-hover); }
 
 /* 设置页已保存提示 */
 .set-saved-tip {

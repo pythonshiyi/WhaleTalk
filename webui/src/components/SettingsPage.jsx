@@ -642,7 +642,7 @@ function BrainBlock() {
             <div>
               ⚠ {mergeOut.conflicts.length} 条冲突待裁决：
               {(mergeOut.conflicts || []).map((c) => (
-                <div key={c.id} style={{ margin: "6px 0", padding: 6, border: "1px solid var(--border-tertiary)", borderRadius: 6 }}>
+                <div key={c.id} style={{ margin: "6px 0", padding: 6, border: "1px solid var(--border-strong)", borderRadius: 6 }}>
                   <div style={{ opacity: 0.9 }}>• {c.file}{c.path && c.path !== c.file ? `（${c.path.replace(c.file + ".", "")}）` : ""}</div>
                   <div style={{ fontSize: 12, opacity: 0.8 }}>A: {c.ours || "—"}　vs　B: {c.theirs || "—"}</div>
                   <div style={{ marginTop: 4 }}>
