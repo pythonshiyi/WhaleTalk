@@ -401,6 +401,11 @@ function BrainBlock() {
   const [importPw, setImportPw] = React.useState("");
   const [importFile, setImportFile] = React.useState(null);
   const [fileB64, setFileB64] = React.useState("");
+  const [mergeA, setMergeA] = React.useState("");
+  const [mergeB, setMergeB] = React.useState("");
+  const [strategy, setStrategy] = React.useState("auto");
+  const [mergeOut, setMergeOut] = React.useState(null);
+  const [resolving, setResolving] = React.useState(false);
 
   const load = async (quiet) => {
     const d = await apiGet("/v1/brain");
@@ -449,8 +454,56 @@ function BrainBlock() {
     r.readAsDataURL(f);
   };
 
+  const enableKeyring = async () => {
+    if (!window.confirm("为本大脑生成密钥对 + 主密钥（RSA-2048），启用免密加密快照？")) return;
+    setBusy(true);
+    const d = await apiPost("/v1/brain", { action: "keyring-setup" });
+    setMsg(d?.message || "请求失败");
+    setBusy(false);
+    load(true);
+  };
+
+  const doMerge = async () => {
+    if (!mergeA || !mergeB) { setMsg("请先选择主干快照与分支快照"); return; }
+    if (mergeA === mergeB) { setMsg("主干与分支不能是同一个快照"); return; }
+    setBusy(true);
+    setMsg("");
+    setMergeOut(null);
+    try {
+      const d = await apiPost("/v1/brain", { action: "merge", snap_a: mergeA, snap_b: mergeB, strategy });
+      if (d) {
+        setMergeOut({ dir: d.data?.dir || "", conflicts: d.data?.conflicts || [], message: d.message || "" });
+        setMsg(d.message || (d.ok ? "合并完成" : "合并失败"));
+      } else setMsg("合并请求失败（后端未连接？）");
+    } catch (e) { setMsg("合并异常：" + String(e)); }
+    setBusy(false);
+    load(true);
+  };
+
+  const resolveOne = async (cid, keep) => {
+    if (!mergeOut) return;
+    setResolving(true);
+    const d = await apiPost("/v1/brain", { action: "merge-resolve", id: cid, keep, dir: mergeOut.dir });
+    if (d && d.data) setMergeOut({ ...mergeOut, conflicts: d.data.conflicts || [] });
+    setMsg(d?.message || "裁决请求失败");
+    setResolving(false);
+    load(true);
+  };
+
+  const adopt = async () => {
+    if (!mergeOut?.dir) return;
+    if (!window.confirm("将合并结果应用为当前大脑？（旧大脑自动备份到 brain.bak-*）")) return;
+    setBusy(true);
+    const d = await apiPost("/v1/brain", { action: "adopt-merge", dir: mergeOut.dir });
+    setMsg(d?.message || "请求失败");
+    setBusy(false);
+    setMergeOut(null);
+    load(true);
+  };
+
   const b = brain;
   const noBrain = b === null || b === undefined;
+  const snapOptions = (b?.snapshots || []).slice().reverse();
   return (
     <div className="svc-actions" style={{ display: "block" }}>
       <div className="sched-line1">
@@ -467,6 +520,7 @@ function BrainBlock() {
         <>
           <div className="sched-text">
             • 指纹：{b.fingerprint_ok ? "✓ 完好" : "✗ 不匹配"}　• 密钥：{b.keyring ? `✓ 免密已启用（${b.pubkey || "?"}）` : "未启用"}
+            {!b.keyring && <button className="confirm-btn" style={{ marginLeft: 8 }} disabled={busy} onClick={enableKeyring}>🔑 一键启用免密</button>}
             <br />• 记忆 {b.memories} 份 · 思考 {b.thinking_days} 天 · 血缘 {JSON.stringify(b.lineage || {})}
             <br />• 断点：{b.resume_hint || "无"}
             {b.open_conflicts > 0 && <span style={{ color: "var(--danger)" }}>　⚠ 待裁决冲突 {b.open_conflicts} 条</span>}
@@ -482,7 +536,7 @@ function BrainBlock() {
             <button className="confirm-btn" disabled={busy} onClick={() => act("archive")}>＋ 立即快照</button>
           </div>
 
-          <div style={{ fontWeight: 500, opacity: 0.85 }} style={{ marginTop: 10 }}>📸 快照（brain_v{n}.whale）</div>
+          <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>📸 快照（brain_v{n}.whale）</div>
           <div className="sched-text">
             {(b.snapshots || []).length === 0 ? "（暂无快照）" : (b.snapshots || []).slice().reverse().map((s) => (
               <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
@@ -492,7 +546,50 @@ function BrainBlock() {
             ))}
           </div>
 
-          <div style={{ fontWeight: 500, opacity: 0.85 }} style={{ marginTop: 10 }}>🔑 跨躯体免密迁移</div>
+          <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>🔀 分支合并（LCA 三路）</div>
+          <div className="sched-line1">
+            <select className="set-select" value={mergeA} onChange={(e) => setMergeA(e.target.value)} style={{ flex: 1 }}>
+              <option value="">主干 A…</option>
+              {snapOptions.map((s) => <option key={s.name} value={`brain/archive/${s.name}`}>{s.name}（{s.mtime}）</option>)}
+            </select>
+            <select className="set-select" value={mergeB} onChange={(e) => setMergeB(e.target.value)} style={{ flex: 1 }}>
+              <option value="">分支 B…</option>
+              {snapOptions.map((s) => <option key={s.name} value={`brain/archive/${s.name}`}>{s.name}（{s.mtime}）</option>)}
+            </select>
+            <select className="set-select" value={strategy} onChange={(e) => setStrategy(e.target.value)}>
+              <option value="auto">冲突留待裁决</option>
+              <option value="ours">冲突取 A</option>
+              <option value="theirs">冲突取 B</option>
+            </select>
+            <button className="confirm-btn" disabled={busy || (b.snapshots || []).length < 2} onClick={doMerge}>合并</button>
+          </div>
+          {mergeOut && (
+            <div className="sched-text">
+              <div>• 结果目录：{mergeOut.dir}</div>
+              {(mergeOut.conflicts || []).length === 0 ? (
+                <div>✓ 无冲突，可采纳为当前大脑。
+                  <button className="confirm-btn" style={{ marginLeft: 8 }} disabled={busy} onClick={adopt}>采纳为当前大脑</button>
+                </div>
+              ) : (
+                <div>
+                  ⚠ {mergeOut.conflicts.length} 条冲突待裁决：
+                  {(mergeOut.conflicts || []).map((c) => (
+                    <div key={c.id} style={{ margin: "6px 0", padding: 6, border: "1px solid var(--border-tertiary)", borderRadius: 6 }}>
+                      <div style={{ opacity: 0.9 }}>• {c.file}{c.path && c.path !== c.file ? `（${c.path.replace(c.file + ".", "")}）` : ""}</div>
+                      <div style={{ fontSize: 12, opacity: 0.8 }}>A: {c.ours || "—"}　vs　B: {c.theirs || "—"}</div>
+                      <div style={{ marginTop: 4 }}>
+                        {["ours", "theirs", "both"].map((k) => (
+                          <button key={k} className="msg-op" disabled={resolving} onClick={() => resolveOne(c.id, k)}>{k === "ours" ? "取A" : k === "theirs" ? "取B" : "两者都要"}</button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>🔑 跨躯体免密迁移</div>
           <div className="sched-line1">
             <input className="set-select set-combo" type="password" placeholder="导出口令（留空自动生成）" value={seedPw} onChange={(e) => setSeedPw(e.target.value)} style={{ flex: 1 }} />
             <button className="confirm-btn" disabled={busy} onClick={() => act("export-key", { passphrase: seedPw })}>导出密钥包</button>

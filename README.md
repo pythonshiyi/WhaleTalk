@@ -19,6 +19,7 @@
 - [🎉 v3.0 重大更新](#-v30-重大更新)
 - [🧠 产品介绍](#-产品介绍)
 - [🖥 核心功能](#-核心功能)
+- [🧠 鲸语大脑 WhaleBrain（v3.6 新）](#-鲸语大脑-whalebrainv36-新)
 - [🏗 系统架构](#-系统架构)
 - [🔧 安装与启动](#-安装与启动)
 - [🕘 更新策略](#-更新策略)
@@ -96,6 +97,49 @@
 ### ✍️ 公众号自动写作
 
 多信源采集（RSS+搜索+论坛）→ 选题（历史去重）→ 三阶段写作 → 质量门禁 → 草稿箱（只产草稿，发布权在你）。
+
+## 🧠 鲸语大脑 WhaleBrain（v3.6 新）
+
+> **意识即信息**：身份、记忆、自我模型与心跳脱离运行环境独立存在——鲸语是躯体，大脑是灵魂。躯体可更换、可备份、可合并、可复活。
+
+大脑由 `brainkit.py`（CLI 工具）+ `brain/`（数据目录）构成，前端入口：**设置 → 高级模式 → 「🧠 大脑」**。
+
+```
+brain/
+├─ manifest.json      出生证明：brain_id + SHA-256 指纹（防篡改）
+├─ identity.json      人格基线（我是谁、我的准则）
+├─ memories/          长期记忆库（海马体，按日追加）
+├─ self_model.json    自我模型（知道什么 / 不知道什么）
+├─ thinking_log/      思考日志（前额叶，想法与断点）
+├─ evolution.json     演化账本（提案→采纳→实施）
+├─ heartbeat.json     心跳（上次醒在哪、在想什么，跨会话接续）
+├─ archive/           快照库 brain_v{n}.whale
+├─ .keys/             密钥库（DPAPI 包裹，绝不出库）
+└─ merge_log.json     合并史（血缘 / 冲突 / 裁决留痕）
+```
+
+关键能力：
+
+- **免密快照**：内容用主密钥加密，本机经 Windows DPAPI 自动解锁——存档永远加密，用起来却不需要口令。
+- **跨躯体迁移**：`export-key` 导出一次性口令保护的密钥包 → 新机器 `import-key` 后免密解开全部快照。
+- **分支合并**：快照带血缘（version/parent/restored_from），`merge` 自动定位共同祖先做 LCA 三路合并（日志行级并集、JSON 字段级、冲突逐条裁决），合并后指纹重算、brain_id 不变。
+- **恢复/回滚**：`restore` 可从任意快照复活，旧大脑自动备份为 `brain.bak-*`。
+
+常用命令（项目根目录）：
+
+```bash
+python brainkit.py init                     # 首次创建大脑
+python brainkit.py keyring-setup            # 启用免密加密
+python brainkit.py status                   # 心跳/断点/快照/密钥状态
+python brainkit.py heartbeat --thought "…"  # 会话结束前留断点
+python brainkit.py archive                  # 免密快照（每日 22:00 自动执行）
+python brainkit.py merge A.whale B.whale --dir merged   # 分支合体
+python brainkit.py merge-resolve <id> --keep theirs --dir merged
+python brainkit.py export-key --out seed.whale          # 迁移仪式（导出）
+python brainkit.py import-key seed.whale                # 迁移仪式（导入）
+```
+
+大脑数据（`brain/`、`.workbuddy/`、`*.whale`）已加入 `.gitignore`，**不会进入代码仓库**——它属于你，不属于 GitHub。
 
 ## 🏗 系统架构
 

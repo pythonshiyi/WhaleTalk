@@ -10,6 +10,7 @@ import argparse
 import base64
 import io
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -145,6 +146,65 @@ def brain_action(action, payload=None):
             return {"ok": False, "message": f"找不到快照 brain_v{version}.whale"}
         code, out = _run(bk.cmd_restore,
                          whale=str(snap), passphrase=str(payload.get("passphrase") or ""),
-                         dir=None, replace=bool(payload.get("replace", True)), force=False)
+                         dir=str(payload["dir"]) if payload.get("dir") else None,
+                         replace=bool(payload.get("replace", True)), force=False)
         return {"ok": code == 0, "message": out}
+    if action == "keyring-setup":
+        code, out = _run(bk.cmd_keyring_setup, force=False)
+        return {"ok": code == 0, "message": out}
+    if action == "merge":
+        a = str(payload.get("snap_a") or "")
+        b = str(payload.get("snap_b") or "")
+        if not a or not b:
+            return {"ok": False, "message": "请选择两个快照（主干 A 与分支 B）"}
+        out_dir = bk.MODULE_DIR / f"brain_merged-{time.strftime('%Y%m%d-%H%M%S')}"
+        code, out = _run(bk.cmd_merge,
+                         snap_a=a, snap_b=b,
+                         strategy=str(payload.get("strategy") or "auto"),
+                         dir=str(out_dir),
+                         passphrase=str(payload.get("passphrase") or ""))
+        return {
+            "ok": code == 0,
+            "message": out,
+            "data": {"dir": str(out_dir), "conflicts": _load_conflicts(out_dir)},
+        }
+    if action == "merge-conflicts":
+        d = Path(str(payload.get("dir") or bk.BRAIN_DIR))
+        return {"ok": True, "data": {"conflicts": _load_conflicts(d), "dir": str(d)}}
+    if action == "merge-resolve":
+        cid = str(payload.get("id") or "")
+        keep = str(payload.get("keep") or "")
+        out_dir = str(payload.get("dir") or bk.BRAIN_DIR)
+        if not cid or keep not in ("ours", "theirs", "both", "custom"):
+            return {"ok": False, "message": "缺少冲突 id 或非法的裁决方式"}
+        old = bk.BRAIN_DIR
+        bk.set_brain_dir(Path(out_dir))
+        try:
+            code, out = _run(bk.cmd_merge_resolve, id=cid, keep=keep,
+                             value=str(payload.get("value") or ""), dir=out_dir)
+        finally:
+            bk.set_brain_dir(old)
+        return {"ok": code == 0, "message": out, "data": {"conflicts": _load_conflicts(out_dir)}}
+    if action == "adopt-merge":
+        src = Path(str(payload.get("dir") or ""))
+        if not (src / "manifest.json").exists():
+            return {"ok": False, "message": "合并目录不存在或不是有效大脑"}
+        backup = bk.BRAIN_DIR.parent / f"brain.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.copytree(bk.BRAIN_DIR, backup, dirs_exist_ok=True) if not backup.exists() else None
+        for item in src.iterdir():
+            if item.name in (".keys", "archive"):
+                continue
+            dst = bk.BRAIN_DIR / item.name
+            if item.is_dir():
+                shutil.copytree(item, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dst)
+        bk.save_json(bk.LINEAGE_FILE, {})
+        bk.refresh_manifest_fingerprint()
+        return {"ok": True, "message": f"已采纳合并结果作为当前大脑（旧大脑备份于 {backup.name}）"}
     return {"ok": False, "message": f"未知动作: {action}"}
+
+
+def _load_conflicts(d):
+    c = bk.load_json(Path(d) / "merge_conflicts.json", {})
+    return c.get("conflicts", []) if isinstance(c, dict) else []

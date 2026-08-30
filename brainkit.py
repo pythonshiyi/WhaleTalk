@@ -854,7 +854,7 @@ def _read_snapshot_to_dir(path: Path, passphrase: str, workdir: Path) -> Path:
     zpath = workdir / f"{path.stem}.zip"
     zpath.write_bytes(raw)
     out = workdir / path.stem
-    out.mkdir()
+    out.mkdir(exist_ok=True)  # 同一快照可能既作输入又作共同祖先，重复解包允许覆盖
     with zipfile.ZipFile(zpath) as zf:
         _safe_extract(zf, out)
     return out
