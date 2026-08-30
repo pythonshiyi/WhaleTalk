@@ -434,216 +434,66 @@ def _missing_auto_deps():
     return miss
 
 
-def _heavy_deps_report():
-    """返回缺失的可选（重型）依赖 dict 列表。"""
+def _importable(name):
+    """检查模块是否可导入（依赖检测用）。"""
     import importlib.util
     try:
-        import deps
-    except Exception:
-        return []
-    out = []
-    for d in deps.HEAVY_DEPS:
-        imp = d.get("import", "")
-        try:
-            if importlib.util.find_spec(imp) is None:
-                out.append(d)
-        except Exception:
-            out.append(d)
-    return out
-
-
-def _install_deps_console(miss):
-    import deps
-    ok_all = True
-    for i, (pkg, label) in enumerate(miss, 1):
-        print(f"  [{i}/{len(miss)}] 安装 {label}（{pkg}）…", flush=True)
-        ok = deps.pip_install(pkg, on_line=lambda s: print("      " + s, flush=True))
-        ok_all = ok_all and ok
-        print(f"    {'✅' if ok else '❌ 失败'} {label}")
-    return ok_all
-
-
-def _deps_dialog(miss, heavy, tk):
-    """启动依赖弹窗：文案围绕「启动鲸语」，可选能力勾选 + 实时日志与计时。"""
-    import queue
-    import threading
-    import deps
-
-    only_heavy = not miss  # 核心已就绪，仅提示可选能力
-
-    root = tk.Tk()
-    root.title("鲸语")
-    root.geometry("540x500")
-    root.resizable(False, False)
-    try:
-        root.attributes("-topmost", True)
-    except Exception:
-        pass
-    tk.Label(root, text="🐋 鲸语", font=("Microsoft YaHei", 16, "bold")).pack(pady=(18, 4))
-    if miss:
-        sub = f"首次启动需安装 {len(miss)} 个必需组件（自动 · 清华源），完成后自动进入程序"
-    else:
-        sub = "鲸语已就绪。以下为可选能力，按需安装（也可稍后在 设置 → 可选依赖 里装）"
-    tk.Label(root, text=sub, font=("Microsoft YaHei", 9), fg="#666", wraplength=480, justify="center").pack(padx=18)
-
-    body = tk.Frame(root)
-    body.pack(fill="x", padx=20, pady=(8, 0))
-
-    if miss:
-        tk.Label(body, text="必需组件（将自动安装）：", font=("Microsoft YaHei", 10, "bold")).pack(anchor="w")
-        tk.Label(body, text="、".join(m[1] for m in miss), font=("Microsoft YaHei", 9),
-                 fg="#555", wraplength=480, justify="left").pack(anchor="w", pady=(2, 6))
-
-    check_vars = {}
-    if heavy:
-        tk.Label(body, text="可选能力（勾选即安装，不勾也不影响启动）：", font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", pady=(4, 2))
-        for d in heavy:
-            var = tk.BooleanVar(value=False)
-            check_vars[d["import"]] = var
-            line = tk.Frame(body)
-            line.pack(anchor="w", fill="x", pady=1)
-            tk.Checkbutton(line, variable=var).pack(side="left")
-            tk.Label(line, text=d["label"], font=("Microsoft YaHei", 10)).pack(side="left")
-            note = d.get("note") or d.get("desc") or ""
-            tk.Label(line, text=f"　{note}", font=("Microsoft YaHei", 8), fg="#888").pack(side="left")
-
-    # 状态行 + 计时
-    head = tk.Frame(root)
-    head.pack(fill="x", padx=20, pady=(6, 0))
-    status = tk.StringVar(value="准备就绪")
-    tk.Label(head, textvariable=status, font=("Microsoft YaHei", 9), fg="#0a84ff").pack(side="left")
-    elapsed = tk.StringVar(value="")
-    tk.Label(head, textvariable=elapsed, font=("Microsoft YaHei", 9), fg="#888").pack(side="right")
-
-    # 实时日志框（滚动）
-    logframe = tk.Frame(root)
-    logframe.pack(fill="both", expand=True, padx=20, pady=(4, 0))
-    log = tk.Text(logframe, height=9, font=("Consolas", 8), state="disabled", wrap="word",
-                  bg="#f6f7f9", fg="#333")
-    log.pack(side="left", fill="both", expand=True)
-    sb = tk.Scrollbar(logframe, command=log.yview)
-    sb.pack(side="right", fill="y")
-    log.config(yscrollcommand=sb.set)
-
-    logq = queue.Queue()
-    t0 = {"t": None}
-
-    def on_line(s):
-        logq.put(str(s)[:120])
-
-    def poll():
-        try:
-            while True:
-                line = logq.get_nowait()
-                log.config(state="normal")
-                log.insert("end", line + "\n")
-                log.see("end")
-                log.config(state="disabled")
-        except queue.Empty:
-            pass
-        if t0["t"] is not None:
-            secs = int(time.time() - t0["t"])
-            elapsed.set(f"已用时 {secs // 60}分{secs % 60}秒")
-        root.after(100, poll)
-
-    result = {"ok": True}
-
-    def worker(chosen):
-        t0["t"] = time.time()
-        total = len(miss) + len(chosen)
-        done = 0
-        result["ok"] = True
-        for i, (pkg, label) in enumerate(miss, 1):
-            done += 1
-            status.set(f"[{done}/{total}] 安装必需组件 {label}…")
-            if not deps.pip_install(pkg, on_line):
-                result["ok"] = False
-        for d in chosen:
-            done += 1
-            status.set(f"[{done}/{total}] 安装 {d['label']}…")
-            if not deps.install_optional(d, on_line):
-                result["ok"] = False
-        status.set("✅ 准备完成，正在进入鲸语…" if result["ok"] else "⚠ 部分组件失败（不阻塞启动），可稍后在设置里重试")
-        root.after(1500, root.destroy)
-
-    def _go(chosen):
-        btn_primary.config(state="disabled")
-        btn_secondary.config(state="disabled")
-        threading.Thread(target=worker, args=(chosen,), daemon=True).start()
-
-    def start():
-        chosen = [d for d in heavy if check_vars.get(d["import"]) and check_vars[d["import"]].get()]
-        _go(chosen)
-
-    def skip():
-        _go([])
-
-    btnrow = tk.Frame(root)
-    btnrow.pack(pady=(6, 14))
-    btn_primary = tk.Button(btnrow, text=("启动鲸语（自动安装）" if miss else "安装并进入鲸语"),
-                            command=start, width=20, font=("Microsoft YaHei", 10),
-                            bg="#0a84ff", fg="#ffffff", activebackground="#1a94ff",
-                            activeforeground="#ffffff", relief="flat", cursor="hand2")
-    btn_primary.pack(side="left", padx=5)
-    btn_secondary = tk.Button(btnrow, text=("仅装必需项" if miss else "直接进入鲸语"),
-                              command=skip, width=16, font=("Microsoft YaHei", 10))
-    btn_secondary.pack(side="left", padx=5)
-
-    root.after(100, poll)
-    root.mainloop()
-    return result["ok"]
-
-
-def _optional_notified():
-    try:
-        import config_utils
-        return bool(config_utils.load_config().get("deps_optional_notified"))
+        return importlib.util.find_spec(name) is not None
     except Exception:
         return False
 
 
-def _mark_optional_notified():
-    try:
-        import config_utils
-        cfg = config_utils.load_config()
-        cfg["deps_optional_notified"] = True
-        config_utils.save_config(cfg)
-    except Exception:
-        pass
+# 硬依赖：缺失时程序完全不可用（API 服务起不来），启动时同步静默安装
+HARD_DEPS = [
+    ("openai", "openai", "核心 API 网关"),
+    ("httpx", "httpx", "网络请求"),
+]
 
 
 def _ensure_python_deps():
-    """启动时检测并安装缺失的 Python 依赖，返回 True 表示可继续。
+    """启动依赖保障：永不弹窗、永不阻塞用户。
 
-    策略：必需组件缺失 → 弹窗（必须装）；可选能力缺失 → 仅首次提示一次，
-    之后静默启动（可在设置页按需安装），避免每次启动都打断用户。
+    - 硬依赖（openai/httpx）：缺失时同步静默安装（无弹窗），失败则明确报错；
+    - 软核心（功能依赖）：后台静默自动安装，不阻塞启动，装好后当前会话即可用；
+    - 可选能力（重型）：完全静默，去设置页「可选能力」面板按需安装。
     """
+    import deps
+    hard_miss = [(imp, pkg, label) for imp, pkg, label in HARD_DEPS
+                 if not _importable(imp)]
+    if hard_miss:
+        print("⏳ 必需组件缺失，正在自动安装（清华源）…")
+        ok = True
+        for imp, pkg, label in hard_miss:
+            print(f"  [{label}] 安装中…", flush=True)
+            if not deps.pip_install(pkg, on_line=lambda s: print("    " + s, flush=True)):
+                ok = False
+        if not ok:
+            print("❌ 核心 API 组件安装失败，请检查网络后重试。")
+            return False
     miss = _missing_auto_deps()
-    heavy = _heavy_deps_report()
-    if not miss and not heavy:
+    if miss:
+        import threading
+        threading.Thread(target=_install_silent, args=(miss,), daemon=True).start()
+        print(f"⏳ {len(miss)} 个功能组件缺失，正在后台自动安装（不影响启动，装好后即可用）。")
+    else:
         print("✅ Python 依赖完整")
-        return True
-    if not miss and heavy and _optional_notified():
-        return True  # 可选能力已提示过，静默启动
-    console = os.environ.get("WHALETALK_DEPS_CONSOLE") == "1"
-    if console:
-        if miss:
-            print(f"⚠️ 检测到 {len(miss)} 个缺失依赖，正在安装…")
-            return _install_deps_console(miss)
-        for d in heavy:
-            print(f"   - {d['label']}（可安装）：{d['desc']}")
-        _mark_optional_notified()
-        return True
-    try:
-        import tkinter as tk
-        ok = _deps_dialog(miss, heavy, tk)
-        if not miss:
-            _mark_optional_notified()  # 可选能力提示过一次即可
-        return ok
-    except Exception:
-        if miss:
-            return _install_deps_console(miss)
-        return True
+    return True
+
+
+def _install_silent(miss):
+    """后台静默安装缺失的核心依赖（清华源），不打扰用户。"""
+    import deps
+    failed = []
+    for pkg, label in miss:
+        try:
+            if not deps.pip_install(pkg):
+                failed.append(label)
+        except Exception:
+            failed.append(label)
+    if failed:
+        print(f"⚠️ 后台安装部分失败：{'、'.join(failed)}（可在 设置 → 可选能力 重试）")
+    else:
+        print("✅ 后台依赖安装完成")
 
 
 def main():
