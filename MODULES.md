@@ -49,6 +49,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 118 工具 + smart_tools）
 | `stats.py` | 用量统计（按天×模型累计）+ 官方峰谷定价费用估算 |
 | `tokens.py` | token 估算（tiktoken o200k_base，缺省回退 1.5 字符/token，对象身份缓存） |
 | `persistence.py` | 原子 JSON 写入（mkstemp 唯一临时文件 + os.replace） |
+| `snapshot.py` | 文件/数据库写操作自动快照（P2）：写/编辑/重命名/数据库写前备份原内容到 `DATA_DIR/undo/`，可列出/恢复（`list_snapshots`/`restore_snapshot` 工具）；上限 200 条自动清理 |
 | `app_utils.py` | 布尔转换、空壳目录判断、清理、干净退出标记、隐私日志 |
 | `proc_utils.py` | 进程树终止（Windows taskkill /T，防孙进程残留） |
 | `shared.py` | cron 5 字段引擎（校验/匹配/错峰顺延）、峰谷定价判定、预算感知思考降档、本地路径正则、Windows OCR PowerShell 脚本 |

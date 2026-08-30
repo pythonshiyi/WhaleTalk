@@ -65,6 +65,7 @@ ACTION_TOOLS = (
     "send_email",
     "pip_install",
     "delete_file",
+    "restore_snapshot",
     "batch_rename",
     "extract_archive",
     "database_execute",

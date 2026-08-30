@@ -401,7 +401,7 @@ function ParamsTab() {
               {(Array.isArray(cur.thinking_modes) ? cur.thinking_modes : []).map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </Field>
-          <Field label="场景" hint="通用/编程/Agent（预设参数）">
+          <Field label="场景" hint="预设采样参数：通用/编程/Agent/运营/法律/金融/教育/医疗健康/写作创作">
             <select className="set-select px-sel" value={cur.scenario} onChange={(e) => edit({ scenario: e.target.value })}>
               {(Array.isArray(cur.scenarios) ? cur.scenarios : []).map((s) => <option key={s} value={s}>{s}</option>)}
             </select>

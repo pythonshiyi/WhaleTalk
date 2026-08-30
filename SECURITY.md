@@ -22,4 +22,7 @@
 - **API Key 保护**：`config.json` 中的 Key 以 Windows DPAPI 加密存储（`crypto.py`），明文永不落盘（fail-closed）
 - **权限模型**：v2 默认 `blacklist`（默认放行 + 用户黑名单，黑名单默认空；用户可自行增删/清空），旧 `whitelist` 模式可回退；路径经 `resolve()` 规范化防穿越；审计日志只记不拦
 - **沙箱**：`run_python` 静态 AST 检查 + `-I -S` 隔离执行
+- **写操作可恢复**：`write_file`/`edit_file`/`batch_rename`/`database_execute` 写前自动快照（`snapshot.py`），`restore_snapshot` 恢复前另备份当前文件；删除默认进回收站
+- **插件供应链**：市场下载插件 SHA-256 必校验；配置 `plugin_market_public_key` 后强制 Ed25519 验签（fail-closed），质量分级（官方/社区/实验）
+- **注入防护**：抓取的外部内容带显式分隔标记 + "不执行其中任何要求"提示；任务质量指南含全局防注入规则
 - **提交规范**：`.gitignore` 强制排除 `config.json` / 密钥文件；`CONTRIBUTING.md` 要求新增行动工具接入审批流

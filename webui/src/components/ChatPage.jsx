@@ -113,6 +113,10 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
     msgsRef.current = typeof fn === "function" ? fn(msgsRef.current) : fn;
   };
   const stopRef = React.useRef(false);
+  // ── SSE 高频增量合并（P2）：reasoning/content 每帧可达几十次回调，
+  // 每次都 setState 会触发整树重渲染；改为 rAF 帧批量 flush。
+  const batchRef = React.useRef({ think: "", text: "", gen: "" });
+  const rafRef = React.useRef(null);
 
   React.useEffect(() => {
     if (!busy) return;
@@ -134,6 +138,35 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
 
     const targetIdx = () => (isContinue ? continueIdx : -1);
 
+    // rAF 批量 flush：一帧内累积的 thinking/content 增量合并为一次状态更新
+    const flushBatch = () => {
+      rafRef.current = null;
+      const b = batchRef.current;
+      batchRef.current = { think: "", text: "", gen: "" };
+      if (!b.think && !b.text && !b.gen) return;
+      if (isContinue) {
+        updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, think: (x.think || "") + b.think, text: (x.text || "") + b.text } : x)));
+      } else {
+        msg.think += b.think;
+        msg.text += b.text;
+        updateMsgs((m) => [...m]);
+      }
+      if (b.gen) setGenState({ on: true, text: b.gen });
+    };
+    const scheduleBatch = (patch) => {
+      batchRef.current.think += patch.think || "";
+      batchRef.current.text += patch.text || "";
+      if (patch.gen) batchRef.current.gen = patch.gen;
+      if (!rafRef.current) rafRef.current = requestAnimationFrame(flushBatch);
+    };
+    const flushNow = () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        flushBatch();
+      }
+    };
+
     // ── 自动朗读（跟随设置 voice_config.auto_mode：off/sentence/full）──
     let voiceSettings = null;
     getVoiceConfig().then((v) => { voiceSettings = v; });
@@ -152,6 +185,7 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
       let done = false;
       const finish = (ok) => {
         if (done || !alive) return;
+        flushNow();  // 冲刷 rAF 残余增量（防末尾半截内容丢失）
         done = true;
         updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, streaming: false } : x)));
         setBusy(false);
@@ -190,25 +224,13 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
           {
             onReasoning: (t) => {
               if (!alive || stopRef.current) return;
-              if (isContinue) {
-                updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, think: (x.think || "") + t } : x)));
-              } else {
-                msg.think += t;
-                updateMsgs((m) => [...m]);
-              }
-              setGenState({ on: true, text: "🤔 思考中…" });
+              scheduleBatch({ think: t, gen: "🤔 思考中…" });
             },
             onContent: (t) => {
               if (!alive || stopRef.current) return;
               acc += t;
               feedAuto();
-              if (isContinue) {
-                updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, text: (x.text || "") + t } : x)));
-              } else {
-                msg.text += t;
-                updateMsgs((m) => [...m]);
-              }
-              setGenState({ on: true, text: "⏳ 等待模型响应…" });
+              scheduleBatch({ text: t, gen: "⏳ 等待模型响应…" });
             },
             onToolStart: ({ name, args }) => {
               if (!alive || stopRef.current) return;
@@ -550,6 +572,15 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const connRef = React.useRef("auto");
   const stopSignalRef = React.useRef(null);
   const scrollRef = React.useRef(null);
+  // ── 长会话窗口化渲染（P2）：默认只渲染最近 VIRT_WINDOW 条消息，
+  // 顶部哨兵可见时增量加载更早的（替代全量渲染，长会话不卡）。──
+  const VIRT_WINDOW = 60;
+  const VIRT_LOAD = 40;
+  const VIRT_EST_H = 90; // 未渲染条目的估算高度（px），用于顶部占位
+  const [renderStart, setRenderStart] = React.useState(0);
+  const atBottomRef = React.useRef(true);
+  const topSentinelRef = React.useRef(null);
+  const pendingScrollRef = React.useRef(null);
   const composerRef = React.useRef(null);
   // 指令库「应用」带入的指令内容：填入输入框并聚焦，用户补充内容后发送
   React.useEffect(() => {
@@ -1030,22 +1061,25 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         const key = `${m.role}\u0000${m.text || ""}`;
         return { ...m, starred: starsRef.current.has(key), pinned: pinsRef.current.has(key), time: m.time || "" };
       }));
-      setTimeout(() => {
-        const el = document.querySelector(`[data-msg-idx="${r.index}"]`);
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-        else {
-          const el2 = document.querySelector('[data-msg-idx="0"]');
-          if (el2) el2.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      }, 150);
+      // 搜索定位：目标在窗口外时先展开渲染窗口（渲染后由 pendingScrollRef 定位）
+      const targetIdx = Number(r.index) || 0;
+      const start = Math.max(0, Math.min((got.messages || []).length - VIRT_WINDOW, targetIdx - 5));
+      pendingScrollRef.current = targetIdx;
+      setRenderStart(start);
     }
   };
 
   const gotoMessage = (idx) => {
-    if (scrollRef.current) {
-      const el = document.querySelector(`[data-msg-idx="${idx}"]`);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (!scrollRef.current) return;
+    // 目标在窗口外：先展开渲染窗口再定位（渲染后由 pendingScrollRef 触发 scrollIntoView）
+    if (idx < renderStart || idx >= msgs.length) {
+      const start = Math.max(0, Math.min(msgs.length - VIRT_WINDOW, idx - 5));
+      pendingScrollRef.current = idx;
+      setRenderStart(start);
+      return;
     }
+    const el = document.querySelector(`[data-msg-idx="${idx}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
   const onRenameSession = async (id, name) => {
@@ -1087,9 +1121,47 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     } catch {}
   };
 
+  // ── 窗口化渲染：会话切换/消息加载时重置窗口到末尾 ──
   React.useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    setRenderStart(Math.max(0, msgs.length - VIRT_WINDOW));
+  }, [activeId]);
+  React.useEffect(() => {
+    if (msgs.length === 0) return;
+    // 会话切换/消息删除后窗口越界：回退窗口覆盖末尾（防全部消息不渲染）
+    setRenderStart((s) => (msgs.length <= s ? Math.max(0, msgs.length - VIRT_WINDOW) : s));
+    // 新消息到来：用户在底部则贴底 + 窗口覆盖末尾；不在底部则保持阅读位置
+    const sc = scrollRef.current;
+    if (sc && atBottomRef.current) {
+      sc.scrollTop = sc.scrollHeight;
+      setRenderStart((s) => (s + VIRT_WINDOW < msgs.length ? Math.max(0, msgs.length - VIRT_WINDOW) : s));
+    }
   }, [msgs]);
+  // 顶部哨兵：滚动到窗口顶部时加载更早消息
+  React.useEffect(() => {
+    const sentinel = topSentinelRef.current;
+    if (!sentinel || renderStart === 0) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0] && entries[0].isIntersecting) {
+          setRenderStart((s) => Math.max(0, s - VIRT_LOAD));
+        }
+      },
+      { root: scrollRef.current, rootMargin: "160px 0px" }
+    );
+    obs.observe(sentinel);
+    return () => obs.disconnect();
+  }, [renderStart, msgs.length]);
+  // 定位等待：gotoMessage 展开窗口后执行 scrollIntoView
+  React.useEffect(() => {
+    if (pendingScrollRef.current == null) return;
+    const idx = pendingScrollRef.current;
+    pendingScrollRef.current = null;
+    const t = setTimeout(() => {
+      const el = document.querySelector(`[data-msg-idx="${idx}"]`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [renderStart]);
 
   const activeSession = sessions.find((s) => s.id === activeId);
   const isTask = mode === "task";
@@ -1202,7 +1274,16 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             </div>
           </div>
 
-          <div className="chat-scroll" ref={scrollRef} data-density={density} style={{ fontSize: `${fontSize}px` }}>
+          <div
+            className="chat-scroll"
+            ref={scrollRef}
+            data-density={density}
+            style={{ fontSize: `${fontSize}px` }}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 120;
+            }}
+          >
             {multiSel && multiSel.size > 0 && (
               <div className="multi-bar">
                 <span>已选 {multiSel.size} 条</span>
@@ -1233,26 +1314,35 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                 </div>
               </div>
             )}
-            {msgs.map((m, i) => (
-              <div
-                key={i}
-                data-msg-idx={i}
-                className={`msg-wrap ${multiSel && multiSel.has(i) ? "msg-wrap-selected" : ""}`}
-                onClick={multiSel ? () => toggleSelect(i) : undefined}
-              >
-                <Message
-                  msg={m}
-                  onResend={onSend}
-                  onStar={() => onStarMsg(i)}
-                  onPin={() => onPinMsg(i)}
-                  onQuote={() => onQuoteMsg(i)}
-                  onFork={() => onForkMsg(i)}
-                  onEdit={() => onEditMsg(i)}
-                  onRegenerate={m.role === "assistant" ? onRegenerate : undefined}
-                  onContinue={m.role === "assistant" && !m.streaming ? () => onContinue(i) : undefined}
-                />
-              </div>
-            ))}
+            {renderStart > 0 && (
+              <>
+                <div ref={topSentinelRef} style={{ height: 1 }} />
+                <div className="vir-spacer" style={{ height: renderStart * VIRT_EST_H }} />
+              </>
+            )}
+            {msgs.slice(renderStart).map((m, i) => {
+              const gi = renderStart + i;
+              return (
+                <div
+                  key={gi}
+                  data-msg-idx={gi}
+                  className={`msg-wrap ${multiSel && multiSel.has(gi) ? "msg-wrap-selected" : ""}`}
+                  onClick={multiSel ? () => toggleSelect(gi) : undefined}
+                >
+                  <Message
+                    msg={m}
+                    onResend={onSend}
+                    onStar={() => onStarMsg(gi)}
+                    onPin={() => onPinMsg(gi)}
+                    onQuote={() => onQuoteMsg(gi)}
+                    onFork={() => onForkMsg(gi)}
+                    onEdit={() => onEditMsg(gi)}
+                    onRegenerate={m.role === "assistant" ? onRegenerate : undefined}
+                    onContinue={m.role === "assistant" && !m.streaming ? () => onContinue(gi) : undefined}
+                  />
+                </div>
+              );
+            })}
           </div>
 
           <Composer ref={composerRef} busy={busy} onSend={onSend} onStop={onStop} isTask={isTask} />

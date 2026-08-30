@@ -205,10 +205,18 @@ function DetailOverlay({ name, onClose }) {
   );
 }
 
+const TIER_META = {
+  official: { label: "官方", cls: "tier-official" },
+  community: { label: "社区", cls: "tier-community" },
+  experimental: { label: "实验", cls: "tier-experimental" },
+};
+
 export default function PluginsPage({ onApply }) {
   const [tab, setTab] = React.useState("gallery");
   const [installed, setInstalled] = React.useState([]);
   const [gallery, setGallery] = React.useState([]);
+  const [market, setMarket] = React.useState([]);
+  const [marketInfo, setMarketInfo] = React.useState({});
   const [busy, setBusy] = React.useState("");
   const [detail, setDetail] = React.useState(null);
   const [tip, setTip] = React.useState("");
@@ -224,10 +232,35 @@ export default function PluginsPage({ onApply }) {
     } else {
       setErr("插件列表加载失败：后端未连接，请启动服务后刷新");
     }
+    const m = await apiGet("/v1/plugin_market");
+    if (m && Array.isArray(m.plugins)) {
+      setMarket(m.plugins);
+      setMarketInfo({ source: m.source, error: m.error, signature_enforced: m.signature_enforced, count: m.count });
+    } else if (m && m.error) {
+      setMarket([]);
+      setMarketInfo({ source: m.source, error: m.error });
+    }
   };
   React.useEffect(() => {
     load();
   }, []);
+
+  const marketInstall = async (name) => {
+    setBusy(name);
+    try {
+      const d = await apiPost("/v1/plugin_market/install", { name });
+      if (d && d.ok) {
+        setTip(`✅ 已安装「${d.name}」（校验：${d.verified || "sha256"}${d.tier ? " · " + (TIER_META[d.tier]?.label || d.tier) : ""}）`);
+        setTimeout(() => setTip(""), 2600);
+        load();
+      } else if (d && d.error) {
+        alert(`安装被拒绝：${d.error}`);
+      }
+    } catch (e) {
+      alert(`安装失败：${e.message}`);
+    }
+    setBusy("");
+  };
 
   const act = async (name, action) => {
     setBusy(name);
@@ -311,6 +344,9 @@ export default function PluginsPage({ onApply }) {
         <button className={`ab-tab ${tab === "gallery" ? "ab-tab-on" : ""}`} onClick={() => setTab("gallery")}>
           🖼 画廊（{gallery.length}）
         </button>
+        <button className={`ab-tab ${tab === "market" ? "ab-tab-on" : ""}`} onClick={() => setTab("market")}>
+          🌐 市场（{market.length}）
+        </button>
         <button className={`ab-tab ${tab === "installed" ? "ab-tab-on" : ""}`} onClick={() => setTab("installed")}>
           📦 已安装（{installed.length}）
         </button>
@@ -328,6 +364,55 @@ export default function PluginsPage({ onApply }) {
             {gallery.map((p) => <Card key={p.name} p={p} />)}
           </div>
           {!err && gallery.length === 0 && <div className="empty-tip">画廊暂无插件</div>}
+        </>
+      )}
+
+      {tab === "market" && (
+        <>
+          <div className="market-bar" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 12, opacity: .8 }}>
+              {marketInfo.signature_enforced ? "🔒 已强制 Ed25519 签名校验" : "🔒 下载后 SHA-256 校验"} · 来源 {marketInfo.source}
+            </span>
+          </div>
+          {marketInfo.error && <div className="empty-tip">市场索引不可用：{marketInfo.error}</div>}
+          <div className="plugin-grid">
+            {market.map((p) => {
+              const tm = TIER_META[p.tier] || TIER_META.community;
+              return (
+                <div className={`plugin-card ${p.installed ? "plugin-on" : ""}`} key={p.name}>
+                  <div className="plugin-head">
+                    <span className="plugin-icon">🧩</span>
+                    <div className="plugin-meta">
+                      <b>{p.name}</b>
+                      <div className="plugin-sub">
+                        <span className="plugin-author">by {p.author || "社区"}</span>
+                        {p.version && <span className="plugin-ver">v{p.version}</span>}
+                      </div>
+                    </div>
+                    <span className={`tier-badge ${tm.cls}`}>{tm.label}</span>
+                  </div>
+                  <div className="plugin-desc">{p.description}</div>
+                  <div className="plugin-perms">
+                    <span className={p.has_sha256 || p.signed ? "tier-verify" : "tier-verify-none"}>
+                      {p.signed ? "🔏 已签名" : p.has_sha256 ? "🔒 SHA-256 校验" : "⚠️ 无校验信息"}
+                    </span>
+                    {p.note && <span className="plugin-perm-tag" style={{ opacity: .7 }}>{p.note}</span>}
+                  </div>
+                  <div className="plugin-foot">
+                    <span />
+                    <button
+                      className={`install-btn ${p.installed ? "install-on" : ""}`}
+                      disabled={busy === p.name || p.installed}
+                      onClick={() => marketInstall(p.name)}
+                    >
+                      {busy === p.name ? "校验安装中…" : p.installed ? "已安装 ✓" : "🔐 校验并安装"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {!marketInfo.error && market.length === 0 && <div className="empty-tip">市场暂无插件</div>}
+          </div>
         </>
       )}
 

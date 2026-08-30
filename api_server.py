@@ -392,6 +392,171 @@ def _plugins_action(body):
     return {"ok": True}, None
 
 
+# ── 在线插件市场（v3.5 P2）：远程索引 + SHA-256/Ed25519 校验 + 质量分级 ──
+# index.json 结构：
+# {"plugins": [{"name","description","author","version","url","sha256",
+#               "tier": "official|community|experimental", "note": ""}]}
+# 质量分级：official（官方维护）/ community（社区贡献）/ experimental（实验性）
+_MARKET_CACHE = {"ts": 0.0, "data": None}
+_MARKET_TTL = 300  # 索引缓存 5 分钟
+_MARKET_TIMEOUT = 12
+
+
+def _market_url():
+    import config_defaults
+    try:
+        import config_utils as _cu
+        cfg = _cu.load_config()
+        return str(cfg.get("plugin_market_url") or config_defaults.PLUGIN_MARKET_URL).strip()
+    except Exception:
+        return config_defaults.PLUGIN_MARKET_URL
+
+
+def _market_public_key():
+    try:
+        import config_utils as _cu
+        return str(_cu.load_config().get("plugin_market_public_key") or "").strip()
+    except Exception:
+        return ""
+
+
+def _market_index(force=False):
+    """拉取市场索引（带缓存）。返回 (plugins_list, source_url, error)。"""
+    now = time.time()
+    if not force and _MARKET_CACHE["data"] is not None and now - _MARKET_CACHE["ts"] < _MARKET_TTL:
+        return _MARKET_CACHE["data"], _MARKET_CACHE["source"], None
+    url = _market_url()
+    try:
+        r = urllib.request.urlopen(url, timeout=_MARKET_TIMEOUT)
+        raw = r.read(2 * 1024 * 1024)
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+        plugins = data.get("plugins") if isinstance(data, dict) else None
+        if not isinstance(plugins, list):
+            return None, url, "市场索引格式错误（缺少 plugins 数组）"
+        cleaned = []
+        for p in plugins:
+            if not isinstance(p, dict) or not str(p.get("name") or "").strip():
+                continue
+            cleaned.append({
+                "name": str(p["name"]).strip(),
+                "description": str(p.get("description") or ""),
+                "author": str(p.get("author") or "社区"),
+                "version": str(p.get("version") or ""),
+                "url": str(p.get("url") or ""),
+                "sha256": str(p.get("sha256") or "").strip().lower(),
+                "signature": str(p.get("signature") or "").strip(),
+                "tier": str(p.get("tier") or "community").strip() or "community",
+                "note": str(p.get("note") or ""),
+            })
+        _MARKET_CACHE.update(ts=now, data=cleaned, source=url)
+        return cleaned, url, None
+    except Exception as e:
+        return None, url, f"市场索引拉取失败：{e}"
+
+
+def _verify_plugin_download(raw, entry):
+    """校验下载的插件字节：SHA-256 必校验；配置公钥后强制 Ed25519 验签。返回 (ok, error)。"""
+    import hashlib
+    entry = entry or {}
+    sha256 = str(entry.get("sha256") or "").strip().lower()
+    if sha256:
+        actual = hashlib.sha256(raw).hexdigest()
+        if actual != sha256:
+            return False, f"SHA-256 校验失败（期望 {sha256[:16]}…，实际 {actual[:16]}…），已拒绝安装"
+    pub = _market_public_key()
+    if pub:
+        sig = str(entry.get("signature") or "").strip()
+        if not sig:
+            return False, "市场配置了签名公钥，但该插件缺少 signature 字段，已拒绝安装（fail-closed）"
+        try:
+            import base64
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            key_material = pub.encode("utf-8")
+            try:
+                pubkey = serialization.load_pem_public_key(key_material)
+            except Exception:
+                der = base64.b64decode(pub)
+                pubkey = Ed25519PublicKey.from_public_bytes(der)
+            pubkey.verify(base64.b64decode(sig), raw)
+        except Exception as e:
+            return False, f"Ed25519 签名校验失败，已拒绝安装：{e}"
+    return True, ""
+
+
+def _plugin_market():
+    """GET /v1/plugin_market：市场条目 + 已安装状态。"""
+    import plugins as plugins_mod
+    plugins_list, source, err = _market_index()
+    installed_names = set()
+    try:
+        for p in plugins_mod.list_plugins(_plugin_paths()["plugins_dir"]):
+            installed_names.add(str((p.get("meta") or {}).get("name") or ""))
+    except Exception:
+        pass
+    out = []
+    for p in plugins_list or []:
+        out.append({
+            **p,
+            "installed": p["name"] in installed_names,
+            "has_sha256": bool(p.get("sha256")),
+            "signed": bool(p.get("signature")) or bool(_market_public_key()),
+        })
+    return {"plugins": out, "source": source, "error": err,
+            "signature_enforced": bool(_market_public_key()), "count": len(out)}
+
+
+def _plugin_market_install(body):
+    """POST /v1/plugin_market/install：{name} → 下载 + 校验 + 安装。"""
+    import plugins as plugins_mod
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "缺少插件名称"}
+    plugins_list, source, err = _market_index()
+    if err:
+        return {"ok": False, "error": err}
+    entry = next((p for p in (plugins_list or []) if p["name"] == name), None)
+    if entry is None:
+        return {"ok": False, "error": f"市场中未找到插件：{name}"}
+    url = str(entry.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return {"ok": False, "error": "插件下载地址无效"}
+    try:
+        from security import _safe_url
+        if _safe_url(url):
+            return {"ok": False, "error": "插件下载地址被安全策略拦截"}
+    except Exception:
+        pass
+    # 下载
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "WhaleTalk/3.5"})
+        with urllib.request.urlopen(req, timeout=_MARKET_TIMEOUT) as r:
+            raw = r.read(2 * 1024 * 1024)
+    except Exception as e:
+        return {"ok": False, "error": f"插件下载失败：{e}"}
+    # 签名/哈希校验（fail-closed）
+    ok_v, err_v = _verify_plugin_download(raw, entry)
+    if not ok_v:
+        return {"ok": False, "error": err_v}
+    # 结构校验
+    try:
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception as e:
+        return {"ok": False, "error": f"插件 JSON 解析失败：{e}"}
+    ok_p, err_p = plugins_mod.validate_plugin(data)
+    if not ok_p:
+        return {"ok": False, "error": f"插件结构校验失败：{err_p}"}
+    data.setdefault("meta", {})["author"] = str(entry.get("author") or data["meta"].get("author") or "社区")
+    data["_market_tier"] = str(entry.get("tier") or "community")
+    data["_market_source"] = source
+    # 安装
+    res = plugins_mod.apply_plugin(data, _plugin_paths())
+    if not res.get("ok"):
+        return {"ok": False, "error": str(res.get("error") or "安装失败")}
+    return {"ok": True, "name": name, "tier": data.get("_market_tier"),
+            "verified": "sha256" if entry.get("sha256") else ("ed25519" if entry.get("signature") else "none")}
+
+
 def _memory_full():
     """长期记忆全量（facts 列表）。兼容 {text,...} 与 {key,value,...} 两种存储结构。"""
     import stores
@@ -4466,6 +4631,8 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(200, _memory_full())
                 elif self.path == "/v1/plugins":
                     self._json(200, _plugins())
+                elif self.path == "/v1/plugin_market":
+                    self._json(200, _plugin_market())
                 elif self.path.startswith("/v1/plugins/"):
                     import urllib.parse as _up
                     name = _up.unquote(self.path[len("/v1/plugins/"):])
@@ -4845,6 +5012,12 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(400, {"error": err})
                 else:
                     self._json(200, result)
+            elif self.path == "/v1/plugin_market/install":
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                self._json(200, _plugin_market_install(body))
             elif self.path == "/v1/profiles":
                 body = self._read_body()
                 if body is None:
@@ -5578,6 +5751,11 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
         perms.set_full_auto(bool(_cu_load("full_auto")))
     except Exception:
         logger.exception("权限模块初始化失败")
+    try:
+        import snapshot as snapshot_mod
+        snapshot_mod.init(os.path.join(DATA_DIR, "undo"))
+    except Exception:
+        logger.exception("快照模块初始化失败（写操作将不带自动快照）")
     # run_workflow 的消息投递通道：Web 版无「投递输入框」，走无头后台执行
     def _send_to_headless(text):
         try:

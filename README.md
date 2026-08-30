@@ -49,7 +49,7 @@
 
 - **看得见**：🖼 多模态视觉（图片理解/图表阅读/截图修复/OCR/扫码、屏幕截图）
 - **说得出**：💬 对话/思考模式/语音合成（TTS）/朗读
-- **做得了**：⚡ 118 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理），权限模型分层
+- **做得了**：⚡ 120 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理/快照恢复），权限模型分层
 - **会进化**：🧬 自我进化（提案分支、失败模式库、成功模式复用）
 - **自疗**：🔁 失败模式沉淀 + 已知坑注入，AI 越用越聪明
 
@@ -77,7 +77,7 @@
 - **📋 指令库（独立栏目）**：提示词资产中心——新建/编辑/删除/分类/标签/图标/短命令，内置 24 条模板可一键复制到我的指令；支持搜索、排序、导入导出、恢复内置、禁用与「应用」试跑；输入框打 `/` 即可模糊搜索调用，支持 `{{TEXT}}`（选中文本）/`{{DATE}}`/`{ASK:}` 变量与「调用后自动发送」；插件技能作为只读来源统一纳管（可复制）
 - **🪄 自主（独立栏目）**：AI 自主能力的观察与管理窗口——进化管理（create_evolution 提案一键采纳/忽略 + self_evolve 分支查看 diff/确认合并/删除，合入权在用户）、审批与询问历史（时间/工具/参数/结果/理由）、行为日志（任务链 tasklog + 工具审计 audit）、自我状态（self_profile 跨会话连续自我 + 失败模式库）
 
-### ⚡ Agent 工具链（118 项）
+### ⚡ Agent 工具链（120 项）
 
 - **信息**：搜索（多引擎/分页/过滤/健康降级）、GitHub、实时热点（Hacker News）、网页抓取（含被墙站点代理通道）、RSS
 - **执行**：沙箱 Python、终端/进程、pip 安装、浏览器自动化
@@ -87,6 +87,7 @@
 - **桌面 RPA**：pyautogui 鼠标/键盘/滚轮/截屏（防误触 failsafe）
 - **自动化**：定时任务（错峰省费）、流程编排、任务检查点、知识库
 - **v3.1 新增**：📦 应用管理 `app_manage`（winget/choco 装/卸/搜/升级，环境搭建闭环）· 🖱 视觉定位点击 `screen_find_click`（看图→定位→点击一步完成）· 🎙 实时语音对话 `voice_chat_loop`（听一句答一句）· 🤝 多智能体编排 `team_run`（协调者拆解+角色接力+共享黑板）· 🌐 网络自愈 `net_diagnose`/`fetch_url_smart`（分层诊断+自动走代理兜底）
+- **v3.5 P2 新增**：🛡 写操作自动快照 `list_snapshots`/`restore_snapshot`（写文件/编辑/重命名/数据库写前自动备份，误操作一键恢复）· 🌐 在线插件市场（远程索引 + **SHA-256 哈希校验 + Ed25519 签名校验**（可选强制）+ **质量分级**：官方/社区/实验）· 🧪 外部内容注入防护（抓取内容显式分隔标记，防 prompt 注入）· 🎯 垂直领域场景（运营/法律/金融/教育/医疗健康/写作创作，预设采样参数）· ⚡ 前端长会话窗口化渲染 + SSE 高频事件 rAF 批处理
 
 ### 🧬 自我进化
 
@@ -201,7 +202,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 鲸语 WhaleTalk 是一个**独立开发的个人作品**，关注「本地 AI 智能体」体验——
 
 - **目标**：让 Windows 用户拥有一个真正"看得见、做得了、能进化"的 AI 助手，而非只是一个聊天窗口
-- **理念**：本地优先（数据不出本机）、能力为王（118 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
+- **理念**：本地优先（数据不出本机）、能力为王（120 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
 - **联系**：
   - 官网：https://whaletalk.top/
   - GitHub Issues：https://github.com/pythonshiyi/WhaleTalk/issues
@@ -232,7 +233,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 WhaleTalk v3.5.0 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745), served from the browser with a system tray resident process.
 
 - **v3.0 highlights**: 3 themes (starfield/deepsea/arctic), console sidebar (model/thinking/scene/appearance), artifact one-click access, unified `web_app.py` entry (desktop/browser/headless)
-- **Capabilities**: 118 Agent tools (files/browser/DB/mail/media/desktop RPA), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
+- **Capabilities**: 120 Agent tools (files/browser/DB/mail/media/desktop RPA/snapshots), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
 - **Stack**: Python 3.9+ + React (Vite) + local API (openai/httpx) · Windows 10/11
 
 ### Quick Start

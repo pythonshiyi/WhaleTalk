@@ -644,6 +644,13 @@ button {
 .plugin-stars { color: var(--warn); }
 .plugin-tag { font-size: 10px; padding: 2px 9px; border-radius: var(--r-full); background: var(--bg-3); color: var(--text-2); }
 .plugin-tag-on { background: var(--ok-soft); color: var(--ok); }
+/* ── 插件市场质量分级徽章（P2）：official / community / experimental ── */
+.tier-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; padding: 2px 8px; border-radius: var(--r-full); font-weight: 600; border: 1px solid transparent; }
+.tier-official { background: rgba(14,165,233,.14); color: #0ea5e9; border-color: rgba(14,165,233,.35); }
+.tier-community { background: rgba(16,185,129,.12); color: #10b981; border-color: rgba(16,185,129,.3); }
+.tier-experimental { background: rgba(245,158,11,.13); color: #f59e0b; border-color: rgba(245,158,11,.35); }
+.tier-verify { font-size: 10px; color: var(--ok); }
+.tier-verify-none { font-size: 10px; color: var(--warn); }
 .plugin-desc { font-size: var(--fs-xs); color: var(--text-2); line-height: 1.7; flex: 1; }
 .plugin-foot { display: flex; align-items: center; justify-content: space-between; }
 .plugin-trigger { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--brand-strong); background: var(--bg-active); padding: 3px 10px; border-radius: var(--r-full); }

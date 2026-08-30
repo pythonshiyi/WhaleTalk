@@ -161,6 +161,8 @@ def normalize_config(cfg):
     cfg["autostart"] = as_bool(cfg.get("autostart", False))
     cfg["strict_tools"] = as_bool(cfg.get("strict_tools", False))
     cfg["update_url"] = str(cfg.get("update_url", "") or "").strip()
+    cfg["plugin_market_url"] = str(cfg.get("plugin_market_url", "") or "").strip()
+    cfg["plugin_market_public_key"] = str(cfg.get("plugin_market_public_key", "") or "").strip()
     return cfg
 
 
