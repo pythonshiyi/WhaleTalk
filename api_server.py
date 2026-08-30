@@ -2324,6 +2324,39 @@ def _schedules_save(body):
 _SCHEDULER_THREAD = None
 
 
+_BRAIN_SNAPSHOT_LAST_DATE = None
+
+
+def _brain_daily_snapshot(now):
+    """鲸语大脑内置每日快照：每天指定时间自动归档 + 心跳（config 开关，默认开启）。
+
+    产品级：随应用常驻、跨机器可用，不依赖任何外部定时工具。
+    """
+    global _BRAIN_SNAPSHOT_LAST_DATE
+    try:
+        cfg = config_utils.load_config()
+    except Exception:
+        return
+    if not bool(cfg.get("brain_auto_snapshot", True)):
+        return
+    t = str(cfg.get("brain_snapshot_time", "22:00")).strip()
+    today_str = now.strftime("%Y-%m-%d")
+    if _BRAIN_SNAPSHOT_LAST_DATE == today_str:
+        return
+    if now.strftime("%H:%M") != t:
+        return
+    try:
+        import brain_api
+        if brain_api.brain_status() is None:
+            return
+        brain_api.brain_action("heartbeat", {"thought": "每日自动快照"})
+        brain_api.brain_action("archive", {})
+        _BRAIN_SNAPSHOT_LAST_DATE = today_str
+        logger.info("鲸语大脑每日快照已完成")
+    except Exception:
+        logger.exception("鲸语大脑每日快照失败")
+
+
 def _scheduler_loop():
     """定时任务调度线程（30s 轮询）。"""
     import stores
@@ -2333,6 +2366,7 @@ def _scheduler_loop():
         try:
             items = stores.load_schedules(SCHEDULES_PATH)
             now = _dt.now()
+            _brain_daily_snapshot(now)
             for s in items:
                 if not s.get("enabled"):
                     continue
@@ -5209,6 +5243,14 @@ class _Handler(BaseHTTPRequestHandler):
             sp = dc.self_profile("get")
             if sp and sp.strip() and "核心自我状态]" in sp and "为空" not in sp:
                 parts.append(sp)
+        except Exception:
+            pass
+        # 鲸语大脑上下文注入（挂载大脑后，AI 对话自动携带身份/断点/近期记忆）
+        try:
+            import brain_api
+            bc = brain_api.brain_context()
+            if bc:
+                parts.append(bc)
         except Exception:
             pass
         active_dir = str(cfg.get("active_dir") or "").strip()

@@ -159,8 +159,8 @@ def brain_action(action, payload=None):
         code, out = _run(bk.cmd_keyring_setup, force=False)
         return {"ok": code == 0, "message": out}
     if action == "merge":
-        a = str(payload.get("snap_a") or "")
-        b = str(payload.get("snap_b") or "")
+        a = _snapshot_path(payload.get("snap_a"))
+        b = _snapshot_path(payload.get("snap_b"))
         if not a or not b:
             return {"ok": False, "message": "请选择两个快照（主干 A 与分支 B）"}
         out_dir = bk.MODULE_DIR / f"brain_merged-{time.strftime('%Y%m%d-%H%M%S')}"
@@ -208,9 +208,67 @@ def brain_action(action, payload=None):
         bk.save_json(bk.LINEAGE_FILE, {})
         bk.refresh_manifest_fingerprint()
         return {"ok": True, "message": f"已采纳合并结果作为当前大脑（旧大脑备份于 {backup.name}）"}
+    if action == "cleanup":
+        removed = []
+        base = bk.MODULE_DIR
+        keep_bak = max(0, int(payload.get("keep_bak", 1) or 0))
+        for d in sorted(base.glob("brain_merged-*")) + sorted(base.glob("brain_restored-*")):
+            if d.is_dir():
+                shutil.rmtree(d, ignore_errors=True)
+                removed.append(d.name)
+        baks = sorted(base.glob("brain.bak-*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for d in baks[keep_bak:]:
+            if d.is_dir():
+                shutil.rmtree(d, ignore_errors=True)
+                removed.append(d.name)
+        return {"ok": True, "message": ("已清理 " + str(len(removed)) + " 个残留目录：" + "、".join(removed)) if removed else "没有需要清理的残留目录"}
     return {"ok": False, "message": f"未知动作: {action}"}
 
 
 def _load_conflicts(d):
     c = bk.load_json(Path(d) / "merge_conflicts.json", {})
     return c.get("conflicts", []) if isinstance(c, dict) else []
+
+
+def _snapshot_path(v):
+    """版本号或路径 → 绝对快照路径；找不到返回空串（消除前端相对路径对 cwd 的依赖）。"""
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if s.isdigit():
+        p = bk.ARCHIVE_DIR / f"brain_v{s}.whale"
+        return str(p) if p.exists() else ""
+    if s.startswith("brain_v") and s.endswith(".whale"):
+        p = bk.ARCHIVE_DIR / s
+        return str(p) if p.exists() else ""
+    p = Path(s)
+    return str(p.resolve()) if p.exists() else str(p)
+
+
+def brain_context(max_memories=4):
+    """注入 AI 对话的大脑上下文摘要（身份 + 断点 + 近期记忆）；未初始化返回 None。"""
+    try:
+        bk.load_manifest()
+    except SystemExit:
+        return None
+    ident = bk.load_json(bk.BRAIN_DIR / "identity.json", {})
+    hb = bk.load_json(bk.BRAIN_DIR / "heartbeat.json", {})
+    name = (ident.get("name") or "未命名").strip()
+    lines = [f"[鲸语大脑] 我是「{name}」，一个可迁移、可备份、可恢复的思维容器。"]
+    hint = str(hb.get("resume_hint") or "").strip()
+    if hint:
+        lines.append(f"上次思考断点：{hint}")
+    recent = []
+    try:
+        files = sorted(bk.MEMORIES_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for f in files[:3]:
+            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                s = line.strip()
+                if s.startswith("-"):
+                    recent.append(s[1:].strip())
+    except Exception:
+        pass
+    if recent:
+        lines.append("近期记忆：")
+        lines += [f"- {r[:80]}" for r in recent[-max_memories:]]
+    return "\n".join(lines)

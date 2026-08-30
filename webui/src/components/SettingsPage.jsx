@@ -584,11 +584,11 @@ function BrainBlock() {
           <div className="sched-line1">
             <select className="set-select" value={mergeA} onChange={(e) => setMergeA(e.target.value)} style={{ flex: 1 }}>
               <option value="">主干 A…</option>
-              {snapOptions.map((s) => <option key={s.name} value={`brain/archive/${s.name}`}>{s.name}（{s.mtime}）</option>)}
+              {snapOptions.map((s) => <option key={s.name} value={s.version}>{s.name}（{s.mtime}）</option>)}
             </select>
             <select className="set-select" value={mergeB} onChange={(e) => setMergeB(e.target.value)} style={{ flex: 1 }}>
               <option value="">分支 B…</option>
-              {snapOptions.map((s) => <option key={s.name} value={`brain/archive/${s.name}`}>{s.name}（{s.mtime}）</option>)}
+              {snapOptions.map((s) => <option key={s.name} value={s.version}>{s.name}（{s.mtime}）</option>)}
             </select>
             <select className="set-select" value={strategy} onChange={(e) => setStrategy(e.target.value)}>
               <option value="auto">冲突留待裁决</option>
@@ -635,6 +635,11 @@ function BrainBlock() {
           </div>
           <div className="sched-text" style={{ fontSize: 12, opacity: 0.75 }}>
             导入密钥包后，本躯体即可免密解开该大脑的加密快照。种子文件与口令用后即焚。
+          </div>
+
+          <div className="sched-line1" style={{ marginTop: 10 }}>
+            <button className="msg-op" disabled={busy} onClick={() => act("cleanup", { keep_bak: 2 }, "清理合并临时目录与过期备份（保留最近 2 份大脑备份）？")}>🧹 清理残留</button>
+            <span className="sched-text" style={{ fontSize: 12, opacity: 0.7 }}>合并临时目录 / 过期大脑备份</span>
           </div>
         </>
       )}
