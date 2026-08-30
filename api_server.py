@@ -1924,12 +1924,36 @@ def _services_save(body):
 
 
 def _deps():
-    """可选依赖状态（deps.py OPTIONAL_DEPS）。"""
+    """可选依赖状态（正确检测）+ 可选能力（HEAVY_DEPS，可一键安装）。"""
+    import importlib.util
     import deps as deps_mod
     out = []
-    for name, ok, usage, cmd in deps_mod.OPTIONAL_DEPS:
-        out.append({"name": str(name), "ok": bool(ok), "usage": str(usage), "install": str(cmd)})
-    return {"deps": out}
+    for imp, label, usage, cmd in deps_mod.OPTIONAL_DEPS:
+        try:
+            ok = importlib.util.find_spec(imp) is not None
+        except Exception:
+            ok = False
+        out.append({"name": label, "import": imp, "ok": ok, "usage": usage, "install": cmd})
+    heavy = []
+    for d in deps_mod.HEAVY_DEPS:
+        try:
+            ok = importlib.util.find_spec(d["import"]) is not None
+        except Exception:
+            ok = False
+        heavy.append({
+            "key": d["import"], "label": d["label"], "desc": d["desc"],
+            "ok": ok, "note": d.get("note", ""),
+        })
+    return {"deps": out, "heavy": heavy}
+
+
+def _deps_install(key):
+    """按 key（import 名或能力名）安装可选能力，返回 {ok, message}。"""
+    import deps as deps_mod
+    ok, dep = deps_mod.install_by_key(str(key or ""))
+    if dep is None:
+        return {"ok": False, "message": f"未找到能力：{key}"}
+    return {"ok": ok, "message": ("✅ 已安装 " if ok else "❌ 安装失败 ") + dep["label"]}
 
 
 def _config_reset():
@@ -4528,6 +4552,10 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(200, result)
                 except Exception as e:  # noqa: BLE001
                     self._json(500, {"error": str(e)})
+            elif self.path == "/v1/deps/install":
+                body = self._read_body()
+                key = str((body or {}).get("key") or "")
+                self._json(200, _deps_install(key))
             elif self.path.startswith("/v1/tools/") and self.path.endswith("/invoke"):
                 name = self.path[len("/v1/tools/"):-len("/invoke")]
                 body = self._read_body()

@@ -100,3 +100,58 @@ HEAVY_DEPS = [
     },
 ]
 
+# ── 安装执行（单一来源：启动弹窗与设置页共用）──────────────────────────
+import os
+import subprocess
+import sys
+
+PIP_MIRROR = os.environ.get("WHALETALK_PIP_MIRROR", "https://pypi.tuna.tsinghua.edu.cn/simple")
+
+
+def run_verbose(cmd, on_line=None):
+    """逐行执行命令，实时回调每行输出；返回 returncode。"""
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1, errors="replace")
+    except Exception as e:  # noqa: BLE001
+        if on_line:
+            on_line(f"无法启动: {e}")
+        return 1
+    for line in proc.stdout or []:
+        s = line.rstrip("\n").rstrip("\r")
+        if s and on_line:
+            on_line(s)
+    proc.wait()
+    return proc.returncode
+
+
+def pip_install(pkg, on_line=None):
+    """用清华源安装单个包。on_line 提供时实时回调每行输出。"""
+    cmd = [sys.executable, "-m", "pip", "install", pkg, "-i", PIP_MIRROR,
+           "--disable-pip-version-check", "--no-warn-script-location"]
+    if on_line:
+        return run_verbose(cmd, on_line) == 0
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode == 0
+
+
+def install_optional(dep, on_line=None):
+    """安装一个可选（重型）依赖：pip 装 + 可选后续命令（如下载 Chromium）。"""
+    ok = True
+    if dep.get("pip"):
+        ok = pip_install(dep["pip"], on_line) and ok
+    if ok and dep.get("post_cmd"):
+        post = list(dep["post_cmd"])
+        if on_line:
+            on_line("$ " + " ".join(post))
+        ok = (run_verbose([sys.executable, "-m"] + post, on_line) == 0) and ok
+    return ok
+
+
+def install_by_key(key, on_line=None):
+    """按 import 名或能力名从 HEAVY_DEPS 找到并安装，返回 (ok, dep)。"""
+    for d in HEAVY_DEPS:
+        if key in (d.get("import"), d.get("label")):
+            return install_optional(d, on_line), d
+    return False, None
+

@@ -721,21 +721,54 @@ function CleanupBlock() {
 // ── B10 依赖状态 ───────────────────────────────────
 function DepsBlock() {
   const [deps, setDeps] = React.useState(null);
-  React.useEffect(() => {
-    apiGet("/v1/deps").then((d) => d && setDeps(d.deps || []));
-  }, []);
-  if (!deps) return null;
-  const ok = deps.filter((d) => d.ok).length;
+  const [heavy, setHeavy] = React.useState([]);
+  const [busyKey, setBusyKey] = React.useState("");
+  const [msg, setMsg] = React.useState("");
+  const load = () => apiGet("/v1/deps").then((d) => { if (d) { setDeps(d.deps || []); setHeavy(d.heavy || []); } });
+  React.useEffect(() => { load(); }, []);
+  const install = async (key) => {
+    setBusyKey(key);
+    setMsg("正在安装（大组件可能需数分钟，请稍候）…");
+    try {
+      // 直连 fetch：不走 15s 超时封装，下载 Chromium 等需更久
+      const r = await fetch(`${api.getBase()}/v1/deps/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${api.getToken()}` },
+        body: JSON.stringify({ key }),
+      });
+      const d = await r.json();
+      setMsg(d?.message || (d?.ok ? "完成" : "失败"));
+    } catch (e) {
+      setMsg("安装请求失败：" + String(e));
+    }
+    setBusyKey("");
+    load();
+  };
+  const heavyOk = heavy.filter((d) => d.ok).length;
   return (
     <div className="svc-actions" style={{ display: "block" }}>
       <div className="sched-line1">
-        <b>🔌 可选依赖</b>
-        <span className="sched-action">{ok}/{deps.length} 已就绪</span>
+        <b>🔌 可选能力</b>
+        <span className="sched-action">{heavyOk}/{heavy.length} 已启用</span>
       </div>
-      {deps.filter((d) => !d.ok).slice(0, 8).map((d) => (
-        <div className="sched-text" key={d.name}>• {d.name}（{d.install}）</div>
+      {(heavy || []).map((d) => (
+        <div className="sched-text" key={d.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
+          <span style={{ flex: 1 }}>
+            {d.ok ? "✓" : "○"} {d.label}　<span style={{ opacity: 0.7 }}>{d.desc}</span>{d.note ? `（${d.note}）` : ""}
+          </span>
+          {!d.ok && (
+            <button className="msg-op" disabled={busyKey === d.key} onClick={() => install(d.key)}>
+              {busyKey === d.key ? "安装中…" : "安装"}
+            </button>
+          )}
+        </div>
       ))}
-      {deps.filter((d) => !d.ok).length === 0 && <div className="sched-text">✓ 全部就绪</div>}
+      {deps && deps.filter((d) => !d.ok).length > 0 && (
+        <div className="sched-text" style={{ fontSize: 12, opacity: 0.7 }}>
+          {(deps || []).filter((d) => !d.ok).slice(0, 6).map((d) => <div key={d.import}>• {d.name}（{d.install}）</div>)}
+        </div>
+      )}
+      {msg && <div className="px-tip">{msg}</div>}
     </div>
   );
 }
