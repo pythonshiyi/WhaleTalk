@@ -1146,14 +1146,24 @@ export default function SettingsPage({ onGoPrompts }) {
               <div className="set-search-hint">没有匹配的设置项，换个关键词试试</div>
             )
           )}
-          <div className="ab-tabs">
-            {TABS.map((t) => (
-              <button key={t.id} className={`ab-tab ${tab === t.id ? "ab-tab-on" : ""}`} onClick={() => setTab(t.id)}>{t.label}</button>
-            ))}
-          </div>
-          <SearchCtx.Provider value={q}>
-          <div className="set-card">
+          <div className="set-layout">
+            <div className="set-nav">
+              {TABS.map((t) => {
+                const sp = t.label.indexOf(" ");
+                const icon = sp > 0 ? t.label.slice(0, sp) : "•";
+                const text = sp > 0 ? t.label.slice(sp + 1) : t.label;
+                return (
+                  <button key={t.id} className={`set-nav-item ${tab === t.id ? "set-nav-item-on" : ""}`} onClick={() => setTab(t.id)}>
+                    <span className="set-nav-icon">{icon}</span>
+                    <span>{text}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="set-content">
+              <SearchCtx.Provider value={q}>
             {tab === "model" && (
+              <div className="set-card">
               <>
                 <ProfilesBlock onTip={setTip} />
                 <Row label="API Key" desc={cfg.has_key ? `✅ 已配置 ${cfg.key_hint || ""}（加密存储于 config.json）· 输入新 Key 可覆盖` : "⚠️ 未配置，粘贴后回车或失焦保存"}>
@@ -1214,9 +1224,11 @@ export default function SettingsPage({ onGoPrompts }) {
                 <Toggle on={!!cfg.beta_api} label="Beta API（/beta）" desc="前缀续写 + FIM 补全" onClick={() => saveField({ beta_api: !cfg.beta_api })} />
                 <Toggle on={!!cfg.strict_tools} label="strict 工具模式" desc="严格遵循 JSON Schema（自动启用 Beta）" onClick={() => saveField({ strict_tools: !cfg.strict_tools })} />
               </>
+              </div>
             )}
             {tab === "service" && <ServicesTab cfg={cfg} onTip={setTip} />}
             {tab === "persona" && (
+              <div className="set-card">
               <>
                 <Row label="🎭 角色" desc="切换即换系统提示词（影响前缀缓存）">
                   <select className="set-select" value={currentRole} onChange={(e) => {
@@ -1259,8 +1271,10 @@ export default function SettingsPage({ onGoPrompts }) {
                   <span className="empty-tip" style={{ padding: 0 }}>在「能力中心」页签管理</span>
                 </Row>
               </>
+              </div>
             )}
             {tab === "notice" && (
+              <div className="set-card">
               <>
                 <Toggle on={cfg.notify_on_done !== false} label="✅ 完成通知" desc="回复完成发桌面通知（浏览器在后台也收到）" onClick={() => saveField({ notify_on_done: cfg.notify_on_done === false })} />
                 <Toggle on={cfg.completion_sound !== false} label="🔊 完成提示音" desc="回复完成播放系统提示音（浏览器关闭也能听到）" onClick={() => saveField({ completion_sound: cfg.completion_sound === false })} />
@@ -1275,8 +1289,10 @@ export default function SettingsPage({ onGoPrompts }) {
                 </Row>
                 <Toggle on={!!cfg.block_on_budget} label="⛔ 达预算阻止发送" desc="超过预算后拦截发送" onClick={() => saveField({ block_on_budget: !cfg.block_on_budget })} />
               </>
+              </div>
             )}
             {tab === "look" && (
+              <div className="set-card">
               <>
                 <div className="theme-picker">
                   {THEMES.map((t) => (
@@ -1303,12 +1319,14 @@ export default function SettingsPage({ onGoPrompts }) {
                   </select>
                 </Row>
               </>
+              </div>
             )}
             {tab === "adv" && <AdvancedTab cfg={cfg} saveField={saveField} onReset={resetAll} onGoPrompts={onGoPrompts} />}
             {tab === "brain" && <BrainBlock />}
             {tab === "deps" && <DepsBlock />}
+              </SearchCtx.Provider>
+            </div>
           </div>
-          </SearchCtx.Provider>
         </>
       )}
       {tip && <div className="set-saved-tip">{tip}</div>}

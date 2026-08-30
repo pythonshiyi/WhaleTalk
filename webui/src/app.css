@@ -626,43 +626,87 @@ button {
 .mem-card-foot { margin-top: 8px; }
 
 /* 设置 */
+/* ===== 设置页（精修版：左导航 + 右卡片）===== */
+.set-layout {
+  display: grid; grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--sp-5); align-items: start;
+}
+.set-nav {
+  position: sticky; top: 12px;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+}
+.set-nav-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 12px; border: none; background: transparent;
+  border-radius: var(--r-md);
+  color: var(--text-2); font-size: var(--fs-sm); font-weight: 500;
+  font-family: var(--font-ui); cursor: pointer; text-align: left;
+  transition: all .15s var(--ease);
+}
+.set-nav-item:hover { background: var(--bg-hover); color: var(--text-1); }
+.set-nav-item-on { background: var(--brand-soft); color: var(--brand-strong); font-weight: 600; }
+.set-nav-icon { font-size: 15px; width: 22px; text-align: center; flex-shrink: 0; }
+.set-content { min-width: 0; }
+
 .set-card {
-  max-width: 640px; background: var(--bg-1);
-  border: 1px solid var(--border); border-radius: var(--r-lg);
-  padding: var(--sp-4) var(--sp-5);
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--r-xl); padding: var(--sp-4) var(--sp-5);
+  box-shadow: 0 2px 14px rgba(0,0,0,.10);
 }
 .set-group-title { font-size: 11px; color: var(--brand-strong); letter-spacing: 1px; margin: 18px 0 4px; }
 .set-group-title:first-child { margin-top: 0; }
 .set-row {
   display: flex; align-items: center; justify-content: space-between;
-  gap: var(--sp-4); padding: 12px 0;
+  gap: var(--sp-4); padding: 13px 6px;
   border-bottom: 1px solid var(--border);
+  border-radius: var(--r-sm); transition: background .15s var(--ease);
 }
+.set-row:hover { background: var(--bg-hover); }
 .set-row:last-child { border-bottom: none; }
-.set-info b { display: block; font-size: var(--fs-sm); font-weight: 600; }
-.set-info span { font-size: var(--fs-xs); color: var(--text-3); }
+.set-info { min-width: 0; }
+.set-info b { display: block; font-size: var(--fs-md); font-weight: 600; margin-bottom: 2px; }
+.set-info span { font-size: var(--fs-xs); color: var(--text-3); line-height: 1.5; display: block; }
 .set-select {
-  background: var(--bg-2); border: 1px solid var(--border-strong);
-  color: var(--text-1); font-size: var(--fs-sm);
-  padding: 7px 10px; border-radius: var(--r-sm);
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  color: var(--text-1); font-size: var(--fs-sm); font-family: var(--font-ui);
+  padding: 8px 12px; border-radius: var(--r-md);
   outline: none; cursor: pointer;
+  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
 }
-.set-select:focus { border-color: rgba(14,165,233,.5); }
+.set-select:focus { border-color: rgba(14,165,233,.55); box-shadow: 0 0 0 3px rgba(14,165,233,.12); }
+.set-combo { min-width: 220px; }
 .toggle {
-  width: 42px; height: 24px; flex-shrink: 0;
+  width: 44px; height: 25px; flex-shrink: 0;
   border-radius: var(--r-full);
   background: var(--bg-3); border: 1px solid var(--border-strong);
   cursor: pointer; position: relative;
   transition: background .2s var(--ease);
 }
 .toggle-knob {
-  position: absolute; top: 2px; left: 2px;
+  position: absolute; top: 2.5px; left: 2.5px;
   width: 18px; height: 18px; border-radius: 50%;
   background: var(--text-3);
   transition: all .2s var(--ease);
 }
 .toggle-on { background: var(--brand); border-color: var(--brand); }
-.toggle-on .toggle-knob { left: 20px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+.toggle-on .toggle-knob { left: 21.5px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+
+/* 设置页内 svc 块卡片化（仅作用于 .set-content 内，不影响其他页面） */
+.set-content .svc-group,
+.set-content .svc-actions {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--r-xl); padding: var(--sp-4) var(--sp-5);
+  margin-bottom: var(--sp-4);
+  box-shadow: 0 2px 14px rgba(0,0,0,.10);
+}
+.set-content .svc-title {
+  font-size: var(--fs-lg); font-weight: 700; color: var(--text-1);
+  margin-bottom: var(--sp-3); padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
 
 /* 设置页已保存提示 */
 .set-saved-tip {
@@ -1467,7 +1511,8 @@ button {
 .set-combo.set-wide { max-width: none; }
 
 /* ═══ 设置页（分类/预设/外部服务） ═════════════════ */
-.set-modebar { display: flex; gap: 6px; margin-bottom: var(--sp-4); }
+.set-modebar { display: flex; gap: 8px; margin-bottom: var(--sp-4); }
+.set-modebar .ab-tab { padding: 8px 20px; }
 .preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--sp-3); margin-bottom: var(--sp-4); }
 .preset-card {
   background: var(--bg-1); border: 1px solid var(--border);
