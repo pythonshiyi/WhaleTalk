@@ -2,6 +2,12 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.6.1（2026-08-30）—— 🐛 修复：安装完成后自动进入 + 501 竞态
+
+- **安装完自动进入**：批量安装结束（含部分失败）自动调用 complete + 进入主界面，无需再点「进入鲸语」；complete 失败时明确提示并可就地重试（不再静默吞错）。
+- **修复 501 `Unsupported method ('{}GET')`**：根源为流式 NDJSON 响应无 `Connection: close`，连接收尾不明确，reload 的 GET 请求与残留字节粘连。修复：所有 NDJSON 流式端点（deps/install、deps/install_many、tts/setup_piper）显式 `Connection: close`；前端「进入」改为状态切换（去掉 reload 环节）。
+- 验证：install_many 流式正常收尾（28 事件行）、complete ok、first_run 翻转全链路通过；构建通过。
+
 ## v3.6.0（2026-08-30）—— 🚀 首次启动依赖安装向导
 
 - **新用户首次启动**：程序弹出**全屏依赖安装向导**（不再是"后台静默装、终端一行字"）——核心组件默认全部勾选、可选能力按需勾选，一键安装（NDJSON 流式进度：逐包进度条 + 实时日志），**安装完成才进入主界面**。

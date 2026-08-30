@@ -11,6 +11,7 @@ export default function FirstRunPage({ onDone }) {
   const [prog, setProg] = React.useState({ done: 0, total: 0, current: "" });
   const [logs, setLogs] = React.useState([]);
   const [failed, setFailed] = React.useState([]);
+  const [autoErr, setAutoErr] = React.useState("");
 
   React.useEffect(() => {
     let alive = true;
@@ -48,11 +49,13 @@ export default function FirstRunPage({ onDone }) {
     if (!keys.length) {
       setPhase("done");
       setFailed([]);
+      finish(); // 无需安装：直接标记完成并自动进入
       return;
     }
     setPhase("installing");
     setLogs([]);
     setFailed([]);
+    setAutoErr("");
     setProg({ done: 0, total: keys.length, current: "" });
     try {
       await api.installMany(keys, {
@@ -66,22 +69,29 @@ export default function FirstRunPage({ onDone }) {
         onBatchDone: (ev) => {
           setFailed(ev.failed || []);
           setPhase("done");
+          finish(); // 安装结束 → 自动标记完成并进入主界面（无需再点击）
         },
         onError: (msg) => {
           setLogs((l) => [...l.slice(-60), "❌ " + msg]);
           setPhase("done");
+          finish();
         },
       });
     } catch (e) {
       setLogs((l) => [...l.slice(-60), "❌ 安装中断：" + e.message]);
       setPhase("done");
+      finish();
     }
   };
 
   const finish = async () => {
+    setAutoErr("");
     try {
       await api.completeFirstRun();
-    } catch {}
+    } catch (e) {
+      setAutoErr("⚠ 未能记录首次完成状态（" + e.message + "），请点击下方按钮重试。");
+      return;
+    }
     onDone();
   };
 
@@ -248,15 +258,16 @@ export default function FirstRunPage({ onDone }) {
                 style={{
                   padding: "12px 14px",
                   borderRadius: 12,
-                  background: failed.length ? "var(--warn-soft)" : "var(--ok-soft)",
-                  color: failed.length ? "var(--warn)" : "var(--ok)",
+                  background: autoErr ? "var(--danger-soft)" : failed.length ? "var(--warn-soft)" : "var(--ok-soft)",
+                  color: autoErr ? "var(--danger)" : failed.length ? "var(--warn)" : "var(--ok)",
                   fontSize: 13,
                   marginBottom: 16,
                 }}
               >
-                {failed.length
-                  ? `⚠ 部分组件安装失败：${failed.join("、")}。可稍后在「设置 → 可选能力」重试，不影响程序使用。`
-                  : "✅ 依赖组件全部就绪！"}
+                {autoErr ||
+                  (failed.length
+                    ? `⚠ 部分组件安装失败：${failed.join("、")}。可稍后在「设置 → 可选能力」重试，不影响程序使用。`
+                    : "✅ 依赖组件全部就绪，正在进入鲸语…")}
               </div>
             )}
 
@@ -277,12 +288,12 @@ export default function FirstRunPage({ onDone }) {
               )}
               {phase === "installing" && (
                 <button className="confirm-btn" disabled>
-                  ⏳ 安装中，请勿关闭…
+                  ⏳ 安装中，完成后自动进入…
                 </button>
               )}
               {phase === "done" && (
                 <button className="confirm-btn confirm-primary" onClick={finish}>
-                  🚀 进入鲸语
+                  {autoErr ? "↻ 重试进入" : "🚀 进入鲸语"}
                 </button>
               )}
             </div>

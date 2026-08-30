@@ -5087,6 +5087,8 @@ class _Handler(BaseHTTPRequestHandler):
                     self.send_response(200)
                     self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
                     self.send_header("Cache-Control", "no-cache")
+                    # 流式响应无 Content-Length：显式关闭连接标记结束
+                    self.send_header("Connection", "close")
                     self.end_headers()
 
                     def emit(obj):
@@ -5143,6 +5145,8 @@ class _Handler(BaseHTTPRequestHandler):
                     self.send_response(200)
                     self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
                     self.send_header("Cache-Control", "no-cache")
+                    # 流式响应无 Content-Length：显式关闭连接标记结束，避免客户端等 EOF 挂起/连接复用竞态
+                    self.send_header("Connection", "close")
                     self.end_headers()
 
                     def emit(obj):
@@ -5506,6 +5510,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
                 self.end_headers()
 
                 def emit(obj):

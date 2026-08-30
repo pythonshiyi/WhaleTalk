@@ -158,7 +158,8 @@ export default function App() {
     return (
       <FirstRunPage
         onDone={() => {
-          window.location.reload();
+          // 直接切主界面（不 reload——避免与流式响应/连接复用产生竞态）
+          setFirstRun(false);
         }}
       />
     );
