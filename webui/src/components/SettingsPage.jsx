@@ -755,14 +755,13 @@ const DEPS_ICONS = { playwright: "🖥", faster_whisper: "🎙", pyzbar: "▦", 
 
 function DepsBlock() {
   const showBlock = useBlockFilter("可选能力 依赖 安装 组件 浏览器 语音转写 二维码 rar 能力 进度");
-  const [deps, setDeps] = React.useState(null);
   const [core, setCore] = React.useState([]);
   const [heavy, setHeavy] = React.useState([]);
   const [busyKey, setBusyKey] = React.useState("");
   const [logs, setLogs] = React.useState({});
   const [showCoreOk, setShowCoreOk] = React.useState(false);
   const [msg, setMsg] = React.useState("");
-  const load = () => apiGet("/v1/deps").then((d) => { if (d) { setDeps(d.deps || []); setCore(d.core || []); setHeavy(d.heavy || []); } });
+  const load = () => apiGet("/v1/deps").then((d) => { if (d) { setCore(d.core || []); setHeavy(d.heavy || []); } });
   React.useEffect(() => { load(); }, []);
   if (!showBlock) return null;
 
@@ -815,9 +814,6 @@ function DepsBlock() {
   const allTotal = (core || []).length + total;
   const allOk = coreOkArr.length + okCount;
   const pct = allTotal ? Math.round((allOk / allTotal) * 100) : 0;
-  // 其他低频库：排除已在上方展示的可选能力（避免重复与统计矛盾），未计入 28 项统计
-  const heavyKeys = new Set((heavy || []).map((d) => d.key));
-  const otherMissing = (deps || []).filter((d) => !d.ok && !heavyKeys.has(d.import));
 
   const coreRow = (d) => {
     const busy = busyKey === d.key;
@@ -848,7 +844,7 @@ function DepsBlock() {
       <div className="deps-head">
         <div className="deps-head-title">
           <h2>依赖与能力</h2>
-          <p>核心组件缺失会自动补齐；可选能力按需安装。每项状态一目了然，安装进度实时可见。</p>
+          <p>除大型可选能力外，所有组件启动时自动安装；每项状态一目了然，安装进度实时可见。</p>
         </div>
         <div className="deps-stat">
           <b>{allOk}/{allTotal}</b>
@@ -857,11 +853,11 @@ function DepsBlock() {
         </div>
       </div>
 
-      {/* 常规组件：缺失项 + 可展开的已安装 */}
+      {/* 常规组件：全部启动时自动安装，缺失项 + 可展开的已安装 */}
       <div className="deps-sec">
         <div className="deps-sec-head">
           <h3>常规组件</h3>
-          <span className="deps-sec-sub">缺失时启动自动补齐 · 也支持手动补装</span>
+          <span className="deps-sec-sub">{core.length} 项启动时自动安装 · 缺失自动补齐</span>
         </div>
         {coreMissing.length > 0 ? (
           <div className="deps-core-list">
@@ -914,18 +910,6 @@ function DepsBlock() {
           })}
         </div>
       </div>
-
-      {otherMissing.length > 0 && (
-        <div className="deps-other">
-          <div className="deps-other-title">其他低频库（未计入上方统计）</div>
-          <div className="deps-other-list">
-            {otherMissing.map((d) => (
-              <span key={d.import} className="deps-other-chip" title={d.install || d.name}>{d.name}</span>
-            ))}
-          </div>
-          <div className="deps-other-hint">电子书 / 邮件 / 压缩等低频格式支持，需要时可在命令行安装（悬停 chip 查看命令）；不影响任何常规功能。</div>
-        </div>
-      )}
 
       {msg && <div className="px-tip">{msg}</div>}
     </div>

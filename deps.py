@@ -60,6 +60,10 @@ AUTO_INSTALL_DEPS = [
     ("curl_cffi", "curl_cffi", "被墙站点抓取"),
     ("sounddevice", "sounddevice", "实时语音录音"),
     ("edge_tts", "edge-tts", "在线神经音色"),
+    ("ebooklib", "ebooklib", "EPUB 电子书阅读"),
+    ("mobi", "mobi", "MOBI 电子书阅读"),
+    ("extract_msg", "extract-msg", "Outlook .msg 邮件阅读"),
+    ("py7zr", "py7zr", "7z 压缩包"),
 ]
 
 # ── 重型 / 需系统组件：可选安装（首启弹窗勾选，用户取舍）──────────────────

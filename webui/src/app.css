@@ -786,19 +786,6 @@ button {
 .deps-btn-install:hover:not(:disabled) { box-shadow: 0 4px 18px rgba(14,165,233,.4); }
 .deps-btn-install:disabled { opacity: .6; cursor: wait; }
 .deps-btn-done { background: var(--bg-3); border: 1px solid var(--border); color: var(--text-3); cursor: default; }
-.deps-other {
-  border: 1px dashed var(--border-strong); border-radius: var(--r-lg);
-  padding: var(--sp-3) var(--sp-4);
-}
-.deps-other-title { font-size: var(--fs-sm); font-weight: 600; margin-bottom: 8px; color: var(--text-2); }
-.deps-other-list { display: flex; flex-wrap: wrap; gap: 6px; }
-.deps-other-chip {
-  font-size: var(--fs-xs); color: var(--text-2);
-  border: 1px solid var(--border-strong); border-radius: var(--r-full);
-  padding: 3px 10px;
-}
-.deps-other-hint { font-size: var(--fs-xs); color: var(--text-3); margin-top: 8px; }
-
 /* ===== 依赖与能力页：常规组件清单 + 进度日志 ===== */
 .deps-sec { display: flex; flex-direction: column; gap: var(--sp-3); }
 .deps-sec-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
