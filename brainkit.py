@@ -42,7 +42,7 @@
   python brainkit.py keyring-setup                 # 为已存在的大脑启用免密
   python brainkit.py mount
   python brainkit.py think "今天想清楚了一件事"
-  python brainkit.py remember "报价目录已整理完第一轮"
+  python brainkit.py remember "今天完成了一个重要约定"
   python brainkit.py archive                        # 默认免密加密（本地密钥）
   python brainkit.py restore brain/archive/brain_v3.whale --dir brain_b2
   python brainkit.py --brain brain_b2 remember "分支上的记忆"   # 在另一份大脑上继续演化
@@ -601,8 +601,9 @@ def cmd_init(args) -> int:
     })
 
     append_line(THINKING_DIR / f"{today()}.md", f"## {now}\n【神经元 #1】{genesis}\n")
+    # 新大脑不预置任何具体记忆（诚实原则：不假装记得没记过的事，不给用户塞无关历史）
     append_line(MEMORIES_DIR / f"{today()}.md",
-                f"- {now} [系统导入] 用户正在推进「博视」报价目录与订单文档整理：将订单截图中的产品/规格/单价/数量/金额等参数提取为结构化报价目录，用于日常报价工作台。")
+                f"- {now} [系统] 大脑初始化完成，近期记忆为空，等待首次记录。")
 
     print(f"[大脑已初始化] id = {brain_id}")
     print(f"  目录    : {BRAIN_DIR}")
@@ -1299,7 +1300,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("remember", help="写入一条长期记忆")
     sp.add_argument("text", help="记忆内容")
-    sp.add_argument("--tag", help="可选标签，如 报价/博视/约定")
+    sp.add_argument("--tag", help="可选标签，如 工作/生活/约定")
     sp.set_defaults(func=cmd_remember)
 
     sp = sub.add_parser("import-memory", help="导入 .workbuddy/memory 的现有记忆")
