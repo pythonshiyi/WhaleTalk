@@ -16,6 +16,13 @@
   --warn: #f59e0b;
   --warn-soft: rgba(245, 158, 11, 0.15);
 
+  /* 语义色 RGB 分量（供 rgba(var(--x-rgb), a) 主题感知引用） */
+  --brand-rgb: 14, 165, 233;
+  --ai-rgb: 139, 92, 246;
+  --ok-rgb: 16, 185, 129;
+  --danger-rgb: 239, 68, 68;
+  --warn-rgb: 245, 158, 11;
+
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
@@ -48,8 +55,8 @@
 [data-theme="starfield"] {
   --bg-0: #05070e;
   --bg-1: #0a0e18;
-  --bg-2: #111827;
-  --bg-3: #1a2136;
+  --bg-2: #10162a;
+  --bg-3: #1b2440;
   --bg-hover: rgba(140, 165, 255, 0.07);
   --bg-active: rgba(14, 165, 233, 0.12);
   --border: rgba(140, 165, 255, 0.10);
@@ -57,17 +64,19 @@
   --chat-glow: rgba(56, 189, 248, 0.08);
 
   --text-1: #e9eef8;
-  --text-2: #98a6c4;
-  --text-3: #5b6885;
+  --text-2: #9aa8c8;
+  --text-3: #64748f;
   --text-link: #38bdf8;
 
   --brand: #0ea5e9;
   --brand-strong: #38bdf8;
   --brand-soft: rgba(14, 165, 233, 0.14);
   --ai: #a78bfa;
+  --brand-rgb: 14, 165, 233;
+  --ai-rgb: 139, 92, 246;
 
-  --scroll-thumb: rgba(140, 165, 255, 0.14);
-  --scroll-thumb-hover: rgba(140, 165, 255, 0.28);
+  --scroll-thumb: rgba(140, 165, 255, 0.16);
+  --scroll-thumb-hover: rgba(140, 165, 255, 0.30);
   --header-bg: rgba(10, 14, 24, 0.85);
   --bubble-bg: linear-gradient(135deg, rgba(14, 165, 233, 0.20), rgba(56, 189, 248, 0.12));
   --composer-fade: linear-gradient(180deg, transparent, rgba(10, 14, 24, 0.65) 30%);
@@ -94,13 +103,15 @@
 
   --text-1: #e2f0ff;
   --text-2: #8fb4d9;
-  --text-3: #4f7399;
+  --text-3: #5a7fa6;
   --text-link: #5cd2ff;
 
   --brand: #22c8ff;
   --brand-strong: #5cd2ff;
   --brand-soft: rgba(34, 200, 255, 0.15);
   --ai: #b39dff;
+  --brand-rgb: 34, 200, 255;
+  --ai-rgb: 179, 157, 255;
 
   --scroll-thumb: rgba(120, 190, 255, 0.16);
   --scroll-thumb-hover: rgba(120, 190, 255, 0.30);
@@ -136,6 +147,8 @@
   --brand-strong: #0369a1;
   --brand-soft: rgba(2, 132, 199, 0.10);
   --ai: #7c3aed;
+  --brand-rgb: 2, 132, 199;
+  --ai-rgb: 124, 58, 237;
 
   --scroll-thumb: rgba(30, 64, 110, 0.22);
   --scroll-thumb-hover: rgba(30, 64, 110, 0.38);
