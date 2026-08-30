@@ -815,7 +815,9 @@ function DepsBlock() {
   const allTotal = (core || []).length + total;
   const allOk = coreOkArr.length + okCount;
   const pct = allTotal ? Math.round((allOk / allTotal) * 100) : 0;
-  const otherMissing = (deps || []).filter((d) => !d.ok);
+  // 其他低频库：排除已在上方展示的可选能力（避免重复与统计矛盾），未计入 28 项统计
+  const heavyKeys = new Set((heavy || []).map((d) => d.key));
+  const otherMissing = (deps || []).filter((d) => !d.ok && !heavyKeys.has(d.import));
 
   const coreRow = (d) => {
     const busy = busyKey === d.key;
@@ -915,11 +917,13 @@ function DepsBlock() {
 
       {otherMissing.length > 0 && (
         <div className="deps-other">
-          <div className="deps-other-title">其他未就绪组件</div>
+          <div className="deps-other-title">其他低频库（未计入上方统计）</div>
           <div className="deps-other-list">
-            {otherMissing.map((d) => <span key={d.import} className="deps-other-chip">{d.name}</span>)}
+            {otherMissing.map((d) => (
+              <span key={d.import} className="deps-other-chip" title={d.install || d.name}>{d.name}</span>
+            ))}
           </div>
-          <div className="deps-other-hint">缺失时相关功能会提示；多数组件在首次启动时自动补齐。</div>
+          <div className="deps-other-hint">电子书 / 邮件 / 压缩等低频格式支持，需要时可在命令行安装（悬停 chip 查看命令）；不影响任何常规功能。</div>
         </div>
       )}
 
