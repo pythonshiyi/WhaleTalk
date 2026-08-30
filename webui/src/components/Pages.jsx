@@ -925,7 +925,7 @@ export function WorkbenchPage({ onApply, onPickSession }) {
             ))}
           </div>
           {quickActs.length === 0 && tplEntries.length === 0 && (
-            <div className="empty-tip">暂无快捷行动——在「指令库」添加指令，或使用后高频指令会自动出现在这里</div>
+            <EmptyState icon="⚡" title="还没有快捷行动" hint="在「指令库」添加指令，或使用后高频指令会自动出现在这里。" compact />
           )}
         </div>
 
@@ -1002,7 +1002,7 @@ export function WorkbenchPage({ onApply, onPickSession }) {
                 </div>
               </div>
             ))}
-            {recentFiles.length === 0 && <div className="empty-tip">暂无产物</div>}
+            {recentFiles.length === 0 && <EmptyState icon="📦" title="还没有产物" hint="AI 生成的文件会出现在这里。" compact />}
           </div>
         </div>
       </div>
