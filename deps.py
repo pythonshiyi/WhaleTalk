@@ -110,11 +110,17 @@ HEAVY_DEPS = [
 
 # ── 安装执行（单一来源：启动弹窗与设置页共用）──────────────────────────
 import os
+import queue
 import subprocess
 import sys
 import threading
+import time
 
 PIP_MIRROR = os.environ.get("WHALETALK_PIP_MIRROR", "https://pypi.tuna.tsinghua.edu.cn/simple")
+
+# 每包安装超时与重试（防单个包卡死拖停全部依赖）
+PIP_INSTALL_TIMEOUT = 300        # 单包安装上限（秒）
+PIP_RETRIES = 1                  # 失败重试次数
 
 # ── 安装状态（供前端轮询展示进度：启动后台安装时实时可见）────────────────
 _INSTALL_LOCK = threading.Lock()
@@ -131,6 +137,7 @@ def install_many(miss, on_line=None):
     """批量安装并实时更新全局状态。
 
     miss: [(pip 包名, 显示名)]；on_line: 每行输出回调。
+    关键修复：单包超时/失败**不中断**后续包——逐个隔离执行，全部尝试完才返回。
     返回 (全部成功?, 失败显示名列表)。
     """
     with _INSTALL_LOCK:
@@ -142,7 +149,12 @@ def install_many(miss, on_line=None):
             with _INSTALL_LOCK:
                 _INSTALL["done"] = i - 1
                 _INSTALL["current"] = label
-            ok = pip_install(pkg, on_line)
+            try:
+                ok = pip_install(pkg, on_line)
+            except Exception as e:  # noqa: BLE001 - 单包异常不得中断其余包
+                if on_line:
+                    on_line(f"[{label}] 安装异常: {e}")
+                ok = False
             if not ok:
                 failed.append(label)
             with _INSTALL_LOCK:
@@ -153,8 +165,12 @@ def install_many(miss, on_line=None):
             _INSTALL.update({"running": False, "current": "", "failed": failed})
 
 
-def run_verbose(cmd, on_line=None):
-    """逐行执行命令，实时回调每行输出；返回 returncode。"""
+def run_verbose(cmd, on_line=None, timeout=PIP_INSTALL_TIMEOUT):
+    """逐行执行命令，实时回调每行输出；超时强制终止（防卡死拖停全部依赖）。
+
+    用独立 reader 线程逐行读 stdout（阻塞读不影响超时检测），
+    主循环轮询 poll() + 超时 kill。返回 returncode。
+    """
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1, errors="replace")
@@ -162,22 +178,79 @@ def run_verbose(cmd, on_line=None):
         if on_line:
             on_line(f"无法启动: {e}")
         return 1
-    for line in proc.stdout or []:
-        s = line.rstrip("\n").rstrip("\r")
-        if s and on_line:
-            on_line(s)
-    proc.wait()
+    q = queue.Queue()
+
+    def _reader():
+        try:
+            for line in proc.stdout or []:
+                q.put(line.rstrip("\n").rstrip("\r"))
+        except Exception:
+            pass
+        q.put(None)
+
+    threading.Thread(target=_reader, daemon=True).start()
+    start = time.monotonic()
+    while True:
+        try:
+            line = q.get(timeout=0.5)
+            if line is None:
+                break
+            if on_line and line:
+                on_line(line)
+        except queue.Empty:
+            if proc.poll() is not None:
+                continue  # 进程已退，等 reader 收尾（EOF → None）
+            if time.monotonic() - start > timeout:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                if on_line:
+                    on_line(f"[超时] 命令超过 {int(timeout)}s 已强制终止")
+                return 1
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
     return proc.returncode
 
 
 def pip_install(pkg, on_line=None):
-    """用清华源安装单个包。on_line 提供时实时回调每行输出。"""
-    cmd = [sys.executable, "-m", "pip", "install", pkg, "-i", PIP_MIRROR,
-           "--disable-pip-version-check", "--no-warn-script-location"]
+    """用清华源安装包：带超时 + 失败重试，防单包卡死拖停全部依赖。
+
+    显式 --timeout/--retries 让 pip 自身网络超时可控；
+    外层 subprocess 超时（PIP_INSTALL_TIMEOUT）兜底防挂起。
+    """
+    base = [sys.executable, "-m", "pip", "install", pkg, "-i", PIP_MIRROR,
+            "--timeout", "20", "--retries", "2",
+            "--disable-pip-version-check", "--no-warn-script-location"]
+    last_err = ""
+    for attempt in range(PIP_RETRIES + 1):
+        try:
+            if on_line:
+                rc = run_verbose(base, on_line)
+            else:
+                r = subprocess.run(base, capture_output=True, text=True,
+                                   timeout=PIP_INSTALL_TIMEOUT, errors="replace")
+                rc = r.returncode
+                if rc != 0:
+                    last_err = (r.stderr or r.stdout or "")[-300:]
+            if rc == 0:
+                return True
+        except subprocess.TimeoutExpired:
+            last_err = f"安装超时（>{PIP_INSTALL_TIMEOUT}s）"
+            if on_line:
+                on_line(f"[{pkg}] {last_err}")
+        except Exception as e:  # noqa: BLE001
+            last_err = str(e)
+        if attempt < PIP_RETRIES and on_line:
+            on_line(f"[{pkg}] 第 {attempt + 1} 次失败（{last_err[:120]}），重试…")
     if on_line:
-        return run_verbose(cmd, on_line) == 0
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    return r.returncode == 0
+        on_line(f"[{pkg}] 安装失败：{last_err[:200]}")
+    return False
 
 
 def install_optional(dep, on_line=None):
