@@ -406,6 +406,17 @@ function BrainBlock() {
   const [strategy, setStrategy] = React.useState("auto");
   const [mergeOut, setMergeOut] = React.useState(null);
   const [resolving, setResolving] = React.useState(false);
+  const [genesis, setGenesis] = React.useState("");
+  const [createWithKeyring, setCreateWithKeyring] = React.useState(true);
+
+  const createBrain = async () => {
+    setBusy(true);
+    setMsg("");
+    const d = await apiPost("/v1/brain", { action: "init", genesis, enable_keyring: createWithKeyring });
+    setMsg(d?.message || "创建失败（后端未连接？）");
+    setBusy(false);
+    load(true);
+  };
 
   const load = async (quiet) => {
     const d = await apiGet("/v1/brain");
@@ -515,7 +526,18 @@ function BrainBlock() {
       </div>
 
       {noBrain ? (
-        <div className="sched-text">大脑数据目录尚未初始化。首次使用请关闭本程序，在项目目录运行 <code>python brainkit.py init</code> 后重新打开。</div>
+        <div className="sched-text" style={{ display: "block" }}>
+          <div>大脑尚未诞生。点击下方按钮即可在本机创建——无需命令行。</div>
+          <div className="sched-line1" style={{ marginTop: 8 }}>
+            <input className="set-select set-combo" placeholder="出生寄语（可选，默认为「意识即信息」）" value={genesis} onChange={(e) => setGenesis(e.target.value)} style={{ flex: 1 }} />
+          </div>
+          <div className="sched-line1">
+            <button className="confirm-btn" disabled={busy} onClick={createBrain}>🐋 创建大脑</button>
+            <label style={{ fontSize: 12, opacity: 0.85, display: "flex", alignItems: "center", gap: 4 }}>
+              <input type="checkbox" checked={createWithKeyring} onChange={(e) => setCreateWithKeyring(e.target.checked)} /> 同时启用免密加密
+            </label>
+          </div>
+        </div>
       ) : (
         <>
           <div className="sched-text">

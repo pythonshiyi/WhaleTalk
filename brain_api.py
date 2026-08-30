@@ -81,6 +81,12 @@ def brain_status():
 def brain_action(action, payload=None):
     """执行大脑管理动作。payload 为前端传入的 dict。"""
     payload = payload or {}
+    if action == "init":
+        code, out = _run(bk.cmd_init, genesis=str(payload.get("genesis") or ""))
+        if code == 0 and payload.get("enable_keyring"):
+            code2, out2 = _run(bk.cmd_keyring_setup, force=False)
+            out = out + "\n" + out2
+        return {"ok": code == 0, "message": out}
     if action == "mount":
         code, out = _run(bk.cmd_mount, force=False)
         return {"ok": code == 0, "message": out}
