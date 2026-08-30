@@ -383,4 +383,12 @@ export async function getAudit() {
   return api("/v1/audit");
 }
 
+// ── 鲸语大脑 ─────────────────────────────────────
+export async function getBrain() {
+  return api("/v1/brain");
+}
+export async function brainAction(payload) {
+  return api("/v1/brain", { method: "POST", body: JSON.stringify(payload) });
+}
+
 export { getToken, getBase, api };

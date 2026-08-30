@@ -4344,6 +4344,12 @@ class _Handler(BaseHTTPRequestHandler):
                         self._json(200, detail)
                 elif self.path == "/v1/status":
                     self._json(200, _status())
+                elif self.path == "/v1/brain":
+                    try:
+                        import brain_api
+                        self._json(200, {"ok": True, "brain": brain_api.brain_status()})
+                    except Exception as e:  # noqa: BLE001
+                        self._json(200, {"ok": False, "brain": None, "error": str(e)})
                 elif self.path == "/v1/situation":
                     self._json(200, build_situation("full"))
                 elif self.path == "/v1/mode":
@@ -4476,6 +4482,18 @@ class _Handler(BaseHTTPRequestHandler):
                 self._handle_chat()
             elif self.path == "/v1/chat/stream":
                 self._handle_chat_stream()
+            elif self.path == "/v1/brain":
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                try:
+                    import brain_api
+                    action = str(body.get("action") or "")
+                    result = brain_api.brain_action(action, body)
+                    self._json(200, result)
+                except Exception as e:  # noqa: BLE001
+                    self._json(500, {"error": str(e)})
             elif self.path.startswith("/v1/tools/") and self.path.endswith("/invoke"):
                 name = self.path[len("/v1/tools/"):-len("/invoke")]
                 body = self._read_body()

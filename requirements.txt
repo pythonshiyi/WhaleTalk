@@ -44,3 +44,5 @@ playwright>=1.40.0
 curl_cffi>=0.7.0
 # 可选：系统资源自检（system_status 的 CPU/内存详情；缺失时降级为磁盘+网络）
 psutil>=5.9.0
+# 可选：鲸语大脑免密加密快照（brainkit.py 的密钥体系；缺失时快照降级为明文压缩）
+cryptography>=42.0

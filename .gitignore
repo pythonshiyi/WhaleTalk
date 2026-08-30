@@ -33,6 +33,9 @@ build/
 
 # ===== 鲸语大脑 / 个人数据（不入库）=====
 brain/
+brain.bak-*/
+brain_restored-*/
+brain_merged-*/
 .workbuddy/
 *.whale
 brain_seed.whale

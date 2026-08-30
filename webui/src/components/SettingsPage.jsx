@@ -391,6 +391,128 @@ function BackupBlock() {
   );
 }
 
+// ── 鲸语大脑（挂载 / 心跳 / 快照 / 密钥 / 恢复）──────────────────────
+function BrainBlock() {
+  const [brain, setBrain] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState("");
+  const [thought, setThought] = React.useState("");
+  const [seedPw, setSeedPw] = React.useState("");
+  const [importPw, setImportPw] = React.useState("");
+  const [importFile, setImportFile] = React.useState(null);
+  const [fileB64, setFileB64] = React.useState("");
+
+  const load = async (quiet) => {
+    const d = await apiGet("/v1/brain");
+    if (d && d.ok) setBrain(d.brain);
+    else if (!quiet) setMsg("无法读取大脑状态：" + (d?.error || "后端未连接"));
+  };
+  React.useEffect(() => { load(true); }, []);
+
+  const act = async (action, extra = {}, confirmText) => {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setBusy(true);
+    setMsg("");
+    try {
+      const d = await apiPost("/v1/brain", { action, ...extra });
+      if (d) {
+        setMsg(d.message || (d.ok ? "完成" : "失败"));
+        if (d.data?.auto_passphrase) setMsg(`⚠️ 一次性口令（仅显示一次）：${d.data.auto_passphrase}\n${d.message || ""}`);
+        if (d.data?.download?.data_b64) {
+          const bin = atob(d.data.download.data_b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const blob = new Blob([bytes], { type: "application/octet-stream" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = d.data.download.filename;
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+      } else {
+        setMsg("请求失败（后端未连接？）");
+      }
+    } catch (e) {
+      setMsg("请求异常：" + String(e));
+    }
+    setBusy(false);
+    load(true);
+  };
+
+  const onPickSeed = (e) => {
+    const f = e.target.files && e.target.files[0];
+    setImportFile(f || null);
+    if (!f) { setFileB64(""); return; }
+    const r = new FileReader();
+    r.onload = () => { const b64 = String(r.result).split(",")[1] || ""; setFileB64(b64); };
+    r.readAsDataURL(f);
+  };
+
+  const b = brain;
+  const noBrain = b === null || b === undefined;
+  return (
+    <div className="svc-actions" style={{ display: "block" }}>
+      <div className="sched-line1">
+        <b>🐋 鲸语大脑</b>
+        <span className="sched-action">
+          {noBrain ? "未初始化（命令行：python brainkit.py init）" : `${b.brain_id} · ${b.name}`}
+        </span>
+        <button className="msg-op" onClick={() => load(false)}>刷新</button>
+      </div>
+
+      {noBrain ? (
+        <div className="sched-text">大脑数据目录尚未初始化。首次使用请关闭本程序，在项目目录运行 <code>python brainkit.py init</code> 后重新打开。</div>
+      ) : (
+        <>
+          <div className="sched-text">
+            • 指纹：{b.fingerprint_ok ? "✓ 完好" : "✗ 不匹配"}　• 密钥：{b.keyring ? `✓ 免密已启用（${b.pubkey || "?"}）` : "未启用"}
+            <br />• 记忆 {b.memories} 份 · 思考 {b.thinking_days} 天 · 血缘 {JSON.stringify(b.lineage || {})}
+            <br />• 断点：{b.resume_hint || "无"}
+            {b.open_conflicts > 0 && <span style={{ color: "var(--danger)" }}>　⚠ 待裁决冲突 {b.open_conflicts} 条</span>}
+          </div>
+
+          <div className="sched-line1" style={{ marginTop: 8 }}>
+            <input className="set-select set-combo" placeholder="此刻的想法 / 收工断点（可空）" value={thought} onChange={(e) => setThought(e.target.value)} style={{ flex: 1 }} />
+          </div>
+          <div className="sched-line1">
+            <button className="confirm-btn" disabled={busy} onClick={() => act("mount")}>挂载</button>
+            <button className="confirm-btn" disabled={busy} onClick={() => act("heartbeat", { thought })}>记录心跳</button>
+            <button className="confirm-btn" disabled={busy} onClick={() => act("unmount", { thought })}>卸载</button>
+            <button className="confirm-btn" disabled={busy} onClick={() => act("archive")}>＋ 立即快照</button>
+          </div>
+
+          <div style={{ fontWeight: 500, opacity: 0.85 }} style={{ marginTop: 10 }}>📸 快照（brain_v{n}.whale）</div>
+          <div className="sched-text">
+            {(b.snapshots || []).length === 0 ? "（暂无快照）" : (b.snapshots || []).slice().reverse().map((s) => (
+              <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
+                <span style={{ flex: 1 }}>• {s.name}（{s.size_kb} KB · {s.mtime}）</span>
+                <button className="msg-op" disabled={busy} onClick={() => act("restore", { version: s.version, replace: true }, `从 ${s.name} 恢复会覆盖当前大脑（旧大脑自动备份到 brain.bak-*）。确认？`)}>恢复</button>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ fontWeight: 500, opacity: 0.85 }} style={{ marginTop: 10 }}>🔑 跨躯体免密迁移</div>
+          <div className="sched-line1">
+            <input className="set-select set-combo" type="password" placeholder="导出口令（留空自动生成）" value={seedPw} onChange={(e) => setSeedPw(e.target.value)} style={{ flex: 1 }} />
+            <button className="confirm-btn" disabled={busy} onClick={() => act("export-key", { passphrase: seedPw })}>导出密钥包</button>
+          </div>
+          <div className="sched-line1">
+            <input type="file" accept=".whale" onChange={onPickSeed} style={{ flex: 1 }} />
+            <input className="set-select set-combo" type="password" placeholder="一次性口令" value={importPw} onChange={(e) => setImportPw(e.target.value)} style={{ flex: 1 }} />
+            <button className="confirm-btn" disabled={busy || !fileB64} onClick={() => act("import-key", { file_b64: fileB64, passphrase: importPw })}>导入密钥</button>
+          </div>
+          <div className="sched-text" style={{ fontSize: 12, opacity: 0.75 }}>
+            导入密钥包后，本躯体即可免密解开该大脑的加密快照。种子文件与口令用后即焚。
+          </div>
+        </>
+      )}
+
+      {msg && <div className="px-tip" style={{ whiteSpace: "pre-wrap" }}>{msg}</div>}
+    </div>
+  );
+}
+
 // ── C2 更新检查 ────────────────────────────────────
 function UpdateBlock() {
   const [info, setInfo] = React.useState(null);
@@ -717,6 +839,7 @@ export default function SettingsPage({ onGoPrompts }) {
     { id: "persona", label: "🧠 人格与工具" },
     { id: "notice", label: "🔔 通知与安全" },
     { id: "look", label: "🎨 外观" },
+    { id: "brain", label: "🧠 大脑" },
     { id: "adv", label: "⚙ 高级" },
   ];
 
@@ -938,6 +1061,7 @@ export default function SettingsPage({ onGoPrompts }) {
               </>
             )}
             {tab === "adv" && <AdvancedTab cfg={cfg} saveField={saveField} onReset={resetAll} onGoPrompts={onGoPrompts} />}
+            {tab === "brain" && <BrainBlock />}
           </div>
         </>
       )}
