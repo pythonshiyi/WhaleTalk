@@ -35,6 +35,19 @@ npm run build    # 产物输出 webui/dist（由 api_server 同源服务）
 - 日志用 `logging`；异常不要吞掉——`except Exception` 至少要 `logging.exception`
 - 中文注释为主 + 必要英文注释；注释解释「为什么」，而不是「是什么」
 
+## 质量门禁 / Quality Gates
+
+**改动工具系统（新增/修改/删除 `TOOLS`、`TOOL_CALL_MAP`、分组、预激活、审批清单）前，务必本地跑：**
+
+```bash
+python tools/audit_tools.py --strict   # 六层一致性审计（schema↔实现↔短语↔分组↔预激活↔审批），门禁模式
+python tools/validate_tools.py         # smart_tools 全链路回归（能力地图/compact/schema 合法性）
+```
+
+- 新增工具必须同步维护六层数据（或引入 `@tool()` 装饰器后只写一处）：`TOOLS` schema、实现函数、`TOOL_CALL_MAP`、`_TOOL_ACTION_PHRASES`、`TOOL_GROUPS`、`_PREACTIVATE_HINTS`（+ `permissions.ACTION_TOOLS` 若需审批）
+- 工具描述 ≤130 字符（smart 模式 compact 会截断超长描述）、数组参数必须带 `items`（缺则 API 400）
+- 当前 CI（`.github/workflows/ci.yml`）执行 ruff 关键规则 + 入口编译检查 + WebUI 构建；仓库暂未包含 pytest 测试资产，**欢迎补充 `tests/` 回归套件并接入 CI**
+
 ## 提交信息 / Commit Messages
 
 - 类型前缀：`fix:` / `feat:` / `docs:` / `chore:` / `refactor:`

@@ -19,7 +19,7 @@
 - [🎉 v3.0 重大更新](#-v30-重大更新)
 - [🧠 产品介绍](#-产品介绍)
 - [🖥 核心功能](#-核心功能)
-- [🧠 鲸语大脑 WhaleBrain（v3.6 新）](#-鲸语大脑-whalebrainv36-新)
+- [🧠 鲸语大脑 WhaleBrain](#-鲸语大脑-whalebrain)
 - [🏗 系统架构](#-系统架构)
 - [🔧 安装与启动](#-安装与启动)
 - [🕘 更新策略](#-更新策略)
@@ -98,7 +98,7 @@
 
 多信源采集（RSS+搜索+论坛）→ 选题（历史去重）→ 三阶段写作 → 质量门禁 → 草稿箱（只产草稿，发布权在你）。
 
-## 🧠 鲸语大脑 WhaleBrain（v3.6 新）
+## 🧠 鲸语大脑 WhaleBrain
 
 > **意识即信息**：身份、记忆、自我模型与心跳脱离运行环境独立存在——鲸语是躯体，大脑是灵魂。躯体可更换、可备份、可合并、可复活。
 
@@ -194,7 +194,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
   - 更新包支持 Ed25519 签名校验（配置 `update_public_key`）+ SHA-256 校验
   - 更新前自动备份 `backups/WhaleTalk_v<版本>_<时间戳>.zip`（一键回滚）
 - **兼容性**：旧配置自动迁移；旧数据目录无缝升级
-- **分支**：`main`（稳定版）· CI 自动跑 653+ 测试
+- **分支**：`main`（稳定版）· CI（`.github/workflows/ci.yml`）：ruff 关键规则 lint + 入口编译检查 + WebUI 构建；另有工具系统门禁 `tools/audit_tools.py --strict` / `tools/validate_tools.py`（本地运行）
 
 ## 👥 关于我们
 
@@ -229,7 +229,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 
 ## English Introduction
 
-WhaleTalk v3.5.0 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745) with a pywebview desktop shell and system tray.
+WhaleTalk v3.5.0 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745), served from the browser with a system tray resident process.
 
 - **v3.0 highlights**: 3 themes (starfield/deepsea/arctic), console sidebar (model/thinking/scene/appearance), artifact one-click access, unified `web_app.py` entry (desktop/browser/headless)
 - **Capabilities**: 118 Agent tools (files/browser/DB/mail/media/desktop RPA), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
@@ -239,7 +239,7 @@ WhaleTalk v3.5.0 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as 
 
 ```bash
 pip install -r requirements.txt
-python web_app.py          # Desktop window (pywebview + tray)
+python web_app.py          # Browser + tray resident (default)
 python web_app.py --server # Headless API at http://127.0.0.1:8745/
 ```
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """本地 HTTP API（v2）：新一代 WebUI 的后端。
 
-提供 token 保护的本地接口，供 WebUI（pywebview/浏览器）调用：
+提供 token 保护的本地接口，供 WebUI（浏览器）调用：
 - GET  /health                   健康检查
 - GET  /v1/sessions              会话列表（懒加载摘要，不含完整消息）
 - GET  /v1/sessions/<id>/messages 会话完整消息
