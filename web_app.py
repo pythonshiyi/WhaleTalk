@@ -454,28 +454,45 @@ def _heavy_deps_report():
     return out
 
 
-def _pip_install(pkg):
-    """用清华源安装单个包，返回是否成功。"""
-    r = subprocess.run(
-        [sys.executable, "-m", "pip", "install", pkg, "-i", PIP_MIRROR,
-         "--disable-pip-version-check", "--no-warn-script-location"],
-        capture_output=True, text=True,
-    )
+def _run_verbose(cmd, on_line=None):
+    """逐行执行命令，实时回调每行输出；返回 returncode。"""
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, errors="replace",
+        )
+    except Exception as e:  # noqa: BLE001
+        if on_line:
+            on_line(f"无法启动: {e}")
+        return 1
+    for line in proc.stdout or []:
+        s = line.rstrip("\n").rstrip("\r")
+        if s and on_line:
+            on_line(s)
+    proc.wait()
+    return proc.returncode
+
+
+def _pip_install(pkg, on_line=None):
+    """用清华源安装单个包。on_line 提供时实时回调每行输出。"""
+    cmd = [sys.executable, "-m", "pip", "install", pkg, "-i", PIP_MIRROR,
+           "--disable-pip-version-check", "--no-warn-script-location"]
+    if on_line:
+        return _run_verbose(cmd, on_line) == 0
+    r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0
 
 
-def _install_optional(dep):
+def _install_optional(dep, on_line=None):
     """安装一个可选（重型）依赖：pip 装 + 可选的后续命令（如下载 Chromium）。"""
     ok = True
     if dep.get("pip"):
-        ok = _pip_install(dep["pip"]) and ok
+        ok = _pip_install(dep["pip"], on_line) and ok
     if ok and dep.get("post_cmd"):
-        try:
-            r = subprocess.run([sys.executable, "-m"] + list(dep["post_cmd"]),
-                               capture_output=True, text=True, timeout=1800)
-            ok = r.returncode == 0
-        except Exception:
-            ok = False
+        post = list(dep["post_cmd"])
+        if on_line:
+            on_line("$ " + " ".join(post))
+        ok = (_run_verbose([sys.executable, "-m"] + post, on_line) == 0) and ok
     return ok
 
 
@@ -483,37 +500,39 @@ def _install_deps_console(miss):
     ok_all = True
     for i, (pkg, label) in enumerate(miss, 1):
         print(f"  [{i}/{len(miss)}] 安装 {label}（{pkg}）…", flush=True)
-        ok = _pip_install(pkg)
+        ok = _pip_install(pkg, on_line=lambda s: print("      " + s, flush=True))
         ok_all = ok_all and ok
         print(f"    {'✅' if ok else '❌ 失败'} {label}")
     return ok_all
 
 
 def _deps_dialog(miss, heavy, tk):
-    """首启依赖弹窗：核心自动装 + 可选能力勾选（用户取舍）。"""
+    """首启依赖弹窗：核心自动装 + 可选勾选 + 实时日志与计时。"""
+    import queue
+    import threading
+
     root = tk.Tk()
     root.title("鲸语 · 首次启动初始化")
-    root.geometry("500x340")
+    root.geometry("520x500")
     root.resizable(False, False)
     try:
         root.attributes("-topmost", True)
     except Exception:
         pass
     tk.Label(root, text="🐋 鲸语 · 启动前准备", font=("Microsoft YaHei", 13, "bold")).pack(pady=(14, 4))
-    tk.Label(root, text="使用清华源镜像，全程可见进度", font=("Microsoft YaHei", 9), fg="#666").pack()
+    tk.Label(root, text="使用清华源镜像，下方实时显示安装进度", font=("Microsoft YaHei", 9), fg="#666").pack()
 
     body = tk.Frame(root)
-    body.pack(fill="both", expand=True, padx=18, pady=(6, 0))
+    body.pack(fill="x", padx=18, pady=(6, 0))
 
     if miss:
         tk.Label(body, text=f"将自动安装 {len(miss)} 个核心依赖：", font=("Microsoft YaHei", 10, "bold")).pack(anchor="w")
         tk.Label(body, text="、".join(m[1] for m in miss), font=("Microsoft YaHei", 9),
-                 fg="#555", wraplength=450, justify="left").pack(anchor="w", pady=(2, 6))
+                 fg="#555", wraplength=460, justify="left").pack(anchor="w", pady=(2, 4))
 
     check_vars = {}
     if heavy:
-        tk.Label(body, text="可选能力（勾选后一并安装，之后也可在设置里再装）：",
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", pady=(6, 2))
+        tk.Label(body, text="可选能力（勾选后一并安装）：", font=("Microsoft YaHei", 10, "bold")).pack(anchor="w", pady=(4, 2))
         for d in heavy:
             var = tk.BooleanVar(value=False)
             check_vars[d["import"]] = var
@@ -524,52 +543,86 @@ def _deps_dialog(miss, heavy, tk):
             note = d.get("note") or d.get("desc") or ""
             tk.Label(line, text=f"　{note}", font=("Microsoft YaHei", 8), fg="#888").pack(side="left")
 
+    # 状态行 + 计时
+    head = tk.Frame(root)
+    head.pack(fill="x", padx=18, pady=(6, 0))
     status = tk.StringVar(value="准备就绪")
-    tk.Label(root, textvariable=status, font=("Microsoft YaHei", 9), fg="#0a84ff").pack(pady=(6, 8))
+    tk.Label(head, textvariable=status, font=("Microsoft YaHei", 9), fg="#0a84ff").pack(side="left")
+    elapsed = tk.StringVar(value="")
+    tk.Label(head, textvariable=elapsed, font=("Microsoft YaHei", 9), fg="#888").pack(side="right")
 
-    btnrow = tk.Frame(root)
-    btnrow.pack(pady=(0, 14))
+    # 实时日志框（滚动）
+    logframe = tk.Frame(root)
+    logframe.pack(fill="both", expand=True, padx=18, pady=(4, 0))
+    log = tk.Text(logframe, height=10, font=("Consolas", 8), state="disabled", wrap="word",
+                  bg="#f6f7f9", fg="#333")
+    log.pack(side="left", fill="both", expand=True)
+    sb = tk.Scrollbar(logframe, command=log.yview)
+    sb.pack(side="right", fill="y")
+    log.config(yscrollcommand=sb.set)
+
+    logq = queue.Queue()
+    t0 = {"t": None}
+
+    def on_line(s):
+        logq.put(str(s)[:120])
+
+    def poll():
+        try:
+            while True:
+                line = logq.get_nowait()
+                log.config(state="normal")
+                log.insert("end", line + "\n")
+                log.see("end")
+                log.config(state="disabled")
+        except queue.Empty:
+            pass
+        if t0["t"] is not None:
+            secs = int(time.time() - t0["t"])
+            elapsed.set(f"已用时 {secs // 60}分{secs % 60}秒")
+        root.after(100, poll)
+
     result = {"ok": True}
 
-    def _run(chosen):
-        import threading
+    def worker(chosen):
+        t0["t"] = time.time()
+        total = len(miss) + len(chosen)
+        done = 0
+        result["ok"] = True
+        for i, (pkg, label) in enumerate(miss, 1):
+            done += 1
+            status.set(f"[{done}/{total}] 安装核心 {label}…")
+            if not _pip_install(pkg, on_line):
+                result["ok"] = False
+        for d in chosen:
+            done += 1
+            status.set(f"[{done}/{total}] 安装 {d['label']}…")
+            if not _install_optional(d, on_line):
+                result["ok"] = False
+        status.set("✅ 依赖就绪，即将启动鲸语…" if result["ok"] else "⚠ 部分依赖失败，可稍后重试")
+        root.after(1500, root.destroy)
 
-        def worker():
-            total = len(miss) + len(chosen)
-            done = 0
-            result["ok"] = True
-            for i, (pkg, label) in enumerate(miss, 1):
-                done += 1
-                status.set(f"[{done}/{total}] 安装核心 {label}…")
-                if not _pip_install(pkg):
-                    result["ok"] = False
-            for d in chosen:
-                done += 1
-                status.set(f"[{done}/{total}] 安装 {d['label']}…")
-                if not _install_optional(d):
-                    result["ok"] = False
-            status.set("✅ 依赖就绪，即将启动鲸语…" if result["ok"] else "⚠ 部分依赖失败，可稍后重试")
-            root.after(1300, root.destroy)
-
-        threading.Thread(target=worker, daemon=True).start()
+    def _go(chosen):
+        btn_start.config(state="disabled")
+        btn_skip.config(state="disabled")
+        threading.Thread(target=worker, args=(chosen,), daemon=True).start()
 
     def start():
         chosen = [d for d in heavy if check_vars.get(d["import"]) and check_vars[d["import"]].get()]
-        btn_start.config(state="disabled")
-        btn_skip.config(state="disabled")
-        _run(chosen)
+        _go(chosen)
 
     def skip():
-        btn_start.config(state="disabled")
-        btn_skip.config(state="disabled")
-        _run([])  # 只装核心（若有），不装可选
+        _go([])  # 只装核心（若有），不装可选
 
+    btnrow = tk.Frame(root)
+    btnrow.pack(pady=(6, 12))
     btn_start = tk.Button(btnrow, text="开始安装", command=start, width=14, font=("Microsoft YaHei", 10))
     btn_start.pack(side="left", padx=5)
     btn_skip = tk.Button(btnrow, text=("跳过可选，仅装核心" if miss else "暂不安装"), command=skip,
                          width=18, font=("Microsoft YaHei", 10))
     btn_skip.pack(side="left", padx=5)
 
+    root.after(100, poll)
     root.mainloop()
     return result["ok"]
 
