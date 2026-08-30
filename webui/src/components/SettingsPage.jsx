@@ -586,7 +586,7 @@ function BrainBlock() {
         <button className="confirm-btn" disabled={busy} onClick={() => act("archive")}>＋ 立即快照</button>
       </div>
 
-      <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>📸 快照（brain_v{n}.whale）</div>
+      <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>📸 快照（brain_v*.whale）</div>
       <div className="sched-text">
         {(b.snapshots || []).length === 0 ? "（暂无快照）" : (b.snapshots || []).slice().reverse().map((s) => (
           <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
