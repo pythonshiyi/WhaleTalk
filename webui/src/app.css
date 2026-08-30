@@ -799,6 +799,44 @@ button {
 }
 .deps-other-hint { font-size: var(--fs-xs); color: var(--text-3); margin-top: 8px; }
 
+/* ===== 依赖与能力页：常规组件清单 + 进度日志 ===== */
+.deps-sec { display: flex; flex-direction: column; gap: var(--sp-3); }
+.deps-sec-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.deps-sec-head h3 { font-size: var(--fs-lg); font-weight: 700; margin: 0; }
+.deps-sec-sub { font-size: var(--fs-xs); color: var(--text-3); }
+.deps-core-list { display: flex; flex-direction: column; gap: 2px; }
+.deps-core-item {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 0 14px; transition: all .15s var(--ease);
+}
+.deps-core-item:hover { background: var(--bg-hover); }
+.deps-core-item.busy { border-color: rgba(14,165,233,.4); }
+.deps-core-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
+.deps-core-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
+.deps-core-dot.on { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.deps-core-name { font-size: var(--fs-sm); font-weight: 500; flex: 1; }
+.deps-core-status { font-size: var(--fs-xs); color: var(--text-3); }
+.deps-core-item.busy .deps-core-status { color: var(--brand-strong); }
+.deps-core-all-ok {
+  font-size: var(--fs-sm); color: var(--ok);
+  padding: 12px 14px; border: 1px dashed rgba(16,185,129,.3);
+  border-radius: var(--r-md);
+}
+.deps-core-toggle {
+  align-self: flex-start; background: none; border: none; cursor: pointer;
+  font-size: var(--fs-xs); color: var(--brand-strong);
+  padding: 6px 4px;
+}
+.deps-core-toggle:hover { text-decoration: underline; }
+.deps-core-oklist { margin-top: 4px; opacity: .8; }
+.deps-log {
+  margin: 0 0 10px; padding: 8px 12px;
+  background: var(--bg-0); border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.7;
+  color: var(--text-2); max-height: 140px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-all;
+}
+
 /* 设置页已保存提示 */
 .set-saved-tip {
   position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);

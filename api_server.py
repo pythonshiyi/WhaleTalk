@@ -1924,9 +1924,16 @@ def _services_save(body):
 
 
 def _deps():
-    """可选依赖状态（正确检测）+ 可选能力（HEAVY_DEPS，可一键安装）。"""
+    """依赖全量清单：核心组件（AUTO）+ 可选能力（HEAVY）+ 常规（OPTIONAL）。"""
     import importlib.util
     import deps as deps_mod
+    core = []
+    for imp, pkg, label in deps_mod.AUTO_INSTALL_DEPS:
+        try:
+            ok = importlib.util.find_spec(imp) is not None
+        except Exception:
+            ok = False
+        core.append({"key": imp, "label": label, "pip": pkg, "ok": ok})
     out = []
     for imp, label, usage, cmd in deps_mod.OPTIONAL_DEPS:
         try:
@@ -1944,7 +1951,7 @@ def _deps():
             "key": d["import"], "label": d["label"], "desc": d["desc"],
             "ok": ok, "note": d.get("note", ""),
         })
-    return {"deps": out, "heavy": heavy}
+    return {"deps": out, "heavy": heavy, "core": core}
 
 
 def _deps_install(key):
@@ -4555,7 +4562,43 @@ class _Handler(BaseHTTPRequestHandler):
             elif self.path == "/v1/deps/install":
                 body = self._read_body()
                 key = str((body or {}).get("key") or "")
-                self._json(200, _deps_install(key))
+                # 流式安装：NDJSON 逐行推送进度（前端实时显示安装日志）
+                try:
+                    import deps as deps_mod
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+
+                    def emit(obj):
+                        try:
+                            self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+                            self.wfile.flush()
+                        except Exception:
+                            pass
+
+                    dep = None
+                    for d in deps_mod.HEAVY_DEPS:
+                        if key in (d.get("import"), d.get("label")):
+                            dep = d
+                            break
+                    if dep is None:
+                        for imp, pkg, label in deps_mod.AUTO_INSTALL_DEPS:
+                            if key in (imp, label):
+                                dep = {"import": imp, "label": label, "pip": pkg, "post_cmd": None, "note": ""}
+                                break
+                    if dep is None:
+                        emit({"type": "error", "message": f"未找到依赖：{key}"})
+                    else:
+                        emit({"type": "start", "label": dep["label"]})
+                        ok = deps_mod.install_optional(dep, on_line=lambda s: emit({"type": "line", "message": s}))
+                        emit({"type": "done", "ok": ok, "label": dep["label"]})
+                except Exception as e:  # noqa: BLE001
+                    try:
+                        self.wfile.write((json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n").encode("utf-8"))
+                        self.wfile.flush()
+                    except Exception:
+                        pass
             elif self.path.startswith("/v1/tools/") and self.path.endswith("/invoke"):
                 name = self.path[len("/v1/tools/"):-len("/invoke")]
                 body = self._read_body()

@@ -750,31 +750,57 @@ function CleanupBlock() {
   );
 }
 
-// ── B10 依赖状态（能力市场卡片）────────────────────
+// ── B10 依赖状态（完整清单 + 能力市场 + 流式进度）────
 const DEPS_ICONS = { playwright: "🖥", faster_whisper: "🎙", pyzbar: "▦", rarfile: "🗜" };
 
 function DepsBlock() {
-  const showBlock = useBlockFilter("可选能力 依赖 安装 组件 浏览器 语音转写 二维码 rar 能力");
+  const showBlock = useBlockFilter("可选能力 依赖 安装 组件 浏览器 语音转写 二维码 rar 能力 进度");
   const [deps, setDeps] = React.useState(null);
+  const [core, setCore] = React.useState([]);
   const [heavy, setHeavy] = React.useState([]);
   const [busyKey, setBusyKey] = React.useState("");
+  const [logs, setLogs] = React.useState({});
+  const [showCoreOk, setShowCoreOk] = React.useState(false);
   const [msg, setMsg] = React.useState("");
-  const load = () => apiGet("/v1/deps").then((d) => { if (d) { setDeps(d.deps || []); setHeavy(d.heavy || []); } });
+  const load = () => apiGet("/v1/deps").then((d) => { if (d) { setDeps(d.deps || []); setCore(d.core || []); setHeavy(d.heavy || []); } });
   React.useEffect(() => { load(); }, []);
   if (!showBlock) return null;
 
+  // 流式安装：NDJSON 逐行实时进度
+  const streamInstall = async (key, onEvent) => {
+    const res = await fetch(`${api.getBase()}/v1/deps/install`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${api.getToken()}` },
+      body: JSON.stringify({ key }),
+    });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (line) {
+          try { onEvent(JSON.parse(line)); } catch {}
+        }
+      }
+    }
+  };
+
   const install = async (key) => {
     setBusyKey(key);
-    setMsg("正在安装（大组件可能需数分钟）…");
+    setLogs((l) => ({ ...l, [key]: [] }));
+    setMsg("");
     try {
-      // 直连 fetch：不走 15s 超时封装，下载 Chromium 等需更久
-      const r = await fetch(`${api.getBase()}/v1/deps/install`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${api.getToken()}` },
-        body: JSON.stringify({ key }),
+      await streamInstall(key, (ev) => {
+        if (ev.type === "line") setLogs((l) => ({ ...l, [key]: [...(l[key] || []), ev.message] }));
+        if (ev.type === "done") setMsg(ev.ok ? `✅ ${ev.label} 安装完成` : `❌ ${ev.label} 安装失败`);
+        if (ev.type === "error") setMsg(`⚠ ${ev.message}`);
       });
-      const d = await r.json();
-      setMsg(d?.message || (d?.ok ? "安装完成" : "安装失败"));
     } catch (e) {
       setMsg("安装请求失败：" + String(e));
     }
@@ -782,51 +808,109 @@ function DepsBlock() {
     load();
   };
 
+  const coreMissing = (core || []).filter((d) => !d.ok);
+  const coreOkArr = (core || []).filter((d) => d.ok);
   const okCount = (heavy || []).filter((d) => d.ok).length;
   const total = (heavy || []).length;
-  const pct = total ? Math.round((okCount / total) * 100) : 0;
+  const allTotal = (core || []).length + total;
+  const allOk = coreOkArr.length + okCount;
+  const pct = allTotal ? Math.round((allOk / allTotal) * 100) : 0;
   const otherMissing = (deps || []).filter((d) => !d.ok);
+
+  const coreRow = (d) => {
+    const busy = busyKey === d.key;
+    const log = logs[d.key] || [];
+    return (
+      <div key={d.key} className={`deps-core-item ${busy ? "busy" : ""}`}>
+        <div className="deps-core-row">
+          <span className={`deps-core-dot ${d.ok ? "on" : ""}`} />
+          <span className="deps-core-name">{d.label}</span>
+          <span className="deps-core-status">{d.ok ? "✓ 已安装" : "未安装"}</span>
+          {!d.ok && (
+            <button className="msg-op" disabled={busy} onClick={() => install(d.key)}>
+              {busy ? "安装中…" : "安装"}
+            </button>
+          )}
+        </div>
+        {busy && log.length > 0 && (
+          <div className="deps-log">
+            {log.slice(-8).map((l, i) => <div key={i}>{l}</div>)}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="deps-page">
       <div className="deps-head">
         <div className="deps-head-title">
-          <h2>可选能力</h2>
-          <p>按需安装的扩展能力，不装不影响鲸语核心使用；装好即用，随时可在此管理。</p>
+          <h2>依赖与能力</h2>
+          <p>核心组件缺失会自动补齐；可选能力按需安装。每项状态一目了然，安装进度实时可见。</p>
         </div>
         <div className="deps-stat">
-          <b>{okCount}/{total}</b>
-          <span>已启用</span>
+          <b>{allOk}/{allTotal}</b>
+          <span>已就绪</span>
           <div className="deps-progress"><i style={{ width: pct + "%" }} /></div>
         </div>
       </div>
 
-      <div className="deps-grid">
-        {(heavy || []).map((d) => {
-          const busy = busyKey === d.key;
-          return (
-            <div key={d.key} className={`deps-card ${d.ok ? "deps-card-on" : ""}`}>
-              <div className="deps-card-top">
-                <span className="deps-icon">{DEPS_ICONS[d.key] || "🧩"}</span>
-                <span className={`deps-badge ${d.ok ? "deps-badge-on" : ""}`}>
-                  {d.ok ? "✓ 已启用" : "未启用"}
-                </span>
+      {/* 常规组件：缺失项 + 可展开的已安装 */}
+      <div className="deps-sec">
+        <div className="deps-sec-head">
+          <h3>常规组件</h3>
+          <span className="deps-sec-sub">缺失时启动自动补齐 · 也支持手动补装</span>
+        </div>
+        {coreMissing.length > 0 ? (
+          <div className="deps-core-list">
+            {coreMissing.map(coreRow)}
+          </div>
+        ) : (
+          <div className="deps-core-all-ok">✓ 全部已安装（{coreOkArr.length} 项）</div>
+        )}
+        {coreOkArr.length > 0 && (
+          <button className="deps-core-toggle" onClick={() => setShowCoreOk(!showCoreOk)}>
+            {showCoreOk ? "▾ 收起已安装" : `▸ 已安装 ${coreOkArr.length} 项（点击展开）`}
+          </button>
+        )}
+        {showCoreOk && <div className="deps-core-list deps-core-oklist">{coreOkArr.map(coreRow)}</div>}
+      </div>
+
+      {/* 可选能力：能力市场卡片 */}
+      <div className="deps-sec">
+        <div className="deps-sec-head">
+          <h3>可选能力</h3>
+          <span className="deps-sec-sub">{okCount}/{total} 已启用 · 按需安装</span>
+        </div>
+        <div className="deps-grid">
+          {(heavy || []).map((d) => {
+            const busy = busyKey === d.key;
+            const log = logs[d.key] || [];
+            return (
+              <div key={d.key} className={`deps-card ${d.ok ? "deps-card-on" : ""}`}>
+                <div className="deps-card-top">
+                  <span className="deps-icon">{DEPS_ICONS[d.key] || "🧩"}</span>
+                  <span className={`deps-badge ${d.ok ? "deps-badge-on" : ""}`}>
+                    {d.ok ? "✓ 已启用" : "未启用"}
+                  </span>
+                </div>
+                <div className="deps-name">{d.label}</div>
+                <div className="deps-desc">{d.desc}</div>
+                {d.note && <div className="deps-note">{d.note}</div>}
+                {busy && log.length > 0 && <div className="deps-log">{log.slice(-5).map((l, i) => <div key={i}>{l}</div>)}</div>}
+                <div className="deps-card-foot">
+                  {d.ok ? (
+                    <button className="deps-btn deps-btn-done" disabled>已就绪</button>
+                  ) : (
+                    <button className="deps-btn deps-btn-install" disabled={busy} onClick={() => install(d.key)}>
+                      {busy ? "安装中…" : "安装"}
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="deps-name">{d.label}</div>
-              <div className="deps-desc">{d.desc}</div>
-              {d.note && <div className="deps-note">{d.note}</div>}
-              <div className="deps-card-foot">
-                {d.ok ? (
-                  <button className="deps-btn deps-btn-done" disabled>已就绪</button>
-                ) : (
-                  <button className="deps-btn deps-btn-install" disabled={busy} onClick={() => install(d.key)}>
-                    {busy ? "安装中…" : "安装"}
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
       {otherMissing.length > 0 && (
