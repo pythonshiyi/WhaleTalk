@@ -520,23 +520,33 @@ function BrainBlock() {
   const b = brain;
   const noBrain = b === null || b === undefined;
   const snapOptions = (b?.snapshots || []).slice().reverse();
-  return (
-    <div className="svc-actions" style={{ display: "block" }}>
-      <div className="sched-line1">
-        <b>🐋 鲸语大脑</b>
-        <span className="sched-action">
-          {noBrain ? "未初始化（命令行：python brainkit.py init）" : `${b.brain_id} · ${b.name}`}
-        </span>
-        <button className="msg-op" onClick={() => load(false)}>刷新</button>
-      </div>
 
-      {noBrain ? (
-        connErr ? (
-          <div className="sched-text" style={{ color: "var(--danger)" }}>
-            ⚠ {connErr}
-            <div style={{ marginTop: 6 }}><button className="msg-op" onClick={() => load(false)}>重试</button></div>
-          </div>
-        ) : (
+  const head = (
+    <div className="sched-line1">
+      <b>🐋 鲸语大脑</b>
+      <span className="sched-action">
+        {noBrain ? "未初始化" : `${b.brain_id} · ${b.name}`}
+      </span>
+      <button className="msg-op" onClick={() => load(false)}>刷新</button>
+    </div>
+  );
+
+  if (connErr) {
+    return (
+      <div className="svc-actions" style={{ display: "block" }}>
+        {head}
+        <div className="sched-text" style={{ color: "var(--danger)" }}>
+          ⚠ {connErr}
+          <div style={{ marginTop: 6 }}><button className="msg-op" onClick={() => load(false)}>重试</button></div>
+        </div>
+      </div>
+    );
+  }
+
+  if (noBrain) {
+    return (
+      <div className="svc-actions" style={{ display: "block" }}>
+        {head}
         <div className="sched-text" style={{ display: "block" }}>
           <div>大脑尚未诞生。点击下方按钮即可在本机创建——无需命令行。</div>
           <div className="sched-line1" style={{ marginTop: 8 }}>
@@ -549,100 +559,104 @@ function BrainBlock() {
             </label>
           </div>
         </div>
-        )
-      ) : (
-        <>
-          <div className="sched-text">
-            • 指纹：{b.fingerprint_ok ? "✓ 完好" : "✗ 不匹配"}　• 密钥：{b.keyring ? `✓ 免密已启用（${b.pubkey || "?"}）` : "未启用"}
-            {!b.keyring && <button className="confirm-btn" style={{ marginLeft: 8 }} disabled={busy} onClick={enableKeyring}>🔑 一键启用免密</button>}
-            <br />• 记忆 {b.memories} 份 · 思考 {b.thinking_days} 天 · 血缘 {JSON.stringify(b.lineage || {})}
-            <br />• 断点：{b.resume_hint || "无"}
-            {b.open_conflicts > 0 && <span style={{ color: "var(--danger)" }}>　⚠ 待裁决冲突 {b.open_conflicts} 条</span>}
-          </div>
+        {msg && <div className="px-tip" style={{ whiteSpace: "pre-wrap" }}>{msg}</div>}
+      </div>
+    );
+  }
 
-          <div className="sched-line1" style={{ marginTop: 8 }}>
-            <input className="set-select set-combo" placeholder="此刻的想法 / 收工断点（可空）" value={thought} onChange={(e) => setThought(e.target.value)} style={{ flex: 1 }} />
-          </div>
-          <div className="sched-line1">
-            <button className="confirm-btn" disabled={busy} onClick={() => act("mount")}>挂载</button>
-            <button className="confirm-btn" disabled={busy} onClick={() => act("heartbeat", { thought })}>记录心跳</button>
-            <button className="confirm-btn" disabled={busy} onClick={() => act("unmount", { thought })}>卸载</button>
-            <button className="confirm-btn" disabled={busy} onClick={() => act("archive")}>＋ 立即快照</button>
-          </div>
+  return (
+    <div className="svc-actions" style={{ display: "block" }}>
+      {head}
 
-          <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>📸 快照（brain_v{n}.whale）</div>
-          <div className="sched-text">
-            {(b.snapshots || []).length === 0 ? "（暂无快照）" : (b.snapshots || []).slice().reverse().map((s) => (
-              <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
-                <span style={{ flex: 1 }}>• {s.name}（{s.size_kb} KB · {s.mtime}）</span>
-                <button className="msg-op" disabled={busy} onClick={() => act("restore", { version: s.version, replace: true }, `从 ${s.name} 恢复会覆盖当前大脑（旧大脑自动备份到 brain.bak-*）。确认？`)}>恢复</button>
-              </div>
-            ))}
-          </div>
+      <div className="sched-text">
+        • 指纹：{b.fingerprint_ok ? "✓ 完好" : "✗ 不匹配"}　• 密钥：{b.keyring ? `✓ 免密已启用（${b.pubkey || "?"}）` : "未启用"}
+        {!b.keyring && <button className="confirm-btn" style={{ marginLeft: 8 }} disabled={busy} onClick={enableKeyring}>🔑 一键启用免密</button>}
+        <br />• 记忆 {b.memories} 份 · 思考 {b.thinking_days} 天 · 血缘 {JSON.stringify(b.lineage || {})}
+        <br />• 断点：{b.resume_hint || "无"}
+        {b.open_conflicts > 0 && <span style={{ color: "var(--danger)" }}>　⚠ 待裁决冲突 {b.open_conflicts} 条</span>}
+      </div>
 
-          <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>🔀 分支合并（LCA 三路）</div>
-          <div className="sched-line1">
-            <select className="set-select" value={mergeA} onChange={(e) => setMergeA(e.target.value)} style={{ flex: 1 }}>
-              <option value="">主干 A…</option>
-              {snapOptions.map((s) => <option key={s.name} value={s.version}>{s.name}（{s.mtime}）</option>)}
-            </select>
-            <select className="set-select" value={mergeB} onChange={(e) => setMergeB(e.target.value)} style={{ flex: 1 }}>
-              <option value="">分支 B…</option>
-              {snapOptions.map((s) => <option key={s.name} value={s.version}>{s.name}（{s.mtime}）</option>)}
-            </select>
-            <select className="set-select" value={strategy} onChange={(e) => setStrategy(e.target.value)}>
-              <option value="auto">冲突留待裁决</option>
-              <option value="ours">冲突取 A</option>
-              <option value="theirs">冲突取 B</option>
-            </select>
-            <button className="confirm-btn" disabled={busy || (b.snapshots || []).length < 2} onClick={doMerge}>合并</button>
+      <div className="sched-line1" style={{ marginTop: 8 }}>
+        <input className="set-select set-combo" placeholder="此刻的想法 / 收工断点（可空）" value={thought} onChange={(e) => setThought(e.target.value)} style={{ flex: 1 }} />
+      </div>
+      <div className="sched-line1">
+        <button className="confirm-btn" disabled={busy} onClick={() => act("mount")}>挂载</button>
+        <button className="confirm-btn" disabled={busy} onClick={() => act("heartbeat", { thought })}>记录心跳</button>
+        <button className="confirm-btn" disabled={busy} onClick={() => act("unmount", { thought })}>卸载</button>
+        <button className="confirm-btn" disabled={busy} onClick={() => act("archive")}>＋ 立即快照</button>
+      </div>
+
+      <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>📸 快照（brain_v{n}.whale）</div>
+      <div className="sched-text">
+        {(b.snapshots || []).length === 0 ? "（暂无快照）" : (b.snapshots || []).slice().reverse().map((s) => (
+          <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0" }}>
+            <span style={{ flex: 1 }}>• {s.name}（{s.size_kb} KB · {s.mtime}）</span>
+            <button className="msg-op" disabled={busy} onClick={() => act("restore", { version: s.version, replace: true }, `从 ${s.name} 恢复会覆盖当前大脑（旧大脑自动备份到 brain.bak-*）。确认？`)}>恢复</button>
           </div>
-          {mergeOut && (
-            <div className="sched-text">
-              <div>• 结果目录：{mergeOut.dir}</div>
-              {(mergeOut.conflicts || []).length === 0 ? (
-                <div>✓ 无冲突，可采纳为当前大脑。
-                  <button className="confirm-btn" style={{ marginLeft: 8 }} disabled={busy} onClick={adopt}>采纳为当前大脑</button>
+        ))}
+      </div>
+
+      <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>🔀 分支合并（LCA 三路）</div>
+      <div className="sched-line1">
+        <select className="set-select" value={mergeA} onChange={(e) => setMergeA(e.target.value)} style={{ flex: 1 }}>
+          <option value="">主干 A…</option>
+          {snapOptions.map((s) => <option key={s.name} value={s.version}>{s.name}（{s.mtime}）</option>)}
+        </select>
+        <select className="set-select" value={mergeB} onChange={(e) => setMergeB(e.target.value)} style={{ flex: 1 }}>
+          <option value="">分支 B…</option>
+          {snapOptions.map((s) => <option key={s.name} value={s.version}>{s.name}（{s.mtime}）</option>)}
+        </select>
+        <select className="set-select" value={strategy} onChange={(e) => setStrategy(e.target.value)}>
+          <option value="auto">冲突留待裁决</option>
+          <option value="ours">冲突取 A</option>
+          <option value="theirs">冲突取 B</option>
+        </select>
+        <button className="confirm-btn" disabled={busy || (b.snapshots || []).length < 2} onClick={doMerge}>合并</button>
+      </div>
+      {mergeOut && (
+        <div className="sched-text">
+          <div>• 结果目录：{mergeOut.dir}</div>
+          {(mergeOut.conflicts || []).length === 0 ? (
+            <div>✓ 无冲突，可采纳为当前大脑。
+              <button className="confirm-btn" style={{ marginLeft: 8 }} disabled={busy} onClick={adopt}>采纳为当前大脑</button>
+            </div>
+          ) : (
+            <div>
+              ⚠ {mergeOut.conflicts.length} 条冲突待裁决：
+              {(mergeOut.conflicts || []).map((c) => (
+                <div key={c.id} style={{ margin: "6px 0", padding: 6, border: "1px solid var(--border-tertiary)", borderRadius: 6 }}>
+                  <div style={{ opacity: 0.9 }}>• {c.file}{c.path && c.path !== c.file ? `（${c.path.replace(c.file + ".", "")}）` : ""}</div>
+                  <div style={{ fontSize: 12, opacity: 0.8 }}>A: {c.ours || "—"}　vs　B: {c.theirs || "—"}</div>
+                  <div style={{ marginTop: 4 }}>
+                    {["ours", "theirs", "both"].map((k) => (
+                      <button key={k} className="msg-op" disabled={resolving} onClick={() => resolveOne(c.id, k)}>{k === "ours" ? "取A" : k === "theirs" ? "取B" : "两者都要"}</button>
+                    ))}
+                  </div>
                 </div>
-              ) : (
-                <div>
-                  ⚠ {mergeOut.conflicts.length} 条冲突待裁决：
-                  {(mergeOut.conflicts || []).map((c) => (
-                    <div key={c.id} style={{ margin: "6px 0", padding: 6, border: "1px solid var(--border-tertiary)", borderRadius: 6 }}>
-                      <div style={{ opacity: 0.9 }}>• {c.file}{c.path && c.path !== c.file ? `（${c.path.replace(c.file + ".", "")}）` : ""}</div>
-                      <div style={{ fontSize: 12, opacity: 0.8 }}>A: {c.ours || "—"}　vs　B: {c.theirs || "—"}</div>
-                      <div style={{ marginTop: 4 }}>
-                        {["ours", "theirs", "both"].map((k) => (
-                          <button key={k} className="msg-op" disabled={resolving} onClick={() => resolveOne(c.id, k)}>{k === "ours" ? "取A" : k === "theirs" ? "取B" : "两者都要"}</button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              ))}
             </div>
           )}
-
-          <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>🔑 跨躯体免密迁移</div>
-          <div className="sched-line1">
-            <input className="set-select set-combo" type="password" placeholder="导出口令（留空自动生成）" value={seedPw} onChange={(e) => setSeedPw(e.target.value)} style={{ flex: 1 }} />
-            <button className="confirm-btn" disabled={busy} onClick={() => act("export-key", { passphrase: seedPw })}>导出密钥包</button>
-          </div>
-          <div className="sched-line1">
-            <input type="file" accept=".whale" onChange={onPickSeed} style={{ flex: 1 }} />
-            <input className="set-select set-combo" type="password" placeholder="一次性口令" value={importPw} onChange={(e) => setImportPw(e.target.value)} style={{ flex: 1 }} />
-            <button className="confirm-btn" disabled={busy || !fileB64} onClick={() => act("import-key", { file_b64: fileB64, passphrase: importPw })}>导入密钥</button>
-          </div>
-          <div className="sched-text" style={{ fontSize: 12, opacity: 0.75 }}>
-            导入密钥包后，本躯体即可免密解开该大脑的加密快照。种子文件与口令用后即焚。
-          </div>
-
-          <div className="sched-line1" style={{ marginTop: 10 }}>
-            <button className="msg-op" disabled={busy} onClick={() => act("cleanup", { keep_bak: 2 }, "清理合并临时目录与过期备份（保留最近 2 份大脑备份）？")}>🧹 清理残留</button>
-            <span className="sched-text" style={{ fontSize: 12, opacity: 0.7 }}>合并临时目录 / 过期大脑备份</span>
-          </div>
-        </>
+        </div>
       )}
+
+      <div style={{ fontWeight: 500, opacity: 0.85, marginTop: 10 }}>🔑 跨躯体免密迁移</div>
+      <div className="sched-line1">
+        <input className="set-select set-combo" type="password" placeholder="导出口令（留空自动生成）" value={seedPw} onChange={(e) => setSeedPw(e.target.value)} style={{ flex: 1 }} />
+        <button className="confirm-btn" disabled={busy} onClick={() => act("export-key", { passphrase: seedPw })}>导出密钥包</button>
+      </div>
+      <div className="sched-line1">
+        <input type="file" accept=".whale" onChange={onPickSeed} style={{ flex: 1 }} />
+        <input className="set-select set-combo" type="password" placeholder="一次性口令" value={importPw} onChange={(e) => setImportPw(e.target.value)} style={{ flex: 1 }} />
+        <button className="confirm-btn" disabled={busy || !fileB64} onClick={() => act("import-key", { file_b64: fileB64, passphrase: importPw })}>导入密钥</button>
+      </div>
+      <div className="sched-text" style={{ fontSize: 12, opacity: 0.75 }}>
+        导入密钥包后，本躯体即可免密解开该大脑的加密快照。种子文件与口令用后即焚。
+      </div>
+
+      <div className="sched-line1" style={{ marginTop: 10 }}>
+        <button className="msg-op" disabled={busy} onClick={() => act("cleanup", { keep_bak: 2 }, "清理合并临时目录与过期备份（保留最近 2 份大脑备份）？")}>🧹 清理残留</button>
+        <span className="sched-text" style={{ fontSize: 12, opacity: 0.7 }}>合并临时目录 / 过期大脑备份</span>
+      </div>
 
       {msg && <div className="px-tip" style={{ whiteSpace: "pre-wrap" }}>{msg}</div>}
     </div>
