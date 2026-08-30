@@ -101,7 +101,8 @@ def _create_shortcuts():
         target, args = _target_and_args()
         ico = os.path.join(BASE_DIR, "app.ico")
         arg = " ".join(f'"{a}"' for a in args)
-        icon_line = f'$s.IconLocation = "{ico}",0\r\n' if os.path.exists(ico) else ""
+        # IconLocation 逗号必须放在引号内（"path,0"），放外面会变成 PowerShell 数组赋值被忽略 → 图标不生效
+        icon_line = f'$s.IconLocation = "{ico},0"\r\n' if os.path.exists(ico) else ""
         make = (
             f"$s.TargetPath = '{target}'\r\n"
             f"$s.Arguments = '{arg}'\r\n"
@@ -140,11 +141,21 @@ def _create_shortcuts():
 
 
 def _shortcuts_exist():
-    """新入口快捷方式已就绪 且 不残留旧版 WhaleTalk.exe.lnk（有残留即下次启动重建清理）。"""
+    """新入口快捷方式已就绪 且 不残留旧版 WhaleTalk.exe.lnk 且 目标指向当前项目。
+
+    目标校验：旧项目/旧路径的快捷方式（同名文件已存在但指向别处）会被识别为过期，
+    下次启动自动重建为指向当前 BASE_DIR 的入口（含鲸鱼图标）。
+    """
     try:
         d = os.path.join(os.path.expanduser("~"), "Desktop", f"{APP_NAME}.lnk")
         old = os.path.join(os.path.expanduser("~"), "Desktop", "WhaleTalk.exe.lnk")
-        return os.path.exists(d) and not os.path.exists(old)
+        if not os.path.exists(d) or os.path.exists(old):
+            return False
+        # 目标校验：lnk 二进制必须包含当前项目路径（UTF-16LE 或 ANSI 编码）
+        base = BASE_DIR  # 如 D:\jingyu\WhaleTalk-main（lnk 内为单反斜杠原始形式）
+        with open(d, "rb") as f:
+            data = f.read()
+        return (base.encode("utf-16-le") in data) or (base.encode("utf-8") in data)
     except Exception:
         return False
 

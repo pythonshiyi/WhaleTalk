@@ -2,6 +2,12 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.6.4（2026-08-30）—— 🐛 修复：桌面快捷方式无图标 / 指向旧路径
+
+- **根因 1（无图标）**：`_create_shortcuts` 的 `$s.IconLocation = "path",0` —— 逗号在引号**外**，PowerShell 视为数组赋值被静默忽略 → 快捷方式永远用默认图标。修复为 `"path,0"`（逗号在引号内）。
+- **根因 2（指向旧路径/未重建）**：`_shortcuts_exist` 只检查文件名存在，旧项目（DeepSeek_Assistant 时代）残留的同名快捷方式被误判"已就绪"→ 跳过重建，桌面图标指向旧目录。修复：校验 lnk 二进制**必须包含当前项目路径**（UTF-16LE/ANSI），不符即自动重建。
+- 已验证：重建后桌面+开始菜单 lnk 均含 app.ico 与当前项目路径，`_shortcuts_exist` 判定正确。
+
 ## v3.6.3（2026-08-30）—— 📦 核心依赖全量盘点与对齐
 
 - **AST 全量扫描**项目代码 import：实际使用 36 个第三方模块（+win32com 同包），**31 个核心已 100% 覆盖于 AUTO_INSTALL_DEPS，5 个大型可选（playwright/faster-whisper/piper/pyzbar/rarfile）在 HEAVY_DEPS，零遗漏**（动态 import 仅标准库）。
