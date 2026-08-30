@@ -2,6 +2,19 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.5.2（2026-08-30）—— 🎙 语音升级：Piper 本地离线神经引擎
+
+**新增 Piper 本地 TTS 引擎**（https://github.com/OHF-Voice/piper1-gpl · `pip install piper-tts[zh]`）：
+- **完全本地离线**：VITS+ONNX 推理，CPU 实时（树莓派 4 级算力即可），断网可用、零费用、30+ 语言
+- **中文模型仅 20-60MB**：默认 `zh_CN-chaowen-medium`，另有 `zh_CN-huayan-medium` 可选
+- **引擎链升级**：`auto` 默认 `Piper → Edge → SAPI` 智能降级；可强制 `engine=piper|edge|sapi`（配置 `voice_config.engine`）
+- **一键下载模型**：`POST /v1/tts/download_piper`（官方源超时自动回退 hf-mirror 镜像；g2pW/bert tokenizer 等中文音素依赖同样走镜像）
+- **语速/音量**：rate（-10..10→length_scale 0.5..1.5）、volume（0..100→增益）全支持
+- 前端设置页：新增「合成引擎」选择 + Piper 音色组 + 「⬇ 下载模型」按钮；`/v1/tts/voices` 返回 piper 音色与就绪状态
+- 依赖清单补录：`piper-tts[zh]` + `g2pW` + `sentence_stream` + `unicode_rbnf`
+
+**验证**：中文模型下载（镜像）、端到端合成（253KB WAV）、`/v1/tts/synthesize`（engine=piper/auto）、`/v1/tts/voices` 全部实测通过；前端构建通过。
+
 ## v3.5.1（2026-08-30）—— ✨ P2 体验与生态：可恢复/市场/防注入/垂直场景
 
 **🛡 安全增量**：

@@ -133,6 +133,8 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
     saveField({ voice_config: { ...vc, ...patch } });
   };
   const hasEdge = !!(voices?.edge || []).length;
+  const hasPiper = !!(voices?.piper || []).length;
+  const [piperBusy, setPiperBusy] = React.useState(false);
   return (
     <div className="svc-group">
       <div className="svc-title">🗣 语音朗读</div>
@@ -143,15 +145,49 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
           <option value="full">自动 · 整段读完</option>
         </select>
       </Row>
+      <Row label="合成引擎" desc="Piper=本地离线（免费·中文自然，需装 piper-tts 并下载模型）；Edge=在线自然；SAPI=系统自带">
+        <select className="set-select" value={vc.engine || "auto"} onChange={(e) => setV({ engine: e.target.value })}>
+          <option value="auto">自动（Piper→Edge→系统）</option>
+          <option value="piper">Piper（本地离线）</option>
+          <option value="edge">Edge（在线）</option>
+          <option value="sapi">系统 SAPI</option>
+        </select>
+      </Row>
+      {hasPiper && (
+        <Row label="Piper 模型" desc="本地离线神经语音，下载后断网可用（中文约 60MB）">
+          <select className="set-select" value={vc.piper_voice || "zh_CN-chaowen-medium"} onChange={(e) => setV({ piper_voice: e.target.value })}>
+            {(voices?.piper || []).map((v) => (
+              <option key={v.id} value={v.id}>{v.name}</option>
+            ))}
+          </select>
+          <button
+            className="confirm-btn"
+            style={{ marginLeft: 6 }}
+            disabled={piperBusy}
+            onClick={async () => {
+              setPiperBusy(true);
+              try {
+                const d = await apiPost("/v1/tts/download_piper", { voice: vc.piper_voice || "zh_CN-chaowen-medium" });
+                onTip((d && d.ok ? "✅ " : "❌ ") + (d?.message || "下载失败"));
+                setTimeout(() => { onTip(""); apiGet("/v1/tts/voices").then((x) => x && setVoices(x)); }, 2600);
+              } catch (e) { onTip("❌ 下载失败：" + e.message); }
+              setPiperBusy(false);
+            }}
+          >
+            {piperBusy ? "⏳ 下载中…" : "⬇ 下载模型"}
+          </button>
+        </Row>
+      )}
       <Row label="语速" desc="-10 慢 ~ 10 快，0 正常">
         <NumInput min={-10} max={10} value={vc.rate} onChange={(v) => setV({ rate: v })} />
       </Row>
       <Row label="朗读音量" desc="0~100（叠加系统音量）">
         <NumInput min={0} max={100} value={vc.volume} onChange={(v) => setV({ volume: v })} />
       </Row>
-      <Row label="音色" desc={voices ? (hasEdge ? "Edge 在线音色更自然；SAPI 为本机离线" : "本机 SAPI 音色（安装 edge-tts 可获得在线自然音色）") : "加载可用音色…"}>
+      <Row label="音色" desc={voices ? (hasEdge || hasPiper ? "Piper/Edge 更自然；SAPI 为本机" : "本机 SAPI 音色（安装 piper-tts/edge-tts 可获得更自然音色）") : "加载可用音色…"}>
         <select className="set-select" value={vc.voice} onChange={(e) => setV({ voice: e.target.value })}>
           <option value="">默认音色</option>
+          {(voices?.piper || []).map((v) => <option key={"p_"+v.id} value={v.id}>💾 {v.name}</option>)}
           {(voices?.edge || []).map((v) => <option key={"e_"+v.id} value={v.id}>🌐 {v.name}</option>)}
           {(voices?.sapi || []).filter((v) => /chinese|zh|hui|kang|yaoyao|kangkang/i.test(v.name)).slice(0, 12).map((v) => (
             <option key={"s_"+v.id} value={v.id}>💻 {v.name}</option>

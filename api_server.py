@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import urllib.request
+import shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import shared
 
@@ -3037,11 +3038,14 @@ def _voice_cfg():
     if not isinstance(vc, dict):
         vc = {}
     mode = str(vc.get("auto_mode") or "off")
+    eng = str(vc.get("engine") or "auto").strip().lower()
     out = {
         "auto_mode": mode if mode in ("off", "sentence", "full") else "off",
         "rate": max(-10, min(10, int(vc.get("rate") or 0))) if str(vc.get("rate") or 0).lstrip("-").isdigit() else 0,
         "volume": max(0, min(100, int(vc.get("volume") or 100))),
         "voice": str(vc.get("voice") or "").strip()[:80],
+        "engine": eng if eng in ("auto", "sapi", "edge", "piper") else "auto",
+        "piper_voice": str(vc.get("piper_voice") or "zh_CN-chaowen-medium").strip()[:80],
     }
     return out
 
@@ -3187,6 +3191,162 @@ def _edge_available():
     return _EDGE_STATE["ok"]
 
 
+# ── Piper 本地 TTS 引擎（v3.5 P3：离线神经语音，中文模型 20-60MB）──
+# https://github.com/OHF-Voice/piper1-gpl · pip install piper-tts
+# 完全本地推理（VITS+ONNX，CPU 可实时），无网络依赖；模型首次使用自动下载后离线可用。
+_PIPER_VOICES_RECOMMENDED = [
+    {"id": "zh_CN-chaowen-medium", "name": "中文·朝闻（本地离线·推荐）"},
+    {"id": "zh_CN-huayan-medium", "name": "中文·华言（本地离线）"},
+]
+_PIPER_STATE = {"checked": False, "ok": False}
+
+
+def _piper_dir():
+    """Piper 模型缓存目录：DATA_DIR/voice/piper/models。"""
+    return os.path.join(DATA_DIR, "voice", "piper", "models")
+
+
+def _piper_model_path(voice):
+    """按模型名定位本地 .onnx 路径（不存在返回 None）。"""
+    v = str(voice or "").strip() or "zh_CN-chaowen-medium"
+    base = os.path.join(_piper_dir(), v)
+    for ext in (".onnx", ".onnx.json"):
+        if os.path.isfile(base + ext):
+            return base
+    return None
+
+
+def _piper_available(voice=""):
+    """探测 piper-tts 可用性（import + 模型存在，结果缓存；模型名不同时按需探测）。"""
+    if not _PIPER_STATE["checked"]:
+        try:
+            import piper  # noqa: F401
+            _PIPER_STATE["ok"] = True
+        except Exception:
+            _PIPER_STATE["ok"] = False
+        _PIPER_STATE["checked"] = True
+    if not _PIPER_STATE["ok"]:
+        return False, "piper-tts 未安装（设置 → 可选能力 → Piper 本地语音，或 pip install piper-tts）"
+    if voice and not _piper_model_path(voice):
+        return False, f"Piper 模型 {voice} 未下载（设置页可一键下载，或 python -m piper.download_voices {voice}）"
+    return True, ""
+
+
+def _piper_download(voice=""):
+    """下载 Piper 语音模型（一次性联网，之后完全离线）。
+
+    官方源 huggingface.co 直连在国内常超时，自动回退 hf-mirror.com 镜像。
+    返回 (ok, message)。
+    """
+    v = str(voice or "").strip() or "zh_CN-chaowen-medium"
+    if _piper_model_path(v):
+        return True, f"模型 {v} 已就绪"
+    # 仅检查 piper-tts 是否已安装（传空 voice：不检查模型，避免"未下载"误判为"未安装"）
+    ok_av, err = _piper_available("")
+    if not ok_av:
+        return False, err
+    # 解析模型名：zh_CN-chaowen-medium → lang=zh_CN / speaker=chaowen / quality=medium
+    parts = v.split("-")
+    if len(parts) >= 3:
+        lang, quality, speaker = parts[0], parts[-1], "-".join(parts[1:-1])
+    else:
+        lang, speaker, quality = "zh_CN", "chaowen", "medium"
+    iso = lang.split("_")[0]
+    rel = f"{iso}/{lang}/{speaker}/{quality}/{v}"
+    hosts = [
+        "https://huggingface.co/rhasspy/piper-voices/resolve/main/",
+        "https://hf-mirror.com/rhasspy/piper-voices/resolve/main/",
+    ]
+    try:
+        os.makedirs(_piper_dir(), exist_ok=True)
+    except Exception:
+        pass
+    for ext in (".onnx", ".onnx.json"):
+        got = False
+        last_err = ""
+        for host in hosts:
+            url = host + rel + ext
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "WhaleTalk/3.5"})
+                with urllib.request.urlopen(req, timeout=180) as r:
+                    data = r.read()
+                with open(os.path.join(_piper_dir(), v + ext), "wb") as f:
+                    f.write(data)
+                # piper 的 PiperVoice.load 期待配置为 {name}.json，而仓库文件名是 .onnx.json：
+                # 下载后补一份 .json 兼容（若两文件都已存在则跳过）
+                if ext == ".onnx.json":
+                    compat = os.path.join(_piper_dir(), v + ".json")
+                    if not os.path.exists(compat):
+                        try:
+                            shutil.copy(os.path.join(_piper_dir(), v + ext), compat)
+                        except Exception:
+                            pass
+                got = True
+                break
+            except Exception as e:
+                last_err = f"{str(e)[:100]}（{host.split('/')[2]}）"
+        if not got:
+            return False, f"模型 {v} 下载失败（官方与镜像均不可达）：{last_err}"
+    try:
+        size = os.path.getsize(os.path.join(_piper_dir(), v + ".onnx")) // 1024 // 1024
+    except OSError:
+        size = 0
+    return True, f"模型 {v} 下载完成（约 {size}MB，此后完全离线可用）"
+
+
+def _synthesize_piper(text, path_wav, rate=0, voice="", volume=100):
+    """Piper 本地合成 WAV（rate>0 加快 / rate<0 放慢 → length_scale；volume 增益）。
+
+    手动写 WAV 头 + synthesize() 流式取帧：不依赖 synthesize_wav 的
+    wave 格式探测（部分版本 chunk 缺 sample_channels 导致 "# channels not specified"）。
+    """
+    v = str(voice or "").strip() or "zh_CN-chaowen-medium"
+    ok_av, err = _piper_available(v)
+    if not ok_av:
+        return err
+    # PiperVoice.load 需要完整 .onnx 路径（onnxruntime 直接加载该文件）
+    model = os.path.join(_piper_dir(), v + ".onnx")
+    if not os.path.isfile(model):
+        return f"Piper 模型 {v} 未下载"
+    # g2pW/transformers 依赖 bert-base-chinese tokenizer（huggingface 下载）：
+    # 统一走 hf-mirror 镜像，避免官方源直连超时（用户未设置时）
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    try:
+        from piper import PiperVoice, SynthesisConfig
+        # length_scale：>1 放慢、<1 加快（rate -10..10 → 0.5..1.5 区间）
+        length_scale = max(0.5, min(1.5, 1.0 - int(rate) * 0.05))
+        # volume 0..100 → 增益 0.4..1.6（50=1.0 原声）
+        vol = max(0.4, min(1.6, int(volume) / 50.0))
+        # download_dir 指向 Piper 缓存（g2pW 中文音素模型放此处，避免从 huggingface 直连下载）
+        voice_inst = PiperVoice.load(model, download_dir=os.path.join(DATA_DIR, "voice", "piper"))
+        syn_config = SynthesisConfig(length_scale=length_scale, volume=vol)
+        import wave
+        with wave.open(path_wav, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(voice_inst.config.sample_rate)
+            wrote = False
+            for chunk in voice_inst.synthesize(text, syn_config=syn_config):
+                data = chunk.audio_int16_bytes
+                if data:
+                    wav_file.writeframes(data)
+                    wrote = True
+        if not wrote:
+            return "Piper 无音频输出"
+    except Exception as e:
+        try:
+            os.remove(path_wav)
+        except OSError:
+            pass
+        return f"Piper 合成失败: {e}"
+    try:
+        if os.path.getsize(path_wav) > 200:
+            return ""
+    except OSError:
+        pass
+    return "Piper 无输出"
+
+
 _EDGE_VOICES_ZH = [
     {"id": "zh-CN-XiaoxiaoNeural", "name": "晓晓（女·自然）"},
     {"id": "zh-CN-XiaoyiNeural", "name": "晓伊（女·活泼）"},
@@ -3198,7 +3358,7 @@ _EDGE_VOICE_IDS = {v["id"] for v in _EDGE_VOICES_ZH}
 
 
 def _tts_voices():
-    """枚举可用音色：SAPI 本地音色 + （装了 edge-tts 时）中文神经网络音色。"""
+    """枚举可用音色：SAPI 本地音色 + （装了 edge-tts 时）中文神经网络音色 + （装了 piper 时）本地离线音色。"""
     sapi = []
     try:
         import pythoncom
@@ -3215,10 +3375,22 @@ def _tts_voices():
             pythoncom.CoUninitialize()
     except Exception:
         pass
+    piper_list = []
+    piper_ready = False
+    try:
+        import piper as _piper_mod  # noqa: F401
+        piper_ready = True
+        for pv in _PIPER_VOICES_RECOMMENDED:
+            ready = _piper_model_path(pv["id"]) is not None
+            piper_list.append({"id": pv["id"], "name": pv["name"] + (" ✓" if ready else "（未下载）"), "ready": ready})
+    except Exception:
+        pass
     return {
         "sapi": sapi,
         "edge": _EDGE_VOICES_ZH if _edge_available() else [],
-        "default_engine": "edge" if (_EDGE_STATE["ok"] and sapi is not None) else "sapi",
+        "piper": piper_list,
+        "piper_ready": piper_ready,
+        "default_engine": "piper" if (piper_ready and _piper_model_path("zh_CN-chaowen-medium")) else ("edge" if (_EDGE_STATE["ok"] and sapi is not None) else "sapi"),
     }
 
 
@@ -5049,26 +5221,44 @@ class _Handler(BaseHTTPRequestHandler):
                         json.dumps([text, rate, volume, voice, engine_req], ensure_ascii=False).encode("utf-8")
                     ).hexdigest()
                     os.makedirs(_VOICE_CACHE_DIR, exist_ok=True)
-                    # edge 优先：未强制 sapi、edge 可用、且（未选音色 或 选中的是 edge 音色）。
-                    # 选中的是 SAPI 音色时不再白白用 edge 跑一次（其音色名对 edge 无效）。
+                    # 引擎选择链：piper（本地离线，可用时优先）→ edge（在线）→ sapi（系统）
+                    # 强制 engine：piper / edge / sapi；auto（默认）智能降级。
                     edge_ok = _edge_available()
                     voice_sel = str(voice).strip()
+                    piper_voice_sel = str(vc.get("piper_voice") or "zh_CN-chaowen-medium")
+                    _PIPER_IDS = {v["id"] for v in _PIPER_VOICES_RECOMMENDED}
+                    _voice_is_piper = bool(voice_sel) and voice_sel in _PIPER_IDS
                     _voice_is_edge = bool(voice_sel) and (voice_sel in _EDGE_VOICE_IDS or voice_sel.endswith("Neural"))
-                    use_edge = (engine_req != "sapi") and edge_ok and (not voice_sel or _voice_is_edge)
-                    if engine_req == "edge":
-                        use_edge = edge_ok
-                    # 候选顺序：edge 优先（请求允许时），失败或未启用回退 SAPI；sapi 强制走 SAPI
-                    plan = ([("edge", f"{digest}.mp3")] if use_edge else []) + [("sapi", f"{digest}.wav")]
-                    edge_err = sapi_err = ""
+                    piper_ok, piper_avail_err = _piper_available(voice_sel if _voice_is_piper else piper_voice_sel)
+                    if engine_req == "piper":
+                        use_piper, use_edge = piper_ok, False
+                    elif engine_req == "edge":
+                        use_piper, use_edge = False, edge_ok
+                    elif engine_req == "sapi":
+                        use_piper, use_edge = False, False
+                    else:  # auto
+                        use_piper = piper_ok and (not voice_sel or _voice_is_piper)
+                        use_edge = (not use_piper) and edge_ok and (not voice_sel or _voice_is_edge)
+                    # 候选顺序：piper → edge → sapi（失败逐级回退；sapi 为最后兜底）
+                    plan = ([("piper", f"{digest}.wav")] if use_piper else []) + \
+                           ([("edge", f"{digest}.mp3")] if use_edge else []) + \
+                           [("sapi", f"{digest}.wav")]
+                    piper_err = edge_err = sapi_err = ""
                     for eng, fn in plan:
                         fp = os.path.join(_VOICE_CACHE_DIR, fn)
                         if os.path.isfile(fp) and os.path.getsize(fp) > (500 if fn.endswith(".mp3") else 200):
                             self._json(200, {"ok": True, "url": f"/v1/tts/audio/{fn}", "cached": True, "engine": eng})
                             return
                         with _TTS_SEM:
-                            msg = _synthesize_edge(text, fp, rate, volume, voice) if eng == "edge" \
-                                else _synthesize_sapi(text, fp, rate, volume, voice)
-                        if eng == "edge":
+                            if eng == "piper":
+                                msg = _synthesize_piper(text, fp, rate, voice_sel if _voice_is_piper else piper_voice_sel)
+                            elif eng == "edge":
+                                msg = _synthesize_edge(text, fp, rate, volume, voice)
+                            else:
+                                msg = _synthesize_sapi(text, fp, rate, volume, voice)
+                        if eng == "piper":
+                            piper_err = msg
+                        elif eng == "edge":
                             edge_err = msg
                         else:
                             sapi_err = msg
@@ -5079,14 +5269,29 @@ class _Handler(BaseHTTPRequestHandler):
                             os.remove(fp)
                         except OSError:
                             pass
-                    # 两种引擎都失败：报更有信息量的一侧（edge 是能力缺口主因）
-                    detail = (edge_err or sapi_err) or "合成失败"
-                    if not edge_err and "语音包" in sapi_err:
-                        detail = "本机无中文离线语音包且在线音色不可用，请安装 edge-tts 或中文语音包后重试"
+                    # 全部引擎失败：按上下文报告最有信息量的一侧
+                    if engine_req == "piper" and piper_avail_err:
+                        detail = piper_avail_err
+                    elif use_piper and piper_err:
+                        detail = piper_err
+                    elif edge_err:
+                        detail = edge_err
+                    else:
+                        detail = (sapi_err or "合成失败")
+                        if not edge_err and "语音包" in detail:
+                            detail = "本机无中文离线语音包且在线音色不可用，请安装 edge-tts、piper-tts 或中文语音包后重试"
                     self._json(500, {"error": detail})
                 except Exception as e:
                     logger.exception("TTS 合成失败")
                     self._json(500, {"error": str(e)})
+            elif self.path == "/v1/tts/download_piper":
+                body = self._read_body()
+                if body is None:
+                    self._json(400, {"error": "invalid json or body too large"})
+                    return
+                voice_dl = str((body or {}).get("voice") or "")[:80] or "zh_CN-chaowen-medium"
+                ok_dl, msg_dl = _piper_download(voice_dl)
+                self._json(200, {"ok": ok_dl, "message": msg_dl})
             elif self.path == "/v1/mode":
                 body = self._read_body()
                 if body is None:

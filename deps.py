@@ -24,6 +24,7 @@ OPTIONAL_DEPS = [
     ("imageio_ffmpeg", "imageio-ffmpeg", "音视频处理（内置 ffmpeg）", "pip install imageio-ffmpeg"),
     ("markdown", "markdown", "公众号写作 HTML 输出", "pip install markdown"),
     ("win32com", "pywin32", "语音朗读/语音合成", "pip install pywin32"),
+    ("piper", "piper-tts[zh]", "本地离线神经语音（Piper：中文模型 20-60MB，断网可用；[zh] 含中文音素依赖）", "pip install piper-tts[zh] g2pW sentence_stream unicode_rbnf"),
     ("tiktoken", "tiktoken", "精确 token 估算（缺省回退字符估算）", "pip install tiktoken"),
     ("pygments", "Pygments", "代码块语法高亮", "pip install pygments"),
     ("ebooklib", "ebooklib", "EPUB 电子书阅读", "pip install ebooklib"),

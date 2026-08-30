@@ -229,7 +229,8 @@ DEFAULT_CONFIG = {
     "api_key": "",
     "base_url": "https://api.deepseek.com",
     "model": "deepseek-v4-flash",
-    "voice_config": {"auto_mode": "off", "rate": 0, "volume": 100, "voice": ""},
+    "voice_config": {"auto_mode": "off", "rate": 0, "volume": 100, "voice": "",
+                     "engine": "auto", "piper_voice": "zh_CN-chaowen-medium"},
     "scenario": "通用",
     "thinking": "none",  # 初始最干净：思考关闭（用户可在设置中开启）
     "max_tokens": 16384,

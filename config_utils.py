@@ -163,6 +163,19 @@ def normalize_config(cfg):
     cfg["update_url"] = str(cfg.get("update_url", "") or "").strip()
     cfg["plugin_market_url"] = str(cfg.get("plugin_market_url", "") or "").strip()
     cfg["plugin_market_public_key"] = str(cfg.get("plugin_market_public_key", "") or "").strip()
+    # 语音引擎配置规范化：engine 限 auto/sapi/edge/piper；piper_voice 限长度
+    try:
+        vc = cfg.get("voice_config") or {}
+        if not isinstance(vc, dict):
+            vc = {}
+        eng = str(vc.get("engine") or "auto").strip().lower()
+        if eng not in ("auto", "sapi", "edge", "piper"):
+            eng = "auto"
+        vc["engine"] = eng
+        vc["piper_voice"] = str(vc.get("piper_voice") or "zh_CN-chaowen-medium").strip()[:80]
+        cfg["voice_config"] = vc
+    except Exception:
+        pass
     return cfg
 
 
