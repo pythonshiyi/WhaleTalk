@@ -138,7 +138,7 @@ const Table = ({ rows }) => (
     <table>
       {rows.map((r, i) => (
         <tr key={i}>
-          {r.cells.map((c, j) => (i === 0 ? <th key={j}>{c}</th> : <td key={j}>{c}</td>))}
+          {r.cells.map((c, j) => (i === 0 ? <th key={j}>{c}</th> : <td key={j}><Inline text={c} /></td>))}
         </tr>
       ))}
     </table>
@@ -155,7 +155,9 @@ export default function Markdown({ text, deferCode = false }) {
       // skip
     } else {
       if (rows.length) {
-        out.push(<Table key={out.length} rows={rows} />);
+        // 快照复制：Table 必须持有独立数组，否则共享引用会在 rows.length=0 时
+        // 被清空，导致所有表格渲染为空（历史 bug：多表格内容整段消失）。
+        out.push(<Table key={out.length} rows={rows.slice()} />);
         rows.length = 0;
       }
       if (b.type === "heading") {
@@ -215,6 +217,6 @@ export default function Markdown({ text, deferCode = false }) {
       }
     }
   }
-  if (rows.length) out.push(<Table key={out.length} rows={rows} />);
+  if (rows.length) out.push(<Table key={out.length} rows={rows.slice()} />);
   return <div className="md">{out}</div>;
 }
