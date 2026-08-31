@@ -1342,12 +1342,12 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                 <h1>{isTask ? "今天想做点什么？" : "随便聊聊"}</h1>
                 <p>
                   {isTask
-                    ? "看得见屏幕、听得见语音、动得了鼠标键盘与浏览器——115 项能力随叫随到"
+                    ? "看得见屏幕、听得见语音、动得了鼠标键盘与浏览器-115项能力随叫随到"
                     : "纯问答 · 不调用工具 · 适合聊天、翻译、写作、答疑"}
                 </p>
                 <div className="empty-suggest">
                   {(isTask
-                    ? ["帮我调研一个主题并输出报告", "把这个文件夹整理成 Markdown 索引", "分析这张图片的内容", "帮我定时巡检一个网站"]
+                    ? ["帮我调研一个主题并输出报告", "把这个文件夹整理成Markdown索引", "分析这张图片的内容", "帮我定时巡检一个网站"]
                     : ["用一句话介绍你自己", "翻译：Knowledge is power", "帮我写一首关于海的短诗", "帮我解释一个概念，比如 HTTP"]
                   ).map((s) => (
                     <button key={s} className="suggest-chip" onClick={() => onSend(s)}>
