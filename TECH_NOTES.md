@@ -1,11 +1,11 @@
-# 鲸语 WhaleTalk 技术文档（Web 版 · v3.7.0）
+# 鲸语 WhaleTalk 技术文档（Web 版 · v3.7.1）
 
 本文档面向后续维护/开发的 AI 智能体，描述 Web 架构（v3.0+）下的系统结构、数据流、核心约定与踩坑记录。符号名为准，行号随代码演化漂移，本文档不承诺行号。
 
 ## 0. 品牌与版本
 
 - 品牌：鲸语 WhaleTalk（独立产品，与 DeepSeek 官方无关联）。对外展示一律使用品牌名，技术描述可写"基于 DeepSeek API"。
-- **版本单一源**：`config_defaults.VERSION`（当前 3.7.0）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
+- **版本单一源**：`config_defaults.VERSION`（当前 3.7.1）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
 - 入口形态：**纯 Web + 托盘常驻**。浏览器是唯一界面；无 pywebview 原生窗口（desktop.py 已废弃）。
 
 ## 1. 项目概览

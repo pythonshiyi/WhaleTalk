@@ -207,7 +207,7 @@ _TOOL_DOMAIN = {
     "read_file": "文件与目录", "write_file": "文件与目录", "edit_file": "文件与目录",
     "list_dir": "文件与目录", "delete_file": "文件与目录", "archive_files": "文件与目录",
     "extract_archive": "文件与目录", "batch_rename": "文件与目录", "archive_list": "文件与目录",
-    "download_file": "文件与目录", "search_local": "文件与目录",
+    "download_file": "文件与目录", "search_local": "文件与目录", "code_lookup": "编程与执行",
     "list_snapshots": "文件与目录", "restore_snapshot": "文件与目录",
     "read_csv": "数据与文档", "write_csv": "数据与文档", "read_excel": "数据与文档",
     "write_excel": "数据与文档", "chart_data": "数据与文档", "pdf_extract": "数据与文档",

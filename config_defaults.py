@@ -5,7 +5,7 @@
 """
 
 # 应用版本号（统一来源：deepseek_client / backup 引用此处）
-VERSION = "3.7.0"
+VERSION = "3.7.1"
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个强大的AI助手，具备以下核心能力：\n"
@@ -36,6 +36,8 @@ BUILTIN_TOOL_NAMES = [
     "read_file",
     "fetch_url",
     "search_web",
+    "search_local",
+    "code_lookup",
     # v2 能力层：安全的基础工具默认启用（高危工具仅出现在工具设置对话框）
     "list_schedules",
     "cancel_schedule",

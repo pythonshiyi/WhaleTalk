@@ -2,6 +2,24 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.7.1（2026-08-31）—— 🛡 进化防瞎闸：四层验证链 + 代码结构定位
+
+### P0 · 自我进化验证链升级（防「瞎进化」核心）
+- **四层验证闸**：`self_evolve` 验证从「lint + 测试」升级为「py_compile 语法编译 → ruff lint → import 冒烟 → pytest」串行闸，任何一级失败立即回滚，杜绝「改完就以为成功」
+- **import 冒烟**：改动涉及的可导入模块必须能被独立子进程导入（抓未定义引用/循环导入/初始化错误）
+- **pytest 全量回退**：改动无测试文件时自动跑仓库 `tests/` 全量——进化从此不得破坏既有回归（防「改了 A 炸了 B」）
+
+### P1 · 自举回归套件（tests/）
+- **tests/ 目录建立**：`test_registry.py`（工具注册表六层一致性核心断言：TOOLS/TOOL_CALL_MAP/TOOL_GROUPS/BUILTIN/ACTION_TOOLS/schema/可调用性）+ `test_evolve_guard.py`（进化闸函数与回滚语义：编译/冒烟/测试跳过逻辑、create_evolution 分支隔离、self_evolve 坏补丁回滚与好补丁保留分支）+ `test_code_lookup.py`
+- 套件 28 用例全绿（venv pytest 9.1.1）；`_evolve_tests` 从「空转」变「有效」
+
+### P2 · 编程能力增强
+- **新增 `code_lookup` 工具**：AST 级代码结构定位（def 定义/class 类/call 调用点/import 导入来源，返回「文件:行号 摘要」），改代码前先查定义与调用点，避免改 A 炸 B；已入默认启用集（BUILTIN_TOOL_NAMES）
+- 新增工具全链路注册：TOOLS(135)/TOOL_CALL_MAP/TOOL_GROUPS/_TOOL_ACTION_PHRASES/_PREACTIVATE_HINTS/_TOOL_DOMAIN，三大门禁全过（audit/validate/island 零孤岛）
+
+### 修复
+- `code_lookup` import 分支误遍历 `ast.Global/Nonlocal` 的字符串 names（AttributeError 崩溃）→ 限定仅处理 Import/ImportFrom
+
 ## v3.7.0（2026-08-30）—— 🧠 大脑进化：从容器到会学习的灵魂
 
 ### P0 · 记忆系统重构

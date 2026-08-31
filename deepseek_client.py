@@ -997,6 +997,23 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "code_lookup",
+            "description": "代码结构定位（AST 只读）：定位 Python 符号的函数/类定义、调用点与导入来源，返回文件行号与摘要。改代码前先查定义与调用点，避免改 A 炸 B",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "要扫描的目录或 .py 文件绝对路径"},
+                    "symbol": {"type": "string", "description": "要定位的符号名（函数/类名，import 时可为模块名或别名）"},
+                    "kind": {"type": "string", "description": "def=函数定义（默认）/ class=类定义 / call=调用点 / import=导入来源"},
+                    "max_results": {"type": "integer", "description": "最多返回条数，默认 20"},
+                },
+                "required": ["path", "symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "create_doc",
             "description": "创建文档（.md/.html 原生支持；.docx 需安装 python-docx），需 write 权限",
             "parameters": {
@@ -1631,7 +1648,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "self_evolve",
-            "description": "闭环自我进化：在 git 分支上实施自我改进补丁，lint/测试验证通过后报告合入（失败自动回滚，不碰生产代码）。适合自主改进自身代码能力",
+            "description": "闭环自我进化：在 git 分支上实施自我改进补丁，四层验证（语法编译→ruff lint→导入冒烟→测试）全过才提交分支供合入，任何一级失败自动回滚，不碰生产代码。适合自主改进自身代码能力",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -6772,6 +6789,88 @@ def _evolve_restore_file(base, rel, orig_entry):
             pass
 
 
+def _evolve_compile(base, rels):
+    """语法编译闸：对改动中的 .py 文件跑 py_compile，缩进/括号/语法错误第一时间暴露。
+    独立子进程执行，与运行态解释器隔离。"""
+    py_paths = [os.path.join(base, r) for r in rels if r.endswith(".py")]
+    if not py_paths:
+        return "（本次改动无 Python 文件，跳过编译）"
+    try:
+        import tempfile as _tf
+        with _tf.SpooledTemporaryFile(max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace") as out:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "py_compile"] + py_paths,
+                stdout=out, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", cwd=base,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            try:
+                proc.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                _kill_tree(proc)
+                return "错误：py_compile 超时（120 秒）"
+            out.seek(0)
+            out_data = out.read(8000)
+            out.seek(0, os.SEEK_END)
+            if out.tell() > 8000:
+                out_data += "\n[输出已截断]"
+        if proc.returncode == 0:
+            return "编译通过（py_compile）"
+        return f"语法编译失败：\n{out_data}"
+    except Exception as e:
+        return f"错误：py_compile 执行失败: {e}"
+
+
+def _evolve_smoke(base, rels):
+    """导入冒烟闸：改动中的可导入模块必须能被 import（抓未定义引用/循环导入/初始化错误）。
+    跳过 __init__.py、test_* 与不带合法模块名的文件；独立子进程 + 超时，防副作用挂起。"""
+    seen, mods = set(), []
+    for r in rels:
+        if not r.endswith(".py") or os.path.basename(r).startswith("test_"):
+            continue
+        if os.path.basename(r) == "__init__.py":
+            continue
+        mod = r[:-3].replace("\\", "/").replace("/", ".")
+        if ".." in mod or not mod.split(".")[-1].replace("_", "").isalnum():
+            continue
+        if mod not in seen:
+            seen.add(mod)
+            mods.append(mod)
+    if not mods:
+        return "（本次改动无可导入模块，跳过导入冒烟）"
+    try:
+        import tempfile as _tf
+        probe = (
+            "import importlib,sys\n"
+            "_mods = %r\n"
+            "for _m in _mods:\n"
+            "    importlib.import_module(_m)\n"
+            "print('IMPORT_OK', len(_mods))" % (mods,)
+        )
+        with _tf.SpooledTemporaryFile(max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace") as out:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", probe],
+                stdout=out, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", cwd=base,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            try:
+                proc.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                _kill_tree(proc)
+                return "错误：导入冒烟超时（120 秒）"
+            out.seek(0)
+            out_data = out.read(8000)
+            out.seek(0, os.SEEK_END)
+            if out.tell() > 8000:
+                out_data += "\n[输出已截断]"
+        if proc.returncode == 0 and "IMPORT_OK" in out_data:
+            return "导入通过（%d 个模块）" % len(mods)
+        return f"导入冒烟失败：\n{out_data}"
+    except Exception as e:
+        return f"错误：导入冒烟执行失败: {e}"
+
+
 def _evolve_lint(base, rels):
     """只对改动文件跑 ruff（规避项目基线告警淹没，让进化聚焦改动本身）。"""
     import shutil as _sh
@@ -6807,10 +6906,15 @@ def _evolve_lint(base, rels):
 
 
 def _evolve_tests(base, rels):
-    """跑与改动相关的测试：只跑改动中的 test_*.py（pytest 指定文件）。
-    pytest 环境崩溃（INTERNALERROR / 退出码 3）视为环境不可用，跳过不阻塞进化。"""
+    """跑与改动相关的测试：优先改动中的 test_*.py；改动无测试但仓库存在 tests/ 时跑全量回归
+    （进化不得破坏既有测试，防「改了 A 炸了 B」）。pytest 环境崩溃视为环境不可用，跳过不阻塞。"""
     test_files = [os.path.join(base, r) for r in rels
                   if r.startswith("test_") or r.endswith("_test.py")]
+    if not test_files and os.path.isdir(os.path.join(base, "tests")):
+        import glob as _glob
+        test_files = _glob.glob(os.path.join(base, "tests", "test_*.py"))
+        if test_files:
+            test_files = [os.path.join("tests", os.path.basename(t)) for t in test_files]
     if not test_files:
         return "（本次改动未包含测试文件，跳过测试）"
     try:
@@ -6842,11 +6946,11 @@ def _evolve_tests(base, rels):
 
 
 def self_evolve(feature_name, files, project_dir=None):
-    """闭环自我进化：在 git 分支上实施自我改进补丁，lint/测试验证，通过后报告合入。
+    """闭环自我进化：在 git 分支上实施自我改进补丁，四层验证后报告合入。
 
     流程：观察自身缺陷 → 生成方案（files 补丁）→ 新建 evolve/ 分支应用补丁 →
-          run_lint/run_tests 验证 → 通过则提交分支并报告（合入权在用户）/
-          失败则自动回滚删除分支，生产代码零改动。
+          py_compile 语法编译 → ruff lint → import 冒烟 → pytest 验证 →
+          通过则提交分支并报告（合入权在用户）/ 失败则自动回滚删除分支，生产代码零改动。
     """
     import subprocess
     from datetime import datetime
@@ -6938,13 +7042,18 @@ def self_evolve(feature_name, files, project_dir=None):
             pass
         return "错误：补丁全部失败：" + "；".join(f"{r}({why})" for r, why in failed)
 
-    # 验证：lint 只对改动文件跑（规避项目基线告警淹没）；测试只跑改动中的测试文件
+    # 验证链（四层串行闸）：语法编译 → lint → 导入冒烟 → 测试。
+    # 任何一级失败立即回滚，杜绝「改完就以为成功」的瞎进化。
+    compile_r = _evolve_compile(base, applied)
     lint_r = _evolve_lint(base, applied)
+    smoke_r = _evolve_smoke(base, applied)
     tests_r = _evolve_tests(base, applied)
-    lint_ok = "无问题" in lint_r or lint_r.startswith("（")
+    compile_ok = compile_r.startswith(("编译通过", "（"))
+    lint_ok = lint_r.startswith(("无问题", "（"))
+    smoke_ok = smoke_r.startswith(("导入通过", "（"))
     tests_ok = tests_r.startswith("（") or ("passed" in tests_r or "退出码 0" in tests_r)
 
-    if lint_ok and tests_ok:
+    if compile_ok and lint_ok and smoke_ok and tests_ok:
         _git(["add", "."])
         _git(["commit", "-m", f"self-evolve: {name}"])
         _git(["checkout", cur])
@@ -6952,7 +7061,10 @@ def self_evolve(feature_name, files, project_dir=None):
             f"进化完成：{name}\n"
             f"分支：{branch}（已提交，可审查后合入 main）\n"
             f"补丁：{len(applied)} 个文件（{'、'.join(applied[:5])}）\n"
-            f"lint：通过\n测试：{tests_r.splitlines()[0] if not tests_r.startswith('（') else tests_r}\n"
+            f"编译：{compile_r.splitlines()[0] if not compile_ok else '通过'}\n"
+            f"lint：通过\n"
+            f"导入：{smoke_r.splitlines()[0] if not smoke_ok else '通过'}\n"
+            f"测试：{tests_r.splitlines()[0] if not tests_r.startswith('（') else tests_r}\n"
             f"已切回 {cur} 分支。合入权在你：git merge {branch}"
         )
 
@@ -6967,7 +7079,9 @@ def self_evolve(feature_name, files, project_dir=None):
     _git(["branch", "-D", branch])
     return (
         f"进化验证未通过，已回滚到 {cur} 分支（生产代码已恢复原状）：\n"
+        f"编译：{compile_r.splitlines()[0] if not compile_ok else '通过'}\n"
         f"lint：{lint_r.splitlines()[0] if not lint_ok else '通过'}\n"
+        f"导入：{smoke_r.splitlines()[0] if not smoke_ok else '通过'}\n"
         f"测试：{tests_r.splitlines()[0] if not tests_r.startswith('（') else tests_r}\n"
         "请参考上述输出调整方案后重试。"
     )
@@ -7033,6 +7147,102 @@ def _search_local_result(hits, scanned, limit, query):
     if len(hits) >= limit or scanned >= 2000:
         note = f"\n[已限制显示前 {limit} 条]"
     return f"找到 {len(hits)} 个匹配文件：\n" + "\n".join(hits) + note
+
+
+def _code_lookup_args(node):
+    """提取函数/类定义的参数摘要（前 5 个），供 code_lookup def/class 展示。"""
+    parts = []
+    for a in list(node.args.args)[:5]:
+        parts.append(a.arg)
+    if node.args.vararg:
+        parts.append("*" + node.args.vararg.arg)
+    if node.args.kwarg:
+        parts.append("**" + node.args.kwarg.arg)
+    if node.args.args and len(node.args.args) > 5:
+        parts.append("…")
+    return ", ".join(parts) or "(无参数)"
+
+
+def code_lookup(path, symbol, kind="def", max_results=20):
+    """代码结构定位（AST 级，只读）：在允许目录内解析 Python 文件，
+    返回符号的定义/类/调用点/导入位置，一行一条「文件:行号 摘要」。
+
+    kind：
+      def     → 函数/方法定义（含参数摘要）
+      class   → 类定义（含基类）
+      call    → 函数调用点（含实参个数）
+      import  → 导入来源（模块/别名）
+    """
+    ok, reason = permissions.check_filesystem(path, write=False)
+    if not ok:
+        return reason
+    p = permissions.resolve(path)
+    if not os.path.exists(p):
+        return f"错误：路径不存在：{p}"
+    sym = str(symbol or "").strip()
+    if not sym:
+        return "错误：symbol 不能为空"
+    k = str(kind or "def").strip().lower()
+    if k not in ("def", "class", "call", "import"):
+        return "错误：kind 仅支持 def/class/call/import"
+    try:
+        limit = max(1, min(200, int(max_results or 20)))
+    except (TypeError, ValueError):
+        limit = 20
+    import ast as _ast
+
+    files = []
+    if os.path.isfile(p) and p.lower().endswith(".py"):
+        files = [p]
+    else:
+        scanned = 0
+        for root, dirs, fns in os.walk(p):
+            dirs[:] = [d for d in dirs if d not in _SEARCH_SKIP_DIRS]
+            for fn in fns:
+                if scanned >= 2000:
+                    break
+                if fn.endswith(".py"):
+                    files.append(os.path.join(root, fn))
+                scanned += 1
+            if scanned >= 2000:
+                break
+    hits = []
+    for full in files:
+        if len(hits) >= limit:
+            break
+        try:
+            with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                src = fh.read()
+        except Exception:
+            continue
+        try:
+            tree = _ast.parse(src)
+        except SyntaxError:
+            continue
+        rel = os.path.relpath(full, p) if os.path.isdir(p) else os.path.basename(full)
+        for node in _ast.walk(tree):
+            if len(hits) >= limit:
+                break
+            line = getattr(node, "lineno", 0)
+            if k == "def" and isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == sym:
+                hits.append(f"{rel}:{line}  def {sym}({_code_lookup_args(node)})")
+            elif k == "class" and isinstance(node, _ast.ClassDef) and node.name == sym:
+                bases = ", ".join(_ast.unparse(b) for b in node.bases[:3]) if node.bases else ""
+                hits.append(f"{rel}:{line}  class {sym}({bases})" if bases else f"{rel}:{line}  class {sym}")
+            elif k == "call" and isinstance(node, _ast.Call):
+                fn = node.func
+                name = fn.id if isinstance(fn, _ast.Name) else (fn.attr if isinstance(fn, _ast.Attribute) else None)
+                if name == sym:
+                    n_args = len(node.args) + len(node.keywords)
+                    hits.append(f"{rel}:{line}  call {sym}({n_args} 个实参)")
+            elif k == "import" and isinstance(node, (_ast.Import, _ast.ImportFrom)):
+                for alias in node.names:
+                    if alias.name == sym or alias.asname == sym:
+                        hits.append(f"{rel}:{line}  import {alias.name}" + (f" as {alias.asname}" if alias.asname else ""))
+    if not hits:
+        return f"未找到符号「{sym}」（kind={k}，已扫描 {len(files)} 个 .py 文件）"
+    note = f"\n[已限制显示前 {limit} 条]" if len(hits) >= limit else ""
+    return f"符号「{sym}」（{k}）共 {len(hits)} 处：\n" + "\n".join(hits) + note
 
 
 def verify_files(paths):
@@ -11683,6 +11893,7 @@ TOOL_CALL_MAP = {
     "recall_session": recall_session,
     "run_command": run_command,
     "search_local": search_local,
+    "code_lookup": code_lookup,
     "create_doc": create_doc,
     "write_code_project": write_code_project,
     "browser_navigate": browser_navigate,
@@ -11821,7 +12032,7 @@ _TOOL_INDEX_KEY = None
 # 能力地图分类（精确感知：类别 + 完整工具名 + 核心动作）。全部内置工具全覆盖。
 TOOL_GROUPS = [
     ("🌐 浏览器与网页", ["browser_navigate", "web_screenshot", "fetch_url", "fetch_url_smart", "net_diagnose", "fetch_blocked", "search_web", "search_realtime", "search_github", "webdav", "download_file", "rss_fetch"]),
-    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "run_lint", "verify_project", "project_scaffold", "dev_plan", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "get_status", "git", "project_map", "find_symbol"]),
+    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "run_lint", "verify_project", "project_scaffold", "dev_plan", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "get_status", "git", "project_map", "find_symbol", "code_lookup"]),
     ("📁 文件与目录", ["read_file", "write_file", "edit_file", "list_dir", "search_local", "delete_file", "archive_files", "extract_archive", "batch_rename", "list_snapshots", "restore_snapshot", "clipboard_get", "clipboard_set"]),
     ("📊 数据与文档", ["read_csv", "write_csv", "read_excel", "write_excel", "chart_data", "database_query", "database_query_mysql", "database_query_postgres", "database_execute", "create_doc", "docx_read", "pptx_read", "pdf_extract", "pdf_create", "epub_read", "mobi_read", "doc_read", "archive_list", "secret_store", "kv_store"]),
     ("📧 邮件与消息", ["send_email", "read_email", "email_summary", "agent_mail", "msg_read", "im_send", "telegram_poll_updates", "send_webhook", "publish_draft", "run_wechat_writer", "daily_brief"]),
@@ -11916,6 +12127,7 @@ _PREACTIVATE_HINTS = [
     (("数据库", "sql", "mysql", "postgres"), ["database_query", "database_query_mysql", "database_query_postgres"]),
     (("网页", "url", "抓取", "爬"), ["fetch_url", "browser_navigate", "web_screenshot"]),
     (("搜索文件", "检索", "找文件"), ["search_local", "list_dir"]),
+    (("在哪定义", "定义在哪", "谁在调用", "调用点", "引用关系", "代码结构", "符号定位", "看下源码"), ["code_lookup"]),
     (("记忆", "记住", "偏好", "忘记", "删除记忆", "修改记忆"), ["write_memory", "read_memory", "delete_memory", "update_memory", "query_memory_graph"]),
     (("自我", "我是谁", "自我状态", "身份", "长期目标", "我的进化", "成长"), ["self_profile"]),
     (("自我进化", "改进自己", "升级自己", "自我改进", "修复自己", "自省"), ["self_evolve"]),
@@ -12043,6 +12255,7 @@ _TOOL_ACTION_PHRASES = {
     "track_web": "网页更新追踪",
     "recall_session": "历史会话回顾",
     "search_local": "在允许目录内全文检索文件",
+    "code_lookup": "代码结构定位（函数/类定义、调用点、导入来源）",
     "delete_file": "删除文件/目录",
     "list_snapshots": "列出自动快照（写操作前生成，可恢复）",
     "restore_snapshot": "从快照恢复文件原内容",
