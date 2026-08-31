@@ -2,6 +2,20 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.2（2026-08-31）—— 🐛 修复联网开关失效：web_search 字段在 api 层被静默丢弃
+
+**症状**：对话模式打开「联网搜索」开关后，AI 仍回答「我的知识截止日期是 2024 年 7 月，无法获取实时信息」——开关看似生效（UI 点亮）但实际未起作用。
+
+**根因**：`ChatPage.jsx` 已把 `web_search: chatMode === "dialog" && webSearch` 传入 `api.streamChat()`，但 `webui/src/api.js` 的 `streamChat` **解构参数列表与 `JSON.stringify` 请求体都遗漏了 `web_search` 字段** → 参数被静默丢弃，后端 `_chat_kwargs` 读不到开关状态（回退默认 `False`），`pure_chat` 分支不注入搜索工具，模型自然回答「没有联网能力」。v3.8.1 测试覆盖了后端注入逻辑，但前端字段透传层无测试，漏洞漏网。
+
+**修复**：
+- `webui/src/api.js`：`streamChat` 解构新增 `web_search` 参数，请求体 `JSON.stringify` 补上 `web_search`（保持与 `tools_enabled` 一致的 camelCase→snake_case 透传约定）
+- 新增 `tests/apiStreamChat.test.mjs`（9 组断言，mock fetch + localStorage 直测 `streamChat`）：`web_search:true/false` 原样进请求体、未传时不带字段、`toolsEnabled→tools_enabled` 映射不回退、SSE 事件（reasoning/content/done）正常分发——**锁定请求体字段透传，杜绝同类静默丢字段**
+
+### 验证
+- 前端测试全绿：`apiStreamChat` 9 组 + `longTextUtil` 8 组 + `markdownRender` 36 组
+- 端到端实测（对话模式 + `web_search:true`）：模型连续调用 `search_realtime`（Hacker News）与 `search_web`（中文新闻聚合），返回真实当日新闻（日本第 23 轮核污染水排海 / 上合组织比什凯克峰会 / 美军袭击伊朗拉腊克岛等），`vite build` 通过
+
 ## v3.8.1（2026-08-31）—— 🌐 对话模式联网搜索：实时信息一键开启
 
 对话模式新增「联网搜索」开关——纯对话也能搜到最新信息（天气/新闻/行情/网页/文献），**大幅减弱幻觉、扩展能力边界**。

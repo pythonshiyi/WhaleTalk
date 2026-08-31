@@ -5,7 +5,7 @@
 ## 0. 品牌与版本
 
 - 品牌：鲸语 WhaleTalk（独立产品，与 DeepSeek 官方无关联）。对外展示一律使用品牌名，技术描述可写"基于 DeepSeek API"。
-- **版本单一源**：`config_defaults.VERSION`（当前 3.8.1）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
+- **版本单一源**：`config_defaults.VERSION`（当前 3.8.2）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
 - 入口形态：**纯 Web + 托盘常驻**。浏览器是唯一界面；无 pywebview 原生窗口（desktop.py 已废弃）。
 
 ## 1. 项目概览
