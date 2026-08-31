@@ -9,6 +9,7 @@ import AuxPanel from "./AuxPanel.jsx";
 import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
+import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, splitSentences, enqueueSpeak, speakText, getVoiceConfig, onSpeechState, stopSpeak } from "../ttsUtil.js";
 
 // 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
@@ -78,9 +79,9 @@ function buildMessageChain(msgs) {
   const out = [];
   for (const m of msgs) {
     if (m.role === "user") {
-      out.push({ role: "user", content: m.text || "" });
+      out.push({ role: "user", content: unwrapLongText(m.text || "") });
     } else if (m.role === "assistant") {
-      const am = { role: "assistant", content: m.text || "" };
+      const am = { role: "assistant", content: unwrapLongText(m.text || "") };
       if (m.think) am.reasoning_content = m.think;
       if (m.tools && m.tools.length) {
         am.tool_calls = m.tools.map((t, i) => ({

@@ -1,6 +1,6 @@
-# 模块地图（v3.7.1 Web 版）
+# 模块地图（v3.7.2 Web 版）
 
-本文档描述鲸语 WhaleTalk 当前（v3.7.1，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。v3.6/v3.7 未改变模块布局，仅扩展能力（详见更新记录）。
+本文档描述鲸语 WhaleTalk 当前（v3.7.2，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。v3.6/v3.7 未改变模块布局，仅扩展能力（详见更新记录）。
 
 ## 分层总览
 
@@ -97,9 +97,9 @@ deepseek_client.py（能力引擎：DeepSeekClient + 135 工具 + smart_tools）
 | 模块 | 职责 |
 |---|---|
 | `wechat_writer/` | 公众号自动写作：sources（多信源采集）/ topic（选题去重）/ writer（三阶段写作）/ quality（质检重试）/ output（草稿箱+存档）/ history / llm / config |
-| `webui/` | React 前端（React 19 + Vite 8，无 UI 框架）：ChatPage/工作台/指令库/自主/大脑/插件/设置；`webui/dist` 由 api_server 同源服务 |
+| `webui/` | React 前端（React 19 + Vite 8，无 UI 框架）：ChatPage/工作台/指令库/自主/大脑/插件/设置；`webui/dist` 由 api_server 同源服务。渲染链路：`components/Markdown.jsx`（轻量块级渲染：splitBlocks/splitProse/Table）渲染前先经 `src/longTextUtil.js`（`unwrapLongText`，v3.7.2 起）解除模型长文本包装（`@long-text:`/`<long_text_quote>` 包裹的 JSON 消息链），表格/列表/加粗不再失效；对应单测 `tests/longTextUtil.test.mjs`（node 直跑） |
 | `tools/` | 开发门禁：`audit_tools.py`（工具系统六层一致性审计，`--strict` 可入 CI）、`validate_tools.py`（smart_tools 全链路回归）、`island_check.py`（九层孤岛对账） |
-| `tests/` | 自举回归套件（v3.7.1 起）：`test_registry.py`（工具注册表六层一致性断言）、`test_evolve_guard.py`（进化闸函数与回滚语义）、`test_code_lookup.py`；`self_evolve` 验证链自动回退跑全量，进化不得破坏回归 |
+| `tests/` | 自举回归套件（v3.7.2 起）：`test_registry.py`（工具注册表六层一致性断言）、`test_evolve_guard.py`（进化闸函数与回滚语义）、`test_code_lookup.py`；`self_evolve` 验证链自动回退跑全量，进化不得破坏回归 |
 
 ### 辅助脚本
 
@@ -133,5 +133,5 @@ deepseek_client.py（能力引擎：DeepSeekClient + 135 工具 + smart_tools）
 
 1. **拆分 `deepseek_client.py`**：按领域拆为 `tools/` 包，顶层保留薄 facade（`TOOLS`/`TOOL_CALL_MAP` 等引用不变），每拆一批跑 `tools/audit_tools.py --strict` + `tools/validate_tools.py`。
 2. **工具声明单一源**：引入 `@tool()` 装饰器统一声明 schema/实现/分组/动作短语/预激活关键字/审批级别，消除六层手工维护漂移（`audit_tools.py` 降级为兜底）。
-3. **测试资产**：`tests/` 自举回归套件已建立（v3.7.1，28 用例：注册表一致性/进化闸/代码定位）；建议按领域扩充分子级 pytest 用例（工具/权限/存储），并将 `pytest tests/` 接入 CI 与 `self_evolve` 验证链（后者已自动回退全量）。
+3. **测试资产**：`tests/` 自举回归套件已建立（v3.7.2，28 用例：注册表一致性/进化闸/代码定位）；建议按领域扩充分子级 pytest 用例（工具/权限/存储），并将 `pytest tests/` 接入 CI 与 `self_evolve` 验证链（后者已自动回退全量）。
 4. 保持"先纯函数/工具模块，再业务模块"的顺序。

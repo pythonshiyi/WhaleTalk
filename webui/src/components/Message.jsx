@@ -2,6 +2,7 @@ import React from "react";
 import Markdown from "./Markdown.jsx";
 import ToolCard from "./ToolCard.jsx";
 import * as api from "../api.js";
+import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
 
 // 表格内嵌预览（CSV/XLSX）：分页展示，不超过后端返回的 rows 上限
@@ -125,7 +126,7 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(msg.text || "");
+      await navigator.clipboard.writeText(unwrapLongText(msg.text || ""));
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {}
@@ -158,7 +159,7 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
       return;
     }
     primeAudio();  // 借本次点击手势解锁音频管线（防自动播放拦截）
-    if (!cleanForSpeech(msg.text)) return;
+    if (!cleanForSpeech(unwrapLongText(msg.text))) return;
     setErr("");
     setLoading(true);
     speakText(msg.text, {}, {

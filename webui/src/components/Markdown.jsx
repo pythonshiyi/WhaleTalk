@@ -1,7 +1,10 @@
 import React, { useMemo } from "react";
+import { unwrapLongText } from "../longTextUtil.js";
 
 // ── 轻量 Markdown 渲染器（流式安全）──────────────────
 // 规则：未闭合的代码块交给父组件延迟，其余即时渲染。
+// 渲染前先解除模型长文本包装（@long-text / <long_text_quote>），
+// 否则 JSON 消息链里的 \n 转义会让表格/列表/加粗全部失效。
 
 function splitBlocks(text) {
   const blocks = [];
@@ -143,7 +146,7 @@ const Table = ({ rows }) => (
 );
 
 export default function Markdown({ text, deferCode = false }) {
-  const blocks = useMemo(() => splitBlocks(text), [text]);
+  const blocks = useMemo(() => splitBlocks(unwrapLongText(text)), [text]);
   const rows = [];
   const out = [];
   for (const b of blocks) {
