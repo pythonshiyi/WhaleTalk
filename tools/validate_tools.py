@@ -9,6 +9,8 @@
   4. TOOLS 整体 JSON 可序列化、无重名
   5. 全部描述 ≤130 字（smart 模式不截断关键信息）
   6. 全部数组参数带 items
+  7. activate_tools 描述自包含（组名 + 反「能力错觉」约束）
+  8. build_smart_hint 精简能力提示可生成且含能力总数
 
 用途：新增/修改工具定义后的回归门禁。可配合 audit_tools.py 使用。
 
@@ -52,9 +54,12 @@ def main():
 
     block = []
     block += get_assign_nodes(src, tree, ["TOOLS", "_TOOL_ACTION_PHRASES", "TOOL_GROUPS",
-                                          "_TOOL_INDEX_CACHE", "_TOOL_INDEX_KEY", "ACTIVATE_TOOL"])
+                                          "_TOOL_INDEX_CACHE", "_TOOL_INDEX_KEY", "ACTIVATE_TOOL",
+                                          "_GROUP_NAMES_TEXT"])
+    block += get_assign_nodes(src, tree, ["_TOOL_GROUP_NAME_MAP"])
     block += get_func_src(src, tree, ["build_tool_index", "compact_tool_schema",
-                                      "compact_tools_list", "_patch_array_items"])
+                                      "compact_tools_list", "_patch_array_items",
+                                      "_finalize_activate_tool", "build_smart_hint"])
     ns = {"re": re, "json": json, "__name__": "validate_block"}
     exec(compile("\n".join(block), "tools_block", "exec"), ns)
 
@@ -122,10 +127,34 @@ def main():
             if pv.get("type") == "array" and "items" not in pv:
                 fails.append(f"{t['function']['name']}: {pn} 缺 items")
 
-    # 7. activate_tools 点菜工具
+    # 7. activate_tools 点菜工具：描述必须自包含（能力地图降级后仍可点菜）
     act = ns.get("ACTIVATE_TOOL") or {}
     if act.get("function", {}).get("name") != "activate_tools":
         fails.append("ACTIVATE_TOOL 缺失或结构异常")
+    try:
+        ns["_finalize_activate_tool"]()
+    except Exception as e:
+        fails.append(f"_finalize_activate_tool 异常: {e}")
+    act_desc = str((act.get("function") or {}).get("description") or "")
+    grp_text = str(ns.get("_GROUP_NAMES_TEXT") or "")
+    if grp_text and not any(g in act_desc for g in grp_text.split("、")[:3]):
+        fails.append("activate_tools 描述未包含组名（能力地图移除后无法点菜）")
+    if "不要因为" not in act_desc:
+        fails.append("activate_tools 描述缺少反「能力错觉」约束")
+
+    # 8. 精简能力提示（完整地图降级后的常驻替代）
+    try:
+        hint = ns["build_smart_hint"](["read_file", "write_file"], tools)
+        if not isinstance(hint, str) or len(hint) < 50:
+            fails.append("build_smart_hint 生成内容过短")
+        if str(len(tools)) not in hint:
+            fails.append("build_smart_hint 未包含能力总数")
+        if "组名" not in hint:
+            fails.append("build_smart_hint 未包含组名指引")
+        if len(hint) > 1200:
+            fails.append(f"build_smart_hint 过长（{len(hint)} 字），失去省 token 意义")
+    except Exception as e:
+        fails.append(f"build_smart_hint 异常: {e}")
 
     if fails:
         print(f"验证失败：{len(fails)} 个问题")

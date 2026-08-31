@@ -745,6 +745,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
+                    "max_files": {"type": "integer", "description": "可选：文件树/符号表扫描上限（默认 150）"},
                 },
                 "required": [],
             },
@@ -760,6 +761,7 @@ TOOLS = [
                 "properties": {
                     "name": {"type": "string", "description": "符号名（函数名或类名）"},
                     "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
+                    "max_files": {"type": "integer", "description": "可选：扫描文件数上限（默认 150）"},
                 },
                 "required": ["name"],
             },
@@ -870,7 +872,7 @@ TOOLS = [
             "description": "安装 Python 库，安装后配合 run_python(with_site=true) 使用；已装常用库：openpyxl/matplotlib/pymysql/psycopg2/Pillow 等",
             "parameters": {
                 "type": "object",
-                "properties": {"package": {"type": "string", "description": "要安装的包名（如 pandas / requests，是否需审批由权限配置决定）"}},
+                "properties": {"package": {"type": "string", "description": "要安装的包名（如 pandas / requests，是否需用户确认由权限配置决定）"}},
                 "required": ["package"],
             },
         },
@@ -912,7 +914,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_dir",
-            "description": "列出目录内容（只读，默认允许，目录须在允许目录内）",
+            "description": "列出目录内容与文件大小（只读，默认允许，目录须在允许目录内）",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string", "description": "目录绝对路径"}},
@@ -980,7 +982,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_local",
-            "description": "在允许目录内检索文本文件内容（只读，支持常见文本格式）",
+            "description": "在允许目录内全文检索文本文件内容（只读，支持常见文本格式，可限量返回）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1064,7 +1066,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "rpa_type",
-            "description": "桌面 RPA：模拟键盘输入文本（需先点击目标输入框）",
+            "description": "桌面 RPA：模拟键盘输入文本（需先点击目标输入框聚焦，可设按键间隔）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1091,7 +1093,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "rpa_move",
-            "description": "桌面 RPA：把鼠标移动到屏幕坐标 (x,y)",
+            "description": "桌面 RPA：把鼠标移动到屏幕坐标 (x,y)，可指定移动耗时",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1107,7 +1109,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "rpa_scroll",
-            "description": "桌面 RPA：滚动鼠标滚轮（正数向上，负数向下）",
+            "description": "桌面 RPA：滚动鼠标滚轮（正数向上滚动，负数向下滚动，可指定位置）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1123,7 +1125,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "rpa_screenshot",
-            "description": "桌面 RPA：截取整个屏幕保存 PNG（默认工作区）",
+            "description": "桌面 RPA：截取整个屏幕保存为 PNG（默认保存到工作区）",
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string", "description": "可选：输出 PNG 绝对路径"}},
@@ -1249,7 +1251,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "epub_read",
-            "description": "读取 EPUB 电子书正文（ebooklib 可选依赖）",
+            "description": "读取 EPUB 电子书正文为纯文本（ebooklib 可选依赖，未安装时提示）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1264,7 +1266,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "mobi_read",
-            "description": "读取 MOBI 电子书正文（mobi 可选依赖）",
+            "description": "读取 MOBI 电子书正文为纯文本（mobi 可选依赖，未安装时提示）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1369,7 +1371,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_csv",
-            "description": "读取 CSV 文件（允许目录内），返回表格文本",
+            "description": "读取 CSV 文件（允许目录内），返回表格文本，可指定分隔符与行数上限",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1548,7 +1550,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "stop_process",
-            "description": "停止后台进程（按名称或 pid）",
+            "description": "停止后台进程（按名称或 pid 定位并终止，进程由 start_process 启动）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1562,7 +1564,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_processes",
-            "description": "列出所有后台进程的运行状态与最近输出（运行中/已退出）",
+            "description": "列出所有后台进程的运行状态与最近输出（运行中/已退出，可配合停止进程）",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -1711,6 +1713,7 @@ TOOLS = [
                 "properties": {
                     "title": {"type": "string", "description": "可选：通知标题（默认 鲸语提醒）"},
                     "text": {"type": "string", "description": "通知正文"},
+                    "fallback_sound": {"type": "boolean", "description": "可选：系统通知音被禁用时是否播放备用提示音（默认 true）"},
                 },
                 "required": ["text"],
             },
@@ -1721,7 +1724,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "clipboard_get",
-            "description": "读取用户剪贴板文本（敏感：需用户确认授权），适合用户复制内容后直接处理",
+            "description": "读取用户剪贴板文本（隐私操作：读取用户复制的内容），适合用户复制内容后直接处理",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -1729,7 +1732,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "clipboard_set",
-            "description": "把整理好的内容写入剪贴板，用户可直接粘贴使用",
+            "description": "把整理好的内容写入系统剪贴板，用户可直接粘贴到任意应用使用（只写不读）",
             "parameters": {
                 "type": "object",
                 "properties": {"text": {"type": "string", "description": "要写入剪贴板的内容"}},
@@ -1742,7 +1745,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "delete_file",
-            "description": "删除文件或目录（默认移入回收站可恢复；permanent=true 才物理删除）。高危：需审批",
+            "description": "删除文件或目录（默认移入回收站可恢复；permanent=true 才物理删除）。高危：删除前自动快照可恢复",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1757,7 +1760,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "archive_files",
-            "description": "把多个文件/目录打包为 zip（工作区内，自动建目录）",
+            "description": "把多个文件/目录打包为 zip 压缩包（工作区内，自动创建目录）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1772,7 +1775,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "extract_archive",
-            "description": "解压 zip 压缩包到目标目录（自动越界防护）",
+            "description": "解压 zip 压缩包到目标目录（自动越界防护，防止路径穿越逃逸）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1801,7 +1804,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "restore_snapshot",
-            "description": "从自动快照恢复文件原内容（写文件/编辑/重命名/数据库写操作前自动生成；id 来自 list_snapshots）。高危：需审批",
+            "description": "从自动快照恢复文件原内容（写文件/编辑/重命名/数据库写操作前自动生成；id 来自 list_snapshots）。高危：恢复会覆盖文件当前内容",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1938,7 +1941,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "screen_capture",
-            "description": "截取当前屏幕保存到工作区（敏感：需审批）。配合 ocr_image/image_understand 描述屏幕内容",
+            "description": "截取当前屏幕保存到工作区（隐私操作）。配合 ocr_image/image_understand 描述屏幕内容",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1985,7 +1988,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "tts_stop",
-            "description": "停止朗读：立即中断后台播放（sid 留空停止全部当前朗读）",
+            "description": "停止朗读：立即中断后台播放（传 sid 只停指定会话，留空停止全部）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2140,7 +2143,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "database_execute",
-            "description": "数据库写操作（UPDATE/INSERT/DELETE/DDL）。高危：走审批流 + 变更前备份 + 审计；SQLite 的 connection 为数据库文件路径，mysql/postgres 用 db_config.json 的连接名",
+            "description": "数据库写操作（UPDATE/INSERT/DELETE/DDL）。高危：变更前自动备份 + 审计；SQLite 的 connection 为数据库文件路径，mysql/postgres 用 db_config.json 的连接名",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2158,7 +2161,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_email",
-            "description": "读取邮箱近期邮件（IMAP，email_config.json 配置 imap 段）。敏感：需审批",
+            "description": "读取邮箱近期邮件（IMAP，email_config.json 配置 imap 段）。隐私操作：读取邮箱内容",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2223,6 +2226,7 @@ TOOLS = [
                     "status": {"type": "string", "description": "可选：状态（进行中/已完成/阻塞等）"},
                     "pending": {"type": "array", "description": "可选：剩余待办步骤列表", "items": {"type": "string"}},
                     "notes": {"type": "string", "description": "可选：进度备注"},
+                    "auto": {"type": "boolean", "description": "可选：true 时自动保存（调用方内部使用，默认 false）"},
                 },
                 "required": ["name"],
             },
@@ -2232,7 +2236,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "task_checkpoint_load",
-            "description": "读取任务检查点（恢复未完成任务上下文）",
+            "description": "读取任务检查点，恢复未完成任务上下文（配合 task_checkpoint_save 使用）",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -4158,7 +4162,7 @@ def database_query_postgres(connection="default", sql="", max_rows=20):
 
 
 def read_csv(path, max_rows=100, delimiter=","):
-    """读取 CSV 文件（允许目录内），返回表格文本。"""
+    """读取 CSV 文件（允许目录内），返回表格文本，可指定分隔符与行数上限。"""
     if not path or not str(path).strip():
         return "错误：path 必填"
     p = permissions.resolve(path)
@@ -4306,7 +4310,7 @@ def _strip_html_tags(html_text):
 
 
 def epub_read(path, max_chars=20000):
-    """读取 EPUB 电子书正文（ebooklib 可选依赖）。"""
+    """读取 EPUB 电子书正文为纯文本（ebooklib 可选依赖，未安装时提示）。"""
     p_or_err = _read_optional_text(path, max_chars)
     if p_or_err[0] is None:
         return p_or_err[1]
@@ -4333,7 +4337,7 @@ def epub_read(path, max_chars=20000):
 
 
 def mobi_read(path, max_chars=20000):
-    """读取 MOBI 电子书正文（mobi 可选依赖）。"""
+    """读取 MOBI 电子书正文为纯文本（mobi 可选依赖，未安装时提示）。"""
     p_or_err = _read_optional_text(path, max_chars)
     if p_or_err[0] is None:
         return p_or_err[1]
@@ -6459,7 +6463,7 @@ def start_process(command, name=""):
 
 
 def stop_process(target):
-    """停止后台进程（按名称或 pid）。"""
+    """停止后台进程（按名称或 pid 定位并终止，进程由 start_process 启动）。"""
     target = str(target or "").strip()
     if not target:
         return "错误：需要进程名或 pid"
@@ -11792,12 +11796,11 @@ ACTIVATE_TOOL = {
     "type": "function",
     "function": {
         "name": "activate_tools",
-        "description": (
-            "加载你拥有但尚未加载的能力定义。你的全部能力见系统消息中的能力地图"
-            "（按分类分组，每组有组名如「数据与文档」「媒体与图像」）。"
-            "传入工具名激活单个工具，传入组名一次激活整组。"
-            "只需激活本次要用到的工具/组，不要全部激活。"
-        ),
+        # 注意：描述必须自包含。能力地图在首轮工具调用后会降级为精简提示，
+        # 若此处只写「见系统消息中的能力地图」，模型会失去能力线索，
+        # 把「定义未加载」误判为「我没有这个能力」（如声称无法写文件）。
+        # 真正的组名/能力总数在 TOOL_GROUPS 构建后回填（见下方 _finalize_activate_tool）。
+        "description": "加载尚未加载的能力定义（组名与能力总数见下方回填）。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -11839,6 +11842,31 @@ for _cat, _members in TOOL_GROUPS:
     if _bare != _cat:
         _TOOL_GROUP_NAME_MAP[_bare] = list(_members)
 
+# 组名清单（裸名，去 emoji）：注入提示用，让模型在没有完整能力地图时也能按组点菜。
+_GROUP_NAMES_TEXT = "、".join(
+    (_cat.split(" ", 1)[-1] if " " in _cat else _cat) for _cat, _ in TOOL_GROUPS
+)
+
+
+def _finalize_activate_tool():
+    """回填 activate_tools 描述：能力总数 + 组名 + 反「能力错觉」约束。
+
+    背景（v3 缺陷修复）：smart_tools 模式下模型首轮只能看到 activate_tools +
+    少量预激活工具。此前描述写「全部能力见系统消息中的能力地图」，而能力地图在
+    首轮工具调用后被移除 → 模型失去线索，把「定义未加载」当成「我没有这项能力」，
+    出现「我没有写文件工具，改不了 identity.json」这类错误自述。
+    """
+    ACTIVATE_TOOL["function"]["description"] = (
+        "加载你拥有但尚未加载的能力定义。你共拥有 %d 项能力，"
+        "当前工具列表只是已加载的部分，未列出的能力同样归你所有。"
+        "传工具名激活单个工具，或传组名一次激活整组。组名：%s。"
+        "不要因为列表里看不到就声称自己没有某项能力或做不到（例如修改文件），先激活再执行。"
+        % (len(TOOLS), _GROUP_NAMES_TEXT)
+    )
+
+
+_finalize_activate_tool()
+
 
 def _expand_activation(wanted, available_names, activated):
     """展开 activate_tools 的请求：支持工具名与组名（组名展开为整组工具）。"""
@@ -11876,6 +11904,11 @@ _PREACTIVATE_HINTS = [
     (("文件", "读取", "读一下", "打开"), ["read_file", "list_dir", "search_local"]),
     (("恢复", "撤销", "还原", "回滚文件", "找回", "误删"), ["list_snapshots", "restore_snapshot"]),
     (("写", "保存", "创建", "生成"), ["write_file", "create_doc", "write_code_project"]),
+    # 改类动词单独成条：此前只有「写/保存/创建/生成」，用户说「修改/编辑/改一下/
+    # 更新/替换/重命名」时不会预激活写工具，模型看到的只有读工具，进而误判自己不能改文件。
+    (("修改", "编辑", "改动", "改一下", "改一次", "改成", "改为", "改下", "改改", "改掉",
+      "更新", "替换", "重写", "覆盖", "重命名", "改名", "删掉", "删除"),
+     ["edit_file", "write_file", "delete_file", "batch_rename"]),
     (("图片", "图像", "截图", "看图", "图表", "视觉执行", "视觉闭环", "屏幕操作"), ["image_understand", "screen_see", "image_process", "chart_read", "chart_data", "ocr_image", "vision_loop", "screen_find_click"]),
     (("表格", "excel", "csv", "报表"), ["read_excel", "write_excel", "read_csv", "chart_data"]),
     (("代码", "编程", "python", "bug", "脚本", "函数"), ["run_python", "read_file", "run_tests"]),
@@ -11886,6 +11919,63 @@ _PREACTIVATE_HINTS = [
     (("记忆", "记住", "偏好", "忘记", "删除记忆", "修改记忆"), ["write_memory", "read_memory", "delete_memory", "update_memory", "query_memory_graph"]),
     (("自我", "我是谁", "自我状态", "身份", "长期目标", "我的进化", "成长"), ["self_profile"]),
     (("自我进化", "改进自己", "升级自己", "自我改进", "修复自己", "自省"), ["self_evolve"]),
+    # ===== 全联通补充（v3）：为无触发词的工具补齐意图入口 =====
+    (("收件箱", "邮件助手", "agent邮箱", "邮件列表", "邮件搜索"), ["agent_mail", "email_summary"]),
+    (("发微信", "发企微", "发telegram", "推送消息", "消息推送", "通知我"), ["im_send", "send_webhook"]),
+    (("telegram消息", "tg更新", "tg消息", "远程指令"), ["telegram_poll_updates"]),
+    (("桌面通知", "toast", "弹通知", "提醒通知"), ["notify_desktop"]),
+    (("公众号", "公众号文章", "自动写作", "写公众号"), ["run_wechat_writer", "publish_draft"]),
+    (("草稿", "草稿箱", "存草稿"), ["publish_draft"]),
+    (("pdf", "转pdf", "pdf提取", "pdf生成", "读pdf"), ["pdf_extract", "pdf_create"]),
+    (("word", "docx", "读word", "读取文档"), ["docx_read"]),
+    (("ppt", "pptx", "演示文稿", "读ppt"), ["pptx_read"]),
+    (("电子书", "epub", "mobi", "kindle"), ["epub_read", "mobi_read"]),
+    (("outlook", "msg邮件", "msg文件", "旧版doc", "rtf"), ["msg_read", "doc_read"]),
+    (("数据库写", "插入数据", "改数据库", "删除记录", "update语句"), ["database_execute"]),
+    (("键值", "kv存储", "缓存读写", "轻量状态"), ["kv_store"]),
+    (("密钥", "api key", "令牌", "保险箱", "托管密码"), ["secret_store"]),
+    (("写csv", "导出csv", "存成csv"), ["write_csv"]),
+    (("文生图", "ai绘图", "生成一张图", "画一张"), ["image_generate"]),
+    (("打包", "压缩成", "归档文件", "压缩包"), ["archive_files", "archive_list"]),
+    (("解压", "解包", "解压缩", "解压到"), ["extract_archive", "archive_list"]),
+    (("创建插件", "加个插件", "写个技能", "做一个插件"), ["create_plugin"]),
+    (("执行命令", "终端", "命令行", "运行命令", "cmd"), ["run_command"]),
+    (("安装库", "pip安装", "装个包", "缺库", "装依赖"), ["pip_install"]),
+    (("环境信息", "python版本", "已装库", "环境检查", "看环境"), ["environment_info"]),
+    (("后台进程", "启动服务", "启动服务器", "停止进程", "看进程", "进程列表"), ["start_process", "stop_process", "list_processes"]),
+    (("核验输出", "对照检查", "检查结果", "自评", "核对答案"), ["verify_output"]),
+    (("核验文件", "检查产物", "产物存在", "验证文件"), ["verify_files"]),
+    (("自身代码", "读源码", "项目文件", "鲸语代码", "看代码库"), ["project_info", "read_project_file"]),
+    (("进化提案", "改进提案", "提个方案", "改进建议"), ["create_evolution"]),
+    (("子代理", "并行处理", "子智能体", "分头做"), ["subagent_run"]),
+    (("多智能体", "团队协作", "分工协作", "角色分工"), ["team_run"]),
+    (("断点", "检查点", "保存进度", "恢复进度", "继续上次"), ["task_checkpoint_save", "task_checkpoint_load"]),
+    (("用量", "费用统计", "token统计", "花费多少", "花了多少"), ["usage_report"]),
+    (("报错截图", "错误截图", "异常截图", "报错诊断"), ["debug_screenshot"]),
+    (("截图转", "ui转代码", "前端还原", "截图还原"), ["screenshot_to_html"]),
+    (("扫描件", "文档图片", "识别图表", "识别公式"), ["scan_read"]),
+    (("语音转文字", "语音识别", "听写"), ["speech_to_text"]),
+    (("语音对话", "语音聊天", "语音交互", "免打字"), ["voice_chat_loop"]),
+    (("ffmpeg", "视频处理", "转码", "提取音频", "视频截图", "剪辑"), ["media_ffmpeg"]),
+    (("二维码", "生成二维码", "识别二维码"), ["qrcode"]),
+    (("截屏", "截个屏", "屏幕截图", "截屏看看"), ["screen_capture", "screen_see"]),
+    (("rss", "订阅源", "聚合阅读", "订阅列表"), ["rss_fetch"]),
+    (("github搜索", "搜开源项目", "找仓库", "搜代码库"), ["search_github"]),
+    (("被墙", "爬墙", "代理抓取", "绕过封锁", "抓不了"), ["fetch_blocked", "fetch_url_smart"]),
+    (("网络诊断", "断网", "连不上", "网络问题", "上不去网"), ["net_diagnose"]),
+    (("调用接口", "api请求", "调接口", "http请求"), ["call_api"]),
+    (("装软件", "卸载软件", "应用管理", "安装程序", "软件列表"), ["app_manage"]),
+    (("几号", "现在几点", "日期时间", "今天是几号"), ["get_date"]),
+    (("每日简报", "今日简报", "晨报", "简报生成"), ["daily_brief"]),
+    (("坚果云", "nextcloud", "webdav", "云盘同步"), ["webdav"]),
+    (("批量看图", "批量分析图片", "批量识别", "整理图库"), ["image_batch"]),
+    (("建索引", "知识库索引", "语义检索", "知识库搜索"), ["knowledge_index", "knowledge_search"]),
+    (("剪贴板", "复制到剪贴板", "粘贴出来", "读剪贴板"), ["clipboard_get", "clipboard_set"]),
+    (("批量改名", "批量重命名"), ["batch_rename"]),
+    (("查看定时", "我的定时任务", "取消定时", "列出定时"), ["list_schedules", "cancel_schedule"]),
+    (("点击屏幕", "移动鼠标", "键盘输入", "模拟按键", "屏幕坐标", "模拟滚轮", "桌面自动化"), ["rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot", "rpa_screen_size"]),
+    (("朗读", "语音播报", "文字转语音", "读给我听", "停止朗读", "tts"), ["tts_save", "tts_speak", "tts_stop"]),
+    (("执行流程", "运行工作流", "跑流程", "流程模板"), ["run_workflow"]),
 ]
 
 
@@ -12086,6 +12176,26 @@ def build_tool_index(tools=None):
     _TOOL_INDEX_CACHE = "\n".join(lines)
     _TOOL_INDEX_KEY = key
     return _TOOL_INDEX_CACHE
+
+
+def build_smart_hint(loaded=None, tools=None):
+    """生成精简能力提示（完整能力地图的低成本替代）。
+
+    完整能力地图约 2k token，只在本轮尚未产生工具调用时注入；一旦模型开始用工具，
+    后续轮次改注入本提示（约 150 token），既省成本又保留「我拥有全部能力」的自我认知，
+    避免模型把「定义未加载」当成「我没有这项能力」而向用户谎报做不到。
+    """
+    tools = tools if tools is not None else TOOLS
+    names = sorted(str(n) for n in (loaded or ()) if str(n).strip())
+    shown = "、".join(names[:40]) + ("…" if len(names) > 40 else "") if names else "（无）"
+    return (
+        "[能力提示] 你共拥有 %d 项能力，当前已加载 %d 项：%s。\n"
+        "其余能力同样归你所有，只是定义未加载；需要时调用 activate_tools([\"工具名或组名\"]) 激活后立即可用。\n"
+        "组名：%s。\n"
+        "重要：不要因为工具列表里看不到就声称自己没有某项能力或做不到某件事"
+        "（例如修改/写入文件、执行命令、截图），先激活对应能力再执行。"
+        % (len(tools), len(names), shown, _GROUP_NAMES_TEXT)
+    )
 
 
 def compact_tool_schema(tool):
@@ -12524,13 +12634,17 @@ class DeepSeekClient:
             _preactivate_from_messages(work, activated)
         smart_round = smart_avail  # 索引阶段：点菜工具 + 预激活工具并注入
         index_msg = None
+        hint_msg = None  # 精简能力提示：完整地图降级后的常驻替代（防「能力错觉」）
+        _hint_key = None  # 提示缓存键（已加载工具集合），集合变化才重建提示
         _index_shown = False
         if smart_avail:
             index_msg = {
                 "role": "system",
                 "content": (
                     "你是一个拥有 100+ 项专业能力的桌面 AI 智能体，能力地图如下（你确实拥有这些能力，"
-                    "不要拒绝用户请求）。能力定义未加载时，先调用 activate_tools 激活再使用。\n\n"
+                    "不要拒绝用户请求）。工具列表只显示已加载的定义，未列出的能力同样归你所有；"
+                    "能力定义未加载时，先调用 activate_tools 激活再使用，"
+                    "不要声称自己没有某项能力或做不到。\n\n"
                     "视觉自检准则：执行截图/浏览器/RPA 操作、或生成图片/图表后，"
                     "用 screen_see / image_understand 查看结果并自查是否达到目标；未达标则继续修正"
                     "（点击/输入/重新生成），完成后才向用户汇报。\n\n"
@@ -12567,24 +12681,33 @@ class DeepSeekClient:
             for _ in range(rounds):
                 if stop_event and stop_event.is_set():
                     return False
-                # smart_tools 阶段切换：索引阶段注入 activate_tools 点菜；
-                # 激活后注入激活工具的完整 schema（压缩版），并移除点菜工具
+                # smart_tools 阶段切换：索引阶段注入 activate_tools 点菜 + 完整能力地图；
+                # 激活后注入已激活工具的压缩 schema，并保留 activate_tools 以支持中途补激活
                 if smart_avail:
                     if smart_round:
                         # 点菜阶段：点菜工具 + 已预激活工具（AI 可直接用，也可补充点菜）
                         preset_specs = [t for t in all_tools if t["function"]["name"] in activated]
                         kw_tools = [ACTIVATE_TOOL] + compact_tools_list(preset_specs)
                     else:
+                        # 已激活阶段：保留 activate_tools，用户中途提出新意图时可继续补激活
+                        # （此前此处会移除点菜工具，模型再用不到的能力只能谎报「我没有」）
                         sel = [t for t in all_tools if t["function"]["name"] in activated]
-                        kw_tools = compact_tools_list(sel) if sel else None
+                        kw_tools = [ACTIVATE_TOOL] + (compact_tools_list(sel) if sel else [])
                     if kw_tools:
                         kwargs["tools"] = _strictify_tools(kw_tools) if strict_tools else kw_tools
                     else:
                         kwargs.pop("tools", None)
-                    # 索引消息在「点菜/工具调用发生前」每轮注入（AI 可随时参考点菜），
-                    # 首次点菜或工具调用后移除（AI 已上手，避免浪费）
+                    # 首轮（尚未产生工具调用）注入完整能力地图；之后降级为精简能力提示，
+                    # 而不是彻底移除——彻底移除会让模型丢失「我拥有全部能力」的自我认知。
                     if not _index_shown and index_msg is not None:
                         req_work = [index_msg] + list(work)
+                    elif index_msg is not None:
+                        # 已加载集合变化时重建提示（提示内列出当前已加载工具名）
+                        cur = frozenset(activated)
+                        if hint_msg is None or cur != _hint_key:
+                            _hint_key = cur
+                            hint_msg = {"role": "system", "content": build_smart_hint(activated, all_tools)}
+                        req_work = [hint_msg] + list(work)
                     else:
                         req_work = work
                 else:

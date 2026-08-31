@@ -200,13 +200,15 @@ def _make_permission_cb(send, stop_event):
 
 # 工具 → 能力域 映射（能力中心 12 域展示用，不改动核心 TOOLS 定义）
 _TOOL_DOMAIN = {
-    "get_date": "系统与基础", "get_weather": "系统与基础", "system_status": "系统与基础",
+    "get_date": "系统与基础", "get_weather": "系统与基础",
     "environment_info": "系统与基础", "call_api": "系统与基础", "usage_report": "系统与基础",
     "secret_store": "系统与基础", "kv_store": "系统与基础",
+    "watch_files": "系统与基础", "track_web": "系统与基础", "recall_session": "系统与基础",
     "read_file": "文件与目录", "write_file": "文件与目录", "edit_file": "文件与目录",
     "list_dir": "文件与目录", "delete_file": "文件与目录", "archive_files": "文件与目录",
     "extract_archive": "文件与目录", "batch_rename": "文件与目录", "archive_list": "文件与目录",
-    "download_file": "文件与目录",
+    "download_file": "文件与目录", "search_local": "文件与目录",
+    "list_snapshots": "文件与目录", "restore_snapshot": "文件与目录",
     "read_csv": "数据与文档", "write_csv": "数据与文档", "read_excel": "数据与文档",
     "write_excel": "数据与文档", "chart_data": "数据与文档", "pdf_extract": "数据与文档",
     "pdf_create": "数据与文档", "docx_read": "数据与文档", "pptx_read": "数据与文档",
@@ -216,19 +218,21 @@ _TOOL_DOMAIN = {
     "database_query_postgres": "数据库", "database_execute": "数据库",
     "fetch_url": "网络与通信", "fetch_blocked": "网络与通信", "search_web": "网络与通信",
     "search_github": "网络与通信", "search_realtime": "网络与通信", "rss_fetch": "网络与通信",
-    "webdav": "网络与通信", "search_local": "网络与通信",
+    "webdav": "网络与通信",
     "net_diagnose": "网络与通信", "fetch_url_smart": "网络与通信",
     "run_python": "开发与测试", "run_command": "开发与测试", "pip_install": "开发与测试",
     "write_code_project": "开发与测试", "run_tests": "开发与测试", "verify_output": "开发与测试",
     "verify_files": "开发与测试", "project_info": "开发与测试", "read_project_file": "开发与测试",
-    "create_plugin": "开发与测试", "create_evolution": "开发与测试",
-    "app_manage": "开发与测试",
+    "create_plugin": "开发与测试", "create_evolution": "开发与测试", "self_evolve": "开发与测试",
+    "app_manage": "开发与测试", "git": "开发与测试", "run_lint": "开发与测试",
+    "verify_project": "开发与测试", "dev_plan": "开发与测试", "project_scaffold": "开发与测试",
+    "project_map": "开发与测试", "find_symbol": "开发与测试", "get_status": "开发与测试",
     "tts_save": "媒体与图像", "image_process": "媒体与图像", "ocr_image": "媒体与图像",
     "image_understand": "媒体与图像", "image_generate": "媒体与图像", "image_batch": "媒体与图像",
     "screen_see": "媒体与图像", "chart_read": "媒体与图像", "screenshot_to_html": "媒体与图像",
     "debug_screenshot": "媒体与图像", "scan_read": "媒体与图像", "screen_capture": "媒体与图像",
     "speech_to_text": "媒体与图像", "media_ffmpeg": "媒体与图像", "web_screenshot": "媒体与图像",
-    "qrcode": "媒体与图像",
+    "qrcode": "媒体与图像", "tts_speak": "媒体与图像", "tts_stop": "媒体与图像",
     "send_email": "消息与协作", "read_email": "消息与协作", "email_summary": "消息与协作",
     "agent_mail": "消息与协作", "send_webhook": "消息与协作", "im_send": "消息与协作",
     "telegram_poll_updates": "消息与协作", "notify_desktop": "消息与协作",
@@ -244,7 +248,8 @@ _TOOL_DOMAIN = {
     "run_workflow": "定时与任务", "daily_brief": "定时与任务",
     "write_memory": "记忆与知识", "read_memory": "记忆与知识",
     "query_memory_graph": "记忆与知识", "knowledge_index": "记忆与知识",
-    "knowledge_search": "记忆与知识",
+    "knowledge_search": "记忆与知识", "delete_memory": "记忆与知识",
+    "update_memory": "记忆与知识", "self_profile": "记忆与知识",
     "ask_user": "AI 与智能", "request_permission": "AI 与智能",
     "run_wechat_writer": "AI 与智能", "publish_draft": "AI 与智能",
     "subagent_run": "AI 与智能", "team_run": "AI 与智能",
@@ -4198,6 +4203,11 @@ def _abilities():
     import deepseek_client as dc
     cfg = config_utils.load_config()
     enabled = set(cfg.get("enabled_tools") or [])
+    # full_auto（smart_tools 点菜）模式下，运行时可用工具与 config.enabled_tools 无关
+    # （_chat_kwargs 不传 enabled_tools，chat() 走全量点菜）。能力中心如实显示全部启用，
+    # 避免「UI 显示未启用、实际却可用」与「UI 显示已启用、实际被忽略」的误导。
+    if cfg.get("full_auto"):
+        enabled = {t["function"]["name"] for t in dc.TOOLS}
     buckets = {d: [] for d in _DOMAIN_ORDER}
     buckets.setdefault("其他", [])
     for t in dc.TOOLS:

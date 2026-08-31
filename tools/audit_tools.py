@@ -128,9 +128,16 @@ def main(argv=None):
             flag(name, "有实现无schema", f"TOOL_CALL_MAP={impl}")
             continue
         if impl is None:
+            # 交互回调工具：实现不落在 TOOL_CALL_MAP，而在 chat() 内通过
+            # on_ask / on_request_permission 回调处理（见执行循环 12907 行附近）。
+            if name in ("ask_user", "request_permission"):
+                continue
             flag(name, "有schema无实现", "TOOL_CALL_MAP 缺失或 None")
         elif impl != name:
-            flag(name, "实现名不一致", f"schema={name} 实现={impl}")
+            if impl in func_params:
+                flag(name, "实现别名", f"schema={name} 实现={impl}（函数已定义，非缺陷）")
+            else:
+                flag(name, "实现名不一致", f"schema={name} 实现={impl}")
 
         d = sch["desc"]
         sp = sch["params"]
