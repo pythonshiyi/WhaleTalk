@@ -50,13 +50,12 @@ check("[长期记忆]" not in (mem or ""), "memory_enabled=False：不注入记�
 check("核心自我状态" in (mem or ""), "memory_enabled=False：核心自我仍注入（受纯净对话总开关控制）")
 check("[大脑上下文]" in (mem or ""), "memory_enabled=False：大脑仍注入（受纯净对话总开关控制）")
 
-# ── 用例 4：_chat_kwargs 透传 quiet_mode（body 优先）──
+# ── 用例 4：_quiet_mode 透传（body 优先，cfg 兜底；且不进 client.chat kwargs）──
+check(h._quiet_mode({"quiet_mode": True}, {"quiet_mode": False}) is True, "_quiet_mode：body True 优先于 cfg False")
+check(h._quiet_mode({}, {"quiet_mode": True}) is True, "_quiet_mode：body 缺省时回退 cfg True")
+check(h._quiet_mode({}, {}) is False, "_quiet_mode：body/cfg 都缺省时默认 False")
 k = h._chat_kwargs({"quiet_mode": True}, {"quiet_mode": False})
-check(k["quiet_mode"] is True, "_chat_kwargs：body quiet_mode=True 优先于 cfg=False")
-k = h._chat_kwargs({}, {"quiet_mode": True})
-check(k["quiet_mode"] is True, "_chat_kwargs：body 缺省时回退 cfg.quiet_mode=True")
-k = h._chat_kwargs({}, {})
-check(k["quiet_mode"] is False, "_chat_kwargs：body/cfg 都缺省时默认 False")
+check("quiet_mode" not in k, "_chat_kwargs 不含 quiet_mode（避免透传给 client.chat 报错）")
 
 # ── 用例 5：任务模式（pure_chat=False）下 quiet_mode 同样生效 ──
 msgs, mem = inject(quiet_mode=True, pure_chat=False)

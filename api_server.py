@@ -6003,6 +6003,10 @@ class _Handler(BaseHTTPRequestHandler):
             pass
         return None
 
+    def _quiet_mode(self, body, cfg):
+        """纯净对话开关：请求级 body 优先，否则回退全局配置（不进 client.chat kwargs）。"""
+        return bool(body.get("quiet_mode", cfg.get("quiet_mode", False)))
+
     def _chat_kwargs(self, body, cfg):
         import deepseek_client as dc
         thinking = str(body.get("thinking") or cfg.get("thinking") or "high")
@@ -6026,8 +6030,7 @@ class _Handler(BaseHTTPRequestHandler):
             "pure_chat": pure,
             # 对话模式联网开关：pure_chat 时注入 search_web 等联网工具（克制、仅搜索）
             "web_search": bool(body.get("web_search", cfg.get("web_search", False))),
-            # 纯净对话总开关：请求级覆盖，开启后注入侧三路个性上下文全停、写回侧对话记忆提炼跳过
-            "quiet_mode": bool(body.get("quiet_mode", cfg.get("quiet_mode", False))),
+            # 纯净对话开关不进 kwargs（client.chat 无此参数），由 _quiet_mode() 单独计算
             "smart_tools": bool(tools and not pure),
             "stop": cfg.get("stop") or None,
             "logprobs": bool(cfg.get("logprobs")),
@@ -6145,8 +6148,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": kb})
                 return
             kwargs = self._chat_kwargs(body, cfg)
+            quiet_mode = self._quiet_mode(body, cfg)
             messages, memory_text = self._inject_system_messages(
-                messages, cfg, kwargs.get("pure_chat", False), kwargs.get("quiet_mode", False)
+                messages, cfg, kwargs.get("pure_chat", False), quiet_mode
             )
             if memory_text:
                 kwargs["memory_text"] = memory_text
@@ -6171,7 +6175,7 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 last_user = next((m.get("content") for m in reversed(messages)
                                   if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
-                if text and last_user and not kwargs.get("quiet_mode", False):
+                if text and last_user and not quiet_mode:
                     _chat_harvest(text, last_user[:600], cfg)
             except Exception:
                 pass
@@ -6208,8 +6212,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self._sse_end()
                 return
             kwargs = self._chat_kwargs(body, cfg)
+            quiet_mode = self._quiet_mode(body, cfg)
             messages, memory_text = self._inject_system_messages(
-                messages, cfg, kwargs.get("pure_chat", False), kwargs.get("quiet_mode", False)
+                messages, cfg, kwargs.get("pure_chat", False), quiet_mode
             )
             if memory_text:
                 kwargs["memory_text"] = memory_text
