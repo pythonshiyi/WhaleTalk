@@ -1,6 +1,6 @@
-# 模块地图（v3.5.0 Web 版）
+# 模块地图（v3.7.0 Web 版）
 
-本文档描述鲸语 WhaleTalk 当前（v3.5.0，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
+本文档描述鲸语 WhaleTalk 当前（v3.7.0，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。v3.6/v3.7 未改变模块布局，仅扩展能力（详见更新记录）。
 
 ## 分层总览
 
@@ -8,10 +8,10 @@
 web_app.py（唯一入口：浏览器 + 托盘 + 快捷方式 + 依赖自检）
     │
     ▼
-api_server.py（本地 HTTP API：REST + SSE，60+ /v1 端点）
+api_server.py（本地 HTTP API：REST + SSE，88 /v1 端点）
     │
     ▼
-deepseek_client.py（能力引擎：DeepSeekClient + 118 工具 + smart_tools）
+deepseek_client.py（能力引擎：DeepSeekClient + 134 工具 + smart_tools）
     │
     ├─ 基础设施：permissions / security / crypto / stores / stats / tokens / persistence
     ├─ 工具底座：net_utils / search_utils / db_utils / pdf_utils / proc_utils / mdparse
@@ -28,13 +28,13 @@ deepseek_client.py（能力引擎：DeepSeekClient + 118 工具 + smart_tools）
 | 模块 | 职责 |
 |---|---|
 | `web_app.py` | 唯一启动入口：启动本地 API、自动打开浏览器、系统托盘常驻、桌面/开始菜单快捷方式、开机自启、单实例、WebUI 自动构建（npm）、Python 依赖自检与自动安装 |
-| `api_server.py` | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/插件/指令库/工作台/大脑/TTS/审计/备份/更新等 60+ 端点；SSE 流式对话；审批/询问/白名单双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
+| `api_server.py` | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/插件/指令库/工作台/大脑/TTS/审计/备份/更新等 88 端点；SSE 流式对话；审批/询问/白名单双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
 
 ### 能力引擎
 
 | 模块 | 职责 |
 |---|---|
-| `deepseek_client.py` | 单体能力引擎（约 1.3 万行）：DeepSeek V4 客户端（thinking/多模态/流式/重试）、118 个 Agent 工具实现、工具注册表（`TOOLS`/`TOOL_CALL_MAP`）、smart_tools 智能调取（能力地图 + `activate_tools` 点菜 + 关键词预激活）、上下文压缩辅助、自我进化工具（`create_evolution`/`self_evolve`） |
+| `deepseek_client.py` | 单体能力引擎（约 1.3 万行）：DeepSeek V4 客户端（thinking/多模态/流式/重试）、134 个 Agent 工具实现、工具注册表（`TOOLS`/`TOOL_CALL_MAP`）、smart_tools 智能调取（能力地图 + `activate_tools` 点菜 + 关键词预激活）、上下文压缩辅助、自我进化工具（`create_evolution`/`self_evolve`）；对话记忆自动写/删/改与大脑双向同步、自动记忆提炼（`auto_memory`） |
 
 > 演进建议：`deepseek_client.py` 已按「工具实现 → 注册表 → 客户端类」分层组织，但仍是单文件。可按领域拆为 `tools/` 包（web/data/doc/media/system），保留顶层薄 facade 做 re-export 兼容，用 `tools/audit_tools.py` 门禁护航。
 
@@ -89,8 +89,8 @@ deepseek_client.py（能力引擎：DeepSeekClient + 118 工具 + smart_tools）
 
 | 模块 | 职责 |
 |---|---|
-| `brainkit.py` | 大脑 CLI：init/mount/unmount/think/remember/archive/restore/merge/export-key/import-key；指纹防篡改、DPAPI 免密密钥体系、LCA 三路合并 |
-| `brain_api.py` | 大脑 → API 适配层（把 CLI 命令包装为 api_server 可调用的纯函数 + 大脑上下文注入） |
+| `brainkit.py` | 大脑 CLI：init/keyring-setup/mount/unmount/heartbeat/think/remember/import-memory/consolidate（睡眠巩固）/goal（目标）/decision（决策日志）/archive/restore/merge/merge-resolve/status/list/diff/export-key/import-key；指纹防篡改、DPAPI 免密密钥体系、RSA 快照签名验签、LCA 三路合并、语义检索（IDF 加权余弦 + 中文 bigram 分词） |
+| `brain_api.py` | 大脑 → API 适配层（把 CLI 命令包装为 api_server 可调用的纯函数 + 大脑上下文注入 + `consolidate_with_llm` LLM 提炼） |
 
 ### 子包
 
@@ -116,7 +116,8 @@ deepseek_client.py（能力引擎：DeepSeekClient + 118 工具 + smart_tools）
 |---|---|
 | `config.json` | 配置（api_key 等敏感字段 DPAPI 加密） |
 | `history/sessions/` | 会话文件（JSON）+ `sessions_index.json` 索引缓存 |
-| `memory.json` | 长期记忆 facts |
+| `memory.json` | 长期记忆 facts（旧格式，v3.7 起自动兼容读取） |
+| `memories/` | 见下方「鲸语大脑」数据说明（大脑目录位于源码同级 `brain/`） |
 | `stats.json` | 用量统计 |
 | `workspace/` | AI 产物工作目录 |
 | `failures.json` / `patterns.json` | 失败模式库 / 成功模式库 |
@@ -124,6 +125,8 @@ deepseek_client.py（能力引擎：DeepSeekClient + 118 工具 + smart_tools）
 | `profiles.json` / `user_tools.json` / `prompts.json` | Profile / 自定义工具 / 指令库 |
 | `archives/` | 上下文压缩归档 |
 | `logs/` | 审计日志 actions.log 等 |
+
+> 鲸语大脑数据（源码同级 `brain/`）：`manifest.json`（指纹/状态）、`memories/memory.jsonl`（v3.7 结构化记忆库）、`thinking_log/`（思考日志）、`archive/`（快照 `brain_v{n}.whale`）、`.keys/`（密钥，DPAPI 免密）、`.lineage.json`（血缘）、`self_model.json`（动态自我模型）、`goals.json`（目标）、`decisions.jsonl`（决策日志）；`.brain_active` 持久化当前大脑，多大脑分支见 `brain-dirs`。
 
 ## 演进建议
 
