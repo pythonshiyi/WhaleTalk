@@ -11998,6 +11998,20 @@ SELF_EVOLUTION_TOOLS = {
     "verify_files",
 }
 
+# 对话模式联网搜索：pure_chat + web_search 时注入的唯二工具（克制注入，保持对话纯粹）。
+# search_web = 通用联网（Bing+360+DDG 聚合）；search_realtime = 实时热点（Hacker News）。
+# 前端「联网搜索」开关默认只给 search_web（覆盖天气/新闻/行情/网页检索等全部通用诉求）。
+WEB_SEARCH_TOOLS = {"search_web", "search_realtime"}
+
+# 联网提示（不写回历史，仅本轮注入）：引导模型在实时/事实类问题先搜再答，普通闲聊不滥搜
+WEB_SEARCH_HINT = (
+    "【联网搜索已开启】你具备实时联网能力：当问题涉及实时信息（今天/近期的天气、新闻、"
+    "股票行情、最新文献、网页内容，或需要核实的事实性断言）时，先调用 search_web 工具搜索"
+    "最新信息，再结合搜索结果回答；若一次搜索信息不足可多次搜索（换关键词/翻页）。"
+    "普通闲聊、无需外部信息的问答直接回答即可，不要为每个问题都搜索。"
+    "搜索可能失败或返回无关结果，此时如实说明，不要编造搜索不到的内容。"
+)
+
 # ===== 智能工具调取（smart_tools）：索引 + 按需激活 =====
 # 完全智能模式不再一次性注入全部工具 schema（≈15k token），
 # 改为：常驻注入精简「工具索引」+ activate_tools 点菜工具；
@@ -12718,6 +12732,7 @@ class DeepSeekClient:
         on_plan=None,
         memory_text=None,
         pure_chat=False,
+        web_search=False,
         on_ask=None,
         on_request_permission=None,
         on_truncated=None,
@@ -12865,8 +12880,14 @@ class DeepSeekClient:
                 ),
             }
         if pure_chat:
-            # 纯对话模式：完全不传 tools schema（避免工具提示词污染对话能力）
-            pass
+            # 纯对话模式：默认完全不传 tools schema（避免工具提示词污染对话能力）。
+            # web_search 开启时仅注入 search_web 这一个联网工具 + 使用提示——
+            # 对话仍保持纯粹（无其他 100+ 工具），但涉及实时信息时可搜索最新数据，大幅减弱幻觉。
+            if web_search:
+                _web_tools = [t for t in all_tools if t["function"]["name"] in WEB_SEARCH_TOOLS]
+                if _web_tools:
+                    kwargs["tools"] = _strictify_tools(_web_tools) if strict_tools else _web_tools
+                    work = work + [{"role": "system", "content": WEB_SEARCH_HINT}]
         elif tools_enabled:
             tools = all_tools
             if enabled_tools is not None:

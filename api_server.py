@@ -6024,6 +6024,8 @@ class _Handler(BaseHTTPRequestHandler):
             "max_tokens": int(body.get("max_tokens") or cfg.get("max_tokens") or 16384),
             "tools_enabled": tools,
             "pure_chat": pure,
+            # 对话模式联网开关：pure_chat 时注入 search_web 等联网工具（克制、仅搜索）
+            "web_search": bool(body.get("web_search", cfg.get("web_search", False))),
             "smart_tools": bool(tools and not pure),
             "stop": cfg.get("stop") or None,
             "logprobs": bool(cfg.get("logprobs")),

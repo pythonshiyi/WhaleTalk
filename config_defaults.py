@@ -5,7 +5,7 @@
 """
 
 # 应用版本号（统一来源：deepseek_client / backup 引用此处）
-VERSION = "3.8.0"
+VERSION = "3.8.1"
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个强大的AI助手，具备以下核心能力：\n"
@@ -272,6 +272,7 @@ DEFAULT_CONFIG = {
     "memory_enabled": True,  # 长期记忆总开关：关闭后停止记忆注入与自动写入（工具仍可手动调用）
     "auto_memory": True,     # 对话回写：每次对话后自动提炼值得记住的写入长期记忆（并同步大脑）
     "pure_chat": False,
+    "web_search": False,  # 对话模式联网开关：开启后纯对话注入 search_web 等联网工具（仅搜索，克制注入）
     # v2 能力层配置
     "inbound_port": 0,        # Webhook 接收端端口（0=关闭）
     "inbound_token": "",      # Webhook 接收端鉴权 token

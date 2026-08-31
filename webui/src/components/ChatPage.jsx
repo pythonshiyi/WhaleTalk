@@ -107,7 +107,7 @@ function buildMessageChain(msgs) {
 }
 
 // ── 真实后端流式对话 ────────────────────────────────
-function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef, chatMode, onFinished, stopSignalRef, onPrompt, setGenState, continueRef, sessionIdRef, msgsRef, toast) {
+function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef, chatMode, webSearch, onFinished, stopSignalRef, onPrompt, setGenState, continueRef, sessionIdRef, msgsRef, toast) {
 
   const updateMsgs = (fn) => {
     setMsgs(fn);
@@ -227,6 +227,8 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
             // 不传 thinking：后端 _chat_kwargs 使用 config.json 的 thinking（控制台/设置选择的档位即时生效）
             mode: chatMode,
             toolsEnabled: chatMode === "task",
+            // 对话模式联网开关：仅对话模式生效（后端 pure_chat 分支注入 search_web）
+            web_search: chatMode === "dialog" && webSearch,
             // 已有会话继续对话时带上会话 id：后端生成完成后自动落盘（前端卸载/断连不丢结果）
             session_id: (sessionIdRef && sessionIdRef.current) || undefined,
             continue_prefix: isContinue,
@@ -582,6 +584,15 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const connRef = React.useRef("auto");
   const stopSignalRef = React.useRef(null);
   const scrollRef = React.useRef(null);
+  // ── 对话模式联网搜索开关（localStorage 持久化）──
+  const [webSearch, setWebSearch] = React.useState(() => localStorage.getItem("whaletalk.webSearch") === "1");
+  const toggleWebSearch = React.useCallback(() => {
+    setWebSearch((v) => {
+      const nv = !v;
+      localStorage.setItem("whaletalk.webSearch", nv ? "1" : "");
+      return nv;
+    });
+  }, []);
   // ── 长会话窗口化渲染（P2）：默认只渲染最近 VIRT_WINDOW 条消息，
   // 顶部哨兵可见时增量加载更早的（替代全量渲染，长会话不卡）。──
   const VIRT_WINDOW = 60;
@@ -637,6 +648,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     historyRef,
     connRef,
     mode,
+    webSearch,
     invokeFinished,
     stopSignalRef,
     setPromptReq,
@@ -1266,6 +1278,16 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                   🚀 任务模式
                 </button>
               </div>
+              {!isTask && (
+                <button
+                  className={`web-switch ${webSearch ? "web-on" : ""}`}
+                  onClick={toggleWebSearch}
+                  title="对话模式联网搜索：开启后 AI 可实时搜索最新信息（天气/新闻/行情/网页），大幅减弱幻觉"
+                >
+                  <span className={`web-dot ${webSearch ? "web-dot-on" : ""}`} />
+                  联网搜索
+                </button>
+              )}
               <span className={`header-chip ${dataMode === "backend" ? "header-chip-brand" : ""}`}>
                 {dataMode === "backend" ? "已连接" : "未连接"}
               </span>

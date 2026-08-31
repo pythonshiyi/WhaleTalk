@@ -1117,6 +1117,29 @@ button {
   box-shadow: 0 0 0 1px rgba(var(--brand-rgb),.3);
 }
 
+/* 对话模式联网搜索开关（仅对话模式显示） */
+.web-switch {
+  display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border-strong); background: var(--bg-2);
+  color: var(--text-3); font-size: var(--fs-xs);
+  padding: 5px 12px; border-radius: var(--r-full); cursor: pointer;
+  transition: all .18s var(--ease); white-space: nowrap;
+}
+.web-switch:hover { color: var(--text-1); border-color: rgba(var(--brand-rgb), .4); }
+.web-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-3); opacity: .55;
+  transition: all .18s var(--ease);
+}
+.web-dot-on {
+  background: var(--ok); opacity: 1;
+  box-shadow: 0 0 0 3px var(--ok-soft), 0 0 8px rgba(16, 185, 129, .5);
+}
+.web-on {
+  color: var(--ok); border-color: rgba(16, 185, 129, .45);
+  background: linear-gradient(135deg, rgba(var(--ok-rgb), .14), rgba(16, 185, 129, .06));
+}
+
 /* ═══ 状态栏 ═════════════════════════════════════ */
 .status-bar {
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);

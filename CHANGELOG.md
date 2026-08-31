@@ -2,6 +2,25 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.1（2026-08-31）—— 🌐 对话模式联网搜索：实时信息一键开启
+
+对话模式新增「联网搜索」开关——纯对话也能搜到最新信息（天气/新闻/行情/网页/文献），**大幅减弱幻觉、扩展能力边界**。
+
+### 新能力
+- **对话模式「联网搜索」开关**（header 模式切换旁，仅对话模式显示，绿色圆点指示状态，localStorage 持久化）：开启后，对话模式的请求注入 `search_web`（Bing+360+DuckDuckGo 聚合）+ `search_realtime`（Hacker News 实时热点）两个**纯搜索只读工具** + 联网使用提示（实时/事实类问题先搜再答、信息不足可换词翻页、搜索失败如实说明不编造）
+- **克制注入**：仅注入联网搜索工具，**不引入其余 100+ 工具**——对话模式保持纯粹；工具卡片展示/流式安全全部复用既有能力（search_web 结果如标题/链接/摘要实时显示在对话流）
+- **任务模式不受影响**：任务模式本就含全部工具，开关不向其注入任何额外工具
+
+### 实现
+- `deepseek_client.chat()` 新增 `web_search` 参数；`pure_chat` 分支开启时注入 `WEB_SEARCH_TOOLS` + `WEB_SEARCH_HINT`（不写回历史，仅本轮生效）
+- `api_server._chat_kwargs` 透传 `body.web_search`（前端 → 后端全链路）
+- `config_defaults` 新增 `web_search: False` 默认配置
+- 前端 `ChatPage.jsx`：联网开关 state（持久化 `whaletalk.webSearch`）+ header UI + 发送 body 带 `web_search`（仅对话模式发送）；`app.css` 新增开关样式（绿色点亮动效）
+
+### 测试
+- 新增 `tests/test_web_search.py`（8 组断言，mock SDK 流式层真实调用 `chat()`）：只注入联网工具、注入提示、对话流正常、纯对话默认不传 tools、工具不可用优雅降级、任务模式不受影响/不额外注入
+- pytest 28 用例回归全绿；前端 vite build 通过（vite 8.2.2）
+
 ## v3.8.0（2026-08-31）—— 🚀 世界级 Markdown 渲染器：所见即所得
 
 手写渲染器全面升级为「解析器 + 渲染器」分离的世界级架构——AI 长回复里的一切格式（嵌套列表/表格对齐/代码高亮/任务框/折叠/脚注/公式/删除线/高亮）**完整还原、所见即所得**。
