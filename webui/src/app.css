@@ -377,6 +377,69 @@ button {
 .md-table-wrap tr:last-child td { border-bottom: none; }
 .md-table-wrap tr:hover td { background: var(--bg-hover); }
 
+/* ── Markdown 增强（v3.8 世界级渲染器）────────── */
+.md h5, .md h6 { font-size: var(--fs-md); font-weight: 600; margin: 10px 0 6px; color: var(--text-2); }
+.md .md-mark { background: var(--warn-soft); color: inherit; padding: 0 2px; border-radius: 3px; }
+.md .md-img { max-width: 100%; border-radius: var(--r-md); margin: 4px 0; display: inline-block; }
+.md .md-math {
+  font-family: var(--font-mono); font-style: italic;
+  background: var(--code-inline-bg); border: 1px solid var(--code-inline-border);
+  padding: 1px 4px; border-radius: 4px; color: var(--brand-strong);
+}
+.md .md-math-block {
+  text-align: center; font-family: var(--font-mono); font-style: italic;
+  background: var(--code-bg); color: var(--code-text);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 14px 16px; margin: 10px 0; overflow-x: auto;
+}
+
+/* 嵌套列表（缩进树 + 任务框） */
+.md-list { margin: 8px 0; padding-left: 24px; }
+.md-list li { margin: 4px 0; line-height: 1.75; }
+.md-list .md-list { margin: 6px 0; }
+.md-list li > .md-li-body { margin-top: 4px; }
+.md-li-body > .md-list { margin: 4px 0; }
+.md-li-body > p { margin: 2px 0; }
+.md-li-body > blockquote, .md-li-body > .md-code-wrap, .md-li-body > .md-table-wrap { margin: 8px 0; }
+.md-task { list-style: none; }
+.md-task-box { margin-right: 7px; vertical-align: -1px; width: 13px; height: 13px; accent-color: var(--brand); cursor: default; }
+
+/* 嵌套引用 */
+.md-quote > .md-quote { margin: 6px 0 0; }
+.md-quote > .md-quote > .md-quote { border-left-color: var(--ai); }
+
+/* details 折叠 */
+.md-details {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  margin: 10px 0; background: var(--bg-2); overflow: hidden;
+}
+.md-details summary {
+  cursor: pointer; padding: 9px 14px; font-weight: 600; font-size: var(--fs-sm);
+  color: var(--text-1); user-select: none; list-style: none;
+  display: flex; align-items: center; gap: 7px;
+}
+.md-details summary::-webkit-details-marker { display: none; }
+.md-details summary::before { content: "▸"; color: var(--brand); transition: transform .18s var(--ease); }
+.md-details[open] summary::before { transform: rotate(90deg); }
+.md-details-body { padding: 2px 14px 10px; border-top: 1px solid var(--border); }
+
+/* 脚注 */
+.md-footnotes { margin-top: 6px; font-size: var(--fs-sm); color: var(--text-2); }
+.md-fn-def { display: flex; gap: 8px; margin: 5px 0; align-items: baseline; }
+.md-fn-ref { color: var(--brand); font-size: 10px; }
+.md-fn-ref a { border-bottom: none; }
+.md-fn-def .md-fn-ref { flex-shrink: 0; }
+
+/* 语法高亮（mdHighlight 输出，均已整体转义） */
+.hl-kw { color: var(--hl-kw); font-weight: 600; }
+.hl-str { color: var(--hl-str); }
+.hl-com { color: var(--hl-com); font-style: italic; }
+.hl-num { color: var(--hl-num); }
+.hl-fn { color: var(--hl-fn); }
+.hl-ty { color: var(--hl-ty); }
+.hl-at { color: var(--hl-at); }
+.hl-tag { color: var(--hl-tag); }
+
 /* 光标 */
 .caret {
   display: inline-block; width: 2px; height: 15px;

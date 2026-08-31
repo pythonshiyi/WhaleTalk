@@ -84,6 +84,15 @@
   --code-inline-border: rgba(140, 165, 255, 0.12);
   --code-bg: #0d1526;
   --code-text: #c9d8f5;
+  /* 语法高亮（代码块恒为深底，用亮色系保证对比度） */
+  --hl-kw: #7dd3fc;
+  --hl-str: #86efac;
+  --hl-com: #64748f;
+  --hl-num: #fbbf24;
+  --hl-fn: #c4b5fd;
+  --hl-ty: #5eead4;
+  --hl-at: #f9a8d4;
+  --hl-tag: #38bdf8;
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-3: 0 20px 60px rgba(0, 0, 0, 0.55);
@@ -122,6 +131,14 @@
   --code-inline-border: rgba(120, 190, 255, 0.14);
   --code-bg: #05263f;
   --code-text: #bfe3ff;
+  --hl-kw: #7cc7ff;
+  --hl-str: #8ee6b8;
+  --hl-com: #5a7fa6;
+  --hl-num: #ffd479;
+  --hl-fn: #c4b5fd;
+  --hl-ty: #6fe3e3;
+  --hl-at: #ffb3d9;
+  --hl-tag: #5cd2ff;
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.5);
   --shadow-3: 0 20px 60px rgba(0, 0, 0, 0.6);
@@ -159,6 +176,14 @@
   --code-inline-border: rgba(2, 132, 199, 0.14);
   --code-bg: #0f1b30;
   --code-text: #c9d8f5;
+  --hl-kw: #7dd3fc;
+  --hl-str: #86efac;
+  --hl-com: #5c7396;
+  --hl-num: #fbbf24;
+  --hl-fn: #c4b5fd;
+  --hl-ty: #5eead4;
+  --hl-at: #f9a8d4;
+  --hl-tag: #38bdf8;
   --chat-glow: rgba(30, 64, 110, 0.03);
   --shadow-1: 0 1px 3px rgba(30, 64, 110, 0.12);
   --shadow-2: 0 10px 28px rgba(30, 64, 110, 0.16);

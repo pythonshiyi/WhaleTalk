@@ -1,11 +1,11 @@
-# 鲸语 WhaleTalk 技术文档（Web 版 · v3.7.3）
+# 鲸语 WhaleTalk 技术文档（Web 版 · v3.8.0）
 
 本文档面向后续维护/开发的 AI 智能体，描述 Web 架构（v3.0+）下的系统结构、数据流、核心约定与踩坑记录。符号名为准，行号随代码演化漂移，本文档不承诺行号。
 
 ## 0. 品牌与版本
 
 - 品牌：鲸语 WhaleTalk（独立产品，与 DeepSeek 官方无关联）。对外展示一律使用品牌名，技术描述可写"基于 DeepSeek API"。
-- **版本单一源**：`config_defaults.VERSION`（当前 3.7.3）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
+- **版本单一源**：`config_defaults.VERSION`（当前 3.8.0）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
 - 入口形态：**纯 Web + 托盘常驻**。浏览器是唯一界面；无 pywebview 原生窗口（desktop.py 已废弃）。
 
 ## 1. 项目概览
@@ -197,6 +197,25 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 - 断连感知：`watchBackend` 5s 心跳探测，状态翻转回调；BackendBanner + 手动重连
 - 消息链构造 `buildMessageChain`：tools 模式必须完整回传 assistant(reasoning_content + tool_calls) → tool 结果（官方规范）
 - TTS：`ttsUtil.js`（合成 + 朗读 + barge-in 说话即打断，权限门控默认关闭）
+
+### 16.1 Markdown 渲染管线（v3.8.0 世界级渲染器）
+
+纯数据 AST 三层管线，零依赖、流式安全、所见即所得：
+
+```
+text → longTextUtil.unwrapLongText（解除 @long-text 包装）
+     → mdParser.parseMarkdown → { blocks }            （块级 AST）
+     → Markdown.jsx <Block> 分发                      （嵌套 ul/ol、任务框、引用、details、表格、代码、数学、脚注、分隔线）
+     → mdInline.parseInline → tokens → <Tokens>       （行内任意嵌套）
+     → mdHighlight.highlight（dangerouslySetInnerHTML，整体转义）
+```
+
+关键约定：
+- **AST 与渲染分离**：三个解析模块是纯 JS（node 可直跑单测），组件只做消费
+- **流式安全**：未闭合代码围栏产出 `{t:'code-open'}`；组件 `deferCode=true` 时跳过，流结束由父组件补渲染；其余未闭合标记原样输出
+- **安全**：所有文本先 token 化再渲染；代码高亮输出整体转义；`safeUrl` 白名单拒绝 `javascript:`；`<script>` 注入经 SSR 断言锁定
+- **防 OOM 铁律**：`parseInline` 递归每层必须 `new RegExp(TOKEN_RE_SRC, "g")` 独立实例——共享全局正则会被内层 exec 破坏 `lastIndex` 导致死循环（历史 OOM 根因）；递归深度上限 5
+- **SSR 测试基建（vite 8 特有）**：vite 8 的 `ssrLoadModule` 会经 module-runner 内联求值 CJS 依赖（react），导致双实例 `Invalid hook call`。正解：`tests/ssrRender.mjs` 用 vite **ssr build**（`build.ssr=true` + `write:false` + `rollupOptions.external` 声明 react/react-dom/server）打包组件为 ESM bundle 落盘项目内（必须位于项目内，否则 node 无法向上解析 react），再原生 `import()`——node 原生 import 与 CJS `require` 共享同一 react 单例（react 是 CJS 包）
 
 ## 17. 工程实践
 
