@@ -42,3 +42,4 @@ brain_seed.whale
 
 # ===== 前端依赖 =====
 webui/node_modules/
+webapp_*.log
