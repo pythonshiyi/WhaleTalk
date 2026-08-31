@@ -6026,6 +6026,8 @@ class _Handler(BaseHTTPRequestHandler):
             "pure_chat": pure,
             # 对话模式联网开关：pure_chat 时注入 search_web 等联网工具（克制、仅搜索）
             "web_search": bool(body.get("web_search", cfg.get("web_search", False))),
+            # 纯净对话总开关：请求级覆盖，开启后注入侧三路个性上下文全停、写回侧对话记忆提炼跳过
+            "quiet_mode": bool(body.get("quiet_mode", cfg.get("quiet_mode", False))),
             "smart_tools": bool(tools and not pure),
             "stop": cfg.get("stop") or None,
             "logprobs": bool(cfg.get("logprobs")),
@@ -6042,7 +6044,7 @@ class _Handler(BaseHTTPRequestHandler):
             "max_tool_rounds": int(cfg.get("max_tool_rounds") or 100),
         }
 
-    def _inject_system_messages(self, messages, cfg, pure_chat):
+    def _inject_system_messages(self, messages, cfg, pure_chat, quiet_mode=False):
         import config_defaults
         import stores as stores_mod
         if any(isinstance(m, dict) and m.get("role") == "system" for m in messages):
@@ -6053,31 +6055,33 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             prompt = str(cfg.get("system_prompt") or config_defaults.DEFAULT_SYSTEM_PROMPT)
             parts = [config_defaults.TASK_QUALITY_GUIDE]
-        try:
-            mem = _memory_full()
-            # 记忆开关：config.memory_enabled 关闭时完全不注入（省 token + 稳定前缀缓存）
-            if cfg.get("memory_enabled", True):
-                facts = [f["text"] for f in mem.get("facts", []) if f.get("text")]
-                if facts:
-                    parts.append("[长期记忆]\n" + "\n".join("- " + t for t in facts[-6:]))
-        except Exception:
-            pass
-        # 核心自我状态注入（跨会话连续自我；有实质内容才注入，空则不占 token）
-        try:
-            import deepseek_client as dc
-            sp = dc.self_profile("get")
-            if sp and sp.strip() and "核心自我状态]" in sp and "为空" not in sp:
-                parts.append(sp)
-        except Exception:
-            pass
-        # 鲸语大脑上下文注入（挂载大脑后，AI 对话自动携带身份/断点/近期记忆）
-        try:
-            import brain_api
-            bc = brain_api.brain_context()
-            if bc:
-                parts.append(bc)
-        except Exception:
-            pass
+        # 纯净对话总开关：开启后跳过以下全部个性上下文（长期记忆/核心自我/大脑），AI 只带基础提示
+        if not quiet_mode:
+            try:
+                mem = _memory_full()
+                # 记忆开关：config.memory_enabled 关闭时完全不注入（省 token + 稳定前缀缓存）
+                if cfg.get("memory_enabled", True):
+                    facts = [f["text"] for f in mem.get("facts", []) if f.get("text")]
+                    if facts:
+                        parts.append("[长期记忆]\n" + "\n".join("- " + t for t in facts[-6:]))
+            except Exception:
+                pass
+            # 核心自我状态注入（跨会话连续自我；有实质内容才注入，空则不占 token）
+            try:
+                import deepseek_client as dc
+                sp = dc.self_profile("get")
+                if sp and sp.strip() and "核心自我状态]" in sp and "为空" not in sp:
+                    parts.append(sp)
+            except Exception:
+                pass
+            # 鲸语大脑上下文注入（挂载大脑后，AI 对话自动携带身份/断点/近期记忆）
+            try:
+                import brain_api
+                bc = brain_api.brain_context()
+                if bc:
+                    parts.append(bc)
+            except Exception:
+                pass
         active_dir = str(cfg.get("active_dir") or "").strip()
         if active_dir and os.path.isdir(active_dir):
             parts.append(
@@ -6141,7 +6145,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": kb})
                 return
             kwargs = self._chat_kwargs(body, cfg)
-            messages, memory_text = self._inject_system_messages(messages, cfg, kwargs.get("pure_chat", False))
+            messages, memory_text = self._inject_system_messages(
+                messages, cfg, kwargs.get("pure_chat", False), kwargs.get("quiet_mode", False)
+            )
             if memory_text:
                 kwargs["memory_text"] = memory_text
             try:
@@ -6165,7 +6171,7 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 last_user = next((m.get("content") for m in reversed(messages)
                                   if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
-                if text and last_user:
+                if text and last_user and not kwargs.get("quiet_mode", False):
                     _chat_harvest(text, last_user[:600], cfg)
             except Exception:
                 pass
@@ -6202,7 +6208,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self._sse_end()
                 return
             kwargs = self._chat_kwargs(body, cfg)
-            messages, memory_text = self._inject_system_messages(messages, cfg, kwargs.get("pure_chat", False))
+            messages, memory_text = self._inject_system_messages(
+                messages, cfg, kwargs.get("pure_chat", False), kwargs.get("quiet_mode", False)
+            )
             if memory_text:
                 kwargs["memory_text"] = memory_text
             try:

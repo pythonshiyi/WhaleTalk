@@ -89,4 +89,28 @@ const ok = (cond, name) => {
   ok(done.some((x) => x[0] === "d"), "done 事件正常收尾");
 }
 
+// 6. 纯净对话开关：quiet_mode:true 原样进请求体（v3.8.3 防再次静默丢字段）
+{
+  const { body } = await run({ messages: [], mode: "dialog", quiet_mode: true });
+  ok(body.quiet_mode === true, "quiet_mode:true 透传到请求体");
+}
+
+// 7. 纯净对话关闭：quiet_mode:false 透传
+{
+  const { body } = await run({ messages: [], mode: "dialog", quiet_mode: false });
+  ok(body.quiet_mode === false, "quiet_mode:false 透传到请求体");
+}
+
+// 8. 未传 quiet_mode（旧调用方）：不带该字段，后端走默认 False
+{
+  const { body } = await run({ messages: [], mode: "task" });
+  ok(body.quiet_mode === undefined, "未传 quiet_mode 时请求体不带该字段");
+}
+
+// 9. quiet_mode 与 web_search 共存互不影响
+{
+  const { body } = await run({ messages: [], mode: "dialog", quiet_mode: true, web_search: true });
+  ok(body.quiet_mode === true && body.web_search === true, "quiet_mode 与 web_search 同时透传互不覆盖");
+}
+
 console.log(`\napi.streamChat 透传测试：${n} 组断言全绿`);

@@ -802,7 +802,7 @@ function AuditBlock() {
 }
 
 // ── 设置页主组件 ────────────────────────────────────
-export default function SettingsPage({ onGoPrompts }) {
+export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { density, setDensity, fontSize, setFontSize } = React.useContext(DisplayContext);
   const [mode, setMode] = React.useState(() => {
@@ -1162,6 +1162,7 @@ export default function SettingsPage({ onGoPrompts }) {
                 <Toggle on={cfg.autostart !== false} label="🚀 开机自启" desc="注册 HKCU Run 开机自动启动（无窗口静默进入托盘）" onClick={() => saveField({ autostart: cfg.autostart === false })} />
                 <Toggle on={cfg.privacy_mode !== false} label="🔒 隐私模式" desc="不写快照/会话/记忆/统计" onClick={() => saveField({ privacy_mode: cfg.privacy_mode === false })} />
                 <Toggle on={cfg.memory_enabled !== false} label="🧠 长期记忆" desc="跨会话记忆：关闭后不注入记忆、AI 不再自动写入（记忆可随时用工具管理）" onClick={() => saveField({ memory_enabled: cfg.memory_enabled === false })} />
+                <Toggle on={quietMode} label="🧘 纯净对话" desc="一键关闭整套个性能力：不注入长期记忆/核心自我/大脑，AI 以全新姿态应答，也不自动回写记忆（对话页 header 有快捷开关）" onClick={() => { onToggleQuiet(); saveField({ quiet_mode: !quietMode }); }} />
                 <VoiceSettingsBlock cfg={cfg} saveField={saveField} onTip={setTip} />
                 <Row label="💵 本月预算（元）" desc="0=不限">
                   <NumInput min={0} max={10000} step={50} value={cfg.monthly_budget || 0} onChange={(v) => saveField({ monthly_budget: v })} />

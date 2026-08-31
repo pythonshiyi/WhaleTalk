@@ -107,7 +107,7 @@ function buildMessageChain(msgs) {
 }
 
 // ── 真实后端流式对话 ────────────────────────────────
-function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef, chatMode, webSearch, onFinished, stopSignalRef, onPrompt, setGenState, continueRef, sessionIdRef, msgsRef, toast) {
+function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef, chatMode, webSearch, quietMode, onFinished, stopSignalRef, onPrompt, setGenState, continueRef, sessionIdRef, msgsRef, toast) {
 
   const updateMsgs = (fn) => {
     setMsgs(fn);
@@ -229,6 +229,8 @@ function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef,
             toolsEnabled: chatMode === "task",
             // 对话模式联网开关：仅对话模式生效（后端 pure_chat 分支注入 search_web）
             web_search: chatMode === "dialog" && webSearch,
+            // 纯净对话总开关：开启后后端停止注入长期记忆/核心自我/大脑，也不自动回写记忆
+            quiet_mode: quietMode,
             // 已有会话继续对话时带上会话 id：后端生成完成后自动落盘（前端卸载/断连不丢结果）
             session_id: (sessionIdRef && sessionIdRef.current) || undefined,
             continue_prefix: isContinue,
@@ -518,7 +520,7 @@ function useDataSources() {
   return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr, peakInfo };
 }
 
-export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone, openSessionId, onOpenSessionDone }) {
+export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone, openSessionId, onOpenSessionDone, quietMode, onToggleQuiet }) {
   const { mode, switchMode } = React.useContext(ModeContext);
   const { density, fontSize } = React.useContext(DisplayContext);
   const { flash } = React.useContext(FlashContext);
@@ -649,6 +651,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     connRef,
     mode,
     webSearch,
+    quietMode,
     invokeFinished,
     stopSignalRef,
     setPromptReq,
@@ -1288,6 +1291,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                   联网搜索
                 </button>
               )}
+              <button
+                className={`web-switch ${quietMode ? "web-on" : ""}`}
+                onClick={onToggleQuiet}
+                title="纯净对话：开启后不注入长期记忆/核心自我/大脑，AI 以全新姿态应答，也不会自动写入记忆（设置 → 高级 可同步配置）"
+              >
+                <span className={`web-dot ${quietMode ? "web-dot-on" : ""}`} />
+                纯净对话
+              </button>
               <span className={`header-chip ${dataMode === "backend" ? "header-chip-brand" : ""}`}>
                 {dataMode === "backend" ? "已连接" : "未连接"}
               </span>

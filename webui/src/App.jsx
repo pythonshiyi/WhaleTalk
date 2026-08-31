@@ -76,6 +76,23 @@ export default function App() {
     }
   });
   const [mode, setMode] = React.useState("task");
+  // 纯净对话总开关：对话页 header 与设置页双入口共享同一状态（localStorage 持久化）
+  const [quietMode, setQuietMode] = React.useState(() => {
+    try {
+      return localStorage.getItem("whaletalk.quietMode") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleQuiet = React.useCallback(() => {
+    setQuietMode((v) => {
+      const nv = !v;
+      try {
+        localStorage.setItem("whaletalk.quietMode", nv ? "1" : "");
+      } catch {}
+      return nv;
+    });
+  }, []);
   // 首次启动引导：true 渲染全屏依赖安装向导，装完才进入主界面
   const [firstRun, setFirstRun] = React.useState(null);
   // 指令库/工作台「应用」→ 把指令内容带进会话输入框（试跑用）
@@ -191,6 +208,8 @@ export default function App() {
                         onApplyDone={() => setApplyPrompt(null)}
                         openSessionId={openSessionId}
                         onOpenSessionDone={() => setOpenSessionId(null)}
+                        quietMode={quietMode}
+                        onToggleQuiet={toggleQuiet}
                       />
                     )}
                     {page === "workbench" && (
@@ -224,7 +243,13 @@ export default function App() {
                     )}
                     {page === "brain" && <BrainPage />}
                     {page === "autonomy" && <AutonomyPage />}
-                    {page === "settings" && <SettingsPage onGoPrompts={() => setPage("prompts")} />}
+                    {page === "settings" && (
+                      <SettingsPage
+                        onGoPrompts={() => setPage("prompts")}
+                        quietMode={quietMode}
+                        onToggleQuiet={toggleQuiet}
+                      />
+                    )}
                   </ErrorBoundary>
                 </main>
               </div>

@@ -2,6 +2,33 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（2026-08-31）—— 🧘 纯净对话：一键关闭整套个性能力
+
+新增「纯净对话」总开关——AI 随时挂着「大脑」（长期记忆 + 核心自我状态 + 鲸语大脑上下文三路注入），用户想安静执行一段不被打扰的对话时，记忆/大脑的存在可能干扰最终结果。现在一键即可让 AI 以全新姿态应答。
+
+### 三路个性上下文（此前只有一路能关）
+- **长期记忆**（`memory.json` 最近 6 条事实注入）——已有 `memory_enabled` 开关（设置 → 高级 → 🧠 长期记忆）
+- **核心自我状态**（`self_profile` 跨会话连续自我注入）——**此前无条件注入、无开关**
+- **鲸语大脑上下文**（`brain_context` 身份/断点/进行中目标/近期记忆 Top4 注入）——**此前无条件注入、无开关**
+
+### 新能力
+- **「纯净对话」总开关**（对话页 header 模式切换旁，随时一键切换；设置 → 通知与安全 → 🧘 纯净对话 双入口共享同一状态，localStorage + config.json 双持久化）
+- 开启后**注入全停**：三路个性上下文（长期记忆/核心自我/大脑）全部不注入，AI 只带基础系统提示，以全新姿态应答
+- 开启后**回写全停**：对话结束不再自动提炼写入长期记忆（`_chat_harvest` 跳过）
+- 与既有开关正交：`memory_enabled` 只管记忆一路，`quiet_mode` 是总闸；任务模式同样生效
+
+### 实现
+- `config_defaults` 新增 `quiet_mode: False` 默认配置；`VERSION → 3.8.3`
+- `api_server._chat_kwargs` 透传 `body.quiet_mode`（请求级覆盖，body 优先、cfg 兜底）
+- `api_server._inject_system_messages` 增加 `quiet_mode` 参数：开启时跳过记忆/自我/大脑三路注入（关闭时保持原行为）
+- `api_server._handle_chat`：`quiet_mode` 时跳过 `_chat_harvest` 对话回写（流式路径本就无回写，只需注入门控）
+- 前端：`App.jsx` 挂全局 `quietMode` state（localStorage `whaletalk.quietMode`）双入口共享；`ChatPage.jsx` header 加「纯净对话」开关 + 发送 body 带 `quiet_mode`；`SettingsPage.jsx` 通知与安全页加「🧘 纯净对话」Toggle（联动保存 `quiet_mode` 配置）；`api.js` `streamChat` 解构 + 请求体补 `quiet_mode`（吸取 v3.8.2 静默丢字段教训，三处一致）
+
+### 测试
+- 新增 `tests/test_quiet_mode.py`（15 组断言）：开启后三路全停、关闭时正常注入、`memory_enabled` 与 `quiet_mode` 正交、`_chat_kwargs` body/cfg 优先级、任务模式同样生效
+- `apiStreamChat.test.mjs` 新增 4 组 `quiet_mode` 透传断言（共 13 组全绿）
+- vite build 通过；pytest 既有用例全绿
+
 ## v3.8.2（2026-08-31）—— 🐛 修复联网开关失效：web_search 字段在 api 层被静默丢弃
 
 **症状**：对话模式打开「联网搜索」开关后，AI 仍回答「我的知识截止日期是 2024 年 7 月，无法获取实时信息」——开关看似生效（UI 点亮）但实际未起作用。

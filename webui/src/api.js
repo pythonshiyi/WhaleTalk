@@ -166,14 +166,14 @@ async function api(path, opts = {}) {
 //             onTool({name,args,result}), onUsage(usage), onDone(), onError(msg) }
 // signal: AbortController.signal（停止生成）
 // session_id: 已有会话继续对话时携带，后端生成完成后自动落盘（前端卸载/断连不丢结果）
-export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, continue_prefix, session_id }, handlers, signal) {
+export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id }, handlers, signal) {
   const r = await fetch(`${getBase()}/v1/chat/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${getToken()}`,
     },
-    body: JSON.stringify({ messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, continue_prefix, session_id }),
+    body: JSON.stringify({ messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id }),
     signal,
   });
   if (!r.ok || !r.body) throw new Error(`chat/stream → ${r.status}`);
