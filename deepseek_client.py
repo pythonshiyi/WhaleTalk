@@ -606,75 +606,6 @@ JSON_HINT_MESSAGE = (
         {
             "type": "function",
             "function": {
-                "name": "get_date",
-                "description": "获取当前日期、具体时间与本地时区（如 2026-08-03 15:30:00 CST）",
-                "parameters": {"type": "object", "properties": {}},
-            },
-        },
-    groups=['🔧 系统与基础'],
-    phrases='获取当前日期/时间',
-    preactivate=(('几号', '现在几点', '日期时间', '今天是几号'),),
-)
-def get_date():
-    """获取当前日期、具体时间与本地时区。"""
-    now = datetime.now().astimezone()
-    tz_name = now.tzinfo.tzname(now) if now.tzinfo else "?"
-    return f"{now:%Y-%m-%d %H:%M:%S} {tz_name}"
-
-
-@tool(
-        {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "获取指定城市某日期的天气（date 仅支持今天与近 3 天预报）",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {"type": "string", "description": "城市名称"},
-                        "date": {"type": "string", "description": "日期，格式 YYYY-mm-dd（今天或未来 3 天内；留空为今天）"},
-                    },
-                    "required": ["location", "date"],
-                },
-            },
-        },
-    groups=['🔧 系统与基础'],
-    phrases='查询天气',
-    preactivate=(('天气', '气温', '台风', '预报'),),
-)
-def get_weather(location, date):
-    """查询城市天气。date（YYYY-mm-dd）传给 wttr.in（仅支持今天与近 3 天预报，
-    更早/更晚的日期返回错误，避免把过期预报当真）。"""
-    loc = str(location or "").strip()
-    if not loc:
-        return "错误：location 必填（城市名称）"
-    d = str(date or "").strip()
-    base = f"{loc} {d}" if d else loc
-    url = f"https://wttr.in/{quote(loc)}?format=j1&lang=zh"
-    if d:
-        url += f"&date={quote(d)}"
-    try:
-        resp = _http_client().get(url, timeout=WEATHER_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        cur = (data.get("current_condition") or [{}])[0]
-        temp = cur.get("temp_C") or "?"
-        desc = cur.get("lang_zh") or []
-        if desc and desc[0].get("value"):
-            text = desc[0]["value"]
-        else:
-            text = ((cur.get("weatherDesc") or [{}])[0].get("value") or "未知")
-        return f"{base} 天气：{text}，气温 {temp}°C"
-    except Exception as e:
-        # 不返回编造的"模拟数据"——AI 会把假天气当真用于决策
-        logging.warning("天气查询失败: %s", e)
-        return f"错误：天气查询失败（{e}），请稍后重试或改用其他方式获取天气"
-
-
-@tool(
-        {
-            "type": "function",
-            "function": {
                 "name": "run_python",
                 "description": "在隔离的 Python 子进程中执行代码（默认 -S 不加载第三方库、无网络库）；with_site=true 时加载已安装的第三方库并可访问外网（httpx/requests 等），需要新库时先调用 pip_install 安装",
                 "parameters": {
@@ -2482,131 +2413,6 @@ def database_query_postgres(connection="default", sql="", max_rows=20):
                 pass
     except Exception as e:
         return f"错误：PostgreSQL 查询失败: {e}"
-
-
-@tool(
-        {
-            "type": "function",
-            "function": {
-                "name": "read_csv",
-                "description": "读取 CSV 文件（允许目录内），返回表格文本，可指定分隔符与行数上限",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "CSV 文件绝对路径"},
-                        "max_rows": {"type": "integer", "description": "可选：最多返回行数（默认 100）"},
-                        "delimiter": {"type": "string", "description": "可选：分隔符（默认逗号）"},
-                    },
-                    "required": ["path"],
-                },
-            },
-        },
-    groups=['📊 数据与文档'],
-    phrases='读 CSV',
-    preactivate=(('表格', 'excel', 'csv', '报表'),),
-)
-def read_csv(path, max_rows=100, delimiter=","):
-    """读取 CSV 文件（允许目录内），返回表格文本，可指定分隔符与行数上限。"""
-    if not path or not str(path).strip():
-        return "错误：path 必填"
-    p = permissions.resolve(path)
-    if not p or not os.path.isfile(p):
-        return f"错误：文件不存在：{p}"
-    ok, reason = permissions.check_filesystem(p, write=False)
-    if not ok:
-        return reason
-    import csv as _csv
-
-    try:
-        limit = max(1, min(500, int(max_rows or 100)))
-    except (TypeError, ValueError):
-        limit = 100
-    try:
-        delim = str(delimiter or ",")
-        if len(delim) != 1:
-            return "错误：delimiter 必须是单个字符（如 , ; | \\t）"
-        if delim == "\\t":
-            delim = "\t"
-        with open(p, "r", encoding="utf-8-sig", errors="replace", newline="") as f:
-            rows = list(itertools.islice(_csv.reader(f, delimiter=delim), limit))
-        if not rows:
-            return "（空文件）"
-        # 列宽截断：超宽单元格（minified JSON/长 URL）会撑爆上下文，单格限 100 字符
-        rows = [
-            [str(c)[:_TABLE_CELL_MAX] + ("…" if len(str(c)) > _TABLE_CELL_MAX else "") for c in r]
-            for r in rows
-        ]
-        widths = []
-        for c in range(max(len(r) for r in rows)):
-            widths.append(max(len(r[c]) if c < len(r) else 0 for r in rows))
-        lines = []
-        for r in rows:
-            cells = [r[c].ljust(widths[c]) if c < len(r) else "" for c in range(len(widths))]
-            lines.append(" | ".join(cells))
-        total = "…" if len(rows) >= limit else ""
-        return "\n".join(lines) + (f"\n[前 {limit} 行{total}]" if len(rows) >= limit else "")
-    except Exception as e:
-        return f"错误：读取 CSV 失败: {e}"
-
-
-@tool(
-        {
-            "type": "function",
-            "function": {
-                "name": "write_csv",
-                "description": "写入 CSV 文件。rows 传 JSON 数组：[[v,v],...] 或 [{\"列\":值},...]",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "输出文件绝对路径"},
-                        "rows": {"type": "array", "items": {}, "description": "数据行（数组的数组，或对象数组）"},
-                        "headers": {"type": "string", "description": "可选：表头，逗号分隔"},
-                    },
-                    "required": ["path", "rows"],
-                },
-            },
-        },
-    groups=['📊 数据与文档'],
-    phrases='写 CSV',
-    preactivate=(('写csv', '导出csv', '存成csv'),),
-)
-def write_csv(path, rows, headers=""):
-    """写入 CSV 文件。rows 为 JSON 数组：[[v,v],...] 或 [{"col":v},...]；headers 逗号分隔。"""
-    if not path or not str(path).strip():
-        return "错误：path 必填"
-    if not isinstance(rows, list):
-        return "错误：rows 必须是非空数组"
-    p = permissions.resolve(path)
-    if not p:
-        return "错误：路径无效"
-    ok, reason = permissions.check_filesystem(p, write=True)
-    if not ok:
-        return reason
-    import csv as _csv
-
-    try:
-        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
-        if rows and isinstance(rows[0], dict):
-            cols = [h.strip() for h in str(headers or "").split(",") if h.strip()] or list(rows[0].keys())
-            # 混合 dict/非 dict 行健壮化：非 dict 行按空字典处理（防中间夹杂标量崩溃）
-            data = [
-                [row.get(c, "") for c in cols] if isinstance(row, dict) else [""] * len(cols)
-                for row in rows
-            ]
-        else:
-            cols = [h.strip() for h in str(headers or "").split(",") if h.strip()]
-            data = [
-                [str(x) for x in row] if isinstance(row, (list, tuple)) else [str(row)]
-                for row in rows
-            ]
-        with open(p, "w", encoding="utf-8-sig", newline="") as f:
-            w = _csv.writer(f)
-            if cols:
-                w.writerow(cols)
-            w.writerows(data)
-        return f"已写入 CSV 至 {p}（{len(data)} 行）"
-    except Exception as e:
-        return f"错误：写入 CSV 失败: {e}"
 
 
 @tool(
@@ -12478,6 +12284,13 @@ register_tool(
     groups=['🔧 系统与基础'],
     phrases='请求权限（白名单）',
 )
+
+# ===== P0-1 巨石拆分：工具域模块（agent_tools/）=====
+# 共享基建（WEATHER_TIMEOUT 等常量、net_utils/db_utils 等 import 别名）已全部
+# 定义完毕，此时导入 agent_tools 才能安全解析域模块顶层的
+# `from deepseek_client import ...`；域模块顶层执行 @tool() 注册，
+# `import *` 同时按 __all__ re-export 工具名（dc.get_date 等旧访问路径不变）。
+from agent_tools import *  # noqa: F401,F403
 
 _TOOL_ORDER = [
     'get_date', 'ask_user', 'request_permission', 'write_memory', 'self_profile', 'read_memory', 'delete_memory', 'update_memory',

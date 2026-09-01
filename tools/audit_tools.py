@@ -40,6 +40,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "deepseek_client.py"
+TOOL_DIR = REPO_ROOT / "agent_tools"
 PERM = REPO_ROOT / "permissions.py"
 REPORTS_DIR = REPO_ROOT / "tools" / "reports"
 OUT_TXT = REPORTS_DIR / "tool_audit.txt"
@@ -48,6 +49,14 @@ OUT_JSON = REPORTS_DIR / "tool_audit.json"
 # P1-3 迁移后六层由 @tool() 声明生成，AST 重建（不 import 模块，CI 无依赖）
 sys.path.insert(0, str(REPO_ROOT))
 import toolkit
+
+
+def audit_source_files():
+    """P0-1 拆分：主文件 + agent_tools/ 域模块（不含 __init__ 聚合文件）。"""
+    files = [SRC]
+    if TOOL_DIR.is_dir():
+        files += [p for p in sorted(TOOL_DIR.glob("*.py")) if p.name != "__init__.py"]
+    return files
 
 # ── 描述质量扫描（warn 级，命中仅提示，需人工甄别是否真误导）──
 # 用"短语 + 正则"而非单字/泛词匹配：早期版本用 ["一般","建议","可能","通常",
@@ -91,24 +100,27 @@ KNOWN_ALIASES = {
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     strict = "--strict" in argv
-    src = SRC.read_text(encoding="utf-8")
-    tree = ast.parse(src)
+    src_files = audit_source_files()
+    src = src_files[0].read_text(encoding="utf-8")
 
-    # ── 1. 函数签名 ──
+    # ── 1. 函数签名（主文件 + agent_tools 域模块）──
     func_params = {}
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            names = [a.arg for a in node.args.posonlyargs] + \
-                    [a.arg for a in node.args.args] + \
-                    [a.arg for a in node.args.kwonlyargs]
-            if node.args.vararg:
-                names.append("*" + node.args.vararg.arg)
-            if node.args.kwarg:
-                names.append("**" + node.args.kwarg.arg)
-            func_params[node.name] = names
+    for pf in src_files:
+        tree = ast.parse(pf.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names = [a.arg for a in node.args.posonlyargs] + \
+                        [a.arg for a in node.args.args] + \
+                        [a.arg for a in node.args.kwonlyargs]
+                if node.args.vararg:
+                    names.append("*" + node.args.vararg.arg)
+                if node.args.kwarg:
+                    names.append("**" + node.args.kwarg.arg)
+                func_params[node.name] = names
 
     # ── 2. 六层数据：P1-3 迁移后由 @tool() 声明生成，AST 重建 ──
-    layers = toolkit.rebuild_layers(src)
+    layers = toolkit.rebuild_layers(
+        src, *[p.read_text(encoding="utf-8") for p in src_files[1:]])
     tools = layers["TOOLS"]
     call_map = layers["TOOL_CALL_MAP"]          # 值 = 实现函数名（字符串）或 None
     phrases = layers["_TOOL_ACTION_PHRASES"]

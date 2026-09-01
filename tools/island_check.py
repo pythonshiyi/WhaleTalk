@@ -28,6 +28,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DC = REPO_ROOT / "deepseek_client.py"
+TOOL_DIR = REPO_ROOT / "agent_tools"
 AS = REPO_ROOT / "api_server.py"
 CFG = REPO_ROOT / "config.json"
 CD = REPO_ROOT / "config_defaults.py"
@@ -42,6 +43,13 @@ CALLBACK_TOOLS = {"ask_user", "request_permission"}
 
 def _parse(path):
     return ast.parse(path.read_text(encoding="utf-8"))
+
+
+def _tool_files():
+    """P0-1 拆分：agent_tools/ 域模块文件（不含 __init__ 聚合文件）。"""
+    if not TOOL_DIR.is_dir():
+        return []
+    return [p for p in sorted(TOOL_DIR.glob("*.py")) if p.name != "__init__.py"]
 
 
 def _get_assign(tree, name):
@@ -80,12 +88,18 @@ def main(argv=None):
     strict = "--strict" in argv
 
     dc_tree = _parse(DC)
-    layers = toolkit.rebuild_layers(DC.read_text(encoding="utf-8"))
+    tool_files = [DC] + _tool_files()
+    layers = toolkit.rebuild_layers(
+        DC.read_text(encoding="utf-8"),
+        *[p.read_text(encoding="utf-8") for p in _tool_files()],
+    )
     tool_names = {t["function"]["name"] for t in layers["TOOLS"]}
 
     call_map = layers["TOOL_CALL_MAP"]
-    defined = {n.name for n in ast.walk(dc_tree)
-               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    defined = set()
+    for pf in tool_files:
+        defined |= {n.name for n in ast.walk(_parse(pf))
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
     group_members = {m for _, ms in layers["TOOL_GROUPS"] for m in ms}
     phrases = set(layers["_TOOL_ACTION_PHRASES"])
     pre_covered = {t for _, ts in layers["_PREACTIVATE_HINTS"] for t in ts}

@@ -2,6 +2,21 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🧩 P0-1 巨石拆分首批（agent_tools/ 域模块）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。P0-1 路线的第一批落地：把 `deepseek_client.py`（13,889 行巨石）的工具定义按域拆出，建立可复制、门禁护航的拆分模式。
+
+### 变更
+- **新增 `agent_tools/` 运行时工具域包**：`tool_basic.py`（🔧 系统与基础：`get_date`/`get_weather`）、`tool_data.py`（📊 数据与文档：`read_csv`/`write_csv`）——装饰器 + 函数体从主文件原样迁出，顶层 `@tool()` 注册；`__init__.py` 聚合并显式 `__all__` re-export 工具名，**`dc.get_date` 等旧访问路径不变**（外部仅经 `TOOL_CALL_MAP` 动态调用，无业务代码直接依赖）
+- **`deepseek_client.py` 薄化 −187 行**：保留全部共享基建（常量/辅助/import 别名）+ `_TOOL_ORDER`/`_GROUP_ORDER`/`_HINT_ORDER` 顺序常量 + 六层构建；在共享基建定义完成后、六层构建前执行 `from agent_tools import *`（加载顺序契约：域模块顶层 `from deepseek_client import WEATHER_TIMEOUT` 可安全解析）
+- **`toolkit.rebuild_layers` 支持多文件**：`rebuild_layers(source_text, *extra_sources)`——@tool/register_tool 跨文件收集，顺序常量只从主文件顶层读取（门禁的 AST 重建与实跑等价）
+- **三门禁多文件适配**：`audit_tools.py`（函数签名收集 + 六层重建均扫主文件 + `agent_tools/`）、`island_check.py`（`defined` 函数集合同样多文件）、`validate_tools.py`（六层重建传多文件）
+- **`WhaleTalk.spec`**：`hiddenimports` 增加 `collect_submodules('agent_tools')`——PyInstaller 无法静态发现 `import *` 的子模块，不收集则打包后工具注册缺失
+
+### 回归
+- 新增 `tests/test_tool_split.py`（6 用例）：re-export 可见性、六层完整性（TOOLS/GROUPS/PHRASES/PREACTIVATE + CALL_MAP 指向同一函数对象）、行为回归（get_date 日期格式 / get_weather 参数校验分支 / CSV 往返）、`rebuild_layers` 多文件重建与运行时六层**顺序级一致**
+- pytest **70 passed**（64 原有 + 6 新增）；四工具门禁全绿（audit `--strict` error 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3）；进程内冒烟确认 TOOLS 仍 135、`write_csv` 归属 `agent_tools.tool_data`、CALL_MAP 指向同一函数对象
+
 ## v3.8.3（未发版追加）—— 🛡 P1-5 安全默认值落地
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。将「初始即完全智能（零审批）」反转为「安全默认（对话模式 + 高危审批）」。

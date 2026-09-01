@@ -18,7 +18,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 135 工具 + smart_tools）
     ├─ 配置体系：config_defaults / config_utils / profiles / themes / roles / templates / deps
     ├─ 扩展体系：plugins / user_tools / fetch_blocked（按需）
     ├─ 大脑：brainkit / brain_api
-    └─ 子包：wechat_writer（公众号写作）/ webui（React 前端）/ tools（开发门禁）
+    └─ 子包：wechat_writer（公众号写作）/ webui（React 前端）/ agent_tools（工具域模块，P0-1 拆分）/ tools（开发门禁）
 ```
 
 ## 模块清单
@@ -98,6 +98,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 135 工具 + smart_tools）
 |---|---|
 | `wechat_writer/` | 公众号自动写作：sources（多信源采集）/ topic（选题去重）/ writer（三阶段写作）/ quality（质检重试）/ output（草稿箱+存档）/ history / llm / config |
 | `webui/` | React 前端（React 19 + Vite 8，无 UI 框架）：ChatPage/工作台/指令库/自主/大脑/插件/设置；`webui/dist` 由 api_server 同源服务。渲染链路（v3.8.0 世界级渲染器）：`longTextUtil.js`（`unwrapLongText`，解除模型 `@long-text:`/`<long_text_quote>` 包装）→ `mdParser.js`（块级 AST：标题/段落/嵌套列表缩进树/任务框/嵌套引用/表格对齐/代码围栏/数学块/details 折叠/脚注定义/分隔线，流式安全的未闭合围栏 `code-open`）→ `mdInline.js`（行内 tokens：粗体/斜体/粗斜体/删除线/高亮/上下标/行内 code/行内公式/图片/链接/自动链接/脚注引用/转义，任意嵌套，独立 RegExp 实例防 lastIndex 破坏）→ `mdHighlight.js`（零依赖语法高亮：js/ts/jsx/py/bash/json/sql/html/css/c/cpp/java/go/rust/yaml 等，输出整体转义）→ `components/Markdown.jsx`（消费 AST 渲染 React DOM，流式 deferCode 机制）；对应单测 `tests/longTextUtil.test.mjs` + `tests/markdownRender.test.mjs`（vite 8 兼容 SSR 真实渲染回归，经 `tests/ssrRender.mjs` 打包管线） |
+| `agent_tools/` | 运行时工具域模块包（P0-1 拆分首批）：`tool_basic.py`（🔧 系统与基础：get_date/get_weather）、`tool_data.py`（📊 数据与文档：read_csv/write_csv）；各模块顶层 `@tool()` 注册，`__init__.py` 聚合 re-export；deepseek_client 在共享基建后 `from agent_tools import *` 触发注册并保持旧访问路径；门禁工具（audit/validate/island）与 `WhaleTalk.spec`（`collect_submodules`）已多文件适配 |
 | `tools/` | 开发门禁：`audit_tools.py`（工具系统六层一致性审计，`--strict` 可入 CI）、`validate_tools.py`（smart_tools 全链路回归）、`island_check.py`（九层孤岛对账） |
 | `tests/` | 自举回归套件（v3.7.2 起）：`test_registry.py`（工具注册表六层一致性断言）、`test_evolve_guard.py`（进化闸函数与回滚语义）、`test_code_lookup.py`；`self_evolve` 验证链自动回退跑全量，进化不得破坏回归 |
 
@@ -131,7 +132,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 135 工具 + smart_tools）
 
 ## 演进建议
 
-1. **拆分 `deepseek_client.py`**：按领域拆为 `tools/` 包，顶层保留薄 facade（`TOOLS`/`TOOL_CALL_MAP` 等引用不变），每拆一批跑 `tools/audit_tools.py --strict` + `tools/validate_tools.py`。
+1. **拆分 `deepseek_client.py`（进行中）**：按领域拆为 `agent_tools/` 包，主文件保留共享基建 + `_TOOL_ORDER` 等顺序常量 + 六层构建 + 薄 facade（`from agent_tools import *` re-export，`TOOLS`/`TOOL_CALL_MAP` 等引用不变）。**首批已落地**（get_date/get_weather/read_csv/write_csv，主文件 −187 行）；配套改造：`toolkit.rebuild_layers` 支持多文件 AST、三门禁（audit/validate/island）多文件扫描、`WhaleTalk.spec` 用 `collect_submodules('agent_tools')`、新增 `tests/test_tool_split.py`（6 用例）。每拆一批跑 `tools/audit_tools.py --strict` + `tools/validate_tools.py` + `python -m pytest -q`。
 2. **工具声明单一源**：引入 `@tool()` 装饰器统一声明 schema/实现/分组/动作短语/预激活关键字/审批级别，消除六层手工维护漂移（`audit_tools.py` 降级为兜底）。
 3. **测试资产**：`tests/` 自举回归套件已建立（v3.7.2，28 用例：注册表一致性/进化闸/代码定位）；建议按领域扩充分子级 pytest 用例（工具/权限/存储），并将 `pytest tests/` 接入 CI 与 `self_evolve` 验证链（后者已自动回退全量）。
 4. 保持"先纯函数/工具模块，再业务模块"的顺序。

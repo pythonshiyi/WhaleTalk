@@ -181,22 +181,16 @@ def clear_registry() -> None:
 # AST 重建：不执行模块即可拿到六层（供无依赖环境的独立审计/门禁工具）
 # ---------------------------------------------------------------------------
 
-def rebuild_layers(source_text: str) -> Dict[str, Any]:
-    """从 deepseek_client.py 源码 AST 重建六层，不 import 模块。
+def rebuild_layers(source_text: str, *extra_sources: str) -> Dict[str, Any]:
+    """从 deepseek_client.py 及工具域模块源码 AST 重建六层，不 import 模块。
 
-    迁移（P1-3）后六层由 @tool()/register_tool() 声明生成，字面量不再存在；
-    审计/门禁工具（CI 不装依赖、不能 import 模块）需从源码静态重建：
-
-      - @tool(schema, groups=, phrases=, preactivate=) 装饰器挂在函数定义上，
-        executor 语义 = 被装饰函数名（用名字字符串标记，无真实函数对象）；
-      - register_tool(schema, ...) 命令式注册（ask_user/request_permission），
-        executor 显式传参（None=交互回调）；
-      - 顺序由 _TOOL_ORDER/_GROUP_ORDER/_HINT_ORDER 字面量决定。
-
-    返回 {"TOOLS", "TOOL_CALL_MAP", "TOOL_GROUPS", "_TOOL_ACTION_PHRASES",
-          "_PREACTIVATE_HINTS"}。注意：会清空并重建全局注册表。
+    P0-1 拆分后 @tool() 装饰器分布在多个文件（主文件 + agent_tools/ 域模块）：
+      - source_text 与全部 extra_sources 均参与 @tool()/register_tool() 收集
+        （同一工具只在一个文件中声明，跨文件不会重复）；
+      - 顺序常量 _TOOL_ORDER/_GROUP_ORDER/_HINT_ORDER 只从主文件顶层读取。
+    其余语义同单文件版本：executor 用名字字符串标记（无真实函数对象）；
+    调用会清空并重建全局注册表。
     """
-    tree = ast.parse(source_text)
     clear_registry()
 
     def arg_value(call_node, key, default=None):
@@ -205,25 +199,29 @@ def rebuild_layers(source_text: str) -> Dict[str, Any]:
                 return ast.literal_eval(kw.value)
         return default
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.decorator_list:
-            for dec in node.decorator_list:
-                if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name) and dec.func.id == "tool":
-                    register_tool(
-                        ast.literal_eval(dec.args[0]),
-                        groups=arg_value(dec, "groups"),
-                        phrases=arg_value(dec, "phrases"),
-                        preactivate=arg_value(dec, "preactivate"),
-                        executor=node.name,
-                    )
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "register_tool" and node.args:
-            register_tool(
-                ast.literal_eval(node.args[0]),
-                groups=arg_value(node, "groups"),
-                phrases=arg_value(node, "phrases"),
-                preactivate=arg_value(node, "preactivate"),
-                executor=arg_value(node, "executor"),
-            )
+    for src in (source_text,) + tuple(extra_sources):
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.decorator_list:
+                for dec in node.decorator_list:
+                    if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name) and dec.func.id == "tool":
+                        register_tool(
+                            ast.literal_eval(dec.args[0]),
+                            groups=arg_value(dec, "groups"),
+                            phrases=arg_value(dec, "phrases"),
+                            preactivate=arg_value(dec, "preactivate"),
+                            executor=node.name,
+                        )
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "register_tool" and node.args:
+                register_tool(
+                    ast.literal_eval(node.args[0]),
+                    groups=arg_value(node, "groups"),
+                    phrases=arg_value(node, "phrases"),
+                    preactivate=arg_value(node, "preactivate"),
+                    executor=arg_value(node, "executor"),
+                )
+
+    tree = ast.parse(source_text)
 
     def find_assign(name):
         for n in tree.body:

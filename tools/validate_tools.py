@@ -26,12 +26,21 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "deepseek_client.py"
+TOOL_DIR = REPO_ROOT / "agent_tools"
 
 # P1-3 迁移后 TOOLS/TOOL_GROUPS/_TOOL_ACTION_PHRASES 由构建调用生成，
 # 不能直接 exec；经 toolkit.rebuild_layers() AST 重建后预置进命名空间
 # （CI 不装依赖，不能 import deepseek_client）。
 sys.path.insert(0, str(REPO_ROOT))
 import toolkit
+
+
+def tool_sources():
+    """P0-1 拆分：收集 agent_tools/ 域模块源码（不含 __init__ 聚合文件）。"""
+    if not TOOL_DIR.is_dir():
+        return []
+    return [p.read_text(encoding="utf-8")
+            for p in sorted(TOOL_DIR.glob("*.py")) if p.name != "__init__.py"]
 
 
 def get_assign_nodes(src, tree, target_names):
@@ -67,7 +76,7 @@ def main():
     block += get_func_src(src, tree, ["build_tool_index", "compact_tool_schema",
                                       "compact_tools_list", "_patch_array_items",
                                       "_finalize_activate_tool", "build_smart_hint"])
-    layers = toolkit.rebuild_layers(src)
+    layers = toolkit.rebuild_layers(src, *tool_sources())
     ns = {"re": re, "json": json, "__name__": "validate_block",
           "TOOLS": layers["TOOLS"],
           "TOOL_GROUPS": layers["TOOL_GROUPS"],
