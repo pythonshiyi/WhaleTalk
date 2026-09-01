@@ -19,7 +19,7 @@ export function BatchPanel({ open, onClose, files, onFiles, tpl, onTpl, onDo }) 
         <div className="overlay-body">
           <div className="ctx-group-title">文件列表（每行一个路径）</div>
           <textarea className="fim-input" rows={5} placeholder={"C:/work/data1.csv\nC:/work/data2.csv"} value={files} onChange={(e) => onFiles(e.target.value)} />
-          <div className="ctx-group-title">指令模板（{file} 占位）</div>
+          <div className="ctx-group-title">指令模板（{'{file}'} 占位）</div>
           <input className="set-select set-combo" value={tpl} onChange={(e) => onTpl(e.target.value)} />
           <div className="svc-actions">
             <button className="confirm-btn confirm-primary" onClick={onDo} disabled={!files.trim()}>生成批量指令到输入框</button>

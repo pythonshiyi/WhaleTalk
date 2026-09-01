@@ -145,7 +145,7 @@ function useBackendChat({
       msg = { role: "assistant", think: "", tools: [], text: "", streaming: true, time: new Date().toTimeString().slice(0, 8) };
       updateMsgs((m) => [...m, { role: "user", text: userText, time: new Date().toTimeString().slice(0, 8) }, msg]);
     }
-    if (stopSignalRef.current) stopSignalRef.current = new AbortController();
+    if (!stopSignalRef.current || stopSignalRef.current.signal.aborted) stopSignalRef.current = new AbortController();
 
     const targetIdx = () => (isContinue ? continueIdx : -1);
 
@@ -345,15 +345,23 @@ function useBackendChat({
             onDone: () => finish(true),
             onError: (e) => {
               if (!alive) return;
+              if (done) return;  // 已被 finish/其他错误终结，防重复处理
+              done = true;       // 错误即终结：短路 streamChat resolve 后误走 finish(true)
+              flushNow();
               updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, text: (x.text || "") + "\n\n⚠️ 后端错误：" + e, streaming: false } : x)));
               setBusy(false);
               setGenState({ on: false, text: "" });
+              try {
+                onFinished?.({ userText, msg, ok: false, isContinue, error: String(e) });
+              } catch (err2) { silentWarn(err2, "ChatPage"); }
             },
           },
           stopSignalRef.current ? stopSignalRef.current.signal : undefined
         );
         finish(true);
       } catch (err) {
+        // 用户主动停止（AbortError）：不算失败，不弹错误 toast；streaming 状态由 onStop 统一清理
+        if (err && (err.name === "AbortError" || err.code === 20)) return;
         if (!alive) return;
         setBusy(false);
         setGenState({ on: false, text: "" });
@@ -372,6 +380,11 @@ function useBackendChat({
     return () => {
       alive = false;
       stopRef.current = true;
+      // 取消挂起的 rAF 批处理：防止停止/卸载后下一帧仍执行 updateMsgs（多冒半帧 / 卸载后 setState）
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       // 中止进行中的流式请求：组件卸载/切换页面时立即断开，避免后台空跑
       try {
         if (stopSignalRef.current) stopSignalRef.current.abort();
@@ -596,11 +609,16 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const stopSignalRef = React.useRef(null);
   const scrollRef = React.useRef(null);
   // ── 对话模式联网搜索开关（localStorage 持久化）──
-  const [webSearch, setWebSearch] = React.useState(() => localStorage.getItem("whaletalk.webSearch") === "1");
+  // 隐私模式/禁用存储下 getItem 抛 SecurityError，套 try/catch 防首次渲染崩溃
+  const [webSearch, setWebSearch] = React.useState(() => {
+    try { return localStorage.getItem("whaletalk.webSearch") === "1"; }
+    catch { return false; }
+  });
   const toggleWebSearch = React.useCallback(() => {
     setWebSearch((v) => {
       const nv = !v;
-      localStorage.setItem("whaletalk.webSearch", nv ? "1" : "");
+      try { localStorage.setItem("whaletalk.webSearch", nv ? "1" : ""); }
+      catch { /* 存储不可用时仅本次会话生效 */ }
       return nv;
     });
   }, []);
@@ -750,7 +768,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   };
 
   const onSend = (text, attachments = []) => {
-    if (busy && !resendIdxRef.current) return;
+    // busy 一律拦截：busy 期间即使带 resendIdxRef 也会覆盖 pendingRef 且 effect 不重跑（新流不会启动），
+    // 导致当前流结束后保存时 userText 错乱。编辑重发需等当前生成结束后再操作。
+    if (busy) return;
     // 高峰提示（每天首次发送；受「高峰提醒」开关与后端实时峰值判定控制）
     try {
       const today = new Date().toISOString().slice(0, 10);
@@ -810,8 +830,15 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         stopSignalRef.current.abort();
       } catch (e) { silentWarn(e, "ChatPage"); }
     }
+    // 同步终结流式状态：把仍在 streaming 的 assistant 消息置为完成态，
+    // 避免光标永久闪烁 / code-open 占位 / 操作条隐藏（停止不依赖 abort 竞态）
+    setMsgs((m) => {
+      const next = m.map((x) => (x.streaming ? { ...x, streaming: false } : x));
+      msgsRef.current = next;  // 同步实时镜像，保证停止后保存会话拿到完成态
+      return next;
+    });
     setBusy(false);
-    setGenState({ on: false, text: "" });
+    setGenStateThrottled({ on: false, text: "" });
     toast("⏹ 已停止生成");
   };
 

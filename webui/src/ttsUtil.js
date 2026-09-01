@@ -14,7 +14,7 @@ const MD_STRIP = [
 export function cleanForSpeech(md) {
   let s = String(md || "");
   for (const p of MD_STRIP) {
-    s = typeof p[1] === "string" && p[1].includes("$") ? s.replace(p[0], p[1]) : s.replace(p[0], p[1]);
+    s = s.replace(p[0], p[1]);
   }
   return s.replace(/^\s*[-+*]\s+/gm, "").replace(/\n{2,}/g, "\n").trim();
 }
@@ -159,7 +159,6 @@ export function primeAudio() {
     a.muted = true;
     const p = a.play();
     if (p && p.then) p.then(() => { primed = true; a.pause(); }).catch(() => {});
-    primed = true;
   } catch (e) { silentWarn(e, "ttsUtil"); }
 }
 
@@ -400,9 +399,10 @@ export function playTestTone(seconds = 0.6) {
       for (let i = 0; i < n; i++) dv.setInt16(44 + i * 2, Math.round(12000 * Math.sin((2 * Math.PI * 440 * i) / sr)), true);
       const url = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
       const a = new Audio(url);
-      a.onended = () => { URL.revokeObjectURL(url); resolve(true); };
-      a.onerror = () => reject(new Error("播放失败"));
-      a.play().catch(reject);
+      const cleanup = () => URL.revokeObjectURL(url);
+      a.onended = () => { cleanup(); resolve(true); };
+      a.onerror = () => { cleanup(); reject(new Error("播放失败")); };
+      a.play().catch((e) => { cleanup(); reject(e); });
     } catch (e) { reject(e); }
   });
 }

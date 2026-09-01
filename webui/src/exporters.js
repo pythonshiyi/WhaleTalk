@@ -40,7 +40,7 @@ function buildText(md) {
 }
 
 function buildHtml(messages, meta = {}) {
-  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const parts = [`<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>会话记录</title><style>
 body{font-family:'Microsoft YaHei',sans-serif;max-width:820px;margin:24px auto;background:#0b1220;color:#e8eefc;padding:0 16px}
 .msg{margin:14px 0;padding:12px 16px;border-radius:12px;line-height:1.7}

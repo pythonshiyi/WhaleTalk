@@ -80,7 +80,7 @@ export function AbilitiesPage() {
                 </div>
                 <span className="domain-status ds-stable">稳定</span>
               </div>
-              <div className="domain-desc">{domains ? `${d.tools.length} 项 · ${d.tools.slice(0, 3).map((t) => t.name).join(" / ")}${d.tools.length > 3 ? " …" : ""}` : d.desc}</div>
+              <div className="domain-desc">{domains ? `${(d.tools || []).length} 项 · ${(d.tools || []).slice(0, 3).map((t) => t.name).join(" / ")}${(d.tools || []).length > 3 ? " …" : ""}` : d.desc}</div>
               {open === d.name && (
                 <div className="domain-actions">
                   {(d.tools || []).slice(0, 8).map((t) => (

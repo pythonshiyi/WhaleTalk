@@ -55,6 +55,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     setSlashQuery("");
     if (p.auto_send && String(t).trim()) {
       setText("");
+      setAttachments([]);  // 与 submit() 一致：自动发送后清空已选附件，防 chip 残留
       onSend(t);
     } else {
       setText(t);
@@ -127,9 +128,11 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
 
   // ── 指令 / 目录 / 插件触发词加载 ──
   React.useEffect(() => {
-    api.getPrompts().then((p) => p && setPrompts(p)).catch(() => {});
-    api.getDirs().then((d) => d && setDirs(d)).catch(() => {});
-    api.getContext().then((c) => c && c.tools && setPluginTriggers([])).catch(() => {});
+    let alive = true;
+    api.getPrompts().then((p) => { if (alive) p && setPrompts(p); }).catch(() => {});
+    api.getDirs().then((d) => { if (alive) d && setDirs(d); }).catch(() => {});
+    api.getContext().then((c) => { if (alive) c && c.tools && setPluginTriggers([]); }).catch(() => {});
+    return () => { alive = false; };
   }, []);
 
   // ── 对外暴露：insertText（引用/编辑用）──
@@ -189,8 +192,8 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
 
   const submit = () => {
     const v = text.trim();
-    if (!v || busy) return;
-    // 发送即打断：busy 时挂起待发
+    if (!v) return;
+    // 发送即打断：busy 时挂起待发（先停止当前生成，再延迟重发）
     if (busy) {
       onStop && onStop();
       setTimeout(() => onSend && onSend(v, attachments), 350);

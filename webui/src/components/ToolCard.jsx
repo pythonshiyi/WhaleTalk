@@ -75,7 +75,7 @@ export default function ToolCard({ tool, status, args, result, cost, duration })
         <span className="tool-args">
           {args && Object.entries(args).map(([k, v]) => (
             <span className="tool-arg" key={k}>
-              {k}=<em>{String(v).length > 26 ? String(v).slice(0, 26) + "…" : v}</em>
+              {k}=<em>{String(v).length > 26 ? String(v).slice(0, 26) + "…" : String(v)}</em>
             </span>
           ))}
         </span>

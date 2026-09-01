@@ -362,10 +362,13 @@ function PromptEditor({ value, onClose, onSave }) {
           <button
             className="confirm-btn confirm-primary"
             disabled={!String(f.name || "").trim() || !String(f.text || "").trim()}
-            onClick={() => onSave({
-              ...f,
-              tags: String(f.tagsText || "").split(",").map((x) => x.trim()).filter(Boolean),
-            })}
+            onClick={() => onSave((() => {
+              const { tagsText, ...rest } = f;  // 剔除 UI 私有字段，只提交后端字段
+              return {
+                ...rest,
+                tags: String(f.tagsText || "").split(",").map((x) => x.trim()).filter(Boolean),
+              };
+            })())}
           >
             保存
           </button>

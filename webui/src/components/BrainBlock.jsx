@@ -332,24 +332,27 @@ function BrainBlock() {
         ) : (
           <>
             <div className="brain-timeline">
-              {snapOptions.map((s) => (
-                <div className="tl-item" key={s.name}>
-                  <span className={`tl-dot ${s.version === b.current_version ? "now" : ""}`} />
-                  <div className="tl-body">
-                    <div className="tl-main">
-                      <b>v{s.version}</b>
-                      <span className="tl-meta">{s.mtime} · {s.size_kb} KB{s.version === b.current_version ? " · 当前" : ""}</span>
+              {snapOptions.map((s) => {
+                const isCur = String(s.version) === String(b.current_version);  // 统一字符串比较防类型不一致误判
+                return (
+                  <div className="tl-item" key={s.name}>
+                    <span className={`tl-dot ${isCur ? "now" : ""}`} />
+                    <div className="tl-body">
+                      <div className="tl-main">
+                        <b>v{s.version}</b>
+                        <span className="tl-meta">{s.mtime} · {s.size_kb} KB{isCur ? " · 当前" : ""}</span>
+                      </div>
+                      <button
+                        className="msg-op"
+                        disabled={busy || isCur}
+                        onClick={() => act("restore", { version: s.version, replace: true }, `回到 v${s.version} 的时刻？当前大脑会自动备份到 brain.bak-*，之后可用「清理」找回空间。`)}
+                      >
+                        {isCur ? "当前" : "回到此刻"}
+                      </button>
                     </div>
-                    <button
-                      className="msg-op"
-                      disabled={busy || s.version === b.current_version}
-                      onClick={() => act("restore", { version: s.version, replace: true }, `回到 v${s.version} 的时刻？当前大脑会自动备份到 brain.bak-*，之后可用「清理」找回空间。`)}
-                    >
-                      {s.version === b.current_version ? "当前" : "回到此刻"}
-                    </button>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             {snapOptions.length >= 2 && (
               <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, fontSize: 12 }}>

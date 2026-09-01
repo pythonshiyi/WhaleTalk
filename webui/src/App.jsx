@@ -87,14 +87,15 @@ export default function App() {
     }
   });
   const toggleQuiet = React.useCallback(() => {
-    setQuietMode((v) => {
-      const nv = !v;
-      try {
-        localStorage.setItem("whaletalk.quietMode", nv ? "1" : "");
-      } catch (e) { silentWarn(e, "App"); }
-      return nv;
-    });
+    // 副作用（localStorage）移出 setState updater：StrictMode 下 updater 可能双调，保持纯函数
+    setQuietMode((v) => !v);
   }, []);
+  // 持久化跟随 state：仅在值真正变化时写一次
+  React.useEffect(() => {
+    try {
+      localStorage.setItem("whaletalk.quietMode", quietMode ? "1" : "");
+    } catch (e) { silentWarn(e, "App"); }
+  }, [quietMode]);
   // 首次启动引导：true 渲染全屏依赖安装向导，装完才进入主界面
   const [firstRun, setFirstRun] = React.useState(null);
   // 指令库/工作台「应用」→ 把指令内容带进会话输入框（试跑用）

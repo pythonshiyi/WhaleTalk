@@ -21,30 +21,35 @@ export default function ContextPanel({ data, onClose }) {
       </div>
 
       <div className="ctx-body">
-        {tab === "工具" && (
-          <>
-            <div className="ctx-group-title">已激活（4）</div>
-            {data.tools.filter((t) => t.state === "on").map((t) => (
-              <div className="ctx-row" key={t.name}>
-                <span className="ctx-dot ctx-dot-on" />
-                <span className="ctx-name">{t.name}</span>
-                <span className="ctx-desc">{t.desc}</span>
-              </div>
-            ))}
-            <div className="ctx-group-title">未激活（2）</div>
-            {data.tools.filter((t) => t.state === "off").map((t) => (
-              <div className="ctx-row" key={t.name}>
-                <span className="ctx-dot" />
-                <span className="ctx-name ctx-off">{t.name}</span>
-                <span className="ctx-desc">{t.desc}</span>
-              </div>
-            ))}
-            <button className="ctx-action">+ 激活工具组</button>
-          </>
-        )}
+        {tab === "工具" && (() => {
+          const tools = (data && data.tools) || [];
+          const on = tools.filter((t) => t.state === "on");
+          const off = tools.filter((t) => t.state === "off");
+          return (
+            <>
+              <div className="ctx-group-title">已激活（{on.length}）</div>
+              {on.map((t) => (
+                <div className="ctx-row" key={t.name}>
+                  <span className="ctx-dot ctx-dot-on" />
+                  <span className="ctx-name">{t.name}</span>
+                  <span className="ctx-desc">{t.desc}</span>
+                </div>
+              ))}
+              <div className="ctx-group-title">未激活（{off.length}）</div>
+              {off.map((t) => (
+                <div className="ctx-row" key={t.name}>
+                  <span className="ctx-dot" />
+                  <span className="ctx-name ctx-off">{t.name}</span>
+                  <span className="ctx-desc">{t.desc}</span>
+                </div>
+              ))}
+              <button className="ctx-action">+ 激活工具组</button>
+            </>
+          );
+        })()}
         {tab === "记忆" && (
           <>
-            {data.memory.map((m) => (
+            {((data && data.memory) || []).map((m) => (
               <div className="mem-card" key={m.id}>
                 <div className="mem-card-head">
                   <span className="mem-id">{m.id}</span>

@@ -55,6 +55,12 @@ export default function FirstRunPage({ onDone }) {
           onBatchDone: (ev) => {
             const fl = ev.failed || [];
             setFailed(fl);
+            // 同步 failedKeys：若本次未逐项上报失败（仅 batch_done 汇总），
+            // 用汇总清单兜底，保证「重试失败项」拿得到 keys 而非空数组直接 finish
+            setFailedKeys((k) => {
+              const merged = [...k, ...fl.filter((f) => !k.includes(f))];
+              return merged;
+            });
             setPhase("done");
             if (fl.length) {
               // 核心有失败：不自动进入（确保装完才进），展示清单供重试/确认

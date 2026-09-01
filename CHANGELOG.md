@@ -2,6 +2,27 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🖥 前端全量审查修复批次（2 P0 + 6 P1 + 12 P2）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。三路并行逐行审查全部 27 个组件 + 8 个模块（~1.17 万行）后的一次性修复批次。核心是聊天流式链路两处 P0 级缺陷与设置页两处 P1 级崩溃，其余为缺防御/死代码/竞态清理。
+
+### 变更
+- **P0-1 停止生成整条链路修复**（`ChatPage.jsx`）：`AbortController` 因 `if (stopSignalRef.current)` 恒 false 而永不创建——改为 `!stopSignalRef.current || signal.aborted` 才新建；`onStop` 同步把 streaming 消息置为完成态并同步 `msgsRef` 镜像（此前停止后光标永久闪烁、`code-open` 代码块永远渲染为占位、操作条永久隐藏）
+- **P0-2 后端错误被当成功**（`ChatPage.jsx`）：`onError` 未置 `done` 终结标志，流关闭后 `finish(true)` 继续执行误弹"✅ 回复完成"并保存带错误文本的会话——改为错误即终结（`done = true` + 冲刷 rAF + 按失败路径回调）
+- **P1-1 设置页白屏**（`SettingsPage.jsx`）：停止序列输入框 `onChange` 把字符串写进 `cfg.stop`，重渲染 `(cfg.stop || []).join(",")` 对字符串调 `.join` 抛 TypeError——改为 onChange 暂存字符串、onBlur 才解析为数组，value 处加 `Array.isArray` 防御
+- **P1-2 浏览器可见开关失效**（`SettingsPage.jsx`）：`browser_headless` 未取反（`!!cfg` 写回原值）——改为 `!cfg.browser_headless`
+- **P1-3 批量任务面板打开即崩**（`ChatPanels.jsx`）：`{file}` 引用未定义变量——改为字面量 `{'{file}'}`
+- **P1-4 Composer 打断挂起死代码**（`Composer.jsx`）：`if (!v || busy) return` 前置短路使"busy 时发送即打断挂起"分支永不执行——删除 busy 短路，恢复设计行为
+- **P1-5 参数对象渲染崩溃**（`ToolCard.jsx`）：参数值为对象时 `String(v)` 长度 ≤26 走原值分支，React 抛 "Objects are not valid as a React child"——无条件 `String(v)`
+- **P1-6 插件页缺字段崩溃**（`PluginsPage.jsx`）：`p.permissions.tools.length` / `files.length` 与详情弹窗 `d.tools/skills/workflows/files` 均无空数组防御——统一 `|| []`
+- **P1-7 停止被误报为失败**（`ChatPage.jsx`）：catch 未区分 `AbortError`（修复 P0-1 后用户停止将走进 catch 弹"⚠️ 发送失败"）——`AbortError`/code 20 直接 return
+- **P1-8 localStorage 崩溃面**（`ChatPage.jsx`）：`whaletalk.webSearch` 读写无 try/catch，隐私模式下 `useState` 初始化器抛 SecurityError 首帧崩溃——套 try/catch 给默认值
+- **P2 批量**：ChatPage rAF 清理（防卸载后 setState/多冒半帧）、webSearch 编辑重发 busy 一律拦截、key_hint 短密钥整体打码；Composer auto_send 清附件 + 加载 effect alive 守卫；ttsUtil 死代码收敛、`playTestTone` blob URL 泄漏、`primeAudio` 过早置位；exporters `esc` 补引号转义；ContextPanel 硬编码计数改动态 + 缺字段防御；Pages 域卡片 `d.tools` 防御；FirstRunPage batch_done 同步 `failedKeys`（重试失败项不再空跑）；PromptsPage 保存剔除 UI 私有 `tagsText` 字段；BrainBlock 快照版本号统一 `String()` 比较；SessionList 拖拽卸载兜底清理全局监听；App `toggleQuiet` 副作用移出 updater
+
+### 回归
+- 前端：`npm run typecheck`（tsc --noEmit）✅ · 三套件（longTextUtil / apiStreamChat / markdownRender）✅ · `npm run build`（vite）✅
+- 后端：pytest **102 passed**；四门禁全绿（audit `--strict` error 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3）
+
 ## v3.8.3（未发版追加）—— 🧪 A6 执行链路测试固化（tests/test_run_capture.py）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。A6 抽 `_run_capture` 后，五个执行工具（run_python / run_command / run_lint / run_tests / pip_install）的执行路径此前仅靠临时冒烟脚本覆盖，本轮固化为正式 pytest 用例，防止后续改动回归。

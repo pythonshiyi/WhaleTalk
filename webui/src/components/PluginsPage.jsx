@@ -169,18 +169,18 @@ function DetailOverlay({ name, onClose }) {
           )}
         </div>
         <div className="perm-groups">
-          {d.tools.length > 0 && (
-            <div className="perm-group"><b style={{ fontSize: 12 }}>🔧 工具（{d.tools.length}）</b>
+          {(d.tools || []).length > 0 && (
+            <div className="perm-group"><b style={{ fontSize: 12 }}>🔧 工具（{(d.tools || []).length}）</b>
               <div className="perm-chips">{d.tools.map((t) => <span className="perm-chip" key={t} style={{ color: "var(--brand)", borderColor: "rgba(14,165,233,.4)" }}>{t}</span>)}</div>
             </div>
           )}
-          {d.skills.length > 0 && (
-            <div className="perm-group"><b style={{ fontSize: 12 }}>⚡ 技能（{d.skills.length}）</b>
+          {(d.skills || []).length > 0 && (
+            <div className="perm-group"><b style={{ fontSize: 12 }}>⚡ 技能（{(d.skills || []).length}）</b>
               <div className="perm-chips">{d.skills.map((s) => <span className="perm-chip" key={s}>{s}</span>)}</div>
             </div>
           )}
-          {d.workflows.length > 0 && (
-            <div className="perm-group"><b style={{ fontSize: 12 }}>🔄 流程（{d.workflows.length}）</b>
+          {(d.workflows || []).length > 0 && (
+            <div className="perm-group"><b style={{ fontSize: 12 }}>🔄 流程（{(d.workflows || []).length}）</b>
               <div className="perm-chips">{d.workflows.map((w) => <span className="perm-chip" key={w}>{w}</span>)}</div>
             </div>
           )}
@@ -189,8 +189,8 @@ function DetailOverlay({ name, onClose }) {
               <div className="sched-text" style={{ fontFamily: "var(--font-mono)" }}>{d.app_entry}</div>
             </div>
           )}
-          {d.files.length > 0 && (
-            <div className="perm-group"><b style={{ fontSize: 12 }}>📁 自带文件（{d.files.length}）</b>
+          {(d.files || []).length > 0 && (
+            <div className="perm-group"><b style={{ fontSize: 12 }}>📁 自带文件（{(d.files || []).length}）</b>
               <div className="perm-chips">{d.files.map((f) => <span className="perm-chip" key={f}>{f}</span>)}</div>
             </div>
           )}
@@ -299,9 +299,9 @@ export default function PluginsPage({ onApply }) {
       <div className="plugin-perms">
         {p.permissions && p.permissions.declared ? (
           <>
-            <span className="plugin-perm-tag">🔐 {p.permissions.tools.length} 工具</span>
+            <span className="plugin-perm-tag">🔐 {(p.permissions.tools || []).length} 工具</span>
             {p.permissions.net && <span className="plugin-perm-tag">🌐 联网</span>}
-            {p.permissions.files.length > 0 && <span className="plugin-perm-tag">📁 {p.permissions.files.join("/")}</span>}
+            {(p.permissions.files || []).length > 0 && <span className="plugin-perm-tag">📁 {p.permissions.files.join("/")}</span>}
           </>
         ) : (
           <span className="plugin-perm-tag plugin-perm-warn">⚠️ 未声明权限</span>

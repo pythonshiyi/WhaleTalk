@@ -45,6 +45,17 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
     document.body.style.userSelect = "none";
   };
 
+  // 卸载兜底：拖拽中卸载时清理全局监听与 body 样式（防 setState 于已卸载组件 + 光标样式残留）
+  React.useEffect(() => {
+    return () => {
+      if (dragRef.current) {
+        dragRef.current = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
+    };
+  }, []);
+
   const allTags = [...new Set(sessions.flatMap((s) => s.tags || []))].slice(0, 12);
 
   const filtered = sessions.filter((s) => {

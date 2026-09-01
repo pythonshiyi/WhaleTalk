@@ -890,7 +890,9 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
     if (!clean) return;
     const d = await saveField({ api_key: clean }, true);
     if (d && d.ok) {
-      setCfg((c) => ({ ...c, has_key: true, key_hint: `${clean.slice(0, 3)}***${clean.slice(-4)}` }));
+      // 脱敏 hint：短密钥（≤7 位）整体打码，避免前后缀重叠泄露
+      const hint = clean.length > 7 ? `${clean.slice(0, 3)}***${clean.slice(-4)}` : "******";
+      setCfg((c) => ({ ...c, has_key: true, key_hint: hint }));
       setTip("✅ API Key 已保存（加密存储）");
     } else {
       setTip("❌ API Key 保存失败，请重试");
@@ -1088,8 +1090,9 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                   <NumInput min={0} value={cfg.seed ?? 0} onChange={(v) => saveField({ seed: v })} />
                 </Row>
                 <Row label="停止序列（stop）" desc="遇到即停，逗号分隔 ≤16 个">
-                  <input className="set-select set-combo" value={(cfg.stop || []).join(",")} placeholder="如：再见,``` 结束（留空不设置）"
-                    onChange={(e) => saveField({ stop: e.target.value })}
+                  {/* value 防御：onChange 暂存字符串、onBlur 才解析为数组；避免字符串被 .join 崩溃 */}
+                  <input className="set-select set-combo" value={Array.isArray(cfg.stop) ? cfg.stop.join(",") : String(cfg.stop ?? "")} placeholder="如：再见,``` 结束（留空不设置）"
+                    onChange={(e) => setCfg((c) => ({ ...c, stop: e.target.value }))}
                     onBlur={(e) => saveField({ stop: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
                 </Row>
                 <Row label="工具选择（tool_choice）" desc="任务模式生效">
@@ -1146,7 +1149,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                   </div>
                 </div>
                 <Toggle on={!!cfg.tools_enabled} label="工具开关" desc="向模型暴露工具定义" onClick={() => saveField({ tools_enabled: !cfg.tools_enabled })} />
-                <Toggle on={!cfg.browser_headless} label="🖥 浏览器可见" desc="AI 操作浏览器弹真实窗口" onClick={() => saveField({ browser_headless: !!cfg.browser_headless })} />
+                <Toggle on={!cfg.browser_headless} label="🖥 浏览器可见" desc="AI 操作浏览器弹真实窗口" onClick={() => saveField({ browser_headless: !cfg.browser_headless })} />
                 <Row label="🔧 工具库与权限" desc="115 工具 12 域 · 黑名单管理">
                   <span className="empty-tip" style={{ padding: 0 }}>在「能力中心」页签管理</span>
                 </Row>
