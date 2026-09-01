@@ -2,6 +2,28 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🧩 P0-1 巨石拆分收官（第三~八批，117 工具全部迁入 agent_tools/）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。一次性规划 + 连续执行剩余全部批次，P0-1 拆分路线收官：`deepseek_client.py` 由 13,115 行瘦身至 **4,484 行**（−8,631），主文件仅剩「共享基建 + 六层注册表 + 薄 facade」。
+
+### 变更
+- **新增 8 个域模块（117 工具）**：
+  - `tool_docs.py`（📊 数据与文档，19）：database_query_mysql / database_query_postgres / read_excel / epub_read / mobi_read / doc_read / msg_read / archive_list / write_excel / chart_data / database_query / database_execute / pdf_extract / pdf_create / docx_read / pptx_read / secret_store / kv_store / create_doc
+  - `tool_web.py`（🌐 浏览器与网页，14）：fetch_url / download_file / search_web / search_github / search_realtime / browser_navigate / web_screenshot / net_diagnose / fetch_url_smart / rss_fetch / webdav / call_api / track_web / **fetch_blocked**（保留字冲突，实现名 `_run_fetch_blocked`，审计/迁移门禁内置别名映射）
+  - `tool_code.py`（💻 编程与执行，15）：run_python / run_command / run_lint / run_tests / verify_project / project_scaffold / dev_plan / get_status / project_map / find_symbol / code_lookup / write_code_project / pip_install / subagent_run / verify_output
+  - `tool_files.py`（📁 文件与进程，17）：read_file / write_file / edit_file / list_dir / search_local / clipboard_get / clipboard_set / delete_file / archive_files / extract_archive / list_snapshots / restore_snapshot / batch_rename / start_process / stop_process / list_processes / environment_info
+  - `tool_brain.py`（🧠 记忆与定时任务，14）：write/read/delete/update_memory / self_profile / query_memory_graph / knowledge_index / knowledge_search / schedule_task / list_schedules / cancel_schedule / task_checkpoint_save / task_checkpoint_load / run_workflow
+  - `tool_msg.py`（📧 邮件与消息，10）：send_email / publish_draft / send_webhook / im_send / telegram_poll_updates / read_email / email_summary / agent_mail / run_wechat_writer / daily_brief
+  - `tool_system.py`（🔧 系统与项目，12）：watch_files / recall_session / project_info / read_project_file / create_evolution / self_evolve / verify_files / git_tool / notify_desktop / app_manage / usage_report / **create_plugin**
+  - `tool_desktop.py`（🖱 桌面与视觉语音，18）：rpa_screen_size / rpa_click / rpa_type / rpa_hotkey / rpa_move / rpa_scroll / rpa_screenshot / screen_find_click / vision_loop / tts_save / tts_speak / tts_stop / speech_to_text / voice_chat_loop / image_generate / qrcode / media_ffmpeg / team_run
+- **运行时注入配置动态化**：迁移后域模块不再对 `WORKING_DIR` / `KV_CACHE_DIR` / `SECRETS_FILE` / `MEMORY_FILE` / `MEMORY_ENABLED` / `EVOLUTIONS_DIR` / `PLUGIN_PATHS` / `EMAIL_CONFIG_FILE` 等 36 个可变配置做值绑定 import，一律 `import deepseek_client as _dc` 属性访问——main / api_server / 测试注入新值后**立即生效**（修复了值绑定导致注入失效的回归）
+- **`agent_tools/__init__.py`**：聚合 11 个域模块 `import *`，`__all__` 覆盖全部 117 个拆分工具名（`dc.kv_store` / `dc.create_plugin` / `dc._run_fetch_blocked` 等旧访问路径不变）
+- **主文件工具定义清零**：`@tool` / `register_tool` 装饰的工具函数全部迁出，主文件 AST 扫描 0 个残留
+
+### 回归
+- `tests/test_tool_split.py` 扩展 7 用例（共 17 用例）：全量 117 工具 re-export + 归属断言（逐工具 `__module__` 匹配域模块）+ 六层完整性（135 = TOOLS/ORDER/CALL_MAP）+ `fetch_blocked` 别名实现 + **主文件无工具定义 AST 断言** + 各域代表性工具参数校验分支（不联网/不依赖三方库）
+- pytest **80 passed**（74 原有 + 6 新增）；四门禁全绿（audit `--strict` error 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3）；前端三套件（longTextUtil / apiStreamChat / markdownRender）全过；修复 `test_quiet_mode.py` 模块级 stub 未恢复的隔离瑕疵（末尾归还 `self_profile` 真实实现）
+
 ## v3.8.3（未发版追加）—— 🧩 P0-1 巨石拆分第二批（媒体/文档域）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。P0-1 路线第二批：把「🎨 媒体与图像」域的 10 个工具从 `deepseek_client.py` 迁入 `agent_tools/tool_media.py`，复用首批验证的「共享符号梳理 + 门禁护航」拆分模式。

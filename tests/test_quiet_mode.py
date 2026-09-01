@@ -67,3 +67,10 @@ if failed:
     print(f"\n❌ {failed} 组失败")
     sys.exit(1)
 print("\n✅ quiet_mode 纯净对话门控全部通过")
+
+# ── 恢复全局副作用（本文件为独立脚本式测试，模块级 stub 需归还）──
+import deepseek_client as _dcm
+if callable(_dcm.self_profile) and _dcm.self_profile.__module__ != "agent_tools.tool_brain":
+    # 重新从域模块取回真实实现（自检隔离：不破坏后续 pytest 对工具归属的断言）
+    from agent_tools.tool_brain import self_profile as _real_self_profile
+    _dcm.self_profile = _real_self_profile

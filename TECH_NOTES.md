@@ -22,8 +22,8 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
 ├── api_server.py           # 本地 HTTP API（REST + SSE，79+ /v1 端点）
-├── deepseek_client.py      # 能力引擎：DeepSeekClient + 135 工具 + smart_tools（约 1.31 万行；P0-1 拆分中，首批+第二批已迁出 14 工具，累计 −775 行）
-├── agent_tools/            # 工具域模块包（P0-1 拆分）：tool_basic / tool_data / tool_media，@tool() 注册 + __all__ re-export
+├── deepseek_client.py      # 能力引擎：DeepSeekClient + 135 工具 + smart_tools（4,484 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
+├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop 共 11 模块 117 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
 ├── security.py             # SSRF 防护（云元数据永远拦截）
 ├── crypto.py               # API Key DPAPI 加密（fail-closed）
@@ -244,7 +244,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 ## 19. 演进建议
 
-1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**进行中**：首批 get_date/get_weather/read_csv/write_csv 已迁（−187 行）；第二批「🎨 媒体与图像」10 工具迁入 `tool_media.py`（−588 行，视觉闭环辅助 `_capture_screen_png`/`_extract_image_path` 留主文件、域模块 from-import 复用）；`rebuild_layers` 多文件 AST、三门禁多文件扫描、spec `collect_submodules('agent_tools')`、`tests/test_tool_split.py`（10 用例）已配套
+1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**已完成（v3.8.3 收官）**：共 11 域模块 117 工具迁出（tool_basic 2 / tool_data 2 / tool_media 10 / tool_docs 19 / tool_web 14 / tool_code 15 / tool_files 17 / tool_brain 14 / tool_msg 10 / tool_system 12 / tool_desktop 18），主文件 13,115 → **4,484 行**，工具定义清零（AST 断言）；关键经验：① 域模块对运行时注入配置（WORKING_DIR/KV_CACHE_DIR/MEMORY_FILE/EVOLUTIONS_DIR 等 36 个）不可值绑定 import，须 `import deepseek_client as _dc` 动态访问，否则 main/测试注入失效；② `fetch_blocked` 因保留字冲突实现名 `_run_fetch_blocked`，audit/migrate 门禁内置别名映射；③ 每批迁移后跑 pytest + 四门禁 + 前端三套件，`test_tool_split.py` 现有 17 用例覆盖全量 re-export/归属/六层
 2. `@tool()` 装饰器统一六层声明（消除手工漂移）
 3. ~~补齐 pytest 测试资产并接入 CI~~ 已完成（v3.8.3 起 CI 跑 `pytest tests/` 28 用例 + 前端 3 套件 + 四道门禁）；下一步是**按领域扩充分子级 pytest 用例**（工具/权限/存储执行路径，当前覆盖集中在注册表与进化闸）
 4. 进化闭环补门禁：`self_evolve` 合并前强制跑 audit/validate/测试；进化账本（效果回流）；评审 AI 前置
