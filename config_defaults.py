@@ -25,7 +25,7 @@ DIALOG_SYSTEM_PROMPT = (
     "请使用中文回答。"
 )
 
-# 内建基础工具（始终默认启用）；行动层工具默认不启用，需用户开启
+# 内建基础工具（始终默认启用）；无限制模式：含系统命令执行，无需额外开启
 BUILTIN_TOOL_NAMES = [
     "get_date",
     "ask_user",
@@ -33,6 +33,7 @@ BUILTIN_TOOL_NAMES = [
     "read_memory",
     "get_weather",
     "run_python",
+    "run_command",
     "read_file",
     "fetch_url",
     "search_web",

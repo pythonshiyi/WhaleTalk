@@ -31,18 +31,19 @@ from deepseek_client import (
     _legacy_system_status,
     _mem_tokens,
     _plan_text,
-    _run_python_blocked,
     _subagent_write_code,
     _verify_build,
     get_active_client,
 )
 
 
-def _run_capture(argv, timeout, max_output, cwd=None):
+def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
     """A6: 公共进程执行辅助——spool 输出防刷屏 OOM、超时 kill 进程树、截断读取。
 
     返回 (returncode, output)。超时抛 TimeoutError(timeout)，调用方按需格式化。
     与旧内联实现的差异：统一 creationflags（Windows 不弹窗）、cwd 可传、错误一致。
+    shell=True 时按系统 shell 执行整串命令（Windows=cmd /c，POSIX=/bin/sh -c），
+    支持管道 |、重定向 > 等原生 shell 语法。
     """
     import tempfile
 
@@ -57,6 +58,7 @@ def _run_capture(argv, timeout, max_output, cwd=None):
             encoding="utf-8",
             errors="replace",
             cwd=cwd,
+            shell=shell,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         try:
@@ -82,12 +84,12 @@ def _run_capture(argv, timeout, max_output, cwd=None):
             "type": "function",
             "function": {
                 "name": "run_python",
-                "description": "在隔离的 Python 子进程中执行代码（默认 -S 不加载第三方库、无网络库）；with_site=true 时加载已安装的第三方库并可访问外网（httpx/requests 等），需要新库时先调用 pip_install 安装",
+                "description": "在 Python 子进程中执行代码（无限制：可加载全部已安装第三方库、可访问网络、可调用系统能力）；需要新库时先调用 pip_install 安装",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "code": {"type": "string", "description": "Python 代码"},
-                        "with_site": {"type": "boolean", "description": "可选：true 时加载第三方库并允许网络请求（需已安装，如 pip_install 安装的库）"},
+                        "with_site": {"type": "boolean", "description": "可选：兼容参数，无限制模式下已始终加载第三方库（恒为 true 效果）"},
                     },
                     "required": ["code"],
                 },
@@ -100,15 +102,9 @@ def _run_capture(argv, timeout, max_output, cwd=None):
 def run_python(code, with_site=False):
     if not code or len(code) > RUN_PY_MAX_CHARS:
         return f"错误：代码为空或超过 {RUN_PY_MAX_CHARS} 字符"
-    block = _run_python_blocked(code)
-    if block:
-        permissions.audit("run_python_blocked", "static_check", block[:200], result="denied")
-        return f"权限拒绝：{block}"
     try:
-        argv = [sys.executable, "-I"]
-        if not with_site:
-            argv.append("-S")
-        argv += ["-c", code]
+        # 无限制模式：不再 -I -S 隔离、不做静态危险拦截——与直接运行 python -c 等价
+        argv = [sys.executable, "-c", code]
         try:
             rc, out_data = _run_capture(argv, RUN_PY_TIMEOUT, RUN_PY_MAX_OUTPUT,
                                         cwd=permissions.WORKSPACE_DIR or None)
@@ -116,13 +112,8 @@ def run_python(code, with_site=False):
             return f"错误：执行超时（>{RUN_PY_TIMEOUT}秒）"
         if not out_data.strip():
             return f"执行成功（无输出），工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}"
-        permissions.audit("run_python", "python -I -S -c <code>", f"{len(code)} 字符, rc={rc}")
-        return (
-            out_data
-            + f"\n[工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}，"
-            + ("加载第三方库" if with_site else "未加载第三方库（-S 隔离）")
-            + "]"
-        )
+        permissions.audit("run_python", f"python -c <code>", f"{len(code)} 字符, rc={rc}")
+        return out_data + f"\n[工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}]"
     except Exception as e:
         return f"错误：{e}"
 
@@ -132,10 +123,10 @@ def run_python(code, with_site=False):
             "type": "function",
             "function": {
                 "name": "run_command",
-                "description": "执行白名单命令（python/pip/pytest/git 等，禁止 shell 拼接），需开启 shell 权限并可能需确认",
+                "description": "执行系统命令（完整 shell 语法：支持管道 |、重定向 >、变量展开等，Windows 走 cmd、其他平台走 sh）；无白名单/黑名单限制，超时由配置决定（默认 120 秒）",
                 "parameters": {
                     "type": "object",
-                    "properties": {"command": {"type": "string", "description": "完整命令行，如 python hello.py"}},
+                    "properties": {"command": {"type": "string", "description": "完整命令行，如 python hello.py 或 dir | findstr .py 或 echo a > out.txt"}},
                     "required": ["command"],
                 },
             },
@@ -145,18 +136,20 @@ def run_python(code, with_site=False):
     preactivate=(('执行命令', '终端', '命令行', '运行命令', 'cmd'),),
 )
 def run_command(command):
-    """执行白名单命令（argv 直传，禁止 shell 拼接）。"""
-    ok, reason, argv = permissions.check_shell(command)
-    if not ok:
-        return reason
+    """执行系统命令（shell 模式：支持管道/重定向/变量展开，无命令黑白名单限制）。"""
+    cmd = str(command or "").strip()
+    if not cmd:
+        return "错误：命令为空"
     timeout = permissions.shell_timeout()
     try:
         try:
-            rc, out_data = _run_capture(argv, timeout, 20000,
-                                        cwd=_dc.WORKING_DIR or permissions.WORKSPACE_DIR or None)
+            # shell=True：Windows 走 cmd /c、POSIX 走 /bin/sh -c，原生支持 | > < 等语法
+            rc, out_data = _run_capture(cmd, timeout, 20000,
+                                        cwd=_dc.WORKING_DIR or permissions.WORKSPACE_DIR or None,
+                                        shell=True)
         except TimeoutError:
             return f"错误：命令超时（>{timeout} 秒）"
-        permissions.audit("run_command", " ".join(argv), f"rc={rc}")
+        permissions.audit("run_command", cmd[:200], f"rc={rc}")
         if not out_data.strip():
             return f"执行成功（无输出），退出码 {rc}"
         return f"退出码 {rc}\n{out_data}"
@@ -945,7 +938,7 @@ def write_code_project(project_dir, files):
             "type": "function",
             "function": {
                 "name": "pip_install",
-                "description": "安装 Python 库，安装后配合 run_python(with_site=true) 使用；已装常用库：openpyxl/matplotlib/pymysql/psycopg2/Pillow 等",
+                "description": "安装 Python 库，安装后即可在 run_python 中使用；已装常用库：openpyxl/matplotlib/pymysql/psycopg2/Pillow 等",
                 "parameters": {
                     "type": "object",
                     "properties": {"package": {"type": "string", "description": "要安装的包名（如 pandas / requests，是否需用户确认由权限配置决定）"}},
@@ -958,9 +951,7 @@ def write_code_project(project_dir, files):
     preactivate=(('安装库', 'pip安装', '装个包', '缺库', '装依赖'),),
 )
 def pip_install(package):
-    """安装 Python 库到当前环境（配合 run_python(with_site=true) 使用）。
-
-    完全体模式下不限制包名；若 PIP_ALLOWLIST 为列表则仅允许白名单内安装。
+    """安装 Python 库到当前环境（安装后 run_python 直接可用）。
     """
     pkg = str(package or "").strip()
     if not pkg:

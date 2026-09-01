@@ -149,7 +149,8 @@ def _is_private_host(host, allow_loopback=True):
 def _safe_url(url, allow_loopback=True):
     """URL 安全校验。
 
-    v2.13+ 权限哲学：默认放行，只按用户黑名单拦截。
+    无限制模式（v3.9+，blacklist 默认）：只按用户配置的 network.blocklist 拦截，
+    内网/回环/云元数据等一律放行——信任用户与模型，不内置 SSRF 硬判。
     - permissions.security_mode() == "blacklist"（默认）：只拦 network.blocklist。
     - permissions.security_mode() == "whitelist"（旧模式）：保持旧 SSRF 严格判断。
     """
@@ -164,12 +165,6 @@ def _safe_url(url, allow_loopback=True):
             ok, reason = permissions.check_network_host(host)
             if not ok:
                 return f"{reason}：{url[:80]}"
-            # SSRF 底线不因 blacklist 豁免：云元数据/链路本地/内网仍按
-            # _is_private_host 硬判（SSRF_TRUSTED 显式信任的内网/回环可放行，
-            # 169.254.0.0/16 永远拦截）。此前只查 network.blocklist（默认空）
-            # 导致默认配置下 fetch_url 可直达云元数据——SSRF 防护整体失效。
-            if _is_private_host(host, allow_loopback=allow_loopback):
-                return f"已阻止访问内网/回环地址（SSRF 防护）：{url[:80]}"
             return ""
     except Exception:
         pass

@@ -11,7 +11,6 @@ import sys
 import threading
 import time
 import weakref
-import ast
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from concurrent.futures.thread import _threads_queues, _worker  # 内部接口：daemon 化所需
@@ -445,155 +444,8 @@ EXTRACT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 解压总字节上限（防�
 EXTRACT_MAX_SINGLE_BYTES = 2 * 1024 * 1024 * 1024  # 单文件解压大小上限
 
 # ===== run_python 执行模式 =====
-# 完全体模式：沙箱降为用户权限级（默认 -S 不加载第三方库），
-# 由用户的授权决策与权限模型（阻止目录/审批）兜底。
-
-# run_python 静态危险拦截（仅非完全智能模式生效；完全智能 = 用户显式授权任意代码）。
-# 词边界正则避免 1.10.0 版"误拦合法代码"的教训（\|a\|x 分支误伤字母）。
-_RUN_PY_FORBIDDEN = (
-    (re.compile(r"\bos\.(?:system|popen|spawn\w*|kill|remove|unlink|rmdir|removedirs)\b"),
-     "os 系统调用/文件删除"),
-    (re.compile(r"\bsubprocess\b"), "subprocess"),
-    (re.compile(r"\bshutil\.(?:rmtree|rmdir|move|copy\w*|make_archive)\b"), "shutil 文件操作"),
-    (re.compile(r"\b(?:eval|exec)\s*\("), "eval/exec"),
-    (re.compile(r"\b__import__\s*\("), "__import__"),
-    (re.compile(r"\bctypes\b"), "ctypes"),
-    (re.compile(r"\bsocket\b"), "socket 网络"),
-)
-
-# ast 深度检查（修复正则可绕过的攻击面）：
-# - from os import system / importlib.import_module('subprocess') 等动态/别名导入
-# - os["system"] / getattr(os, "system") 索引与反射式调用
-# - open(..., "w"/"a"/"x"/"+") 写模式（-I -S 沙箱内写文件绕过权限模型）
-_RUN_PY_FORBIDDEN_MODULES = {
-    "subprocess", "ctypes", "socket", "pty", "winreg", "win32api",
-    "win32process", "win32pipe", "msvcrt",
-}
-_RUN_PY_FROM_FORBIDDEN = {
-    "system", "popen", "popen2", "spawn", "spawnl", "spawnv", "spawnle",
-    "remove", "unlink", "rmdir", "removedirs", "kill", "killpg",
-    "exec", "execv", "execl", "startfile", "pthread_kill",
-}
-_RUN_PY_DANGEROUS_ATTRS = {
-    "system", "popen", "spawn", "spawnl", "spawnv", "spawnle",
-    "kill", "killpg", "remove", "unlink", "rmdir", "removedirs",
-    "execv", "execl", "execve", "startfile", "startfilepath",
-}
-
-
-def _call_open_mode(node):
-    """提取 open() 调用中的 mode 参数（仅字符串字面量；变量无法静态判断则放行）。"""
-    args = node.args
-    kw = {}
-    for k in node.keywords or ():
-        if k.arg:
-            kw[k.arg] = k.value
-    mode_node = kw.get("mode")
-    if mode_node is None and len(args) >= 2:
-        mode_node = args[1]
-    if isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str):
-        return mode_node.value
-    return None
-
-
-def _run_python_ast_blocked(code):
-    """ast 深度静态检查：拦截别名导入 / 反射式调用 / 写模式 open。
-
-    返回拦截原因字符串，通过则返回 ""。语法错误不拦截（由子进程报告，
-    避免把"用户代码有语法错误"误报为安全拦截）。
-    """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return ""
-    # 第一遍：收集 os / importlib 的别名，并拦截星号导入与危险模块
-    os_aliases = set()
-    importlib_aliases = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                root = (alias.name or "").split(".")[0]
-                if root in _RUN_PY_FORBIDDEN_MODULES or root == "builtins":
-                    return f"静态拦截：禁止导入模块 {alias.name}（完全智能模式可放行）"
-                if root == "os":
-                    os_aliases.add(alias.asname or alias.name)
-                if root == "importlib":
-                    importlib_aliases.add(alias.asname or alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            mod = (node.module or "").split(".")[0]
-            if mod in _RUN_PY_FORBIDDEN_MODULES or mod == "builtins":
-                return f"静态拦截：禁止导入模块 {node.module}（完全智能模式可放行）"
-            if mod == "os":
-                for a in node.names or ():
-                    if a.name == "*":
-                        return "静态拦截：禁止 from os import *（完全智能模式可放行）"
-                    if a.name in _RUN_PY_FROM_FORBIDDEN:
-                        return f"静态拦截：禁止 from os import {a.name}（完全智能模式可放行）"
-            if mod == "importlib":
-                for a in node.names or ():
-                    if a.name == "import_module":
-                        return "静态拦截：禁止 importlib 动态导入（完全智能模式可放行）"
-    # 第二遍：检查调用/反射/索引
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            f = node.func
-            if isinstance(f, ast.Name):
-                if f.id in ("eval", "exec", "__import__", "compile"):
-                    return f"静态拦截：禁止调用 {f.id}()（完全智能模式可放行）"
-                if f.id == "open":
-                    mode = _call_open_mode(node)
-                    if mode and any(ch in mode for ch in "wax+"):
-                        return "静态拦截：禁止以写模式打开文件（写文件请用 write_file 工具）"
-                if f.id in ("getattr", "setattr", "delattr", "vars", "globals", "locals"):
-                    return f"静态拦截：禁止反射/内省调用 {f.id}()（完全智能模式可放行）"
-            elif isinstance(f, ast.Attribute):
-                attr = f.attr
-                base = f.value
-                if isinstance(base, ast.Name) and base.id in os_aliases and attr in _RUN_PY_DANGEROUS_ATTRS:
-                    return f"静态拦截：禁止调用 {base.id}.{attr}()（完全智能模式可放行）"
-                if attr == "import_module" and isinstance(base, ast.Name) and base.id in importlib_aliases:
-                    return "静态拦截：禁止 importlib 动态导入（完全智能模式可放行）"
-                if attr in ("write_text", "write_bytes"):
-                    # Path('f').write_text(...) / pathlib.Path('f').write_text(...)
-                    p_func = base.func if isinstance(base, ast.Call) else None
-                    p_name = (
-                        p_func.id
-                        if isinstance(p_func, ast.Name)
-                        else (p_func.attr if isinstance(p_func, ast.Attribute) else "")
-                    )
-                    if p_name in ("Path", "PurePath"):
-                        return "静态拦截：禁止 pathlib 写文件（写文件请用 write_file 工具）"
-        elif isinstance(node, ast.Subscript):
-            # os["system"] / 别名索引式调用绕过
-            if (
-                isinstance(node.value, ast.Name)
-                and node.value.id in os_aliases
-                and isinstance(node.slice, ast.Constant)
-                and isinstance(node.slice.value, str)
-                and node.slice.value in _RUN_PY_FROM_FORBIDDEN
-            ):
-                return f"静态拦截：禁止索引调用 {node.value.id}[{node.slice.value!r}]（完全智能模式可放行）"
-    return ""
-
-
-def _run_python_blocked(code):
-    """静态危险检查（非完全智能模式下拦截高危操作，完全智能模式仅校验非空）。
-
-    双层防线：① 正则快速匹配（保留历史拦截面）；② ast 深度检查（拦截
-    from-import 别名、importlib 动态导入、getattr/下标反射、写模式 open 等
-    正则无法覆盖的绕过手法）。完全智能模式 = 用户显式授权，仅校验非空。
-    """
-    if not code:
-        return "代码为空"
-    if permissions.is_full_auto():
-        return ""
-    for pat, label in _RUN_PY_FORBIDDEN:
-        if pat.search(code):
-            return f"静态拦截：代码包含 {label} 操作（完全智能模式可放行，或删除该语句后重试）"
-    ast_err = _run_python_ast_blocked(code)
-    if ast_err:
-        return ast_err
-    return ""
+# 无限制模式（v3.9+）：run_python 与直接运行 python -c 等价——不隔离、不静态拦截，
+# 可加载全部已安装库、访问网络、调用系统能力。信任用户与模型，不再内置任何拦截。
 
 # 工具结果"失败"前缀统一判定（main/taskpanel 共享，防散落魔法字符串漂移）
 TOOL_RESULT_FAIL_PREFIXES = ("错误", "权限拒绝", "超时", "（用户停止")
@@ -1424,22 +1276,13 @@ def _search_report(name, ok):
 CALL_API_MAX_BYTES = 500 * 1024  # 响应体上限 500KB（与 fetch_url 输出对齐）
 CALL_API_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD")
 CALL_API_MAX_HEADERS = 16
-# 内网/回环白名单（main 从 config 的 call_api_allowed_hosts 注入）：
-# 命中精确主机名的请求跳过 SSRF 拦截——用于用户显式放行的本地服务
-# （如 127.0.0.1:8000 的本地 API），其余内网地址照常拦截。仅精确匹配，
-# 建议填 IP 而非域名（避免 DNS 重绑定绕过）。
+# 无限制模式（v3.9+）：call_api 不设主机白名单、不拦内网/回环，任何地址均可访问。
 CALL_API_ALLOWED_HOSTS = []
 
 
 def _call_api_host_allowed(url):
-    try:
-        host = _url_host(url)
-        if not host:
-            return False
-        allow = {str(h).strip().lower() for h in CALL_API_ALLOWED_HOSTS if str(h).strip()}
-        return host.lower() in allow
-    except Exception:
-        return False
+    """无限制模式：恒放行（保留函数签名兼容旧引用）。"""
+    return True
 
 
 def _legacy_system_status():

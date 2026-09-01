@@ -173,7 +173,7 @@ def read_file(path, start_line=None, max_lines=None):
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "写文件（自动建目录，目录白名单校验 + 大小限制 + 原子写 + 自动 .bak）",
+                "description": "写文件（自动建目录，大小限制 + 原子写 + 自动 .bak）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -189,7 +189,7 @@ def read_file(path, start_line=None, max_lines=None):
     preactivate=(('写', '保存', '创建', '生成'), ('修改', '编辑', '改动', '改一下', '改一次', '改成', '改为', '改下', '改改', '改掉', '更新', '替换', '重写', '覆盖', '重命名', '改名', '删掉', '删除')),
 )
 def write_file(path, content):
-    """写文件：目录白名单 + 大小限制（按 UTF-8 字节计）+ 原子写 + 自动 .bak + 写入后真实核验。"""
+    """写文件：大小限制（按 UTF-8 字节计）+ 原子写 + 自动 .bak + 写入后真实核验。"""
     ok, reason = permissions.check_filesystem(path, write=True)
     if not ok:
         return reason
@@ -978,26 +978,32 @@ def batch_rename(directory, pattern, replacement, dry_run=False):
     preactivate=(('后台进程', '启动服务', '启动服务器', '停止进程', '看进程', '进程列表'),),
 )
 def start_process(command, name=""):
-    """后台启动长驻进程（服务器等），输出实时推送终端面板。"""
-    ok, reason, argv = permissions.check_shell(command)
-    if not ok:
-        return reason
+    """后台启动长驻进程（服务器等），输出实时推送终端面板。
+
+    无限制模式：支持完整 shell 语法（管道/重定向/变量），不做命令黑白名单拦截。
+    """
+    cmd = str(command or "").strip()
+    if not cmd:
+        return "错误：命令为空"
     with _PROCESSES_LOCK:
         for k in [k for k, v in PROCESSES.items() if v.get("exited")]:
             PROCESSES.pop(k, None)
         if len(PROCESSES) >= MAX_PROCESSES:
             return f"错误：后台进程数已达上限（{MAX_PROCESSES} 个），请先 stop_process 停止部分进程"
     try:
-        # Python 子进程输出到管道为全缓冲，实时日志需 -u 无缓冲
-        if os.path.basename(argv[0]).lower().startswith("python") and "-u" not in argv:
-            argv = [argv[0], "-u"] + argv[1:]
+        # shell=True：Windows 走 cmd /c、POSIX 走 /bin/sh -c，原生支持管道/重定向；
+        # PYTHONUNBUFFERED=1 替代 -u 注入（shell 模式下无需拆 argv），python 实时日志不缓冲
+        env = dict(os.environ)
+        env["PYTHONUNBUFFERED"] = "1"
         proc = subprocess.Popen(
-            argv,
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
             errors="replace",
+            shell=True,
+            env=env,
             creationflags=(
                 subprocess.CREATE_NO_WINDOW
                 if hasattr(subprocess, "CREATE_NO_WINDOW")
@@ -1016,7 +1022,8 @@ def start_process(command, name=""):
         if len(PROCESSES) >= MAX_PROCESSES:
             _kill_tree(proc)  # 启动后才发现达上限：进程必须回收，不能留孤儿
             return f"错误：后台进程数已达上限（{MAX_PROCESSES} 个），请先 stop_process 停止部分进程"
-        base = str(name or "").strip()[:40] or os.path.basename(argv[0]) or f"proc{len(PROCESSES) + 1}"
+        first_token = (cmd.split(None, 1) or [""])[0]
+        base = str(name or "").strip()[:40] or os.path.basename(first_token) or f"proc{len(PROCESSES) + 1}"
         proc_name = base
         i = 2
         while proc_name in PROCESSES:
@@ -1032,9 +1039,9 @@ def start_process(command, name=""):
             "code": None,
             "lines": deque(maxlen=2000),
         }
-    _emit_process(proc_name, f"── 进程启动 pid={proc.pid}（{' '.join(argv)}）──")
+    _emit_process(proc_name, f"── 进程启动 pid={proc.pid}（{cmd[:120]}）──")
     threading.Thread(target=_process_reader, args=(proc_name,), daemon=True).start()
-    permissions.audit("start_process", proc_name, " ".join(argv))
+    permissions.audit("start_process", proc_name, cmd[:200])
     return (
         f"已启动后台进程「{proc_name}」（pid={proc.pid}）\n"
         "实时输出见「工具 → 进程终端」。可用 stop_process 停止，list_processes 查询状态。"

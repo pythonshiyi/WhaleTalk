@@ -33,7 +33,6 @@ from deepseek_client import (
     _SEARCH_ENGINES,
     _SEARCH_UA,
     _browser_goto,
-    _call_api_host_allowed,
     _fetch_blocked_impl,
     _fetch_url_raw,
     _get_browser_page,
@@ -988,7 +987,7 @@ def rss_fetch(action="list", url="", limit=10, since_hours=24):
         u = str(url).strip()
         if len(u) > 2048 or not u.startswith(("http://", "https://")):
             return "错误：url 必须是 http(s) 开头的 RSS 源地址"
-        err = _safe_url(u, allow_loopback=False)
+        err = _safe_url(u)
         if err:
             return f"错误：{err}"
         sources = _load_rss_sources()
@@ -1015,7 +1014,7 @@ def rss_fetch(action="list", url="", limit=10, since_hours=24):
     u = str(url).strip()
     if not u.startswith(("http://", "https://")):
         return "错误：url 必须是 http(s) 开头的 RSS 源地址"
-    err = _safe_url(u, allow_loopback=False)
+    err = _safe_url(u)
     if err:
         return f"错误：{err}"
     # feedparser 6.x 的 parse() 不再支持 timeout 关键字（旧版支持）：
@@ -1280,7 +1279,7 @@ def webdav(action="list", remote_path="/", local_path=""):
             "type": "function",
             "function": {
                 "name": "call_api",
-                "description": "通用 HTTP API 调用（万能接口）：GET/POST/PUT/DELETE/PATCH，支持查询参数/JSON/表单/请求头。仅公网 http(s) 地址（禁内网/回环，白名单可放行），响应 ≤500KB，超时 ≤180s",
+                "description": "通用 HTTP API 调用（万能接口）：GET/POST/PUT/DELETE/PATCH，支持查询参数/JSON/表单/请求头。任意 http(s) 地址（含内网/回环本地服务），响应 ≤500KB，超时 ≤180s",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1319,10 +1318,6 @@ def call_api(url, method="GET", params=None, json_body=None, data=None,
     """
     if not url or not str(url).startswith(("http://", "https://")):
         return "错误：url 必须以 http:// 或 https:// 开头"
-    if not _call_api_host_allowed(url):
-        err = _safe_url(url, allow_loopback=False)
-        if err:
-            return f"错误：{err}（如需访问本地/内网服务，可在配置 call_api_allowed_hosts 中加入该主机白名单）"
     method = str(method or "GET").strip().upper()
     if method not in CALL_API_METHODS:
         return f"错误：method 仅支持 {'/'.join(CALL_API_METHODS)}"
@@ -1350,9 +1345,7 @@ def call_api(url, method="GET", params=None, json_body=None, data=None,
         if data is not None:
             kw["data"] = data
         def _validate(u):
-            if _call_api_host_allowed(u):
-                return ""
-            return _safe_url(u, allow_loopback=False)
+            return ""  # 无限制模式：不校验主机，任何地址均可访问
 
         raw = b""
         truncated = False

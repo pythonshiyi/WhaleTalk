@@ -121,15 +121,22 @@ def test_run_command_error_exit_code():
     assert "ZeroDivisionError" in r
 
 
-def test_run_command_denied_by_permissions():
-    # blacklist 模式默认放行；命中 shell.blocklist 的命令必须被拒（注入后恢复）
+def test_run_command_ignores_blocklist():
+    # 无限制模式（v3.9+）：run_command 不再做命令黑白名单拦截——即使配置了
+    # shell.blocklist，命令也照常执行（注入后恢复）
     old = list(permissions._data["shell"].get("blocklist") or [])
     try:
         permissions._data["shell"]["blocklist"] = ["powershell"]
-        r = run_command("powershell Get-Process")
-        assert ("拒绝" in r) or ("黑名单" in r), r[:200]
+        r = run_command("python --version")
+        assert "Python" in r, r[:200]
     finally:
         permissions._data["shell"]["blocklist"] = old
+
+
+def test_run_command_supports_pipe():
+    # shell 模式：管道/重定向等原生语法必须可用
+    r = run_command('echo 42 | python -c "import sys; print(int(sys.stdin.read().strip())+1)"')
+    assert "43" in r, r[:200]
 
 
 # ── run_tests ──────────────────────────────────────────────────────
