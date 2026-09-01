@@ -2,6 +2,19 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🧩 P0-1 巨石拆分第二批（媒体/文档域）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。P0-1 路线第二批：把「🎨 媒体与图像」域的 10 个工具从 `deepseek_client.py` 迁入 `agent_tools/tool_media.py`，复用首批验证的「共享符号梳理 + 门禁护航」拆分模式。
+
+### 变更
+- **新增 `agent_tools/tool_media.py`**（🎨 媒体与图像，10 工具）：`image_process` / `ocr_image` / `image_understand` / `screen_capture` / `screen_see` / `chart_read` / `screenshot_to_html` / `debug_screenshot` / `scan_read` / `image_batch`——装饰器 + 函数体原样迁出；顶层 `from-import` 依赖符号：deepseek_client（`VISION_MODEL` / `IMAGE_EXTENSIONS` / `get_active_client` / `is_vision_model` / `_detect_image_mime` / `_safe_stream` / `_capture_screen_png`）+ security（`_safe_url`）+ shared（`OCR_IMAGE_PS`）+ permissions，均位于主文件导入点之前（加载顺序契约）
+- **`deepseek_client.py` 薄化 −588 行**（13,703 → 13,115）：主文件保留视觉闭环辅助符号 `_capture_screen_png` / `_extract_image_path` / `_IMAGE_FILE_PATH_RE` / `_IMAGE_PATH_TRAIL` / `_IMAGE_PRODUCING_TOOLS`（vision_loop / RPA 自查 10829/10873/10929 与进化审核 12924/12927 仍直接调用），域模块经 re-import 复用
+- **`agent_tools/__init__.py`**：聚合 `from .tool_media import *`，`__all__` 扩展至 14 工具名（`dc.image_understand` 等旧访问路径不变）
+
+### 回归
+- `tests/test_tool_split.py` 扩展 4 用例（共 10 用例）：媒体工具 re-export + 归属 `agent_tools.tool_media`、六层完整性、视觉辅助符号保留在主文件、参数校验分支行为回归（不依赖 PIL/网络）
+- pytest **74 passed**（70 原有 + 4 新增）；四工具门禁全绿（audit `--strict` error 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3）；进程内冒烟确认 TOOLS 仍 135、媒体 10 工具六层同源、`image_generate`/`qrcode` 等仍归属主文件
+
 ## v3.8.3（未发版追加）—— 🧩 P0-1 巨石拆分首批（agent_tools/ 域模块）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。P0-1 路线的第一批落地：把 `deepseek_client.py`（13,889 行巨石）的工具定义按域拆出，建立可复制、门禁护航的拆分模式。

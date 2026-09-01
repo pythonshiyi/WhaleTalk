@@ -22,8 +22,8 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
 ├── api_server.py           # 本地 HTTP API（REST + SSE，79+ /v1 端点）
-├── deepseek_client.py      # 能力引擎：DeepSeekClient + 135 工具 + smart_tools（约 1.3 万行；P0-1 拆分中，首批已迁出）
-├── agent_tools/            # 工具域模块包（P0-1 拆分）：tool_basic / tool_data，@tool() 注册 + __all__ re-export
+├── deepseek_client.py      # 能力引擎：DeepSeekClient + 135 工具 + smart_tools（约 1.31 万行；P0-1 拆分中，首批+第二批已迁出 14 工具，累计 −775 行）
+├── agent_tools/            # 工具域模块包（P0-1 拆分）：tool_basic / tool_data / tool_media，@tool() 注册 + __all__ re-export
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
 ├── security.py             # SSRF 防护（云元数据永远拦截）
 ├── crypto.py               # API Key DPAPI 加密（fail-closed）
@@ -244,7 +244,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 ## 19. 演进建议
 
-1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**进行中**：首批 get_date/get_weather/read_csv/write_csv 已迁（主文件 −187 行），`rebuild_layers` 多文件 AST、三门禁多文件扫描、spec `collect_submodules('agent_tools')`、`tests/test_tool_split.py` 已配套
+1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**进行中**：首批 get_date/get_weather/read_csv/write_csv 已迁（−187 行）；第二批「🎨 媒体与图像」10 工具迁入 `tool_media.py`（−588 行，视觉闭环辅助 `_capture_screen_png`/`_extract_image_path` 留主文件、域模块 from-import 复用）；`rebuild_layers` 多文件 AST、三门禁多文件扫描、spec `collect_submodules('agent_tools')`、`tests/test_tool_split.py`（10 用例）已配套
 2. `@tool()` 装饰器统一六层声明（消除手工漂移）
 3. ~~补齐 pytest 测试资产并接入 CI~~ 已完成（v3.8.3 起 CI 跑 `pytest tests/` 28 用例 + 前端 3 套件 + 四道门禁）；下一步是**按领域扩充分子级 pytest 用例**（工具/权限/存储执行路径，当前覆盖集中在注册表与进化闸）
 4. 进化闭环补门禁：`self_evolve` 合并前强制跑 audit/validate/测试；进化账本（效果回流）；评审 AI 前置
