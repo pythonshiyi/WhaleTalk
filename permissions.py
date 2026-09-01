@@ -45,7 +45,14 @@ DEFAULT_PERMISSIONS = {
     "network": {
         "blocklist": [],           # 两种模式均生效：命中的主机/网段拒绝
     },
-    "approval_actions": [],        # 默认完全放开：黑名单里不能有任何数据（用户自行增删）
+    "approval_actions": [  # P1-5 安全默认：高危动作默认需审批（blacklist 模式下仅清单内动作弹确认）
+        "run_command", "run_python", "pip_install",
+        "delete_file", "batch_rename", "extract_archive", "restore_snapshot",
+        "send_email", "database_execute",
+        "start_process", "stop_process",
+        "write_code_project", "publish_draft", "create_plugin",
+        "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot",
+    ],
     "approval_mode": "auto",       # whitelist 模式用：auto / confirm / deny
     "approval_timeout": 120,
     "plan_confirm": False,
@@ -152,7 +159,8 @@ def _migrate_v1_to_v2(data, disk):
         data["shell"]["allow_run_command"] = bool(sh.get("allow_run_command", False))
         # 旧 SSRF 永远拦截云元数据：迁移为初始网络黑名单
         data["network"]["blocklist"] = ["169.254.169.254"]
-        data["approval_actions"] = []
+        # P1-5：迁移用户同样获得高危审批安全基线（与 DEFAULT_PERMISSIONS 一致）
+        data["approval_actions"] = list(DEFAULT_PERMISSIONS["approval_actions"])
         for key in ("approval_mode", "approval_timeout", "plan_confirm"):
             if key in disk:
                 data[key] = disk[key]

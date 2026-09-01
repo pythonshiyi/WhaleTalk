@@ -2,6 +2,20 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🛡 P1-5 安全默认值落地
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。将「初始即完全智能（零审批）」反转为「安全默认（对话模式 + 高危审批）」。
+
+### 变更
+- **`config_defaults.full_auto` 默认 `True → False`**：新装用户初始为 💬 对话模式，不再零审批；老用户 config.json 显式值不受影响
+- **`permissions.DEFAULT_PERMISSIONS.approval_actions` 预填 21 项高危动作**（run_command / run_python / pip_install / delete_file / batch_rename / extract_archive / restore_snapshot / send_email / database_execute / start_process / stop_process / write_code_project / publish_draft / create_plugin / rpa_* 六项）——blacklist 模式下清单内动作弹审批确认，**此前默认为空导致审批空转**；v1→v2 迁移路径同步获得该安全基线
+- **`api_server._config_reset`**：不再强制保留 `full_auto=True`，恢复默认 = 回到安全默认，并同步权限模块 FULL_AUTO
+- **前端**：`App.jsx` 初始 `mode` 由 `task` → `dialog`（启动后仍从后端读真实模式覆盖）；`FirstRunPage` 首次启动向导底部新增「🛡 安全默认已启用」确认说明（高危操作需确认、可随时切任务模式）
+
+### 回归
+- 新增 `tests/test_safety_defaults.py`（10 用例）：默认值断言、approval_actions 高危预填与低危不打扰、blacklist 清单内走审批/清单外放行、FULL_AUTO 跳过审批、审批拒绝拦截、`_config_reset` 回安全默认、前端初始 mode 与向导说明静态检查
+- pytest **64 passed**（54 原有 + 10 新增）；前端 `npm test` / `npm run typecheck` / `npm run build` 全绿；四工具门禁（audit/validate/island/check_docs）全绿；进程内冒烟确认默认 `mode=dialog / full_auto=False`
+
 ## v3.8.3（未发版追加）—— 🧹 P2 打磨批次（P2-1 ~ P2-8 全部落地）
 
 在 v3.8.3 基础上的低优先级打磨项全量收敛，**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3），涉及后端重构 + 前端优化 + 文档/门禁配套。

@@ -2159,7 +2159,7 @@ def _deps_install(key):
 
 
 def _config_reset():
-    """恢复默认配置（保留 api_key / inbound_token / image_api_key）。"""
+    """恢复默认配置（保留 api_key / inbound_token / image_api_key / active_dir）。"""
     import config_utils
     import config_defaults
     cfg = config_utils.load_config()
@@ -2168,11 +2168,17 @@ def _config_reset():
         "inbound_token": cfg.get("inbound_token", ""),
         "image_api_key": cfg.get("image_api_key", ""),
         "active_dir": cfg.get("active_dir", ""),
-        "full_auto": True,
+        # P1-5：恢复默认 = 回到安全默认（full_auto 由 config_defaults 决定，不再强制 True）
         "pure_chat": False,
     }
     fresh = dict(config_defaults.DEFAULT_CONFIG)
     fresh.update(keep)
+    # 恢复默认后同步权限模块的 FULL_AUTO（防进程内状态残留）
+    try:
+        import permissions as _perms
+        _perms.set_full_auto(bool(fresh.get("full_auto")))
+    except Exception:
+        pass
     config_utils.save_config(fresh)
     return {"ok": True}
 

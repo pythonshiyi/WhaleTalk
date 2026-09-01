@@ -265,7 +265,7 @@ DEFAULT_CONFIG = {
     "silent_start": False,  # web 版静默启动：启动后不自动打开浏览器（托盘常驻，随手打开界面）
     "ssrf_trusted": [],
     "project_context": False,
-    "full_auto": True,  # 初始即完全智能：全部工具、零审批、零开关（黑名单仍生效）
+    "full_auto": False,  # 安全默认（P1-5）：初始即对话模式 + 高危动作审批；显式开启任务模式（全部工具、零审批，黑名单仍生效）
     "active_dir": "",
     "evolution_reminder_days": 7,
     "suggestions_enabled": True,
