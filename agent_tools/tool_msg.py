@@ -721,7 +721,7 @@ def daily_brief(topic="", max_items=8):
     except Exception as e:
         return f"错误：简报生成失败: {e}"
     if not brief:
-        return "简报生成失败：模型返回空内容，请重试"
+        return "错误：简报生成失败：模型返回空内容，请重试"
     out = ""
     if permissions.WORKSPACE_DIR:
         d = os.path.join(permissions.WORKSPACE_DIR, "briefs")

@@ -38,6 +38,44 @@ from deepseek_client import (
 )
 
 
+def _run_capture(argv, timeout, max_output, cwd=None):
+    """A6: 公共进程执行辅助——spool 输出防刷屏 OOM、超时 kill 进程树、截断读取。
+
+    返回 (returncode, output)。超时抛 TimeoutError(timeout)，调用方按需格式化。
+    与旧内联实现的差异：统一 creationflags（Windows 不弹窗）、cwd 可传、错误一致。
+    """
+    import tempfile
+
+    with tempfile.SpooledTemporaryFile(
+        max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
+    ) as out:
+        proc = subprocess.Popen(
+            argv,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+            raise TimeoutError(timeout)
+        out.seek(0)
+        data = out.read(max_output)
+        out.seek(0, os.SEEK_END)
+        if out.tell() > max_output:
+            data += "\n[输出已截断]"
+    return proc.returncode, data
+
+
 
 @tool(
         {
@@ -71,39 +109,14 @@ def run_python(code, with_site=False):
         if not with_site:
             argv.append("-S")
         argv += ["-c", code]
-        # SpooledTemporaryFile 重定向输出：进程刷屏打印时内存峰值限 1MB，
-        # 超时 kill 后读取截断，不再全量 buffered 进内存（GB 级打印防 OOM）
-        import tempfile
-
-        with tempfile.SpooledTemporaryFile(
-            max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
-        ) as out:
-            proc = subprocess.Popen(
-                argv,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                cwd=permissions.WORKSPACE_DIR or None,
-            )
-            try:
-                proc.wait(timeout=RUN_PY_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                _kill_tree(proc)
-                try:
-                    proc.wait(timeout=3)
-                except Exception:
-                    pass
-                return f"错误：执行超时（>{RUN_PY_TIMEOUT}秒）"
-            out.seek(0)
-            out_data = out.read(RUN_PY_MAX_OUTPUT)
-            out.seek(0, os.SEEK_END)
-            if out.tell() > RUN_PY_MAX_OUTPUT:
-                out_data += "\n[输出已截断]"
+        try:
+            rc, out_data = _run_capture(argv, RUN_PY_TIMEOUT, RUN_PY_MAX_OUTPUT,
+                                        cwd=permissions.WORKSPACE_DIR or None)
+        except TimeoutError:
+            return f"错误：执行超时（>{RUN_PY_TIMEOUT}秒）"
         if not out_data.strip():
             return f"执行成功（无输出），工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}"
-        permissions.audit("run_python", "python -I -S -c <code>", f"{len(code)} 字符, rc={proc.returncode}")
+        permissions.audit("run_python", "python -I -S -c <code>", f"{len(code)} 字符, rc={rc}")
         return (
             out_data
             + f"\n[工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}，"
@@ -138,40 +151,15 @@ def run_command(command):
         return reason
     timeout = permissions.shell_timeout()
     try:
-        # 输出 spool 到临时文件：命令刷屏（type 大日志）时内存峰值限 1MB
-        import tempfile
-
-        with tempfile.SpooledTemporaryFile(
-            max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
-        ) as out:
-            proc = subprocess.Popen(
-                argv,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                # 命令在工作目录执行（跟随 📁 目录设置），相对路径引用不再漂移
-                cwd=_dc.WORKING_DIR or permissions.WORKSPACE_DIR or None,
-            )
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                _kill_tree(proc)
-                try:
-                    proc.wait(timeout=3)
-                except Exception:
-                    pass
-                return f"错误：命令超时（>{timeout} 秒）"
-            out.seek(0)
-            out_data = out.read(20000)
-            out.seek(0, os.SEEK_END)
-            if out.tell() > 20000:
-                out_data += "\n[输出已截断]"
-        permissions.audit("run_command", " ".join(argv), f"rc={proc.returncode}")
+        try:
+            rc, out_data = _run_capture(argv, timeout, 20000,
+                                        cwd=_dc.WORKING_DIR or permissions.WORKSPACE_DIR or None)
+        except TimeoutError:
+            return f"错误：命令超时（>{timeout} 秒）"
+        permissions.audit("run_command", " ".join(argv), f"rc={rc}")
         if not out_data.strip():
-            return f"执行成功（无输出），退出码 {proc.returncode}"
-        return f"退出码 {proc.returncode}\n{out_data}"
+            return f"执行成功（无输出），退出码 {rc}"
+        return f"退出码 {rc}\n{out_data}"
     except Exception as e:
         return f"错误：{e}"
 
@@ -221,26 +209,11 @@ def run_lint(path=None, fix=False):
         cmd.append("--fix")
     cmd.append(base)
     try:
-        import tempfile
-        with tempfile.SpooledTemporaryFile(
-            max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
-        ) as out:
-            proc = subprocess.Popen(
-                cmd, stdout=out, stderr=subprocess.STDOUT, text=True,
-                encoding="utf-8", errors="replace", cwd=base,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            try:
-                proc.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                _kill_tree(proc)
-                return "错误：ruff 检查超时（120 秒）"
-            out.seek(0)
-            out_data = out.read(12000)
-            out.seek(0, os.SEEK_END)
-            if out.tell() > 12000:
-                out_data += "\n[输出已截断]"
-        if proc.returncode == 0:
+        try:
+            rc, out_data = _run_capture(cmd, 120, 12000, cwd=base)
+        except TimeoutError:
+            return "错误：ruff 检查超时（120 秒）"
+        if rc == 0:
             return "无问题（ruff 检查通过）"
         return f"ruff 检查发现问题：\n{out_data}"
     except Exception as e:
@@ -314,35 +287,14 @@ def run_tests(path=None, framework="auto"):
             if target:
                 cmd.append(str(target))
     try:
-        # SpooledTemporaryFile 限流：pytest -v / unittest 输出可达 MB 级，
-        # capture_output 全量进内存会 OOM；内存峰值限 1MB 后自动转磁盘
-        import tempfile
-
-        with tempfile.SpooledTemporaryFile(
-            max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
-        ) as out:
-            proc = subprocess.Popen(
-                cmd, stdout=out, stderr=subprocess.STDOUT, text=True,
-                encoding="utf-8", errors="replace",
-                cwd=os.path.dirname(target) if os.path.isfile(target) else target,
-            )
-            try:
-                proc.wait(timeout=180)
-            except subprocess.TimeoutExpired:
-                _kill_tree(proc)
-                try:
-                    proc.wait(timeout=3)
-                except Exception:
-                    pass
-                return "错误：测试执行超时（180 秒）"
-            out.seek(0)
-            out_data = out.read(12000)
-            out.seek(0, os.SEEK_END)
-            if out.tell() > 12000:
-                out_data += "\n[输出已截断]"
-        return f"退出码 {proc.returncode}\n{out_data}"
-    except subprocess.TimeoutExpired:
-        return "错误：测试超时（>180 秒）"
+        # A6: 统一走 _run_capture（spool 限流防 OOM、超时 kill 进程树、截断读取）
+        rc, out_data = _run_capture(
+            cmd, 180, 12000,
+            cwd=os.path.dirname(target) if os.path.isfile(target) else target,
+        )
+        return f"退出码 {rc}\n{out_data}"
+    except TimeoutError:
+        return "错误：测试执行超时（180 秒）"
     except Exception as e:
         return f"错误：运行测试失败: {e}"
 
@@ -1022,34 +974,15 @@ def pip_install(package):
     if _dc.PIP_ALLOWLIST is not None and base not in _dc.PIP_ALLOWLIST:
         return f"权限拒绝：仅允许安装白名单库：{_dc.PIP_ALLOWLIST}"
     try:
-        # SpooledTemporaryFile 限流：--quiet 下 pip 错误输出仍可能 MB 级，防 OOM
-        import tempfile
-
-        with tempfile.SpooledTemporaryFile(
-            max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
-        ) as out:
-            proc = subprocess.Popen(
-                [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", pkg],
-                stdout=out, stderr=subprocess.STDOUT, text=True,
-                encoding="utf-8", errors="replace",
-            )
-            try:
-                proc.wait(timeout=300)
-            except subprocess.TimeoutExpired:
-                _kill_tree(proc)
-                try:
-                    proc.wait(timeout=3)
-                except Exception:
-                    pass
-                return "错误：安装超时（300 秒）"
-            out.seek(0)
-            out_data = out.read()
-            if len(out_data) > 20000:
-                out_data = out_data[-20000:] + "\n[较早输出已省略]"
-        if proc.returncode == 0:
+        # A6: 统一走 _run_capture（spool 限流防 OOM、超时 kill、截断读取）
+        rc, out_data = _run_capture(
+            [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check", pkg],
+            300, 20000,
+        )
+        if rc == 0:
             return f"已安装 {pkg}。\n{PIP_ALLOWLIST_NOTICE}"
         return f"安装失败：{out_data[-800:]}"
-    except subprocess.TimeoutExpired:
+    except TimeoutError:
         return "错误：安装超时（300 秒）"
     except Exception as e:
         return f"错误：{e}"

@@ -2,6 +2,17 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🧹 收尾批次：返回契约统一（A1）+ 公共执行辅助抽取（A6）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。对 C 系列遗留项的收尾：工具返回契约全库核对归一 + `tool_code.py` 五处重复的「spool 输出 + 超时 kill + 截断」内联模式收敛为单一公共辅助。
+
+### 变更
+- **A1** 返回契约统一：`daily_brief` 失败返回补 `错误：` 前缀（`简报生成失败` → `错误：简报生成失败`，与其余工具失败前缀一致）；全库 AST 扫描确认其余疑似裸文案（~103 处）均为嵌套辅助函数内部返回 / `return None` 分支，非工具契约出口，无需改动
+- **A6** 抽 `_run_capture` 公共执行辅助（`agent_tools/tool_code.py`）：统一「`SpooledTemporaryFile` 1MB 限流防 OOM + 超时 `_kill_tree` 进程树 + 抛 `TimeoutError(timeout)` + 头部截断 `[输出已截断]` + `CREATE_NO_WINDOW` + 可传 `cwd`」；`run_python` / `run_command` / `run_lint` / `run_tests` / `pip_install` 五工具全部改走该辅助，删除各函数内联副本（净 −80 行重复代码），超时/截断/无输出文案行为不变
+
+### 回归
+- pytest **80 passed**；四门禁全绿（audit `--strict` error 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3）；前端三套件（longTextUtil / apiStreamChat / markdownRender）+ `tsc --noEmit` 全过；A6 定向冒烟 **10/10**（五工具成功/失败/无输出/退出码路径 + `_run_capture` 超时 kill、截断标记、pip 选项注入拦截）
+
 ## v3.8.3（未发版追加）—— 🔧 设计/逻辑/能力三层优化批次（D1-D4 + L1-L8 + C1-C8 共 16 项）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。对全部 135 工具做三层审查后的一次性修复批次：设计缺陷（返回值格式统一/读操作留痕/进程间文件锁/参数校验收敛）+ 逻辑短板（输出相似度升级/记忆近重复合并/SQL 强制 LIMIT 与超时/写操作行数保护/进程内增量索引/批量替换/编码探测/权限分级）+ 能力缺口（HTML 正文提取/Excel 追加多表/图表多系列与字体探测/实时搜索多源/下载校验和/Webhook 签名/点击轮询等待/桌面通知静音时长）。
