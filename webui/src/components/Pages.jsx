@@ -584,6 +584,31 @@ export function PermissionsPage() {
           ? "🚀 任务模式已开启：零审批、零开关，AI 拥有全部工具（黑名单仍生效）"
           : "💬 对话模式：不调用任何工具，黑名单不生效"}
       </div>
+      {/* 黑名单一键总开关：默认开（黑名单空 = 0 限制）；关 = 一键全放行（连黑名单也不拦） */}
+      <div className="perm-group" style={{ borderColor: "var(--border-strong)" }}>
+        <div className="perm-group-head">
+          <b>黑名单总开关（blocklist_enabled）</b>
+          <span>{perms.blocklist_enabled ? "已开启：黑名单条目生效（默认空 = 0 限制）" : "已关闭：一键全放行，黑名单条目不拦截"}</span>
+        </div>
+        <button
+          className="confirm-btn"
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const d = await apiPost("/v1/permissions", { blocklist_enabled: !perms.blocklist_enabled });
+              if (d && d.ok) {
+                setPerms({ ...perms, blocklist_enabled: !perms.blocklist_enabled });
+                setSavedTip("已保存到 permissions.json");
+                setTimeout(() => setSavedTip(""), 1800);
+              }
+            } catch (e) { silentWarn(e, "Pages"); }
+            setBusy(false);
+          }}
+          disabled={busy}
+        >
+          {perms.blocklist_enabled ? "🔓 一键全放行" : "🛡 启用黑名单限制"}
+        </button>
+      </div>
       <div className="perm-groups">
         {groups.map((g) => (
           <BlacklistGroup

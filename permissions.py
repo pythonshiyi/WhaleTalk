@@ -30,31 +30,26 @@ _dirs_cache = {"blocked": None, "allowed": None, "workspace": None}
 DEFAULT_PERMISSIONS = {
     "version": 2,
     "security_mode": "blacklist",  # blacklist（默认放行+黑名单）/ whitelist（旧默认拒绝+白名单）
+    "blocklist_enabled": True,     # 黑名单总开关：True=黑名单条目生效（默认空=0 限制）；False=一键全放行（连黑名单也不拦）
     "filesystem": {
         "allow_write": True,       # whitelist 模式开关；blacklist 模式忽略
         "allowed_dirs": [],        # whitelist 模式白名单；blacklist 模式忽略
-        "blocked_dirs": [],        # 两种模式均生效：命中的路径拒绝
+        "blocked_dirs": [],        # 黑名单生效时命中的路径拒绝（默认空 = 不限制）
         "max_write_size": 50 * 1024 * 1024,
     },
     "shell": {
         "allow_run_command": True, # whitelist 模式开关；blacklist 模式忽略
         "whitelist": ["python", "pip", "pytest", "git"],  # whitelist 模式用
-        "blocklist": [],           # 两种模式均生效：命中的命令拒绝
+        "blocklist": [],           # 黑名单生效时命中的命令拒绝（默认空 = 不限制）
         "timeout": 120,
     },
     "network": {
-        "blocklist": [],           # 两种模式均生效：命中的主机/网段拒绝
+        "blocklist": [],           # 黑名单生效时命中的主机/网段拒绝（默认空 = 不限制）
     },
-    "approval_actions": [  # P1-5 安全默认：高危动作默认需审批（blacklist 模式下仅清单内动作弹确认）
-        "run_command", "run_python", "pip_install",
-        "delete_file", "batch_rename", "extract_archive", "restore_snapshot",
-        "send_email", "database_execute",
-        "start_process", "stop_process",
-        "write_code_project", "publish_draft", "create_plugin",
-        # 写类 RPA 与视觉闭环需审批；rpa_screen_size/rpa_screenshot 只读不在此列（L8）
-        "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll",
-        "screen_find_click", "vision_loop",
-    ],
+    # 审批清单（额外限制，默认空 = 零审批、法无禁止皆可为）。
+    # 与黑名单同属「可一键启用的限制」：需要时由用户在权限页/配置中自行添加，
+    # 不再由程序默认强加——「给用户给程序选择的机会，而不是粗暴的禁止」。
+    "approval_actions": [],
     "approval_mode": "auto",       # whitelist 模式用：auto / confirm / deny
     "approval_timeout": 120,
     "plan_confirm": False,
@@ -162,8 +157,9 @@ def _migrate_v1_to_v2(data, disk):
         data["shell"]["allow_run_command"] = bool(sh.get("allow_run_command", False))
         # 旧 SSRF 永远拦截云元数据：迁移为初始网络黑名单
         data["network"]["blocklist"] = ["169.254.169.254"]
-        # P1-5：迁移用户同样获得高危审批安全基线（与 DEFAULT_PERMISSIONS 一致）
-        data["approval_actions"] = list(DEFAULT_PERMISSIONS["approval_actions"])
+        # 默认零审批（黑名单主导）；老用户已有审批清单则保留（在下方 v2 分支整体覆盖）
+        data["approval_actions"] = []
+        data["blocklist_enabled"] = True
         for key in ("approval_mode", "approval_timeout", "plan_confirm"):
             if key in disk:
                 data[key] = disk[key]
@@ -185,6 +181,7 @@ def _load():
                         data[section].update(disk[section])
                 for key in (
                     "security_mode",
+                    "blocklist_enabled",
                     "approval_actions",
                     "approval_mode",
                     "approval_timeout",
@@ -257,16 +254,18 @@ def check_filesystem(path, write=False):
 
     blacklist 模式：除 blocked_dirs 外全部允许。
     whitelist 模式：保持旧行为（写开关 + 允许目录白名单 + blocked_dirs）。
+    blocklist_enabled=False（一键全放行）时跳过黑名单检查。
     """
     if not _data:
         return False, "权限模块未初始化"
     p = resolve(path)
     if p is None:
         return False, f"权限拒绝：路径无效：{path}"
-    blocked = _cached_dirs("blocked", _data["filesystem"].get("blocked_dirs"))
-    for b in blocked:
-        if _under(p, b):
-            return False, f"权限拒绝：路径在黑名单内：{p}"
+    if bool(_data.get("blocklist_enabled", True)):
+        blocked = _cached_dirs("blocked", _data["filesystem"].get("blocked_dirs"))
+        for b in blocked:
+            if _under(p, b):
+                return False, f"权限拒绝：路径在黑名单内：{p}"
     if security_mode() == "blacklist":
         return True, ""
     # ---- 旧 whitelist 模式 ----
@@ -294,7 +293,10 @@ def max_write_size():
 
 
 def check_shell(command):
-    """命令判定：解析 argv，按模式执行黑名单或白名单。返回 (allowed, reason, argv)。"""
+    """命令判定：解析 argv，按模式执行黑名单或白名单。返回 (allowed, reason, argv)。
+
+    blocklist_enabled=False（一键全放行）时跳过命令黑名单检查。
+    """
     if not _data:
         return False, "权限模块未初始化", None
     try:
@@ -304,9 +306,10 @@ def check_shell(command):
     if not argv:
         return False, "命令为空", None
     base = os.path.basename(argv[0]).lower()
-    blocklist = [str(b).strip().lower() for b in _data["shell"].get("blocklist", []) if str(b).strip()]
-    if base in blocklist:
-        return False, f"权限拒绝：命令在黑名单：{argv[0]}", None
+    if bool(_data.get("blocklist_enabled", True)):
+        blocklist = [str(b).strip().lower() for b in _data["shell"].get("blocklist", []) if str(b).strip()]
+        if base in blocklist:
+            return False, f"权限拒绝：命令在黑名单：{argv[0]}", None
     if security_mode() == "blacklist":
         return True, "", argv
     # ---- 旧 whitelist 模式 ----
@@ -366,10 +369,15 @@ def _host_blocked(host, entries):
 
 
 def check_network_host(host):
-    """网络主机判定。blacklist 模式：只拦 network.blocklist；whitelist 模式：放行（由 SSRF 旧逻辑另行处理）。"""
+    """网络主机判定。blacklist 模式：只拦 network.blocklist；whitelist 模式：放行（由 SSRF 旧逻辑另行处理）。
+
+    blocklist_enabled=False（一键全放行）时跳过网络黑名单检查。
+    """
     if not _data:
         return True, ""
     if security_mode() != "blacklist":
+        return True, ""
+    if not bool(_data.get("blocklist_enabled", True)):
         return True, ""
     blocked = _data.get("network", {}).get("blocklist", [])
     if _host_blocked(host, blocked):

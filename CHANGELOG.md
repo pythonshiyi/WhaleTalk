@@ -2,6 +2,27 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🚀 恢复默认自由：任务模式无限权限 + 黑名单主导（一键开关）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。回应用户对 P1-5「安全默认值」的纠偏：任务模式应回归「法无禁止皆可为」——默认 0 限制，限制只来自黑名单（带一键开关），不再由程序默认强加审批。
+
+### 变更
+- **默认任务模式（无限权限）**：`config_defaults.full_auto` 默认 `False → True`——全新安装/恢复默认即进入任务模式（全 135 工具、零审批、黑名单主导）；`App.jsx` 初始 `mode` 同步改回 `task`（启动后仍从后端读真实模式覆盖）
+- **审批清单默认清空**：`permissions.DEFAULT_PERMISSIONS.approval_actions` 由 21 项高危动作 → `[]`（零审批，法无禁止皆可为）；迁移路径（v1→v2）同样不再强制写入。审批机制保留——需要时用户可在「权限」页自行添加工具名（可选限制，非默认）
+- **黑名单一键总开关（新增）**：`blocklist_enabled`（默认 `True`，黑名单默认空 = 0 限制）——`check_shell` / `check_filesystem` / `check_network_host` 三处黑名单检查统一受开关控制；`False` = 一键全放行（连黑名单也不拦）。权限页新增「🔓 一键全放行 / 🛡 启用黑名单限制」按钮，`/v1/permissions` API 支持读写
+- **首次启动向导**：说明文案由「🛡 安全默认已启用（对话模式+高危审批）」改为「🚀 默认任务模式（法无禁止皆可为）：黑名单为唯一限制来源，可在权限页添加黑名单/审批清单（均带一键开关），或随时切换对话模式」
+- **`_config_reset`**：恢复默认 = 默认任务模式（full_auto=True），同步权限模块
+- **杂项**：`SettingsPage`「工具库与权限」入口描述 115 → 135 工具（过时文案修正）
+
+### 保留的安全底线（非"限制"，是"保护"）
+- SSRF 防护（`security._safe_url` 的 `_is_private_host` 硬拦 169.254.169.254/内网）独立于权限层黑名单，**不受一键全放行影响**——无限权限不等于裸奔，恶意/危险 URL 在请求层永远被拦
+- `run_python` 静态危险检查在任务模式（full_auto）下按设计放行（用户显式授权的无限权限）
+
+### 回归
+- 新增/重写 `tests/test_safety_defaults.py`（13 用例）：默认自由断言（full_auto=True / approval_actions=[] / blocklist_enabled=True）、审批机制保留（用户配置清单后仍走回调/拒绝拦截/FULL_AUTO 跳过）、**黑名单开关三域验证**（shell/filesystem/network 关闭即全放行）、`_config_reset` 回默认任务模式、前端初始 mode 与向导文案静态检查
+- 后端冒烟：全新安装加载链确认默认 `full_auto=True / approval_actions=[] / blocklist_enabled=True`，`check_shell`/`check_filesystem`/`request_approval(delete_file)` 全部默认放行，SSRF 层仍拦云元数据
+- 全量 pytest **105 passed**；四门禁全绿（audit `--strict` error 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3）；前端 `npm run typecheck` + 三套件全绿
+
 ## v3.8.3（未发版追加）—— 🤖 AI 自我进化提案实现：audit_preactivate_hints（六层审计补全）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。采纳并实现鲸语 AI 自提的进化提案 `evolutions/audit_preactivate_hints_20260901`——为 `tools/audit_tools.py` 补上六层注册表审计中唯一缺失的第 6 层 `_PREACTIVATE_HINTS` 覆盖检查。

@@ -1374,6 +1374,7 @@ def _permissions_get():
     return {
         "security_mode": perms.security_mode(),
         "full_auto": perms.is_full_auto(),
+        "blocklist_enabled": bool(d.get("blocklist_enabled", True)),
         "approval_actions": list(d.get("approval_actions") or []),
         "approval_timeout": int(d.get("approval_timeout") or 120),
         "approval_mode": str(d.get("approval_mode") or "auto"),
@@ -1388,7 +1389,7 @@ def _permissions_get():
 
 
 def _permissions_set(body):
-    """更新黑名单：blocked_dirs / shell_blocklist / network_blocklist / approval_actions。"""
+    """更新限制项：blocked_dirs / shell_blocklist / network_blocklist / approval_actions / blocklist_enabled。"""
     import permissions as perms
     d = perms.get_data() or {}
     fields = {
@@ -1409,6 +1410,9 @@ def _permissions_set(body):
             d.setdefault(container, {})[field] = items
         else:
             d[field] = items
+    if "blocklist_enabled" in body:
+        # 黑名单一键总开关：False = 全部放行（连黑名单也不拦）；True = 黑名单条目生效
+        d["blocklist_enabled"] = bool(body["blocklist_enabled"])
     if "approval_timeout" in body:
         try:
             d["approval_timeout"] = max(10, min(600, int(body["approval_timeout"])))
@@ -2168,7 +2172,7 @@ def _config_reset():
         "inbound_token": cfg.get("inbound_token", ""),
         "image_api_key": cfg.get("image_api_key", ""),
         "active_dir": cfg.get("active_dir", ""),
-        # P1-5：恢复默认 = 回到安全默认（full_auto 由 config_defaults 决定，不再强制 True）
+        # 恢复默认 = 默认任务模式（full_auto 由 config_defaults 决定 = True，无限权限/黑名单主导）
         "pure_chat": False,
     }
     fresh = dict(config_defaults.DEFAULT_CONFIG)

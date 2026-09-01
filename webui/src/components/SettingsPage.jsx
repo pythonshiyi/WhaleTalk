@@ -1150,7 +1150,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                 </div>
                 <Toggle on={!!cfg.tools_enabled} label="工具开关" desc="向模型暴露工具定义" onClick={() => saveField({ tools_enabled: !cfg.tools_enabled })} />
                 <Toggle on={!cfg.browser_headless} label="🖥 浏览器可见" desc="AI 操作浏览器弹真实窗口" onClick={() => saveField({ browser_headless: !cfg.browser_headless })} />
-                <Row label="🔧 工具库与权限" desc="115 工具 12 域 · 黑名单管理">
+                <Row label="🔧 工具库与权限" desc="135 工具 12 域 · 黑名单管理">
                   <span className="empty-tip" style={{ padding: 0 }}>在「能力中心」页签管理</span>
                 </Row>
               </>

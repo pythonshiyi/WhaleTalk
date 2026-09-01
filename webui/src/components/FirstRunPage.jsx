@@ -283,12 +283,12 @@ export default function FirstRunPage({ onDone }) {
               )}
             </div>
 
-            {/* P1-5 安全默认确认：首次启动告知对话模式+高危审批，可随时切换 */}
+            {/* 默认自由说明：任务模式 = 无限权限，黑名单主导（默认空 = 0 限制），可随时切换 */}
             {phase === "done" && (
               <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: "var(--bg-1)", border: "1px solid var(--border)", fontSize: 12, color: "var(--text-2)", lineHeight: 1.6 }}>
-                🛡 <b style={{ color: "var(--text-1)" }}>安全默认已启用</b>：初始为「💬 对话模式」，
-                高危操作（命令执行 / 删除 / 发信 / 装包等）需你确认后才执行。
-                需要全自动时，可随时在底部状态栏或对话页头部切换到「🚀 任务模式」。
+                🚀 <b style={{ color: "var(--text-1)" }}>默认任务模式（法无禁止皆可为）</b>：AI 拥有完整行动能力，
+                黑名单为唯一限制来源（默认空 = 零限制）。你可在「权限」页添加黑名单 / 审批清单
+                （均带一键开关），或随时切换「💬 对话模式」收紧权限。
               </div>
             )}
           </>

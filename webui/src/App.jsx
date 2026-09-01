@@ -76,8 +76,8 @@ export default function App() {
       return 14;
     }
   });
-  // P1-5 安全默认：初始 dialog（对话模式+高危审批），启动后从后端读真实模式覆盖
-  const [mode, setMode] = React.useState("dialog");
+  // 默认任务模式（无限权限，黑名单主导），启动后从后端读真实模式覆盖
+  const [mode, setMode] = React.useState("task");
   // 纯净对话总开关：对话页 header 与设置页双入口共享同一状态（localStorage 持久化）
   const [quietMode, setQuietMode] = React.useState(() => {
     try {
