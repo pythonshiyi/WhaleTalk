@@ -290,6 +290,9 @@ def rpa_screenshot(path=""):
     if not ok:
         return hint
     if str(path or "").strip():
+        ok, reason = permissions.check_filesystem(path, write=True)
+        if not ok:
+            return reason
         p = permissions.resolve(path)
     else:
         p = permissions.resolve(os.path.join(

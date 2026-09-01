@@ -45,6 +45,11 @@ from deepseek_client import (
     _workflow_step_text,
 )
 
+# 流程运行互斥标志：模块级初始化（run_workflow 在函数内 global 声明并置位，
+# 若缺少此处初始化，首次调用在检查 `if _WORKFLOW_RUNNING` 时抛 NameError，
+# 被外层 except 吞掉变成"读取流程失败"）
+_WORKFLOW_RUNNING = False
+
 
 
 @tool(

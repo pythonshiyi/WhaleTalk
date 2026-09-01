@@ -615,7 +615,21 @@ def extract_archive(path, dest_dir):
                     target = os.path.normpath(os.path.join(base, m.name))
                     if not (target == base or target.startswith(base + os.sep)):
                         return f"错误：压缩包含越界条目，已中止：{m.name}"
-                tf.extractall(dest)
+                    # tar-slip via 链接：symlink/hardlink 的 linkname 可指向包外
+                    # 文件，extractall 会真实创建该链接——解析后必须仍落在解压目录内
+                    if m.issym() or m.islnk():
+                        ln = (m.linkname or "").replace("\\", "/")
+                        if os.path.isabs(ln) or ln.startswith("/"):
+                            return f"错误：压缩包含绝对路径链接目标，已中止：{m.name} → {m.linkname}"
+                        link_target = os.path.normpath(os.path.join(os.path.dirname(target), ln))
+                        if not (link_target == base or link_target.startswith(base + os.sep)):
+                            return f"错误：压缩包含越界链接目标，已中止：{m.name} → {m.linkname}"
+                try:
+                    # Python 3.12+ 内置 data 过滤器（拦越界/绝对路径/外部链接/设备文件）
+                    tf.extractall(dest, filter="data")
+                except TypeError:
+                    # 旧版 Python 不支持 filter 参数：手动校验已覆盖主要攻击面，降级
+                    tf.extractall(dest)
             permissions.audit("extract_archive", dest, f"{len(members)} 个条目")
             return f"已解压 {len(members)} 个条目到 {dest}"
         if ext == ".7z":
@@ -759,6 +773,11 @@ def batch_rename(directory, pattern, replacement, dry_run=False):
                     continue
                 src = os.path.join(d, fn)
                 dst = os.path.join(d, new)
+                # 防路径穿越：replacement 若含 ../ 或路径分隔符（/ \）会把文件
+                # 移出目标目录，normpath 后必须仍在 d 内才允许
+                dst_norm = os.path.normpath(dst)
+                if dst_norm != d and not dst_norm.startswith(d.rstrip("\\/") + os.sep):
+                    continue
                 if os.path.exists(dst):
                     continue
                 if not dry_run:

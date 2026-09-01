@@ -74,6 +74,15 @@ def _is_private_host(host, allow_loopback=True):
     host = (host or "").strip().lower()
     if not host:
         return True
+    # 云元数据 / 链路本地（169.254.0.0/16）：永远阻止，信任白名单不可豁免
+    if host.replace(".", "").isdigit():
+        parts = host.split(".")
+        if len(parts) == 4:
+            try:
+                if int(parts[0]) == 169 and int(parts[1]) == 254:
+                    return True
+            except ValueError:
+                return True
     if _trusted_host(host, SSRF_TRUSTED):
         return False
     if host in ("localhost", "ipv6-localhost"):
@@ -155,6 +164,12 @@ def _safe_url(url, allow_loopback=True):
             ok, reason = permissions.check_network_host(host)
             if not ok:
                 return f"{reason}：{url[:80]}"
+            # SSRF 底线不因 blacklist 豁免：云元数据/链路本地/内网仍按
+            # _is_private_host 硬判（SSRF_TRUSTED 显式信任的内网/回环可放行，
+            # 169.254.0.0/16 永远拦截）。此前只查 network.blocklist（默认空）
+            # 导致默认配置下 fetch_url 可直达云元数据——SSRF 防护整体失效。
+            if _is_private_host(host, allow_loopback=allow_loopback):
+                return f"已阻止访问内网/回环地址（SSRF 防护）：{url[:80]}"
             return ""
     except Exception:
         pass

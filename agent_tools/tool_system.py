@@ -503,7 +503,7 @@ def self_evolve(feature_name, files, project_dir=None):
     compile_ok = compile_r.startswith(("编译通过", "（"))
     lint_ok = lint_r.startswith(("无问题", "（"))
     smoke_ok = smoke_r.startswith(("导入通过", "（"))
-    tests_ok = tests_r.startswith("（") or ("passed" in tests_r or "退出码 0" in tests_r)
+    tests_ok = tests_r.startswith("（") or tests_r.startswith("全部通过")
 
     if compile_ok and lint_ok and smoke_ok and tests_ok:
         _git(["add", "."])

@@ -1020,7 +1020,10 @@ def webdav(action="list", remote_path="/", local_path=""):
                 os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
                 client = _http_client()
                 if hasattr(client, "stream"):
-                    with _safe_stream("GET", cfg["url"] + remote, timeout=30) as resp:
+                    with _safe_stream(
+                        "GET", cfg["url"] + remote, timeout=30,
+                        auth=(cfg["username"], cfg["password"]),
+                    ) as resp:
                         if resp.status_code != 200:
                             return f"错误：下载失败（HTTP {resp.status_code}）"
                         with open(out, "wb") as f:

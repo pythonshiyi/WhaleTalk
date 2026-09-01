@@ -659,7 +659,8 @@ def chart_data(data, path, kind="line", title="", x_label="", y_label=""):
         elif k == "pie":
             ax.pie(ys, labels=xs, autopct="%1.1f%%", textprops={"color": title_c})
         elif k == "scatter":
-            ax.scatter(list(range(len(ys))), ys, color=series)
+            # 保留用户传入的 x 坐标（此前 range(len(ys)) 会把 x 丢弃成序号）
+            ax.scatter(xs, ys, color=series)
         else:
             ax.plot(xs, ys, color=series, marker="o", markersize=4)
         if title:
@@ -1318,7 +1319,8 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
                     return "错误：set 需要 key"
                 if len(k) > 256:
                     return "错误：key 过长（上限 256 字符）"
-                v = str(value or "")
+                # 区分 None 与 0/False：None 存空串，0/False 保留字面值
+                v = str(value if value is not None else "")
                 if len(v.encode("utf-8", "replace")) > KV_VALUE_MAX_BYTES:
                     return "错误：value 超过 1MB 上限"
                 try:
