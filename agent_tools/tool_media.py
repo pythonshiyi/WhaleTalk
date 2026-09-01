@@ -26,6 +26,7 @@ from deepseek_client import (
     _detect_image_mime,
     _safe_stream,
     _capture_screen_png,
+    EFFORT_BY_THINKING,
 )
 
 
@@ -278,6 +279,24 @@ def image_understand(path, question=""):
         if not is_vision_model(model):
             model = VISION_MODEL
             switched = True
+        # 跟随前端「思考档」开关（config.thinking，与主对话 chat() 一致）：
+        #   none → 关思考；low/medium/high/xhigh/max → 开思考 + 对应 effort。
+        # 不能写死 disabled：该模型默认开启思考，复杂截图时思考会吃满
+        # max_tokens 导致 content 为空 → 工具误报「模型未返回内容」→ AI
+        # 误判"不支持看图"；但也不应无视用户配置强制关思考。
+        try:
+            import config_utils
+            _cfg = config_utils.load_config()
+            _thinking = str(_cfg.get("thinking") or "none")
+            _max_tokens = int(_cfg.get("max_tokens") or 16384)
+        except Exception:
+            _thinking, _max_tokens = "none", 16384
+        _extra = {"thinking": {"type": "disabled"}}
+        if _thinking != "none":
+            _effort = EFFORT_BY_THINKING.get(_thinking)
+            _extra = {"thinking": {"type": "enabled"}}
+            if _effort and _effort != "none":
+                _extra["reasoning_effort"] = _effort
         resp = client.client.chat.completions.create(
             model=model,
             messages=[
@@ -289,18 +308,19 @@ def image_understand(path, question=""):
                     ],
                 }
             ],
-            max_tokens=2048,
+            max_tokens=_max_tokens,
             stream=False,
             timeout=120.0,
+            extra_body=_extra,
         )
         out = (resp.choices[0].message.content or "").strip()
         if not out:
-            return "模型未返回内容（当前模型可能不支持图片输入，可配置支持视觉的模型端点）"
+            return "模型未返回有效内容（图片过大或上游暂未响应），请重试或换小图"
         if switched:
             out += f"\n\n（注：当前模型不支持图片，已自动改用视觉模型 {VISION_MODEL}）"
         return out
     except Exception as e:
-        return f"错误：图片理解失败: {e}（当前模型可能不支持视觉输入，可切换支持视觉的模型端点）"
+        return f"错误：图片理解失败: {e}"
 
 
 @tool(

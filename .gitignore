@@ -8,6 +8,7 @@ data/
 backups/
 evolutions/
 .whaletalk/
+screenshots/
 
 # ===== 本地配置（用户自定义，不入库） =====
 wechat_writer/config.json
