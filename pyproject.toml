@@ -1,3 +1,10 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 禁用 pytest-asyncio 插件：它与部分 pytest 版本组合会在收集阶段抛
+# INTERNALERROR（AttributeError: 'Package' object has no attribute 'obj'），
+# 而本项目测试全部为同步用例。插件不存在时该选项为空操作，安全。
+addopts = "-p no:asyncio"
+
 [tool.ruff]
 line-length = 120
 target-version = "py39"

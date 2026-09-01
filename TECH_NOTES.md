@@ -10,7 +10,7 @@
 
 ## 1. 项目概览
 
-Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、118 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、鲸语大脑（跨会话灵魂）、插件体系（.wtplugin v2）、公众号自动写作。
+Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、135 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、鲸语大脑（跨会话灵魂）、插件体系（.wtplugin v2）、公众号自动写作。
 
 - 运行时：Python 3.9+（开发 3.12），核心依赖仅 `openai` / `httpx`，其余全部可选（缺失自动降级提示）
 - API 层：标准库 `http.server.ThreadingHTTPServer`（**无 Flask/无框架**）
@@ -21,8 +21,8 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 ```
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
-├── api_server.py           # 本地 HTTP API（REST + SSE，60+ /v1 端点）
-├── deepseek_client.py      # 能力引擎：DeepSeekClient + 118 工具 + smart_tools（约 1.3 万行）
+├── api_server.py           # 本地 HTTP API（REST + SSE，79+ /v1 端点）
+├── deepseek_client.py      # 能力引擎：DeepSeekClient + 135 工具 + smart_tools（约 1.3 万行）
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
 ├── security.py             # SSRF 防护（云元数据永远拦截）
 ├── crypto.py               # API Key DPAPI 加密（fail-closed）
@@ -219,8 +219,8 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 ## 17. 工程实践
 
-- **CI**（.github/workflows/ci.yml）：ruff 关键规则（E9/F63/F7/F82）+ 入口 py_compile + WebUI npm build。**注意：当前不跑 pytest**（仓库暂无 tests/ 目录）
-- **本地门禁**：`tools/audit_tools.py`（六层一致性，`--strict` 返回非 0）· `tools/validate_tools.py`（smart_tools 全链路：能力地图/compact/schema 可序列化/描述 ≤130 字/数组参数带 items）
+- **CI**（.github/workflows/ci.yml）：`check`（ruff 关键规则 E9/F63/F7/F82 + 入口 py_compile）· `test-backend`（`pytest tests/`，28 用例，依赖 `requirements-dev.txt` 锁 pytest 版本）· `webui`（npm ci + build + `npm test` 三个 node 套件）· 门禁 job（`tools/audit_tools.py --strict` / `tools/validate_tools.py` / `tools/island_check.py` / `tools/check_docs.py`）。pytest 的 `addopts=-p no:asyncio` 在 `pyproject.toml` 固化，本地与 CI 行为一致
+- **本地门禁**：`tools/audit_tools.py`（六层一致性，error 级 `--strict` 返回非 0；warn 级仅提示）· `tools/validate_tools.py`（smart_tools 全链路：能力地图/compact/schema 可序列化/描述 ≤130 字/数组参数带 items）· `tools/island_check.py`（九层孤岛对账）· `tools/check_docs.py`（README/TECH_NOTES/MODULES 数字与源码一致，`--fix` 自动修正）
 - **依赖**：`deps.py` 分层（硬依赖同步安装 / 自动安装后台 / 重型可选）；清华源镜像（`WHALETALK_PIP_MIRROR` 可覆盖）
 - **打包**：`build_exe.bat` → PyInstaller（WhaleTalk.spec：webui/dist + sample_plugins 内置；playwright/faster-whisper/PyMuPDF 等大型依赖排除）
 - **备份**：`backup.py` 源码快照（compresslevel=1；排除 .venv/dist/backups/.git 等）
@@ -245,7 +245,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 1. `deepseek_client.py` 按领域拆 `tools/` 包（薄 facade re-export 兼容）
 2. `@tool()` 装饰器统一六层声明（消除手工漂移）
-3. 补齐 pytest 测试资产并接入 CI（当前 CI 无测试步骤）
+3. ~~补齐 pytest 测试资产并接入 CI~~ 已完成（v3.8.3 起 CI 跑 `pytest tests/` 28 用例 + 前端 3 套件 + 四道门禁）；下一步是**按领域扩充分子级 pytest 用例**（工具/权限/存储执行路径，当前覆盖集中在注册表与进化闸）
 4. 进化闭环补门禁：`self_evolve` 合并前强制跑 audit/validate/测试；进化账本（效果回流）；评审 AI 前置
 5. 插件签名密钥分发与轮换流程；市场索引自动更新提醒
 

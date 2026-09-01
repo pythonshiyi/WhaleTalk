@@ -28,6 +28,40 @@ jobs:
         run: |
           python -m py_compile web_app.py api_server.py deepseek_client.py webui/start.py
 
+  test-backend:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+      - name: Pytest
+        run: pytest -q
+
+  gate-tools:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tool registry audit (six layers, error-gated)
+        run: python tools/audit_tools.py --strict
+      - name: Tool full-chain validation
+        run: python tools/validate_tools.py
+      - name: Island check (nine-layer reconciliation)
+        run: python tools/island_check.py
+      - name: Docs numbers vs source
+        run: python tools/check_docs.py
+
   webui:
     runs-on: windows-latest
     steps:
@@ -43,3 +77,6 @@ jobs:
       - name: Build webui
         working-directory: webui
         run: npm run build
+      - name: Test webui
+        working-directory: webui
+        run: npm test

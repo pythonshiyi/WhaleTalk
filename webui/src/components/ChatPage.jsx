@@ -6,6 +6,7 @@ import ContextPanel from "./ContextPanel.jsx";
 import StatusBar from "./StatusBar.jsx";
 import ConfirmGate from "./ConfirmGate.jsx";
 import AuxPanel from "./AuxPanel.jsx";
+import { BatchPanel, CmdPanel, TimelinePanel, FimPanel, VariantPanel, SearchPanel, StarPanel } from "./ChatPanels.jsx";
 import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
@@ -107,7 +108,15 @@ function buildMessageChain(msgs) {
 }
 
 // ── 真实后端流式对话 ────────────────────────────────
-function useBackendChat(busy, setBusy, setMsgs, pendingRef, historyRef, connRef, chatMode, webSearch, quietMode, onFinished, stopSignalRef, onPrompt, setGenState, continueRef, sessionIdRef, msgsRef, toast) {
+// P0-3：17 个位置参数改为 options 对象——调用点自描述、加参数不再数位；
+// 内部闭包语义与重构前完全一致（effect 仍只依赖 [busy]，所有依赖经对象解构注入）。
+function useBackendChat({
+  busy, setBusy, setMsgs, msgsRef,
+  pendingRef, historyRef,
+  chatMode, webSearch, quietMode,
+  onFinished, stopSignalRef, onPrompt, setGenState,
+  continueRef, sessionIdRef, toast,
+}) {
 
   const updateMsgs = (fn) => {
     setMsgs(fn);
@@ -583,7 +592,6 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   }, []);
   const pendingRef = React.useRef({ text: "", images: [] });
   const historyRef = React.useRef([]);
-  const connRef = React.useRef("auto");
   const stopSignalRef = React.useRef(null);
   const scrollRef = React.useRef(null);
   // ── 对话模式联网搜索开关（localStorage 持久化）──
@@ -624,7 +632,6 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   }, []);
 
   const { mode: dataMode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr, peakInfo } = useDataSources();
-  connRef.current = dataMode;
 
   React.useEffect(() => {
     setBackendNote(
@@ -642,25 +649,24 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     []
   );
 
-  useBackendChat(
-    dataMode === "backend" && busy,
+  useBackendChat({
+    busy: dataMode === "backend" && busy,
     setBusy,
     setMsgs,
+    msgsRef,
     pendingRef,
     historyRef,
-    connRef,
-    mode,
+    chatMode: mode,
     webSearch,
     quietMode,
-    invokeFinished,
+    onFinished: invokeFinished,
     stopSignalRef,
-    setPromptReq,
-    setGenStateThrottled,
+    onPrompt: setPromptReq,
+    setGenState: setGenStateThrottled,
     continueRef,
-    activeIdRef,
-    msgsRef,
-    toast
-  );
+    sessionIdRef: activeIdRef,
+    toast,
+  });
 
   // 会话保存：每次 render 同步到 ref，保证 useBackendChat 用的是最新闭包
   onFinishedRef.current = ({ userText, msg, ok, isContinue, error }) => {
@@ -1412,225 +1418,83 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         }}
       />
 
-            {batchPanel && (
-        <div className="overlay-mask" onClick={() => setBatchPanel(false)}>
-          <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="overlay-head">
-              <b>📦 批量任务</b>
-              <button className="icon-btn" onClick={() => setBatchPanel(false)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-              </button>
-            </div>
-            <div className="overlay-body">
-              <div className="ctx-group-title">文件列表（每行一个路径）</div>
-              <textarea className="fim-input" rows={5} placeholder={"C:/work/data1.csv\nC:/work/data2.csv"} value={batchFiles} onChange={(e) => setBatchFiles(e.target.value)} />
-              <div className="ctx-group-title">指令模板（{file} 占位）</div>
-              <input className="set-select set-combo" value={batchTpl} onChange={(e) => setBatchTpl(e.target.value)} />
-              <div className="svc-actions">
-                <button className="confirm-btn confirm-primary" onClick={doBatch} disabled={!batchFiles.trim()}>生成批量指令到输入框</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <BatchPanel
+        open={batchPanel}
+        onClose={() => setBatchPanel(false)}
+        files={batchFiles}
+        onFiles={setBatchFiles}
+        tpl={batchTpl}
+        onTpl={setBatchTpl}
+        onDo={doBatch}
+      />
 
-      {cmdPanel && (
-        <div className="confirm-mask" onClick={() => setCmdPanel(false)}>
-          <div className="cmd-panel" onClick={(e) => e.stopPropagation()}>
-            <input
-              className="cmd-input"
-              placeholder="输入命令或搜索会话…"
-              autoFocus
-              value={cmdQuery}
-              onChange={(e) => setCmdQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setCmdPanel(false);
-                if (e.key === "Enter") {
-                  if (cmdQuery) doSearchWithQuery(cmdQuery);
-                }
-              }}
-            />
-            <div className="cmd-list">
-              {[
-                { icon: "💬", label: "新对话", act: () => { setCmdPanel(false); onPickSession(null); } },
-                { icon: "🔍", label: "全局搜索", act: () => { setCmdPanel(false); setSearchPanel(true); } },
-                { icon: "⏱", label: "定时任务（工作台）", act: () => { setCmdPanel(false); onGoWorkbench && onGoWorkbench(); } },
-                { icon: "🕐", label: "会话轨迹", act: () => { setCmdPanel(false); setTimelinePanel(true); } },
-                { icon: "🔄", label: "回复变体", act: () => { setCmdPanel(false); openVariants(); } },
-                { icon: "✂", label: "FIM 代码补全", act: () => { setCmdPanel(false); setFimPanel(true); } },
-                { icon: "⭐", label: "收藏与固定", act: () => { setCmdPanel(false); setStarPanel(true); } },
-                { icon: "📋", label: "导出当前会话", act: () => { setCmdPanel(false); onExportSession(); } },
-                { icon: "⚙", label: "设置", act: () => { setCmdPanel(false); onGoSettings && onGoSettings(); } },
-              ]
-                .filter((c) => !cmdQuery || c.label.includes(cmdQuery))
-                .map((c, i) => (
-                  <div className="cmd-item" key={i} onClick={c.act}>
-                    <span>{c.icon}</span>
-                    <span>{c.label}</span>
-                  </div>
-                ))}
-            </div>
-          </div>
-        </div>
-      )}
+      <CmdPanel
+        open={cmdPanel}
+        onClose={() => setCmdPanel(false)}
+        query={cmdQuery}
+        onQuery={setCmdQuery}
+        onSearch={doSearchWithQuery}
+        onNewChat={() => onPickSession(null)}
+        onOpenSearch={() => setSearchPanel(true)}
+        onGoWorkbench={onGoWorkbench}
+        onOpenTimeline={() => setTimelinePanel(true)}
+        onOpenVariants={openVariants}
+        onOpenFim={() => setFimPanel(true)}
+        onOpenStar={() => setStarPanel(true)}
+        onExport={onExportSession}
+        onGoSettings={onGoSettings}
+      />
 
-      {timelinePanel && (
-        <div className="overlay-mask" onClick={() => setTimelinePanel(false)}>
-          <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="overlay-head">
-              <b>🕐 会话轨迹（{msgs.length} 条）</b>
-              <button className="icon-btn" onClick={() => setTimelinePanel(false)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-              </button>
-            </div>
-            <div className="overlay-body">
-              <div className="timeline">
-                {msgs.map((m, i) => (
-                  <div key={i} className="tl-item" onClick={() => { setTimelinePanel(false); gotoMessage(i); }}>
-                    <span className="tl-icon">{m.role === "user" ? "💬" : "🤖"}</span>
-                    <span className="tl-role">{m.role === "user" ? "我" : "助手"}</span>
-                    <span className="tl-text">
-                      {String(m.text || m.think || "").slice(0, 50) || (m.tools && m.tools.length ? `🔧 ${m.tools.length} 个工具调用` : "")}
-                    </span>
-                    <span className="gs-time">{m.time || ""}</span>
-                  </div>
-                ))}
-                {msgs.length === 0 && <div className="empty-tip">暂无消息</div>}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <TimelinePanel
+        open={timelinePanel}
+        onClose={() => setTimelinePanel(false)}
+        msgs={msgs}
+        onGoto={gotoMessage}
+      />
 
-      {fimPanel && (
-        <div className="overlay-mask" onClick={() => setFimPanel(false)}>
-          <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="overlay-head">
-              <b>✂ FIM 代码补全（Beta）</b>
-              <button className="icon-btn" onClick={() => setFimPanel(false)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-              </button>
-            </div>
-            <div className="overlay-body">
-              <div className="ctx-group-title">前缀（必填）</div>
-              <textarea className="fim-input" rows={4} placeholder="代码前缀…" value={fimPrompt} onChange={(e) => setFimPrompt(e.target.value)} />
-              <div className="ctx-group-title">后缀（可选）</div>
-              <textarea className="fim-input" rows={2} placeholder="代码后缀…" value={fimSuffix} onChange={(e) => setFimSuffix(e.target.value)} />
-              <div className="svc-actions">
-                <button className="confirm-btn confirm-primary" onClick={doFim} disabled={fimBusy || !fimPrompt.trim()}>
-                  {fimBusy ? "补全中…" : "▶ 补全"}
-                </button>
-              </div>
-              {fimResult && (
-                <div className="evo-file">
-                  <div className="evo-file-head"><b>结果</b></div>
-                  <pre>{fimResult}</pre>
-                  <button className="msg-op" style={{ marginTop: 6 }} onClick={() => composerRef.current?.insertText(fimResult)}>↩ 插入输入框</button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <FimPanel
+        open={fimPanel}
+        onClose={() => setFimPanel(false)}
+        prompt={fimPrompt}
+        onPrompt={setFimPrompt}
+        suffix={fimSuffix}
+        onSuffix={setFimSuffix}
+        result={fimResult}
+        busy={fimBusy}
+        onDo={doFim}
+        onInsert={(text) => composerRef.current?.insertText(text)}
+      />
 
-      {variantPanel && (
-        <div className="overlay-mask" onClick={() => setVariantPanel(false)}>
-          <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="overlay-head">
-              <b>🔄 回复变体（{variants.length} 版）</b>
-              <button className="icon-btn" onClick={() => setVariantPanel(false)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-              </button>
-            </div>
-            <div className="overlay-body">
-              {variants.length === 0 && <div className="empty-tip">暂无变体——重新生成时旧回复自动保存</div>}
-              {variants.map((v, i) => (
-                <div className="star-item" key={i} onClick={() => restoreVariant(v)}>
-                  <span className="star-role">第 {variants.length - i} 版</span>
-                  <span className="star-text">{String(v.text).slice(0, 60)}</span>
-                  <span className="gs-time">{new Date(v.ts).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      <VariantPanel
+        open={variantPanel}
+        onClose={() => setVariantPanel(false)}
+        variants={variants}
+        onRestore={restoreVariant}
+      />
 
-      {searchPanel && (
-        <div className="overlay-mask" onClick={() => setSearchPanel(false)}>
-          <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="overlay-head">
-              <b>🔍 全局搜索</b>
-              <button className="icon-btn" onClick={() => setSearchPanel(false)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-              </button>
-            </div>
-            <div className="overlay-body">
-              <div className="global-search-bar">
-                <button className={`confirm-btn ${searchType === "message" ? "confirm-primary" : ""}`} onClick={() => { setSearchType("message"); setSearchResults([]); }}>💬 消息</button>
-                <button className={`confirm-btn ${searchType === "artifact" ? "confirm-primary" : ""}`} onClick={() => { setSearchType("artifact"); setSearchResults([]); }}>📦 产物</button>
-                <input
-                  className="set-select set-combo"
-                  placeholder={searchType === "artifact" ? "跨会话搜产物文件路径…（回车搜索）" : "跨全部会话搜索…（回车搜索）"}
-                  value={searchQuery}
-                  autoFocus
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && doSearch()}
-                />
-                <button className="confirm-btn confirm-primary" onClick={doSearch} disabled={searchBusy || !searchQuery.trim()}>
-                  {searchBusy ? "搜索中…" : "搜索"}
-                </button>
-              </div>
-              <div className="global-search-results">
-                {searchResults.map((r, i) => (
-                  <div className="gs-item" key={i} onClick={() => openSearchResult(r)}>
-                    <div className="gs-line1">
-                      <b>{r.session_name}</b>
-                      <span>{r.role === "user" ? "我" : "助手"}</span>
-                      <span className="gs-time">{r.time}</span>
-                    </div>
-                    <div className="gs-snippet">{r.snippet}</div>
-                  </div>
-                ))}
-                {searchQuery && !searchBusy && searchResults.length === 0 && <div className="empty-tip">无匹配结果</div>}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <SearchPanel
+        open={searchPanel}
+        onClose={() => setSearchPanel(false)}
+        query={searchQuery}
+        onQuery={setSearchQuery}
+        type={searchType}
+        onType={setSearchType}
+        results={searchResults}
+        onResults={setSearchResults}
+        busy={searchBusy}
+        onBusy={setSearchBusy}
+        onSearch={doSearch}
+        onOpen={openSearchResult}
+      />
 
-      {starPanel && (
-        <div className="overlay-mask" onClick={toggleStarPanel}>
-          <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="overlay-head">
-              <b>⭐ 收藏与固定</b>
-              <button className="icon-btn" onClick={toggleStarPanel}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-              </button>
-            </div>
-            <div className="overlay-body">
-              <div className="ctx-group-title">⭐ 已收藏消息（{msgs.filter((m) => m.starred).length}）</div>
-              {msgs.filter((m) => m.starred).length === 0 && <div className="empty-tip">暂无收藏——hover 消息点 ⭐</div>}
-              {msgs.map((m, i) => m.starred && (
-                <div className="star-item" key={i} onClick={() => gotoMessage(i)}>
-                  <span className="star-role">{m.role === "user" ? "我" : "助手"}</span>
-                  <span className="star-text">{String(m.text || "").slice(0, 60)}</span>
-                  <button className="msg-op" onClick={(e) => { e.stopPropagation(); onStarMsg(i); }}>取消</button>
-                </div>
-              ))}
-              <div className="ctx-group-title">📌 已固定消息（{msgs.filter((m) => m.pinned).length}，压缩时保留进摘要）</div>
-              {msgs.filter((m) => m.pinned).length === 0 && <div className="empty-tip">暂无固定——hover 消息点 📌</div>}
-              {msgs.map((m, i) => m.pinned && (
-                <div className="star-item" key={i} onClick={() => gotoMessage(i)}>
-                  <span className="star-role">{m.role === "user" ? "我" : "助手"}</span>
-                  <span className="star-text">{String(m.text || "").slice(0, 60)}</span>
-                  <button className="msg-op" onClick={(e) => { e.stopPropagation(); onPinMsg(i); }}>取消</button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      <StarPanel
+        open={starPanel}
+        onClose={toggleStarPanel}
+        msgs={msgs}
+        onStar={onStarMsg}
+        onPin={onPinMsg}
+        onGoto={gotoMessage}
+      />
     </div>
   );
 }

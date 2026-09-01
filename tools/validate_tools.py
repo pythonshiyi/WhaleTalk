@@ -27,6 +27,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "deepseek_client.py"
 
+# P1-3 迁移后 TOOLS/TOOL_GROUPS/_TOOL_ACTION_PHRASES 由构建调用生成，
+# 不能直接 exec；经 toolkit.rebuild_layers() AST 重建后预置进命名空间
+# （CI 不装依赖，不能 import deepseek_client）。
+sys.path.insert(0, str(REPO_ROOT))
+import toolkit
+
 
 def get_assign_nodes(src, tree, target_names):
     """按文件顺序返回指定顶层赋值节点的源码片段。"""
@@ -53,14 +59,19 @@ def main():
     tree = ast.parse(src)
 
     block = []
-    block += get_assign_nodes(src, tree, ["TOOLS", "_TOOL_ACTION_PHRASES", "TOOL_GROUPS",
-                                          "_TOOL_INDEX_CACHE", "_TOOL_INDEX_KEY", "ACTIVATE_TOOL",
+    # 六层构建产物（TOOLS/TOOL_GROUPS/_TOOL_ACTION_PHRASES）预置自 rebuild_layers，
+    # 不进入 exec block（其赋值是 build_* 调用，直接 exec 会 NameError）
+    block += get_assign_nodes(src, tree, ["_TOOL_INDEX_CACHE", "_TOOL_INDEX_KEY", "ACTIVATE_TOOL",
                                           "_GROUP_NAMES_TEXT"])
     block += get_assign_nodes(src, tree, ["_TOOL_GROUP_NAME_MAP"])
     block += get_func_src(src, tree, ["build_tool_index", "compact_tool_schema",
                                       "compact_tools_list", "_patch_array_items",
                                       "_finalize_activate_tool", "build_smart_hint"])
-    ns = {"re": re, "json": json, "__name__": "validate_block"}
+    layers = toolkit.rebuild_layers(src)
+    ns = {"re": re, "json": json, "__name__": "validate_block",
+          "TOOLS": layers["TOOLS"],
+          "TOOL_GROUPS": layers["TOOL_GROUPS"],
+          "_TOOL_ACTION_PHRASES": layers["_TOOL_ACTION_PHRASES"]}
     exec(compile("\n".join(block), "tools_block", "exec"), ns)
 
     tools = ns["TOOLS"]

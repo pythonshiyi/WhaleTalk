@@ -32,6 +32,10 @@ AS = REPO_ROOT / "api_server.py"
 CFG = REPO_ROOT / "config.json"
 CD = REPO_ROOT / "config_defaults.py"
 
+# P1-3 迁移后 deepseek_client 六层由 @tool() 声明生成，AST 重建（不 import 模块）
+sys.path.insert(0, str(REPO_ROOT))
+import toolkit
+
 # 交互回调工具：实现不落在 TOOL_CALL_MAP（chat() 内 on_ask/on_request_permission 通道）
 CALLBACK_TOOLS = {"ask_user", "request_permission"}
 
@@ -76,15 +80,15 @@ def main(argv=None):
     strict = "--strict" in argv
 
     dc_tree = _parse(DC)
-    tools = ast.literal_eval(_get_assign(dc_tree, "TOOLS"))
-    tool_names = {t["function"]["name"] for t in tools}
+    layers = toolkit.rebuild_layers(DC.read_text(encoding="utf-8"))
+    tool_names = {t["function"]["name"] for t in layers["TOOLS"]}
 
-    call_map = _collect_dict(_get_assign(dc_tree, "TOOL_CALL_MAP"))
+    call_map = layers["TOOL_CALL_MAP"]
     defined = {n.name for n in ast.walk(dc_tree)
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    group_members = {m for _, ms in ast.literal_eval(_get_assign(dc_tree, "TOOL_GROUPS")) for m in ms}
-    phrases = set(ast.literal_eval(_get_assign(dc_tree, "_TOOL_ACTION_PHRASES")))
-    pre_covered = {t for _, ts in ast.literal_eval(_get_assign(dc_tree, "_PREACTIVATE_HINTS")) for t in ts}
+    group_members = {m for _, ms in layers["TOOL_GROUPS"] for m in ms}
+    phrases = set(layers["_TOOL_ACTION_PHRASES"])
+    pre_covered = {t for _, ts in layers["_PREACTIVATE_HINTS"] for t in ts}
     self_evo = set(ast.literal_eval(_get_assign(dc_tree, "SELF_EVOLUTION_TOOLS")))
 
     as_tree = _parse(AS)

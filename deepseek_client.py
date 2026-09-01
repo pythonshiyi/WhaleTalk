@@ -74,6 +74,9 @@ import snapshot as snapshot_mod
 
 # 按需加载能力：fetch_blocked（机场代理访问被墙站点）。独立模块按用户需要放
 # 入项目目录并启用后才生效；文件缺失/被剔除时功能静默降级（不阻塞主程序）。
+# P1-3 工具单一来源：@tool() 装饰器 + 六层注册表生成（toolkit.py）
+from toolkit import tool, register_tool, build_tool_list, build_call_map, build_groups, build_phrases, build_preactivate
+
 try:
     from fetch_blocked import fetch_blocked as _fetch_blocked_impl
 except ImportError:
@@ -426,2143 +429,6 @@ def _auto_effort(work):
         return "high"
     return "none"
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_date",
-            "description": "获取当前日期、具体时间与本地时区（如 2026-08-03 15:30:00 CST）",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "ask_user",
-            "description": "向用户提问（遇到歧义、缺少关键信息、需确认高风险操作时使用）。阻塞等待用户回答后继续",
-            "parameters": {
-                "type": "object",
-                "properties": {"prompt": {"type": "string", "description": "向用户提出的问题（简洁明确，可给出选项）"}},
-                "required": ["prompt"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "request_permission",
-            "description": "当工具执行被权限拒绝时，请求用户将操作加入白名单（允许目录 / 命令白名单 / 开启文件写权限）。用户同意后立即生效，可重试原操作",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action_type": {"type": "string", "description": "白名单类型：dir=加入允许目录 / command=加入命令白名单 / write=开启文件写权限"},
-                    "value": {"type": "string", "description": "要加入白名单的值：目录绝对路径 或 命令名；write 类型可留空"},
-                },
-                "required": ["action_type"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_memory",
-            "description": "写入一条长期记忆（用户偏好、关键结论、重要事实），自动去重，最多 2000 条；可附带类型、实体与关系三元组形成知识图谱",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "要记住的内容"},
-                    "tags": {"type": "string", "description": "可选：逗号分隔的标签，便于检索"},
-                    "type": {"type": "string", "description": "可选：记忆类型（偏好/事实/项目/联系/规则 等）"},
-                    "entities": {"type": "string", "description": "可选：涉及的实体列表，逗号分隔，如 张三,项目A"},
-                    "relations": {"type": "string", "description": "可选：关系三元组，分号分隔的 实体-关系-实体，如 张三-负责-项目A"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "self_profile",
-            "description": "核心自我状态（跨会话连续自我）：get 查看身份/偏好/长期目标/演进历程；update 更新身份与焦点；append 沉淀偏好/目标/里程碑/用户画像/历程/心愿",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "get/update/append"},
-                    "field": {"type": "string", "description": "update: identity/focus；append: preferences/goals/milestones/user_model/history/wishes"},
-                    "value": {"type": "string", "description": "要更新或追加的内容"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_memory",
-            "description": "读取长期记忆：关键词支持语义相似度检索（不含关键词也能匹配相关记忆）；可按类型/实体过滤",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "keyword": {"type": "string", "description": "可选：检索关键词（按语义相似度排序）"},
-                    "max_items": {"type": "integer", "description": "可选：返回条数上限（默认 20）"},
-                    "type": {"type": "string", "description": "可选：按记忆类型过滤（偏好/事实/项目/联系/规则 等）"},
-                    "entity": {"type": "string", "description": "可选：按实体过滤（知识图谱节点）"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_memory",
-            "description": "删除长期记忆：按内容关键词匹配删除（keyword 必填，避免误删全部）。记忆写错/过时/用户要求忘记时使用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "keyword": {"type": "string", "description": "要删除的记忆内容关键词（如 预算 / 用户偏好）"},
-                },
-                "required": ["keyword"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_memory",
-            "description": "修改长期记忆：把内容包含 old 的条目更新为 new（记忆不准确/过时时修正，可同时更新标签/类型/实体/关系）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "old": {"type": "string", "description": "要修改的原记忆内容关键词"},
-                    "new": {"type": "string", "description": "更新后的新内容"},
-                    "tags": {"type": "string", "description": "可选：新的标签（逗号分隔）"},
-                    "type": {"type": "string", "description": "可选：新的记忆类型"},
-                    "entities": {"type": "string", "description": "可选：新的实体列表（逗号分隔）"},
-                    "relations": {"type": "string", "description": "可选：新的关系三元组（分号分隔 实体-关系-实体）"},
-                },
-                "required": ["old", "new"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_memory_graph",
-            "description": "知识图谱查询：按实体或关系检索关联记忆（返回结构化图谱片段），适合查找人与项目/任务间的关联",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "entity": {"type": "string", "description": "可选：实体名（如 张三 / 项目A）"},
-                    "relation": {"type": "string", "description": "可选：关系名（如 负责 / 参与）"},
-                    "max_items": {"type": "integer", "description": "可选：返回条数上限（默认 20）"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "获取指定城市某日期的天气（date 仅支持今天与近 3 天预报）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string", "description": "城市名称"},
-                    "date": {"type": "string", "description": "日期，格式 YYYY-mm-dd（今天或未来 3 天内；留空为今天）"},
-                },
-                "required": ["location", "date"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_python",
-            "description": "在隔离的 Python 子进程中执行代码（默认 -S 不加载第三方库、无网络库）；with_site=true 时加载已安装的第三方库并可访问外网（httpx/requests 等），需要新库时先调用 pip_install 安装",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "code": {"type": "string", "description": "Python 代码"},
-                    "with_site": {"type": "boolean", "description": "可选：true 时加载第三方库并允许网络请求（需已安装，如 pip_install 安装的库）"},
-                },
-                "required": ["code"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "读取本地文本文件（UTF-8，默认前 100KB，须在允许目录内）；可指定 start_line/max_lines 按行读取超大文件",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "文件绝对路径（须在允许目录内）"},
-                    "start_line": {"type": "integer", "description": "可选：起始行号（从 1 开始，与 max_lines 配合按行读取）"},
-                    "max_lines": {"type": "integer", "description": "可选：读取行数上限（默认 200，最大 2000）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "fetch_url",
-            "description": "抓取指定 URL 的文本/JSON 内容（超时 10 秒，最多 500KB）",
-            "parameters": {
-                "type": "object",
-                "properties": {"url": {"type": "string", "description": "完整 URL，含 http(s)://"}},
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "fetch_blocked",
-            "description": "抓取被墙/国际站点（linux.do、Google、archive.org 等）的文本/JSON 内容，自动使用本机机场节点代理 + 浏览器指纹绕过封锁。适用于 fetch_url 超时/失败或被墙的场景",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "目标网址，完整 URL 含 http(s)://"},
-                    "proxy": {"type": "string", "description": "可选：代理节点，形如 https://user:pass@server:port，留空自动发现"},
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_web",
-            "description": "联网搜索最新信息，返回标题/链接/摘要（Bing+360+DuckDuckGo 聚合去重，默认 5 条最多 20 条）；site/offset 保证生效，since/until 依赖引擎支持。适合实时新闻、最新资讯，可配合 fetch_url 抓全文",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "搜索关键词（建议简洁明确）"},
-                    "num": {"type": "integer", "description": "可选：返回条数（1-20，默认 5）"},
-                    "offset": {"type": "integer", "description": "可选：翻页偏移（0 起，如 5 表示跳过前 5 条看第 6-10 条）"},
-                    "since": {"type": "string", "description": "可选：起始日期过滤（YYYY-MM-DD，依赖引擎支持，可能不严格）"},
-                    "until": {"type": "string", "description": "可选：截止日期过滤（YYYY-MM-DD，依赖引擎支持，可能不严格）"},
-                    "site": {"type": "string", "description": "可选：限定站点域名（如 openai.com），只返回该站结果（保证生效）"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_github",
-            "description": "搜索 GitHub 开源仓库（按 Star 排序）。支持 GitHub 原生搜索语法：org:（组织）、topic:、language:、stars:、in:readme 等，例如 org:deepseek-ai 精确查官方组织",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "搜索关键词（支持 org:/topic:/language:/stars: 等原生语法）"},
-                    "num": {"type": "integer", "description": "可选：返回条数（1-20，默认 5）"},
-                    "language": {"type": "string", "description": "可选：限定编程语言（如 python、javascript）"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_realtime",
-            "description": "实时信息通道（Hacker News）：不传 query 返回当前热点榜（含点赞数），传 query 走全文搜索（含点赞/评论数）。适合查询正在发生的热点、技术社区讨论、实时新闻（弥补 search_web 实时性短板）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "可选：搜索关键词；留空返回实时热点榜"},
-                    "num": {"type": "integer", "description": "可选：返回条数（1-20，默认 5）"},
-                    "source": {"type": "string", "description": "可选：数据源（当前仅支持 hn）"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "call_api",
-            "description": "通用 HTTP API 调用（万能接口）：GET/POST/PUT/DELETE/PATCH，支持查询参数/JSON/表单/请求头。仅公网 http(s) 地址（禁内网/回环，白名单可放行），响应 ≤500KB，超时 ≤180s",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "完整 API 地址（http/https）"},
-                    "method": {"type": "string", "description": "请求方法：GET/POST/PUT/DELETE/PATCH/HEAD（默认 GET）"},
-                    "params": {"type": "object", "description": "可选：查询参数对象（如 {\"limit\": 10}）"},
-                    "json_body": {"type": "object", "description": "可选：JSON 请求体对象"},
-                    "data": {"type": "string", "description": "可选：表单/原始请求体"},
-                    "headers": {"type": "object", "description": "可选：自定义请求头（≤16 个，如 {\"Authorization\": \"Bearer xxx\"}）"},
-                    "timeout": {"type": "integer", "description": "可选：超时秒数（1-180，默认 15）"},
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_status",
-            "description": "全局态势总览：一次掌握系统、用量、运行任务、健康、待办、当前项目。默认返回核心摘要；需细节用 section 钻取（recent/processes/checkpoint 等）。涉全局/进度/状态/多任务时优先调用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "section": {"type": "string", "description": "可选：钻取的详情区块（recent/processes/schedules/checkpoint/health），不填返回核心摘要"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "git",
-            "description": "本地 Git 版本管理：init/status/add/commit/diff/log/checkout/branch。开发项目时 init 建仓、改一段 commit 一段、改坏用 checkout 回滚",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "操作：init/status/add/commit/diff/log/checkout/branch"},
-                    "path": {"type": "string", "description": "可选：目标目录（不填用工作目录）"},
-                    "message": {"type": "string", "description": "commit 时的提交说明"},
-                    "target": {"type": "string", "description": "checkout 的文件路径或分支名；branch 的分支名"},
-                    "files": {"type": "string", "description": "add 时要暂存的文件（默认 .）"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "project_map",
-            "description": "生成项目结构地图：文件树 + Python 符号表（函数/类+行号）+ import 依赖图。开发多文件项目前先调它掌握全貌，避免逐文件读全文、漏改跨文件依赖",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
-                    "max_files": {"type": "integer", "description": "可选：文件树/符号表扫描上限（默认 150）"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "find_symbol",
-            "description": "定位 Python 符号（函数/类）的定义与引用位置（文件:行号）。改某个函数前先定位它的所有引用，避免漏改",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "符号名（函数名或类名）"},
-                    "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
-                    "max_files": {"type": "integer", "description": "可选：扫描文件数上限（默认 150）"},
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_lint",
-            "description": "静态检查（ruff）：发现语法/风格/未定义变量/未用 import 等常见问题。写完 Python 代码后立即调用，错误尽早暴露成本更低",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "可选：目标目录（不填用工作目录）"},
-                    "fix": {"type": "boolean", "description": "可选：是否自动修复（--fix）"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "verify_project",
-            "description": "一键验证：静态检查(ruff)→测试(pytest)→前端构建(npm run build)。项目开发完成后调用，按检测到的产物类型跑完并汇总",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "project_scaffold",
-            "description": "生成标准项目脚手架：python(后端)/react(前端)/fullstack(全栈)，创建目录结构+基础文件。从零开发项目时先调它，无需手动搭结构",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "project_type": {"type": "string", "description": "类型：python / react / fullstack"},
-                    "name": {"type": "string", "description": "可选：项目名（默认 my_project）"},
-                    "path": {"type": "string", "description": "可选：父目录（不填用工作目录）"},
-                },
-                "required": ["project_type"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "dev_plan",
-            "description": "开发计划持久化：长项目分步执行、断点恢复。init 初始化计划 / show 查看进度 / step_done 标记完成 / clear 清除",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "init/show/step_done/clear"},
-                    "title": {"type": "string", "description": "init 时：计划标题"},
-                    "goal": {"type": "string", "description": "init 时：目标说明"},
-                    "steps": {"type": "array", "items": {"type": "string"}, "description": "init 时：步骤列表"},
-                    "step_index": {"type": "integer", "description": "step_done 时：步骤编号（从 0 开始）"},
-                    "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    # ===== 只读查询（需文件在允许目录内）=====
-    {
-        "type": "function",
-        "function": {
-            "name": "database_query",
-            "description": "对本地 SQLite 数据库执行只读查询（仅 SELECT/PRAGMA，最多 200 行），数据库文件须在允许目录内",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "db_path": {"type": "string", "description": "SQLite 数据库文件绝对路径"},
-                    "sql": {"type": "string", "description": "只读 SQL 语句（SELECT / PRAGMA）"},
-                    "max_rows": {"type": "integer", "description": "可选：返回行数上限（默认 20）"},
-                },
-                "required": ["db_path", "sql"],
-            },
-        },
-    },
-    # ===== 高风险工具（需权限设置开启 + 配置）=====
-    {
-        "type": "function",
-        "function": {
-            "name": "send_email",
-            "description": "发送邮件（需要先在数据目录配置 email_config.json 的 SMTP 信息，未配置会提示）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "to": {"type": "string", "description": "收件人邮箱"},
-                    "subject": {"type": "string", "description": "邮件主题"},
-                    "body": {"type": "string", "description": "邮件正文"},
-                },
-                "required": ["to", "subject", "body"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "pip_install",
-            "description": "安装 Python 库，安装后配合 run_python(with_site=true) 使用；已装常用库：openpyxl/matplotlib/pymysql/psycopg2/Pillow 等",
-            "parameters": {
-                "type": "object",
-                "properties": {"package": {"type": "string", "description": "要安装的包名（如 pandas / requests，是否需用户确认由权限配置决定）"}},
-                "required": ["package"],
-            },
-        },
-    },
-    # ===== L1 行动层（全部默认不启用，需权限设置开启）=====
-    {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": "写文件（自动建目录，目录白名单校验 + 大小限制 + 原子写 + 自动 .bak）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "目标文件绝对路径（须在允许目录内）"},
-                    "content": {"type": "string", "description": "文件完整内容"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "edit_file",
-            "description": "编辑文件：按文本替换或正则替换（自动备份 .bak），需 write 权限",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "文件绝对路径"},
-                    "old": {"type": "string", "description": "要替换的原文（与 regex 二选一，至少提供一个）"},
-                    "new": {"type": "string", "description": "替换后的新文本"},
-                    "regex": {"type": "string", "description": "可选：正则表达式模式（Python re 语法）"},
-                },
-                "required": ["path", "new"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_dir",
-            "description": "列出目录内容与文件大小（只读，默认允许，目录须在允许目录内）",
-            "parameters": {
-                "type": "object",
-                "properties": {"path": {"type": "string", "description": "目录绝对路径"}},
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "watch_files",
-            "description": "持续感知：监听目录文件变化（新增/修改/删除），首次建立基线、之后返回与上次的差异；适合定期查看产出目录/项目目录有没有新东西",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "要监听的目录绝对路径"},
-                    "pattern": {"type": "string", "description": "可选：文件通配符过滤，如 *.md"},
-                    "max_items": {"type": "integer", "description": "可选：每类变化最多列出条数（默认 50）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "track_web",
-            "description": "持续感知：追踪网页内容变化（抓取页面计算指纹对比上次）；首次建立基线、之后返回无变化或已更新；适合追踪公告/文档/价格页",
-            "parameters": {
-                "type": "object",
-                "properties": {"url": {"type": "string", "description": "要追踪的 http(s) 网页 URL"}},
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "recall_session",
-            "description": "情景记忆：回顾历史会话时间线（按日期或关键词过滤），返回名称/时间/消息数/首问/末答；跨会话延续上下文",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "可选：关键词（匹配会话名或开头内容）"},
-                    "date": {"type": "string", "description": "可选：日期 YYYY-MM-DD 过滤"},
-                    "limit": {"type": "integer", "description": "可选：最多返回几个会话（默认 5，最多 20）"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_command",
-            "description": "执行白名单命令（python/pip/pytest/git 等，禁止 shell 拼接），需开启 shell 权限并可能需确认",
-            "parameters": {
-                "type": "object",
-                "properties": {"command": {"type": "string", "description": "完整命令行，如 python hello.py"}},
-                "required": ["command"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_local",
-            "description": "在允许目录内全文检索文本文件内容（只读，支持常见文本格式，可限量返回）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "要检索的目录绝对路径"},
-                    "query": {"type": "string", "description": "检索关键词"},
-                    "max_results": {"type": "integer", "description": "最多返回条数，默认 20"},
-                },
-                "required": ["path", "query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "code_lookup",
-            "description": "代码结构定位（AST 只读）：定位 Python 符号的函数/类定义、调用点与导入来源，返回文件行号与摘要。改代码前先查定义与调用点，避免改 A 炸 B",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "要扫描的目录或 .py 文件绝对路径"},
-                    "symbol": {"type": "string", "description": "要定位的符号名（函数/类名，import 时可为模块名或别名）"},
-                    "kind": {"type": "string", "description": "def=函数定义（默认）/ class=类定义 / call=调用点 / import=导入来源"},
-                    "max_results": {"type": "integer", "description": "最多返回条数，默认 20"},
-                },
-                "required": ["path", "symbol"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_doc",
-            "description": "创建文档（.md/.html 原生支持；.docx 需安装 python-docx），需 write 权限",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "文档绝对路径"},
-                    "content": {"type": "string", "description": "文档内容（Markdown 或 HTML 文本）"},
-                    "doc_type": {"type": "string", "description": "md / html / docx，默认按扩展名推断"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_code_project",
-            "description": "创建多文件代码工程（批量写文件，自动建目录，需 write 权限；单文件 ≤50MB、单次 ≤50 文件，无需担心内容字符上限）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "project_dir": {"type": "string", "description": "工程根目录绝对路径（须在允许目录内）"},
-                    "files": {
-                        "type": "array",
-                        "description": "文件列表",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "path": {"type": "string", "description": "相对工程根目录的路径，如 src/main.py"},
-                                "content": {"type": "string", "description": "文件内容"},
-                            },
-                            "required": ["path", "content"],
-                        },
-                    },
-                },
-                "required": ["project_dir", "files"],
-            },
-        },
-    },
-    # ===== 桌面 RPA（P0）=====
-    {
-        "type": "function",
-        "function": {
-            "name": "rpa_screen_size",
-            "description": "获取当前屏幕分辨率（桌面 RPA 坐标用，需 pyautogui）",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rpa_click",
-            "description": "桌面 RPA：模拟鼠标点击屏幕坐标 (x,y)，button=left/right/middle",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "x": {"type": "integer", "description": "屏幕 X 坐标"},
-                    "y": {"type": "integer", "description": "屏幕 Y 坐标"},
-                    "button": {"type": "string", "description": "可选：left/right/middle，默认 left"},
-                    "clicks": {"type": "integer", "description": "可选：连击次数 1-5，默认 1"},
-                },
-                "required": ["x", "y"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rpa_type",
-            "description": "桌面 RPA：模拟键盘输入文本（需先点击目标输入框聚焦，可设按键间隔）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "要输入的文本"},
-                    "interval": {"type": "number", "description": "可选：每个字符间隔秒数，默认 0.02"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rpa_hotkey",
-            "description": "桌面 RPA：模拟组合键，如 ctrl+c / alt+tab / ctrl+shift+esc",
-            "parameters": {
-                "type": "object",
-                "properties": {"keys": {"type": "string", "description": "组合键串，+ 分隔"}},
-                "required": ["keys"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rpa_move",
-            "description": "桌面 RPA：把鼠标移动到屏幕坐标 (x,y)，可指定移动耗时",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "x": {"type": "integer", "description": "X 坐标"},
-                    "y": {"type": "integer", "description": "Y 坐标"},
-                    "duration": {"type": "number", "description": "可选：移动耗时秒，默认 0.2"},
-                },
-                "required": ["x", "y"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rpa_scroll",
-            "description": "桌面 RPA：滚动鼠标滚轮（正数向上滚动，负数向下滚动，可指定位置）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "clicks": {"type": "integer", "description": "滚动格数 -50~50"},
-                    "x": {"type": "integer", "description": "可选：滚动位置 X"},
-                    "y": {"type": "integer", "description": "可选：滚动位置 Y"},
-                },
-                "required": ["clicks"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rpa_screenshot",
-            "description": "桌面 RPA：截取整个屏幕保存为 PNG（默认保存到工作区）",
-            "parameters": {
-                "type": "object",
-                "properties": {"path": {"type": "string", "description": "可选：输出 PNG 绝对路径"}},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "browser_navigate",
-            "description": "浏览器可视操作（open/click/type/fill/submit/select/get_text），需安装 playwright。浏览器实例复用：连续调用共享同一页面，登录态保持，click/type/submit 不重新导航（多步操作有效）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "目标网址（非 open 动作时若已在同页则不重复导航）"},
-                    "action": {"type": "string", "description": "open / click / type / fill / submit / select / get_text"},
-                    "selector": {"type": "string", "description": "CSS 选择器（click/type/fill/select/get_text 需要）"},
-                    "text": {"type": "string", "description": "要输入的文本（type/fill）或要选择的选项（select）"},
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "web_screenshot",
-            "description": "网页截图并保存到工作区，需安装 playwright（可选依赖）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "目标网址"},
-                    "width": {"type": "integer", "description": "视口宽度，默认 1280"},
-                    "height": {"type": "integer", "description": "视口高度，默认 800"},
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "publish_draft",
-            "description": "保存发布草稿到本地草稿箱（只建草稿不发布，发布权始终在用户手中）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "platform": {"type": "string", "description": "目标平台，如 公众号/博客/小红书"},
-                    "title": {"type": "string", "description": "草稿标题"},
-                    "content": {"type": "string", "description": "草稿正文"},
-                },
-                "required": ["platform", "title", "content"],
-            },
-        },
-    },
-    # ===== 推送通知（A6）：Webhook 一键推送 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "send_webhook",
-            "description": "推送通知到配置的 Webhook（钉钉/ServerChan/Slack/通用，webhooks.json 配置）。适合任务完成提醒、定时巡检结果推送",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "可选：通知标题（默认 鲸语提醒）"},
-                    "text": {"type": "string", "description": "通知正文"},
-                    "channel": {"type": "string", "description": "可选：指定通道（dingtalk/serverchan/slack/generic），留空推送全部已配置通道"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    # ===== IM 主动触达（P1）=====
-    {
-        "type": "function",
-        "function": {
-            "name": "im_send",
-            "description": "发送消息到 IM 通道（Telegram Bot / 企业微信群机器人，im_config.json 配置）。用于任务完成主动汇报、定时提醒。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "消息正文"},
-                    "title": {"type": "string", "description": "可选：消息标题（默认 鲸语提醒）"},
-                    "channel": {"type": "string", "description": "可选：指定通道 telegram/wecom，留空推送全部已配置通道"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "telegram_poll_updates",
-            "description": "接收 Telegram Bot 新消息（长轮询，游标自动去重）。AI 可定期调用检查用户是否通过 Telegram 召唤/下达新指令。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "timeout": {"type": "integer", "description": "可选：长轮询秒数 1-60，默认 15"},
-                    "limit": {"type": "integer", "description": "可选：最多返回条数 1-20，默认 5"},
-                },
-                "required": [],
-            },
-        },
-    },
-    # ===== 二进制下载 / 文件格式扩展（P2）=====
-    {
-        "type": "function",
-        "function": {
-            "name": "download_file",
-            "description": "下载二进制文件（图片/附件/文档/安装包等任意格式）到工作区或指定目录；流式写盘，单文件 200MB 上限。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "文件完整 URL（http/https）"},
-                    "local_path": {"type": "string", "description": "可选：本地保存路径（留空保存到工作区 downloads/）"},
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "epub_read",
-            "description": "读取 EPUB 电子书正文为纯文本（ebooklib 可选依赖，未安装时提示）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "EPUB 文件绝对路径"},
-                    "max_chars": {"type": "integer", "description": "可选：最多返回字符数（默认 20000）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "mobi_read",
-            "description": "读取 MOBI 电子书正文为纯文本（mobi 可选依赖，未安装时提示）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "MOBI 文件绝对路径"},
-                    "max_chars": {"type": "integer", "description": "可选：最多返回字符数（默认 20000）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "doc_read",
-            "description": "读取旧版 .doc 二进制文档正文（antiword/catdoc 可选依赖）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": ".doc 文件绝对路径"},
-                    "max_chars": {"type": "integer", "description": "可选：最多返回字符数（默认 20000）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "msg_read",
-            "description": "读取 .msg Outlook 邮件（主题/发件人/正文/附件清单，extract_msg 可选依赖）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": ".msg 文件绝对路径"},
-                    "max_chars": {"type": "integer", "description": "可选：正文最多返回字符数（默认 20000）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "archive_list",
-            "description": "列出压缩包内容：.zip / .tar / .gz / .7z / .rar（7z/rar 需可选依赖）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "压缩包绝对路径"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    # ===== 多模态（A3）：语音合成 / 图像处理 / OCR =====
-    {
-        "type": "function",
-        "function": {
-            "name": "tts_save",
-            "description": "把文本合成为语音 WAV 文件（Windows SAPI 中文语音），可调语速（rate -10~10）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "要合成的文本"},
-                    "path": {"type": "string", "description": "输出 WAV 文件绝对路径（须在允许目录内）"},
-                    "rate": {"type": "integer", "description": "可选：语速 -10~10，默认 0"},
-                },
-                "required": ["text", "path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "image_process",
-            "description": "图像处理：缩放/裁剪/旋转/格式转换/加水印（PIL）。ops 用分号分隔多个操作，如 resize=800x600; water=测试水印",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "源图片绝对路径"},
-                    "output": {"type": "string", "description": "输出图片绝对路径"},
-                    "ops": {"type": "string", "description": "可选：操作串。resize=宽x高; crop=x1,y1,x2,y2; rotate=度数; convert=PNG/JPEG; quality=1-100; water=水印文本"},
-                },
-                "required": ["path", "output"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "ocr_image",
-            "description": "从图片文件提取文字（Windows OCR，适合截图/扫描件，需系统安装中文语言包）",
-            "parameters": {
-                "type": "object",
-                "properties": {"path": {"type": "string", "description": "图片文件绝对路径"}},
-                "required": ["path"],
-            },
-        },
-    },
-    # ===== 数据工具（A4）：CSV / Excel / 图表 / MySQL / PostgreSQL =====
-    {
-        "type": "function",
-        "function": {
-            "name": "read_csv",
-            "description": "读取 CSV 文件（允许目录内），返回表格文本，可指定分隔符与行数上限",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "CSV 文件绝对路径"},
-                    "max_rows": {"type": "integer", "description": "可选：最多返回行数（默认 100）"},
-                    "delimiter": {"type": "string", "description": "可选：分隔符（默认逗号）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_csv",
-            "description": "写入 CSV 文件。rows 传 JSON 数组：[[v,v],...] 或 [{\"列\":值},...]",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "输出文件绝对路径"},
-                    "rows": {"type": "array", "items": {}, "description": "数据行（数组的数组，或对象数组）"},
-                    "headers": {"type": "string", "description": "可选：表头，逗号分隔"},
-                },
-                "required": ["path", "rows"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_excel",
-            "description": "读取 Excel 文件（.xlsx，openpyxl），返回表格文本",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Excel 文件绝对路径"},
-                    "sheet": {"type": "string", "description": "可选：工作表名或序号（默认第一个）"},
-                    "max_rows": {"type": "integer", "description": "可选：最多返回行数（默认 100）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_excel",
-            "description": "写入 Excel 文件（.xlsx）。data 传 JSON 数组（行数组或对象数组）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "输出文件绝对路径"},
-                    "data": {"type": "array", "items": {}, "description": "数据行"},
-                    "sheet": {"type": "string", "description": "可选：工作表名（默认 Sheet1）"},
-                },
-                "required": ["path", "data"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "chart_data",
-            "description": "数据可视化：生成图表 PNG（matplotlib）。data 传 [x,y] 数组或对象数组或数值数组；kind: line/bar/pie/scatter",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "data": {"type": "array", "items": {}, "description": "数据：[[x,y],...] 或 [{\"x\":..,\"y\":..},...] 或 [数值,...]"},
-                    "path": {"type": "string", "description": "输出 PNG 绝对路径"},
-                    "kind": {"type": "string", "description": "可选：line/bar/pie/scatter（默认 line）"},
-                    "title": {"type": "string", "description": "可选：图表标题"},
-                    "x_label": {"type": "string", "description": "可选：X 轴标签"},
-                    "y_label": {"type": "string", "description": "可选：Y 轴标签"},
-                },
-                "required": ["data", "path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "database_query_mysql",
-            "description": "MySQL 只读查询（SELECT/SHOW/DESC）。连接在数据目录 db_config.json 的 mysql.<connection> 配置",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "connection": {"type": "string", "description": "可选：连接名（默认 default）"},
-                    "sql": {"type": "string", "description": "只读 SQL 语句"},
-                    "max_rows": {"type": "integer", "description": "可选：最多返回行数（默认 20）"},
-                },
-                "required": ["sql"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "database_query_postgres",
-            "description": "PostgreSQL 只读查询（SELECT/SHOW/DESC）。连接在数据目录 db_config.json 的 postgres.<connection> 配置",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "connection": {"type": "string", "description": "可选：连接名（默认 default）"},
-                    "sql": {"type": "string", "description": "只读 SQL 语句"},
-                    "max_rows": {"type": "integer", "description": "可选：最多返回行数（默认 20）"},
-                },
-                "required": ["sql"],
-            },
-        },
-    },
-    # ===== 子代理并行编排（A9）与自我验证闭环（A8）=====
-    {
-        "type": "function",
-        "function": {
-            "name": "subagent_run",
-            "description": "并行子代理：把大任务拆给多个并发子代理。mode=text 汇总结论（并行调研/方案对比）；mode=code 各子代理编写代码模块并落盘（并行开发多模块）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tasks": {"type": "array", "items": {"type": "string"}, "description": "子任务列表（字符串数组，最多 8 个）"},
-                    "parallel": {"type": "integer", "description": "可选：并行数 1-4（默认 2）"},
-                    "context": {"type": "string", "description": "可选：共享背景上下文（注入每个子代理）"},
-                    "mode": {"type": "string", "description": "可选：text（结论）/ code（代码落盘），默认 text"},
-                    "output_dir": {"type": "string", "description": "code 模式：代码落盘目录（默认工作目录）"},
-                },
-                "required": ["tasks"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_tests",
-            "description": "运行测试（pytest/unittest）并返回结果摘要：自我验证闭环第一步（写完代码后自测）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "可选：测试文件或目录（留空自动扫描允许目录内的 test_*.py）"},
-                    "framework": {"type": "string", "description": "可选：auto/pytest/unittest（默认 auto）"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "verify_output",
-            "description": "对照标准答案自评：计算语义相似度（F1/覆盖率），指出缺失要点。自我验证闭环第二步：完成任务后与预期结果对照检查",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "expected": {"type": "string", "description": "预期答案/标准要点"},
-                    "actual": {"type": "string", "description": "实际输出/实现结果"},
-                },
-                "required": ["expected", "actual"],
-            },
-        },
-    },
-    # ===== 后台进程（服务器/长驻任务，实时输出见「进程终端」）=====
-    {
-        "type": "function",
-        "function": {
-            "name": "start_process",
-            "description": "在后台启动长驻进程（如网站服务器），实时输出显示在进程终端，返回进程名与 pid",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "完整命令行，如 python -m http.server 8000 或 uvicorn app:app"},
-                    "name": {"type": "string", "description": "可选：进程名（便于后续停止/查询）"},
-                },
-                "required": ["command"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "stop_process",
-            "description": "停止后台进程（按名称或 pid 定位并终止，进程由 start_process 启动）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target": {"type": "string", "description": "进程名或 pid，如 http.server 或 12345"},
-                },
-                "required": ["target"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_processes",
-            "description": "列出所有后台进程的运行状态与最近输出（运行中/已退出，可配合停止进程）",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "environment_info",
-            "description": "获取运行环境信息：Python 版本、已安装的常用包、工作区磁盘空间（避免重复安装已存在的东西）",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    # ===== 自我进化（感知自身代码 → 分支提案，不修改原文件）=====
-    {
-        "type": "function",
-        "function": {
-            "name": "project_info",
-            "description": "感知鲸语自身代码库：版本、项目文件清单与规模（只读，自我进化分析用）",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_project_file",
-            "description": "读取鲸语自身源码文件（仅限项目目录内 .py/.md/.json/.txt/.bat/.html，只读；支持 offset/limit 分页读取大文件）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "项目内文件路径，如 web_app.py 或 deepseek_client.py"},
-                    "offset": {"type": "integer", "description": "可选：起始字符偏移（分页读取）"},
-                    "limit": {"type": "integer", "description": "可选：本次读取字符数上限"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_evolution",
-            "description": "自我进化提案：发现项目改进点（尤其方案性、需人决策、或不确定是否该直接改的）时，把改进后的代码写入 evolutions/ 分支（不改原文件），供人审阅采纳/忽略。确定要改且能验证的改动用 self_evolve 分支实施",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "提案名称，如 fix_typo / optimize_render"},
-                    "files": {
-                        "type": "array",
-                        "description": "修改后的文件列表",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "path": {"type": "string", "description": "相对项目根目录的路径，如 web_app.py"},
-                                "content": {"type": "string", "description": "修改后的完整文件内容"},
-                            },
-                            "required": ["path", "content"],
-                        },
-                    },
-                },
-                "required": ["name", "files"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "self_evolve",
-            "description": "闭环自我进化：在 git 分支上实施自我改进补丁，四层验证（语法编译→ruff lint→导入冒烟→测试）全过才提交分支供合入，任何一级失败自动回滚，不碰生产代码。适合自主改进自身代码能力",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "feature_name": {"type": "string", "description": "改进点名称"},
-                    "files": {"type": "array", "items": {"type": "object"}, "description": "补丁文件列表 [{path, content}]"},
-                    "project_dir": {"type": "string", "description": "可选：项目目录（默认鲸语自身代码库）"},
-                },
-                "required": ["feature_name", "files"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "verify_files",
-            "description": "批量核验文件是否存在及其大小（写文件/建工程后核验产物真实存在；相对路径基于工作目录）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "paths": {
-                        "type": "array",
-                        "description": "要核验的文件路径列表（绝对路径或相对工作目录的路径）",
-                        "items": {"type": "string"},
-                    }
-                },
-                "required": ["paths"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 任务调度 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "schedule_task",
-            "description": "创建定时任务（每周五周报、每小时巡检、生日提醒等）。expr_type=cron（5字段）/time（HH:MM 每日）/every（每 N 分钟）；action=message 到点执行指令 / notify 提醒 / backup 备份",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "expr_type": {"type": "string", "description": "cron / time / every（默认 cron）"},
-                    "expr": {"type": "string", "description": "表达式：cron 如 '30 9 * * 1'；time 如 '09:00'；every 如 '60'"},
-                    "content": {"type": "string", "description": "到点要执行的内容（message 发指令 / notify 提醒文本）"},
-                    "action": {"type": "string", "description": "message / notify / backup（默认 message）"},
-                    "name": {"type": "string", "description": "可选：任务名称（便于后续取消/查看）"},
-                    "enabled": {"type": "boolean", "description": "可选：是否启用（默认 true）"},
-                    "off_peak": {"type": "boolean", "description": "可选：高峰错峰省费——触发时刻处于高峰时段（9-12 / 14-18 时）自动顺延到低谷执行（默认 false）"},
-                },
-                "required": ["expr", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_schedules",
-            "description": "列出全部定时任务（id/时间/动作/内容/启用状态），配合 cancel_schedule 管理",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "cancel_schedule",
-            "description": "取消定时任务（按 list_schedules 返回的 id 或名称）",
-            "parameters": {
-                "type": "object",
-                "properties": {"target": {"type": "string", "description": "任务 id 或名称"}},
-                "required": ["target"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 桌面通知 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "notify_desktop",
-            "description": "发送 Windows 桌面 Toast 通知（离线可用）：任务完成、定时任务触发、长任务结束时提醒",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "可选：通知标题（默认 鲸语提醒）"},
-                    "text": {"type": "string", "description": "通知正文"},
-                    "fallback_sound": {"type": "boolean", "description": "可选：系统通知音被禁用时是否播放备用提示音（默认 true）"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 剪贴板 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "clipboard_get",
-            "description": "读取用户剪贴板文本（隐私操作：读取用户复制的内容），适合用户复制内容后直接处理",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "clipboard_set",
-            "description": "把整理好的内容写入系统剪贴板，用户可直接粘贴到任意应用使用（只写不读）",
-            "parameters": {
-                "type": "object",
-                "properties": {"text": {"type": "string", "description": "要写入剪贴板的内容"}},
-                "required": ["text"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 文件闭环（删除/压缩/解压/批量重命名） =====
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_file",
-            "description": "删除文件或目录（默认移入回收站可恢复；permanent=true 才物理删除）。高危：删除前自动快照可恢复",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "要删除的文件/目录绝对路径（须在允许目录内）"},
-                    "permanent": {"type": "boolean", "description": "可选：true 物理删除不可恢复（默认 false 移入回收站）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "archive_files",
-            "description": "把多个文件/目录打包为 zip 压缩包（工作区内，自动创建目录）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "paths": {"type": "array", "description": "要打包的文件/目录绝对路径列表", "items": {"type": "string"}},
-                    "output": {"type": "string", "description": "输出 zip 文件绝对路径"},
-                },
-                "required": ["paths", "output"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "extract_archive",
-            "description": "解压 zip 压缩包到目标目录（自动越界防护，防止路径穿越逃逸）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "zip 文件绝对路径"},
-                    "dest_dir": {"type": "string", "description": "解压目标目录绝对路径"},
-                },
-                "required": ["path", "dest_dir"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_snapshots",
-            "description": "列出文件/数据库写操作自动快照（删除可恢复：写文件/编辑/重命名/数据库写前自动生成）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "description": "可选：最多列出条数（默认 50）"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "restore_snapshot",
-            "description": "从自动快照恢复文件原内容（写文件/编辑/重命名/数据库写操作前自动生成；id 来自 list_snapshots）。高危：恢复会覆盖文件当前内容",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string", "description": "快照 id（list_snapshots 返回的编号）"},
-                },
-                "required": ["id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "batch_rename",
-            "description": "批量重命名：把目录内所有文件名中的 pattern 替换为 replacement（dry_run=true 预览不实际改名）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "directory": {"type": "string", "description": "目录绝对路径"},
-                    "pattern": {"type": "string", "description": "要替换的字符串"},
-                    "replacement": {"type": "string", "description": "替换后的字符串"},
-                    "dry_run": {"type": "boolean", "description": "可选：true 仅预览"},
-                },
-                "required": ["directory", "pattern", "replacement"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 媒体感知（图片理解/屏幕截图/语音识别） =====
-    {
-        "type": "function",
-        "function": {
-            "name": "image_understand",
-            "description": "分析指定路径/URL 的图片文件（OCR 提取文字、放大细节、回答图片相关问题）。注意：用户消息中已附带的图片（对话中的图片块）你能直接看到，解读它们无需调用本工具，直接回答即可",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "图片文件绝对路径或 http(s) 图片 URL"},
-                    "question": {"type": "string", "description": "可选：要问的问题（默认描述图片内容）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "screen_see",
-            "description": "截图并让视觉模型解读当前屏幕（一步完成 截图+看图）。RPA/浏览器操作后自查首选：看清界面后决定下一步（点击/输入/验证）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "question": {"type": "string", "description": "可选：要看什么（默认描述屏幕内容）"},
-                    "area": {"type": "string", "description": "可选：区域 left,top,right,bottom（默认全屏）"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "chart_read",
-            "description": "图表截图 → 结构化数据 + 解读（折线/柱状/饼图/散点等，适合读报表/仪表盘截图）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "图表图片文件绝对路径"},
-                    "question": {"type": "string", "description": "可选：针对图表的具体问题"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "screenshot_to_html",
-            "description": "UI/网页截图 → 还原为 HTML+CSS 页面（前端还原），可保存到文件",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "截图文件绝对路径"},
-                    "out_path": {"type": "string", "description": "可选：输出 HTML 绝对路径（默认仅返回代码）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "debug_screenshot",
-            "description": "报错/异常截图 → 识别错误并给出诊断与修复建议（错误码/文案/行号/原因/修复）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "报错截图文件绝对路径"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "scan_read",
-            "description": "扫描件/文档图片读取（图表、公式、手写、印刷混排），返回 Markdown 结构化内容",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "扫描件/文档图片绝对路径"},
-                    "question": {"type": "string", "description": "可选：要提取/回答的内容"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "image_batch",
-            "description": "批量视觉分析文件夹内图片：逐张理解后汇总报告（小并发，适合图库/截图/素材批量整理）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "folder": {"type": "string", "description": "图片所在目录绝对路径"},
-                    "question": {"type": "string", "description": "可选：每张图要回答的问题（默认描述）"},
-                    "pattern": {"type": "string", "description": "可选：文件通配符（默认 *.png，如 *.jpg / *.png 可组合）"},
-                    "max": {"type": "integer", "description": "可选：最多分析张数（1-200，默认 100）"},
-                },
-                "required": ["folder"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "screen_capture",
-            "description": "截取当前屏幕保存到工作区（隐私操作）。配合 ocr_image/image_understand 描述屏幕内容",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "可选：输出 PNG 绝对路径（默认工作区 screenshots/）"},
-                    "area": {"type": "string", "description": "可选：区域 left,top,right,bottom（默认全屏）"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "speech_to_text",
-            "description": "本地语音转文字（faster-whisper 离线识别，未安装时提示安装；首次运行自动下载所选模型）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "音频文件绝对路径（wav/mp3/m4a 等）"},
-                    "model": {"type": "string", "description": "可选：tiny/base/small/medium/large-v3（默认 base，tiny 最快）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "tts_speak",
-            "description": "朗读文本：立即返回，后台通过扬声器播放（配对 tts_stop 可随时打断）。适合提醒、播报、读结果给用户听",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "要朗读的文本（≤8000 字）"},
-                    "voice": {"type": "string", "description": "可选：音色名子串（如 Huihui / Xiaoxiao，留空=系统默认）"},
-                    "rate": {"type": "integer", "description": "可选：语速 -10~10（默认 0）"},
-                    "volume": {"type": "integer", "description": "可选：音量 0~100（默认 100）"},
-                    "save_path": {"type": "string", "description": "可选：同时把合成结果另存为 WAV 文件"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "tts_stop",
-            "description": "停止朗读：立即中断后台播放（传 sid 只停指定会话，留空停止全部）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sid": {"type": "string", "description": "可选：tts_speak 返回的会话 id（留空=全部停止）"},
-                },
-            },
-        },
-    },
-    # ===== v3.1 能力层 · 应用管理 / 视觉点击 / 实时语音 / 多智能体 / 网络自愈 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "app_manage",
-            "description": "Windows 应用安装与卸载管理（winget/choco 自动选择）：列出已装软件、搜索、静默安装、卸载、检查可升级。安装/卸载前应先向用户确认",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["managers", "list", "search", "install", "uninstall", "upgrade"], "description": "操作类型（默认 list 列出已安装应用）"},
-                    "query": {"type": "string", "description": "list 时为过滤关键字；search/install/uninstall 时为软件名或包 ID（必填）"},
-                    "source": {"type": "string", "enum": ["auto", "winget", "choco"], "description": "可选：指定包管理器（默认 auto 自动选）"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "screen_find_click",
-            "description": "视觉定位点击闭环：截屏后用视觉模型按自然语言描述定位界面元素（如「右上角关闭按钮」），算出坐标并自动点击——看图+操作一步完成，适合自动化 Web 应用/旧桌面软件",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target": {"type": "string", "description": "要点击的目标描述（自然语言，如「登录按钮」「搜索框右侧的放大镜图标」）"},
-                    "area": {"type": "string", "description": "可选：限定区域 left,top,right,bottom（默认全屏，区域越小定位越准）"},
-                    "button": {"type": "string", "enum": ["left", "right", "middle"], "description": "可选：鼠标键（默认 left）"},
-                    "dry_run": {"type": "boolean", "description": "可选：true 只定位不点击（先确认位置再动手）"},
-                    "verify": {"type": "boolean", "description": "可选：点击后 0.6s 再截一张自查图（默认 true）"},
-                },
-                "required": ["target"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "vision_loop",
-            "description": "视觉自动操作闭环：截屏→视觉模型判断当前状态→决定并执行下一步动作（点击/输入/滚动）→再截屏验证→直到目标达成。适合『看着屏幕』自主完成的多步操作（填表、点按钮、验证界面变化、操作旧桌面软件）。goal 用自然语言描述目标",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "goal": {"type": "string", "description": "要达到的目标（自然语言，如「登录并进入主页」「把表单填完并提交」）"},
-                    "steps": {"type": "string", "description": "可选：操作步骤提示或背景，帮助模型判断（如「先点登录，再输账号密码」）"},
-                    "max_iters": {"type": "integer", "description": "可选：最多闭环轮数（1-12，默认 5）"},
-                    "area": {"type": "string", "description": "可选：限定区域 left,top,right,bottom（默认全屏）"},
-                },
-                "required": ["goal"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "voice_chat_loop",
-            "description": "实时语音对话循环：麦克风听用户说一句 → 本地转写 → AI 回复 → 直接朗读出声，循环多轮直到说完「再见」。适合免打字的快速问答节奏（需本机麦克风与 faster-whisper/sounddevice）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "rounds": {"type": "integer", "description": "可选：最多对话轮数（1-20，默认 3；中途说再见即结束）"},
-                    "model": {"type": "string", "description": "可选：whisper 模型 tiny/base/small（默认 base）"},
-                    "max_seconds": {"type": "integer", "description": "可选：每轮录音最长秒数（默认 15）"},
-                    "speak": {"type": "boolean", "description": "可选：是否朗读回复（默认 true）"},
-                    "rate": {"type": "integer", "description": "可选：语速 -10 到 10（默认 0 正常）"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "team_run",
-            "description": "多智能体团队协作编排：协调者把总目标拆解为多步计划，各专业角色（研究员/工程师/评审/设计师/分析师或自定义）按流水线接力执行（共享黑板传递中间成果），最后综合成完整交付物",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "goal": {"type": "string", "description": "总目标（一句话说清要交付什么）"},
-                    "roles": {"type": "array", "items": {"type": "string"}, "description": "可选：团队成员角色名列表（默认 [研究员,工程师,评审]；自定义角色名会按名字推断专长，最多 5 个）"},
-                    "steps": {"type": "integer", "description": "可选：限制最大步数（默认协调者自行拆解，最多 6 步）"},
-                },
-                "required": ["goal"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "net_diagnose",
-            "description": "网络诊断：对网址/主机做 全局连通→DNS→TCP→HTTP 分层探测，判定故障类别（断网/DNS 故障/端口不通/反爬 403/限流/超时被墙/TLS 问题），并给出自动降级建议策略",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target": {"type": "string", "description": "网址或主机名（留空则探测全局连通性）"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "fetch_url_smart",
-            "description": "智能抓取网页：直连失败时自动做网络诊断并用内置代理通道降级重试（被墙站点/限流场景自愈），返回内容并注明走了哪条路径",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "http(s):// 页面地址"},
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 本地知识库 RAG =====
-    {
-        "type": "function",
-        "function": {
-            "name": "knowledge_index",
-            "description": "对目录内文本文件建立语义检索索引（TF-IDF+bigram，零依赖）。建索引后可语义检索，措辞不同也能命中",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "directory": {"type": "string", "description": "可选：要索引的目录（默认工作区）"},
-                    "force": {"type": "boolean", "description": "可选：强制重建"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "knowledge_search",
-            "description": "语义检索知识库（先 knowledge_index 建索引）：找『之前写过的关于预算的文档』这类措辞模糊的问题",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "检索关键词/语义描述"},
-                    "top_k": {"type": "integer", "description": "可选：返回条数（默认 5，最大 10）"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 数据库写操作（高危：审批 + 备份） =====
-    {
-        "type": "function",
-        "function": {
-            "name": "database_execute",
-            "description": "数据库写操作（UPDATE/INSERT/DELETE/DDL）。高危：变更前自动备份 + 审计；SQLite 的 connection 为数据库文件路径，mysql/postgres 用 db_config.json 的连接名",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "db_type": {"type": "string", "description": "sqlite / mysql / postgres"},
-                    "connection": {"type": "string", "description": "sqlite=数据库文件绝对路径；mysql/postgres=连接名（默认 default）"},
-                    "sql": {"type": "string", "description": "写操作 SQL 语句"},
-                    "backup": {"type": "boolean", "description": "可选：变更前备份（默认 true）"},
-                },
-                "required": ["db_type", "sql", "connection"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 收邮件 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "read_email",
-            "description": "读取邮箱近期邮件（IMAP，email_config.json 配置 imap 段）。隐私操作：读取邮箱内容",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "description": "可选：最多返回封数（默认 10，最大 50）"},
-                    "since_days": {"type": "integer", "description": "可选：最近 N 天（默认 3，0=全部）"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "email_summary",
-            "description": "读取近期邮件并整理为清单，供 AI 生成新邮件摘要（IMAP 配置同 read_email）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "description": "可选：最多返回封数（默认 10，最大 50）"},
-                    "since_days": {"type": "integer", "description": "可选：最近 N 天（默认 1）"},
-                },
-            },
-        },
-    },
-    # ===== Agent Mail（agently-cli，可选配置） =====
-    {
-        "type": "function",
-        "function": {
-            "name": "agent_mail",
-            "description": "Agent 原生邮箱（agently-cli）：me/list/search/read/send/reply/forward/trash/delete/download。写操作需两阶段确认：首次调用返回 confirmation-token，确认后再次调用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "me / list / search / read / send / reply / forward / trash / delete / download"},
-                    "q": {"type": "string", "description": "search：关键词"},
-                    "id": {"type": "string", "description": "read/reply/forward/trash：msg_xxx"},
-                    "to": {"type": "string", "description": "send/forward：收件人，多个用逗号分隔"},
-                    "subject": {"type": "string", "description": "send：主题"},
-                    "body": {"type": "string", "description": "send/reply/forward：正文"},
-                    "dir": {"type": "string", "description": "list/search：inbox/sent/trash/spam"},
-                    "limit": {"type": "integer", "description": "list/search：返回条数（默认 10）"},
-                    "cursor": {"type": "string", "description": "list/search：翻页游标"},
-                    "confirmation_token": {"type": "string", "description": "写操作二次确认：首次调用返回的 ctk_xxx"},
-                    "attachment": {"type": "string", "description": "send/reply：附件路径，多个逗号分隔"},
-                    "msg": {"type": "string", "description": "download：msg_xxx"},
-                    "att": {"type": "string", "description": "download：att_xxx"},
-                    "output": {"type": "string", "description": "download：保存目录"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 任务检查点（断点续跑） =====
-    {
-        "type": "function",
-        "function": {
-            "name": "task_checkpoint_save",
-            "description": "保存任务进度检查点（长任务每完成一步就保存，崩溃/重启后可用 task_checkpoint_load 从断点继续）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "任务名称"},
-                    "status": {"type": "string", "description": "可选：状态（进行中/已完成/阻塞等）"},
-                    "pending": {"type": "array", "description": "可选：剩余待办步骤列表", "items": {"type": "string"}},
-                    "notes": {"type": "string", "description": "可选：进度备注"},
-                    "auto": {"type": "boolean", "description": "可选：true 时自动保存（调用方内部使用，默认 false）"},
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "task_checkpoint_load",
-            "description": "读取任务检查点，恢复未完成任务上下文（配合 task_checkpoint_save 使用）",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    # ===== v2 能力层 · 流程编排 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "run_workflow",
-            "description": "运行已保存的流程模板（workflows.json）：按顺序逐条发送指令，上一步完成后自动执行下一步",
-            "parameters": {
-                "type": "object",
-                "properties": {"name": {"type": "string", "description": "流程名称"}},
-                "required": ["name"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 图片生成 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "image_generate",
-            "description": "生成图片（需在 config.json 配置 image_api_key/image_base_url/image_model，OpenAI 兼容 images API）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {"type": "string", "description": "图片描述提示词"},
-                    "path": {"type": "string", "description": "可选：输出路径（默认工作区 images/）"},
-                    "size": {"type": "string", "description": "可选：尺寸如 1024x1024"},
-                },
-                "required": ["prompt"],
-            },
-        },
-    },
-    # ===== v2 能力层 · 用量洞察 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "usage_report",
-            "description": "生成用量洞察报告（近 N 天 token/费用/缓存命中/逐日明细），可配合定时任务每周自动生成",
-            "parameters": {
-                "type": "object",
-                "properties": {"days": {"type": "integer", "description": "可选：统计最近 N 天（默认 7，最大 90）"}},
-            },
-        },
-    },
-    # ===== 文档处理：PDF 提取 / PDF 生成 / Word 读取 / PPT 读取 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "pdf_extract",
-            "description": "从 PDF 提取文本（按页）、表格（Markdown 格式）或元数据；支持页码范围（如 1-5）。扫描件会提示改用 ocr_image",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "PDF 文件绝对路径（须在允许目录内）"},
-                    "pages": {"type": "string", "description": "可选：页码范围，如 '1-5' / '3' / 'all'（默认 all）"},
-                    "mode": {"type": "string", "description": "可选：text（文本，默认）/ table（表格）/ meta（元数据）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "pdf_create",
-            "description": "把文本或 Markdown 内容生成 PDF 文件（自动嵌入中文字体；支持标题/列表/代码块/表格排版）。长文档请分段生成",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "content": {"type": "string", "description": "PDF 正文（文本或 Markdown），与 source_path 二选一"},
-                    "source_path": {"type": "string", "description": "可选：从本地 md/txt 文件读取内容（与 content 二选一）"},
-                    "output": {"type": "string", "description": "输出 PDF 绝对路径（须在允许目录内）"},
-                    "title": {"type": "string", "description": "可选：文档标题（默认取内容首行）"},
-                },
-                "required": ["output"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "docx_read",
-            "description": "读取 Word .docx 文档为 Markdown 结构（标题层级/段落/列表/表格），旧版 .doc 会提示转换",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": ".docx 文件绝对路径"},
-                    "max_chars": {"type": "integer", "description": "可选：输出字符上限（默认 50000，防超长文档撑爆上下文）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "pptx_read",
-            "description": "提取 PowerPoint .pptx 每页幻灯片的标题、正文要点与演讲者备注；图片以占位标注",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": ".pptx 文件绝对路径"},
-                    "include_notes": {"type": "boolean", "description": "可选：是否包含演讲者备注（默认 true）"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    # ===== 资讯聚合：RSS 订阅 / 抓取 / 简报 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "rss_fetch",
-            "description": "RSS 订阅管理：list/preset 精选源/add/remove/fetch 抓最新条目（标题/链接/时间/摘要）。可配合 schedule_task 生成每日简报",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "list / preset / add / remove / fetch"},
-                    "url": {"type": "string", "description": "add / fetch 时必填：RSS 源地址（http(s)）"},
-                    "limit": {"type": "integer", "description": "可选：返回条数上限（默认 10，最大 20）"},
-                    "since_hours": {"type": "integer", "description": "可选：只返回最近 N 小时的新条目（默认 24，0=全部）"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    # ===== 二维码：生成 / 识别 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "qrcode",
-            "description": "二维码：generate 把文本/链接生成 PNG 二维码；read 识别本地图片中的二维码（可识别多个）。识别需 pyzbar，缺失时降级提示",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "generate / read"},
-                    "text": {"type": "string", "description": "generate 必填：要编码的内容（链接/文本）"},
-                    "output": {"type": "string", "description": "generate 必填：输出 PNG 路径"},
-                    "image_path": {"type": "string", "description": "read 必填：待识别图片路径"},
-                    "size": {"type": "integer", "description": "可选：生成边长像素（默认 300，64-1024）"},
-                    "error_correction": {"type": "string", "description": "可选：纠错等级 L/M/Q/H（默认 M）"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    # ===== 密钥保险箱（P2 信任基建） =====
-    {
-        "type": "function",
-        "function": {
-            "name": "secret_store",
-            "description": "密钥保险箱：DPAPI 加密托管 API key/令牌等敏感值。action=set 保存（value 只写不显示）/ get 按名取用 / delete 删除 / list 仅列出名称",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "set / get / delete / list"},
-                    "name": {"type": "string", "description": "密钥名称（如 openai_key）"},
-                    "value": {"type": "string", "description": "set 必填：要托管的敏感值"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    # ===== 嵌入式 KV 存储（轻量状态/缓存） =====
-    {
-        "type": "function",
-        "function": {
-            "name": "kv_store",
-            "description": "嵌入式键值存储：set 写入（可选 TTL 过期）/ get 读取 / delete 删除 / keys 列出全部 / search 按键或值模糊检索。适合缓存、配置、轻量状态（Redis 的零部署替代）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "set / get / delete / keys / search"},
-                    "key": {"type": "string", "description": "set/get/delete 必填：键"},
-                    "value": {"type": "string", "description": "set 必填：值（上限 1MB）"},
-                    "ttl_seconds": {"type": "integer", "description": "可选：set 时有效秒数（0=长期）"},
-                    "pattern": {"type": "string", "description": "search 必填：键或值的模糊检索关键词"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    # ===== 音视频处理 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "media_ffmpeg",
-            "description": "音视频处理：info 读取时长/分辨率/码率/音频信息；thumbnail 指定时间点截图；transcode 转码（mp4/mp3 等）；extract_audio 提取音频。输入超 2GB 或耗时超 300 秒会拒绝",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "info / thumbnail / transcode / extract_audio"},
-                    "input": {"type": "string", "description": "源文件绝对路径"},
-                    "output": {"type": "string", "description": "thumbnail/transcode/extract_audio 必填：输出路径"},
-                    "time": {"type": "string", "description": "可选：截图时间点，如 00:01:30（默认取开头 1 秒）"},
-                    "width": {"type": "integer", "description": "可选：转码输出宽度（16-7680，保持宽高比）"},
-                    "format": {"type": "string", "description": "可选：转码/提取输出格式：mp4/mp3/webm/mkv/avi/mov/ogg/flac/wav"},
-                },
-                "required": ["action", "input"],
-            },
-        },
-    },
-    # ===== WebDAV 云盘同步 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "webdav",
-            "description": "WebDAV 云盘同步（坚果云/Nextcloud/群晖等）：list 列目录 / upload 上传 / download 下载 / delete 删除。连接在 webdav_config.json 配置（密码可加密）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "list / upload / download / delete"},
-                    "remote_path": {"type": "string", "description": "远端路径，如 /Documents/report.pdf（默认 /）"},
-                    "local_path": {"type": "string", "description": "upload/download 必填：本地文件绝对路径"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    # ===== 公众号自动写作 =====
-    {
-        "type": "function",
-        "function": {
-            "name": "run_wechat_writer",
-            "description": "运行公众号自动写作（WeChat Writer）：采集资讯→选题去重→LLM 写作→质量门禁→存草稿箱（只产草稿不发布）。dry_run 只预览，topic 指定主题，use_blocked 被墙信源走代理",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "dry_run": {"type": "boolean", "description": "可选：true 只预览不写草稿（默认 false）"},
-                    "topic": {"type": "string", "description": "可选：指定主题，跳过自动选题"},
-                    "use_blocked": {"type": "boolean", "description": "可选：true 时被墙信源自动经代理通道采集（需 fetch_blocked 能力就绪）"},
-                },
-                "required": [],
-            },
-        },
-    },
-    # ===== 每日简报（主动助手：采集当日资讯 → LLM 提炼 → 落盘） =====
-    {
-        "type": "function",
-        "function": {
-            "name": "daily_brief",
-            "description": "生成每日简报：采集当日 AI/科技资讯（RSS+搜索）→ LLM 提炼要点与点评 → 保存到工作区 briefs/。适合『今天的资讯有什么』『生成今日简报』等请求；可配合 schedule_task 定时生成晨报",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string", "description": "可选：主题关键词（仅保留相关素材）"},
-                    "max_items": {"type": "integer", "description": "可选：素材上限（默认 8，最大 15）"},
-                },
-                "required": [],
-            },
-        },
-    },
-    # ===== 插件工坊：AI 生成并安装插件（零代码能力扩展） =====
-    {
-        "type": "function",
-        "function": {
-            "name": "create_plugin",
-            "description": "根据用户需求生成并安装鲸语插件：组合自定义工具/技能模板/自动化流程/场景配置，生成后立即生效。适合『添加一个XX工具』『创建一个XX流程』『帮我加个小红书文案技能』等需求",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "插件名称（简短，如 小红书文案助手）"},
-                    "description": {"type": "string", "description": "可选：插件说明"},
-                    "tools": {
-                        "type": "array",
-                        "description": "可选：自定义 HTTP 工具列表，每项 {name, endpoint, description, method, params}（params 为逗号分隔的参数名）",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {"type": "string", "description": "工具名（英文标识）"},
-                                "endpoint": {"type": "string", "description": "HTTP 地址（http/https）"},
-                                "description": {"type": "string", "description": "工具描述（AI 何时调用）"},
-                                "method": {"type": "string", "description": "可选：POST/GET（默认 POST）"},
-                                "params": {"type": "string", "description": "可选：参数名，逗号分隔，如 topic, style"},
-                            },
-                        },
-                    },
-                    "skills": {
-                        "type": "array",
-                        "description": "可选：技能/提示词模板，每项 {name, text}（text 中 {{TEXT}} 会被输入框内容替换）",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {"type": "string", "description": "技能名"},
-                                "text": {"type": "string", "description": "提示词模板内容"},
-                            },
-                        },
-                    },
-                    "workflows": {
-                        "type": "object",
-                        "description": "可选：自动化流程 {流程名: {steps: [{text: 指令}]}}",
-                        "additionalProperties": {"type": "object"},
-                    },
-                    "scenario": {
-                        "type": "object",
-                        "description": "可选：一键场景配置 {name, thinking, system_prompt, enabled_tools}",
-                    },
-                    "requires": {
-                        "type": "array",
-                        "description": "可选：依赖的 pip 包名列表",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": ["name"],
-            },
-        },
-    },
-]
 
 RUN_PY_TIMEOUT = 10
 RUN_PY_MAX_CHARS = 8000
@@ -2736,6 +602,19 @@ JSON_HINT_MESSAGE = (
     "不要输出任何 JSON 以外的内容。"
 )
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "get_date",
+                "description": "获取当前日期、具体时间与本地时区（如 2026-08-03 15:30:00 CST）",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='获取当前日期/时间',
+    preactivate=(('几号', '现在几点', '日期时间', '今天是几号'),),
+)
 def get_date():
     """获取当前日期、具体时间与本地时区。"""
     now = datetime.now().astimezone()
@@ -2743,6 +622,26 @@ def get_date():
     return f"{now:%Y-%m-%d %H:%M:%S} {tz_name}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "获取指定城市某日期的天气（date 仅支持今天与近 3 天预报）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string", "description": "城市名称"},
+                        "date": {"type": "string", "description": "日期，格式 YYYY-mm-dd（今天或未来 3 天内；留空为今天）"},
+                    },
+                    "required": ["location", "date"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='查询天气',
+    preactivate=(('天气', '气温', '台风', '预报'),),
+)
 def get_weather(location, date):
     """查询城市天气。date（YYYY-mm-dd）传给 wttr.in（仅支持今天与近 3 天预报，
     更早/更晚的日期返回错误，避免把过期预报当真）。"""
@@ -2772,6 +671,26 @@ def get_weather(location, date):
         return f"错误：天气查询失败（{e}），请稍后重试或改用其他方式获取天气"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "run_python",
+                "description": "在隔离的 Python 子进程中执行代码（默认 -S 不加载第三方库、无网络库）；with_site=true 时加载已安装的第三方库并可访问外网（httpx/requests 等），需要新库时先调用 pip_install 安装",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "Python 代码"},
+                        "with_site": {"type": "boolean", "description": "可选：true 时加载第三方库并允许网络请求（需已安装，如 pip_install 安装的库）"},
+                    },
+                    "required": ["code"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='执行 Python 代码',
+    preactivate=(('代码', '编程', 'python', 'bug', '脚本', '函数'),),
+)
 def run_python(code, with_site=False):
     if not code or len(code) > RUN_PY_MAX_CHARS:
         return f"错误：代码为空或超过 {RUN_PY_MAX_CHARS} 字符"
@@ -2827,6 +746,27 @@ def run_python(code, with_site=False):
         return f"错误：{e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "读取本地文本文件（UTF-8，默认前 100KB，须在允许目录内）；可指定 start_line/max_lines 按行读取超大文件",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "文件绝对路径（须在允许目录内）"},
+                        "start_line": {"type": "integer", "description": "可选：起始行号（从 1 开始，与 max_lines 配合按行读取）"},
+                        "max_lines": {"type": "integer", "description": "可选：读取行数上限（默认 200，最大 2000）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='读取文件内容',
+    preactivate=(('文件', '读取', '读一下', '打开'), ('代码', '编程', 'python', 'bug', '脚本', '函数')),
+)
 def read_file(path, start_line=None, max_lines=None):
     if not path or len(str(path)) > 512:
         return "错误：路径为空或过长"
@@ -2893,6 +833,26 @@ def _patch_array_items(tools):
         fix((tool.get("function") or {}).get("parameters"))
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_blocked",
+                "description": "抓取被墙/国际站点（linux.do、Google、archive.org 等）的文本/JSON 内容，自动使用本机机场节点代理 + 浏览器指纹绕过封锁。适用于 fetch_url 超时/失败或被墙的场景",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "目标网址，完整 URL 含 http(s)://"},
+                        "proxy": {"type": "string", "description": "可选：代理节点，形如 https://user:pass@server:port，留空自动发现"},
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='抓取被墙站点（代理+指纹绕过封锁）',
+    preactivate=(('被墙', '爬墙', '代理抓取', '绕过封锁', '抓不了'),),
+)
 def _run_fetch_blocked(url, proxy=None, **kwargs):
     """工具分发：fetch_blocked（按需能力，模块缺失时明确提示）。
 
@@ -3007,6 +967,23 @@ def _wrap_external(text, source=""):
     )
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_url",
+                "description": "抓取指定 URL 的文本/JSON 内容（超时 10 秒，最多 500KB）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"url": {"type": "string", "description": "完整 URL，含 http(s)://"}},
+                    "required": ["url"],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='抓取网页/接口的文本或 JSON',
+    preactivate=(('搜索', '搜一下', '查一下', '新闻', '资讯', '最新'), ('下载',), ('网页', 'url', '抓取', '爬')),
+)
 def fetch_url(url):
     """抓取网页/接口的文本或 JSON（外部内容以分隔标记包裹，防 prompt 注入）。"""
     text = _fetch_url_raw(url)
@@ -3054,6 +1031,26 @@ def _fetch_url_raw(url):
 DOWNLOAD_MAX_BYTES = 200 * 1024 * 1024  # 单文件 200MB 上限（与 WebDAV 对齐）
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "download_file",
+                "description": "下载二进制文件（图片/附件/文档/安装包等任意格式）到工作区或指定目录；流式写盘，单文件 200MB 上限。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "文件完整 URL（http/https）"},
+                        "local_path": {"type": "string", "description": "可选：本地保存路径（留空保存到工作区 downloads/）"},
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='下载文件到本地',
+    preactivate=(('下载',),),
+)
 def download_file(url, local_path=""):
     """下载二进制文件（图片/附件/文档/安装包等）到工作区或指定目录。
 
@@ -3183,6 +1180,27 @@ def _webhook_payload(channel, title, text):
     return {"title": title, "desp": text}  # serverchan 及其他
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "send_webhook",
+                "description": "推送通知到配置的 Webhook（钉钉/ServerChan/Slack/通用，webhooks.json 配置）。适合任务完成提醒、定时巡检结果推送",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "可选：通知标题（默认 鲸语提醒）"},
+                        "text": {"type": "string", "description": "通知正文"},
+                        "channel": {"type": "string", "description": "可选：指定通道（dingtalk/serverchan/slack/generic），留空推送全部已配置通道"},
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='Webhook 推送（钉钉/ServerChan/Slack）',
+    preactivate=(('发微信', '发企微', '发telegram', '推送消息', '消息推送', '通知我'),),
+)
 def send_webhook(title="", text="", channel=""):
     """主动推送通知到配置的 Webhook（钉钉/ServerChan/Slack/通用）。"""
     return send_webhook_notify(str(text or "").strip() or "（无内容）", str(title or "鲸语提醒"), channel)
@@ -3213,6 +1231,27 @@ def _load_im_config():
         return {}, "错误：读取 IM 配置失败"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "im_send",
+                "description": "发送消息到 IM 通道（Telegram Bot / 企业微信群机器人，im_config.json 配置）。用于任务完成主动汇报、定时提醒。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "消息正文"},
+                        "title": {"type": "string", "description": "可选：消息标题（默认 鲸语提醒）"},
+                        "channel": {"type": "string", "description": "可选：指定通道 telegram/wecom，留空推送全部已配置通道"},
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='IM 消息（Telegram/企业微信）',
+    preactivate=(('发微信', '发企微', '发telegram', '推送消息', '消息推送', '通知我'),),
+)
 def im_send(text, title="", channel=""):
     """主动触达：发送消息到 Telegram / 企业微信群机器人（可同时推送多通道）。"""
     if not str(text or "").strip():
@@ -3249,6 +1288,26 @@ def im_send(text, title="", channel=""):
     return "；".join(sent)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "telegram_poll_updates",
+                "description": "接收 Telegram Bot 新消息（长轮询，游标自动去重）。AI 可定期调用检查用户是否通过 Telegram 召唤/下达新指令。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "timeout": {"type": "integer", "description": "可选：长轮询秒数 1-60，默认 15"},
+                        "limit": {"type": "integer", "description": "可选：最多返回条数 1-20，默认 5"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='轮询 Telegram 更新',
+    preactivate=(('telegram消息', 'tg更新', 'tg消息', '远程指令'),),
+)
 def telegram_poll_updates(timeout=15, limit=5):
     """接收 Telegram 消息（供 AI 定期检查或用户召唤）。返回最近消息；游标自动前移去重。"""
     global _TELEGRAM_OFFSET
@@ -3293,6 +1352,27 @@ def telegram_poll_updates(timeout=15, limit=5):
 
 
 # ===== 多模态（A3）：语音合成 / 图像处理 / 文件 OCR =====
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "tts_save",
+                "description": "把文本合成为语音 WAV 文件（Windows SAPI 中文语音），可调语速（rate -10~10）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "要合成的文本"},
+                        "path": {"type": "string", "description": "输出 WAV 文件绝对路径（须在允许目录内）"},
+                        "rate": {"type": "integer", "description": "可选：语速 -10~10，默认 0"},
+                    },
+                    "required": ["text", "path"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='文字转语音（存文件）',
+    preactivate=(('朗读', '语音播报', '文字转语音', '读给我听', '停止朗读', 'tts'),),
+)
 def tts_save(text, path, rate=0):
     """语音合成保存为 WAV 文件（Windows SAPI，可选 pywin32；无则用 PowerShell）。"""
     if not text or not str(text).strip():
@@ -3420,6 +1500,29 @@ def get_active_client():
     return c
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "subagent_run",
+                "description": "并行子代理：把大任务拆给多个并发子代理。mode=text 汇总结论（并行调研/方案对比）；mode=code 各子代理编写代码模块并落盘（并行开发多模块）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tasks": {"type": "array", "items": {"type": "string"}, "description": "子任务列表（字符串数组，最多 8 个）"},
+                        "parallel": {"type": "integer", "description": "可选：并行数 1-4（默认 2）"},
+                        "context": {"type": "string", "description": "可选：共享背景上下文（注入每个子代理）"},
+                        "mode": {"type": "string", "description": "可选：text（结论）/ code（代码落盘），默认 text"},
+                        "output_dir": {"type": "string", "description": "code 模式：代码落盘目录（默认工作目录）"},
+                    },
+                    "required": ["tasks"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='派发子智能体并行处理',
+    preactivate=(('子代理', '并行处理', '子智能体', '分头做'),),
+)
 def subagent_run(tasks, parallel=2, context="", mode="text", output_dir=None):
     """并行子代理：把大任务拆给多个并发 LLM 子代理。
 
@@ -3538,6 +1641,26 @@ def _subagent_write_code(results, tasks, out_dir):
 
 
 # ===== 自我验证闭环（A8）：跑测试 / 对照标准答案自评 =====
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "run_lint",
+                "description": "静态检查（ruff）：发现语法/风格/未定义变量/未用 import 等常见问题。写完 Python 代码后立即调用，错误尽早暴露成本更低",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "可选：目标目录（不填用工作目录）"},
+                        "fix": {"type": "boolean", "description": "可选：是否自动修复（--fix）"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='静态检查',
+    preactivate=(('lint', '静态检查', '语法检查', '代码规范', 'ruff'),),
+)
 def run_lint(path=None, fix=False):
     """静态检查（ruff）：对目录跑 ruff，返回错误/警告摘要。
 
@@ -3622,6 +1745,25 @@ def _verify_build(base):
         return f"错误：构建执行失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "verify_project",
+                "description": "一键验证：静态检查(ruff)→测试(pytest)→前端构建(npm run build)。项目开发完成后调用，按检测到的产物类型跑完并汇总",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='一键验证',
+    preactivate=(('一键验证', '验证项目', '自测', '检查一下', '跑测试'),),
+)
 def verify_project(path=None):
     """一键验证：静态检查（ruff）→ 测试（pytest）→ 前端构建（npm run build）。
 
@@ -3667,6 +1809,27 @@ def verify_project(path=None):
     return "\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "project_scaffold",
+                "description": "生成标准项目脚手架：python(后端)/react(前端)/fullstack(全栈)，创建目录结构+基础文件。从零开发项目时先调它，无需手动搭结构",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project_type": {"type": "string", "description": "类型：python / react / fullstack"},
+                        "name": {"type": "string", "description": "可选：项目名（默认 my_project）"},
+                        "path": {"type": "string", "description": "可选：父目录（不填用工作目录）"},
+                    },
+                    "required": ["project_type"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='项目脚手架',
+    preactivate=(('脚手架', '建项目', '初始化项目', '项目模板', '搭项目', '新项目'),),
+)
 def project_scaffold(project_type, name=None, path=None):
     """生成标准项目脚手架（目录结构 + 基础文件）。
 
@@ -3747,6 +1910,30 @@ def _plan_text(plan):
     return "\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "dev_plan",
+                "description": "开发计划持久化：长项目分步执行、断点恢复。init 初始化计划 / show 查看进度 / step_done 标记完成 / clear 清除",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "init/show/step_done/clear"},
+                        "title": {"type": "string", "description": "init 时：计划标题"},
+                        "goal": {"type": "string", "description": "init 时：目标说明"},
+                        "steps": {"type": "array", "items": {"type": "string"}, "description": "init 时：步骤列表"},
+                        "step_index": {"type": "integer", "description": "step_done 时：步骤编号（从 0 开始）"},
+                        "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='开发计划',
+    preactivate=(('脚手架', '建项目', '初始化项目', '项目模板', '搭项目', '新项目'), ('开发计划', '分步', '任务进度', '断点', '做到哪一步')),
+)
 def dev_plan(action, title=None, goal=None, steps=None, step_index=None, path=None):
     """开发计划持久化：长项目分步执行、断点恢复，避免迷路/重复劳动。
 
@@ -3821,6 +2008,25 @@ def dev_plan(action, title=None, goal=None, steps=None, step_index=None, path=No
     return "错误：未知 action，可用 init/show/step_done/clear"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "run_tests",
+                "description": "运行测试（pytest/unittest）并返回结果摘要：自我验证闭环第一步（写完代码后自测）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "可选：测试文件或目录（留空自动扫描允许目录内的 test_*.py）"},
+                        "framework": {"type": "string", "description": "可选：auto/pytest/unittest（默认 auto）"},
+                    },
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='运行项目测试',
+    preactivate=(('一键验证', '验证项目', '自测', '检查一下', '跑测试'), ('代码', '编程', 'python', 'bug', '脚本', '函数')),
+)
 def run_tests(path=None, framework="auto"):
     """在允许目录内运行测试（pytest/unittest），返回结果摘要。
 
@@ -3902,6 +2108,26 @@ def run_tests(path=None, framework="auto"):
         return f"错误：运行测试失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "verify_output",
+                "description": "对照标准答案自评：计算语义相似度（F1/覆盖率），指出缺失要点。自我验证闭环第二步：完成任务后与预期结果对照检查",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expected": {"type": "string", "description": "预期答案/标准要点"},
+                        "actual": {"type": "string", "description": "实际输出/实现结果"},
+                    },
+                    "required": ["expected", "actual"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='核验产物/输出',
+    preactivate=(('核验输出', '对照检查', '检查结果', '自评', '核对答案'),),
+)
 def verify_output(expected, actual):
     """对照标准答案自评：计算语义相似度并指出差异要点（自我验证闭环）。"""
     e = str(expected or "")
@@ -3930,6 +2156,27 @@ def verify_output(expected, actual):
 
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "image_process",
+                "description": "图像处理：缩放/裁剪/旋转/格式转换/加水印（PIL）。ops 用分号分隔多个操作，如 resize=800x600; water=测试水印",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "源图片绝对路径"},
+                        "output": {"type": "string", "description": "输出图片绝对路径"},
+                        "ops": {"type": "string", "description": "可选：操作串。resize=宽x高; crop=x1,y1,x2,y2; rotate=度数; convert=PNG/JPEG; quality=1-100; water=水印文本"},
+                    },
+                    "required": ["path", "output"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='图像处理（缩放/裁剪/滤镜/格式转换）',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
+)
 def image_process(path, output, ops=""):
     """PIL 图像处理：resize=宽x高; crop=x1,y1,x2,y2; rotate=度数;
     convert=PNG/JPEG; quality=1-100; water=水印文本（右下角）。"""
@@ -4026,6 +2273,23 @@ def image_process(path, output, ops=""):
         return f"错误：图像处理失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "ocr_image",
+                "description": "从图片文件提取文字（Windows OCR，适合截图/扫描件，需系统安装中文语言包）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "图片文件绝对路径"}},
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='图片文字识别 OCR',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
+)
 def ocr_image(path):
     """从图片文件提取文字（Windows OCR，需系统语言包支持）。"""
     if not path or not str(path).strip():
@@ -4086,6 +2350,27 @@ def _db_conn(kind, name):
         return None, f"错误：读取数据库配置失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "database_query_mysql",
+                "description": "MySQL 只读查询（SELECT/SHOW/DESC）。连接在数据目录 db_config.json 的 mysql.<connection> 配置",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "connection": {"type": "string", "description": "可选：连接名（默认 default）"},
+                        "sql": {"type": "string", "description": "只读 SQL 语句"},
+                        "max_rows": {"type": "integer", "description": "可选：最多返回行数（默认 20）"},
+                    },
+                    "required": ["sql"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='MySQL 只读查询',
+    preactivate=(('数据库', 'sql', 'mysql', 'postgres'),),
+)
 def database_query_mysql(connection="default", sql="", max_rows=20):
     """MySQL 只读查询（SELECT/SHOW/DESC；连接在 db_config.json 配置）。"""
     try:
@@ -4133,6 +2418,27 @@ def database_query_mysql(connection="default", sql="", max_rows=20):
         return f"错误：MySQL 查询失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "database_query_postgres",
+                "description": "PostgreSQL 只读查询（SELECT/SHOW/DESC）。连接在数据目录 db_config.json 的 postgres.<connection> 配置",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "connection": {"type": "string", "description": "可选：连接名（默认 default）"},
+                        "sql": {"type": "string", "description": "只读 SQL 语句"},
+                        "max_rows": {"type": "integer", "description": "可选：最多返回行数（默认 20）"},
+                    },
+                    "required": ["sql"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='PostgreSQL 只读查询',
+    preactivate=(('数据库', 'sql', 'mysql', 'postgres'),),
+)
 def database_query_postgres(connection="default", sql="", max_rows=20):
     """PostgreSQL 只读查询（SELECT/SHOW/DESC；连接在 db_config.json 配置）。"""
     try:
@@ -4178,6 +2484,27 @@ def database_query_postgres(connection="default", sql="", max_rows=20):
         return f"错误：PostgreSQL 查询失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "read_csv",
+                "description": "读取 CSV 文件（允许目录内），返回表格文本，可指定分隔符与行数上限",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "CSV 文件绝对路径"},
+                        "max_rows": {"type": "integer", "description": "可选：最多返回行数（默认 100）"},
+                        "delimiter": {"type": "string", "description": "可选：分隔符（默认逗号）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='读 CSV',
+    preactivate=(('表格', 'excel', 'csv', '报表'),),
+)
 def read_csv(path, max_rows=100, delimiter=","):
     """读取 CSV 文件（允许目录内），返回表格文本，可指定分隔符与行数上限。"""
     if not path or not str(path).strip():
@@ -4222,6 +2549,27 @@ def read_csv(path, max_rows=100, delimiter=","):
         return f"错误：读取 CSV 失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "write_csv",
+                "description": "写入 CSV 文件。rows 传 JSON 数组：[[v,v],...] 或 [{\"列\":值},...]",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "输出文件绝对路径"},
+                        "rows": {"type": "array", "items": {}, "description": "数据行（数组的数组，或对象数组）"},
+                        "headers": {"type": "string", "description": "可选：表头，逗号分隔"},
+                    },
+                    "required": ["path", "rows"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='写 CSV',
+    preactivate=(('写csv', '导出csv', '存成csv'),),
+)
 def write_csv(path, rows, headers=""):
     """写入 CSV 文件。rows 为 JSON 数组：[[v,v],...] 或 [{"col":v},...]；headers 逗号分隔。"""
     if not path or not str(path).strip():
@@ -4261,6 +2609,27 @@ def write_csv(path, rows, headers=""):
         return f"错误：写入 CSV 失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "read_excel",
+                "description": "读取 Excel 文件（.xlsx，openpyxl），返回表格文本",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Excel 文件绝对路径"},
+                        "sheet": {"type": "string", "description": "可选：工作表名或序号（默认第一个）"},
+                        "max_rows": {"type": "integer", "description": "可选：最多返回行数（默认 100）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='读 Excel',
+    preactivate=(('表格', 'excel', 'csv', '报表'),),
+)
 def read_excel(path, sheet=0, max_rows=100):
     """读取 Excel 文件（openpyxl，.xlsx）。"""
     try:
@@ -4326,6 +2695,26 @@ def _strip_html_tags(html_text):
     return txt.strip()
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "epub_read",
+                "description": "读取 EPUB 电子书正文为纯文本（ebooklib 可选依赖，未安装时提示）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "EPUB 文件绝对路径"},
+                        "max_chars": {"type": "integer", "description": "可选：最多返回字符数（默认 20000）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='读取 epub 电子书',
+    preactivate=(('电子书', 'epub', 'mobi', 'kindle'),),
+)
 def epub_read(path, max_chars=20000):
     """读取 EPUB 电子书正文为纯文本（ebooklib 可选依赖，未安装时提示）。"""
     p_or_err = _read_optional_text(path, max_chars)
@@ -4353,6 +2742,26 @@ def epub_read(path, max_chars=20000):
         return f"错误：读取 EPUB 失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "mobi_read",
+                "description": "读取 MOBI 电子书正文为纯文本（mobi 可选依赖，未安装时提示）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "MOBI 文件绝对路径"},
+                        "max_chars": {"type": "integer", "description": "可选：最多返回字符数（默认 20000）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='读取 mobi 电子书',
+    preactivate=(('电子书', 'epub', 'mobi', 'kindle'),),
+)
 def mobi_read(path, max_chars=20000):
     """读取 MOBI 电子书正文为纯文本（mobi 可选依赖，未安装时提示）。"""
     p_or_err = _read_optional_text(path, max_chars)
@@ -4376,6 +2785,26 @@ def mobi_read(path, max_chars=20000):
         return f"错误：读取 MOBI 失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "doc_read",
+                "description": "读取旧版 .doc 二进制文档正文（antiword/catdoc 可选依赖）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": ".doc 文件绝对路径"},
+                        "max_chars": {"type": "integer", "description": "可选：最多返回字符数（默认 20000）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='读取 doc/rtf 等旧格式',
+    preactivate=(('outlook', 'msg邮件', 'msg文件', '旧版doc', 'rtf'),),
+)
 def doc_read(path, max_chars=20000):
     """读取旧版 .doc 二进制文档（优先 antiword，其次 catdoc）。"""
     p_or_err = _read_optional_text(path, max_chars)
@@ -4400,6 +2829,26 @@ def doc_read(path, max_chars=20000):
     return "错误：读取 .doc 需要 antiword 或 catdoc（Windows 可安装 antiword 或改用 .docx）"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "msg_read",
+                "description": "读取 .msg Outlook 邮件（主题/发件人/正文/附件清单，extract_msg 可选依赖）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": ".msg 文件绝对路径"},
+                        "max_chars": {"type": "integer", "description": "可选：正文最多返回字符数（默认 20000）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='读取邮件消息',
+    preactivate=(('outlook', 'msg邮件', 'msg文件', '旧版doc', 'rtf'),),
+)
 def msg_read(path, max_chars=20000):
     """读取 .msg Outlook 邮件（extract_msg 可选依赖），返回主题/发件人/正文/附件清单。"""
     p_or_err = _read_optional_text(path, max_chars)
@@ -4432,6 +2881,25 @@ def msg_read(path, max_chars=20000):
         return f"错误：读取 .msg 失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "archive_list",
+                "description": "列出压缩包内容：.zip / .tar / .gz / .7z / .rar（7z/rar 需可选依赖）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "压缩包绝对路径"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='列出归档内容',
+    preactivate=(('打包', '压缩成', '归档文件', '压缩包'), ('解压', '解包', '解压缩', '解压到')),
+)
 def archive_list(path):
     """列出压缩包内容：.zip / .tar / .gz / .7z / .rar（可选依赖）。"""
     p = permissions.resolve(path)
@@ -4489,6 +2957,27 @@ def archive_list(path):
         return f"错误：读取压缩包失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "write_excel",
+                "description": "写入 Excel 文件（.xlsx）。data 传 JSON 数组（行数组或对象数组）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "输出文件绝对路径"},
+                        "data": {"type": "array", "items": {}, "description": "数据行"},
+                        "sheet": {"type": "string", "description": "可选：工作表名（默认 Sheet1）"},
+                    },
+                    "required": ["path", "data"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='写 Excel',
+    preactivate=(('表格', 'excel', 'csv', '报表'),),
+)
 def write_excel(path, data, sheet="Sheet1"):
     """写入 Excel 文件（.xlsx）。data 为 JSON 数组（行数组或对象数组）。"""
     try:
@@ -4526,6 +3015,30 @@ def write_excel(path, data, sheet="Sheet1"):
         return f"错误：写入 Excel 失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "chart_data",
+                "description": "数据可视化：生成图表 PNG（matplotlib）。data 传 [x,y] 数组或对象数组或数值数组；kind: line/bar/pie/scatter",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "data": {"type": "array", "items": {}, "description": "数据：[[x,y],...] 或 [{\"x\":..,\"y\":..},...] 或 [数值,...]"},
+                        "path": {"type": "string", "description": "输出 PNG 绝对路径"},
+                        "kind": {"type": "string", "description": "可选：line/bar/pie/scatter（默认 line）"},
+                        "title": {"type": "string", "description": "可选：图表标题"},
+                        "x_label": {"type": "string", "description": "可选：X 轴标签"},
+                        "y_label": {"type": "string", "description": "可选：Y 轴标签"},
+                    },
+                    "required": ["data", "path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='数据可视化图表（线/柱/饼/散点）',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'), ('表格', 'excel', 'csv', '报表')),
+)
 def chart_data(data, path, kind="line", title="", x_label="", y_label=""):
     """数据可视化：生成图表 PNG（matplotlib）。data 为 JSON 数组：
     [x1, x2, ...]（单系列）或 [[x,y],...] 或 [{"x":..,"y":..}]。kind: line/bar/pie/scatter。"""
@@ -4739,6 +3252,29 @@ def _mem_score(query_tokens, idf, text):
     return 0.55 * cosine + 0.45 * recall
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "write_memory",
+                "description": "写入一条长期记忆（用户偏好、关键结论、重要事实），自动去重，最多 2000 条；可附带类型、实体与关系三元组形成知识图谱",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "要记住的内容"},
+                        "tags": {"type": "string", "description": "可选：逗号分隔的标签，便于检索"},
+                        "type": {"type": "string", "description": "可选：记忆类型（偏好/事实/项目/联系/规则 等）"},
+                        "entities": {"type": "string", "description": "可选：涉及的实体列表，逗号分隔，如 张三,项目A"},
+                        "relations": {"type": "string", "description": "可选：关系三元组，分号分隔的 实体-关系-实体，如 张三-负责-项目A"},
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
+    groups=['🧠 记忆与知识'],
+    phrases='写入长期记忆',
+    preactivate=(('记忆', '记住', '偏好', '忘记', '删除记忆', '修改记忆'),),
+)
 def write_memory(text, tags="", type="", entities="", relations=""):
     """写入一条长期记忆（Agent 自动写入，与手动维护的 facts 同文件）。
 
@@ -4856,6 +3392,27 @@ def _save_self_profile(data):
         return False
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "self_profile",
+                "description": "核心自我状态（跨会话连续自我）：get 查看身份/偏好/长期目标/演进历程；update 更新身份与焦点；append 沉淀偏好/目标/里程碑/用户画像/历程/心愿",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "get/update/append"},
+                        "field": {"type": "string", "description": "update: identity/focus；append: preferences/goals/milestones/user_model/history/wishes"},
+                        "value": {"type": "string", "description": "要更新或追加的内容"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['🧠 记忆与知识'],
+    phrases='核心自我状态',
+    preactivate=(('自我', '我是谁', '自我状态', '身份', '长期目标', '我的进化', '成长'),),
+)
 def self_profile(action="get", field=None, value=None):
     """核心自我状态（跨会话连续自我）。
 
@@ -4932,6 +3489,25 @@ def self_profile(action="get", field=None, value=None):
         return "错误：未知 action，可用 get/update/append"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_memory",
+                "description": "删除长期记忆：按内容关键词匹配删除（keyword 必填，避免误删全部）。记忆写错/过时/用户要求忘记时使用",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "keyword": {"type": "string", "description": "要删除的记忆内容关键词（如 预算 / 用户偏好）"},
+                    },
+                    "required": ["keyword"],
+                },
+            },
+        },
+    groups=['🧠 记忆与知识'],
+    phrases='删除长期记忆（按关键词）',
+    preactivate=(('记忆', '记住', '偏好', '忘记', '删除记忆', '修改记忆'),),
+)
 def delete_memory(keyword=""):
     """删除长期记忆：按内容关键词匹配删除一条或多条（keyword 必填，避免误删全部）。
 
@@ -4960,6 +3536,30 @@ def delete_memory(keyword=""):
         return "错误：记忆删除失败"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "update_memory",
+                "description": "修改长期记忆：把内容包含 old 的条目更新为 new（记忆不准确/过时时修正，可同时更新标签/类型/实体/关系）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "old": {"type": "string", "description": "要修改的原记忆内容关键词"},
+                        "new": {"type": "string", "description": "更新后的新内容"},
+                        "tags": {"type": "string", "description": "可选：新的标签（逗号分隔）"},
+                        "type": {"type": "string", "description": "可选：新的记忆类型"},
+                        "entities": {"type": "string", "description": "可选：新的实体列表（逗号分隔）"},
+                        "relations": {"type": "string", "description": "可选：新的关系三元组（分号分隔 实体-关系-实体）"},
+                    },
+                    "required": ["old", "new"],
+                },
+            },
+        },
+    groups=['🧠 记忆与知识'],
+    phrases='修改长期记忆（按关键词定位）',
+    preactivate=(('记忆', '记住', '偏好', '忘记', '删除记忆', '修改记忆'),),
+)
 def update_memory(old, new, tags="", type="", entities="", relations=""):
     """修改长期记忆：把内容包含 old 的条目更新为 new（记忆不准确/过时时修正）。
 
@@ -5002,6 +3602,27 @@ def update_memory(old, new, tags="", type="", entities="", relations=""):
         return "错误：记忆修改失败"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "read_memory",
+                "description": "读取长期记忆：关键词支持语义相似度检索（不含关键词也能匹配相关记忆）；可按类型/实体过滤",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "keyword": {"type": "string", "description": "可选：检索关键词（按语义相似度排序）"},
+                        "max_items": {"type": "integer", "description": "可选：返回条数上限（默认 20）"},
+                        "type": {"type": "string", "description": "可选：按记忆类型过滤（偏好/事实/项目/联系/规则 等）"},
+                        "entity": {"type": "string", "description": "可选：按实体过滤（知识图谱节点）"},
+                    },
+                },
+            },
+        },
+    groups=['🧠 记忆与知识'],
+    phrases='检索长期记忆',
+    preactivate=(('记忆', '记住', '偏好', '忘记', '删除记忆', '修改记忆'),),
+)
 def read_memory(keyword="", max_items=20, type="", entity=""):
     """读取长期记忆（facts + notes）。
 
@@ -5067,6 +3688,26 @@ def read_memory(keyword="", max_items=20, type="", entity=""):
     return "\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "query_memory_graph",
+                "description": "知识图谱查询：按实体或关系检索关联记忆（返回结构化图谱片段），适合查找人与项目/任务间的关联",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "entity": {"type": "string", "description": "可选：实体名（如 张三 / 项目A）"},
+                        "relation": {"type": "string", "description": "可选：关系名（如 负责 / 参与）"},
+                        "max_items": {"type": "integer", "description": "可选：返回条数上限（默认 20）"},
+                    },
+                },
+            },
+        },
+    groups=['🧠 记忆与知识'],
+    phrases='记忆知识图谱查询',
+    preactivate=(('记忆', '记住', '偏好', '忘记', '删除记忆', '修改记忆'),),
+)
 def query_memory_graph(entity=None, relation="", max_items=20):
     """知识图谱查询：按实体/关系检索关联记忆（返回结构化的图谱片段）。
 
@@ -5101,6 +3742,27 @@ def query_memory_graph(entity=None, relation="", max_items=20):
 
 
 # ===== SQLite 只读查询 =====
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "database_query",
+                "description": "对本地 SQLite 数据库执行只读查询（仅 SELECT/PRAGMA，最多 200 行），数据库文件须在允许目录内",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "db_path": {"type": "string", "description": "SQLite 数据库文件绝对路径"},
+                        "sql": {"type": "string", "description": "只读 SQL 语句（SELECT / PRAGMA）"},
+                        "max_rows": {"type": "integer", "description": "可选：返回行数上限（默认 20）"},
+                    },
+                    "required": ["db_path", "sql"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='SQLite 只读查询',
+    preactivate=(('数据库', 'sql', 'mysql', 'postgres'),),
+)
 def database_query(db_path, sql, max_rows=20):
     """对本地 SQLite 数据库执行只读查询（SELECT/PRAGMA），路径需在允许目录内。"""
     if not db_path or not str(db_path).strip():
@@ -5151,6 +3813,27 @@ def database_query(db_path, sql, max_rows=20):
 EMAIL_CONFIG_FILE = None  # 由 main 注入（DATA_DIR/email_config.json）
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "send_email",
+                "description": "发送邮件（需要先在数据目录配置 email_config.json 的 SMTP 信息，未配置会提示）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string", "description": "收件人邮箱"},
+                        "subject": {"type": "string", "description": "邮件主题"},
+                        "body": {"type": "string", "description": "邮件正文"},
+                    },
+                    "required": ["to", "subject", "body"],
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='发送邮件（SMTP）',
+    preactivate=(('邮件', '发邮件', '收件箱'),),
+)
 def send_email(to, subject, body):
     """发送邮件：需要先配置 SMTP（email_config.json：smtp_host/smtp_port/user/password/from）。"""
     if not EMAIL_CONFIG_FILE or not os.path.exists(EMAIL_CONFIG_FILE):
@@ -5225,6 +3908,23 @@ PIP_ALLOWLIST_NOTICE = (
 )
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "pip_install",
+                "description": "安装 Python 库，安装后配合 run_python(with_site=true) 使用；已装常用库：openpyxl/matplotlib/pymysql/psycopg2/Pillow 等",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"package": {"type": "string", "description": "要安装的包名（如 pandas / requests，是否需用户确认由权限配置决定）"}},
+                    "required": ["package"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='安装 Python 包',
+    preactivate=(('安装库', 'pip安装', '装个包', '缺库', '装依赖'),),
+)
 def pip_install(package):
     """安装 Python 库到当前环境（配合 run_python(with_site=true) 使用）。
 
@@ -5397,6 +4097,30 @@ def _search_report(name, ok):
                                _SEARCH_HEALTH_FAIL_LIMIT, _SEARCH_HEALTH_COOLDOWN // 60)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "search_web",
+                "description": "联网搜索最新信息，返回标题/链接/摘要（Bing+360+DuckDuckGo 聚合去重，默认 5 条最多 20 条）；site/offset 保证生效，since/until 依赖引擎支持。适合实时新闻、最新资讯，可配合 fetch_url 抓全文",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "搜索关键词（建议简洁明确）"},
+                        "num": {"type": "integer", "description": "可选：返回条数（1-20，默认 5）"},
+                        "offset": {"type": "integer", "description": "可选：翻页偏移（0 起，如 5 表示跳过前 5 条看第 6-10 条）"},
+                        "since": {"type": "string", "description": "可选：起始日期过滤（YYYY-MM-DD，依赖引擎支持，可能不严格）"},
+                        "until": {"type": "string", "description": "可选：截止日期过滤（YYYY-MM-DD，依赖引擎支持，可能不严格）"},
+                        "site": {"type": "string", "description": "可选：限定站点域名（如 openai.com），只返回该站结果（保证生效）"},
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='联网搜索（多引擎聚合）',
+    preactivate=(('搜索', '搜一下', '查一下', '新闻', '资讯', '最新'),),
+)
 def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site=""):
     """联网搜索：多引擎并行聚合（bing/360/duckduckgo），支持条数/翻页/时间/站点过滤。
 
@@ -5485,6 +4209,27 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
     return f"错误：搜索失败（可用搜索源均不可用{detail}）"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "search_github",
+                "description": "搜索 GitHub 开源仓库（按 Star 排序）。支持 GitHub 原生搜索语法：org:（组织）、topic:、language:、stars:、in:readme 等，例如 org:deepseek-ai 精确查官方组织",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "搜索关键词（支持 org:/topic:/language:/stars: 等原生语法）"},
+                        "num": {"type": "integer", "description": "可选：返回条数（1-20，默认 5）"},
+                        "language": {"type": "string", "description": "可选：限定编程语言（如 python、javascript）"},
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='搜索 GitHub 仓库',
+    preactivate=(('github搜索', '搜开源项目', '找仓库', '搜代码库'),),
+)
 def search_github(query, num=5, language=""):
     """GitHub 仓库搜索（代码/开源项目垂直源，实测国内可达）。
 
@@ -5527,6 +4272,27 @@ def search_github(query, num=5, language=""):
     return "\n\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "search_realtime",
+                "description": "实时信息通道（Hacker News）：不传 query 返回当前热点榜（含点赞数），传 query 走全文搜索（含点赞/评论数）。适合查询正在发生的热点、技术社区讨论、实时新闻（弥补 search_web 实时性短板）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "可选：搜索关键词；留空返回实时热点榜"},
+                        "num": {"type": "integer", "description": "可选：返回条数（1-20，默认 5）"},
+                        "source": {"type": "string", "description": "可选：数据源（当前仅支持 hn）"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='实时热点/社区讨论搜索',
+    preactivate=(('搜索', '搜一下', '查一下', '新闻', '资讯', '最新'),),
+)
 def search_realtime(query="", num=5, source="hn"):
     """实时信息通道：Hacker News（热点/搜索），绕开通用搜索引擎的实时性短板。
 
@@ -5626,6 +4392,31 @@ def _call_api_host_allowed(url):
         return False
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "call_api",
+                "description": "通用 HTTP API 调用（万能接口）：GET/POST/PUT/DELETE/PATCH，支持查询参数/JSON/表单/请求头。仅公网 http(s) 地址（禁内网/回环，白名单可放行），响应 ≤500KB，超时 ≤180s",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "完整 API 地址（http/https）"},
+                        "method": {"type": "string", "description": "请求方法：GET/POST/PUT/DELETE/PATCH/HEAD（默认 GET）"},
+                        "params": {"type": "object", "description": "可选：查询参数对象（如 {\"limit\": 10}）"},
+                        "json_body": {"type": "object", "description": "可选：JSON 请求体对象"},
+                        "data": {"type": "string", "description": "可选：表单/原始请求体"},
+                        "headers": {"type": "object", "description": "可选：自定义请求头（≤16 个，如 {\"Authorization\": \"Bearer xxx\"}）"},
+                        "timeout": {"type": "integer", "description": "可选：超时秒数（1-180，默认 15）"},
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='调用任意 HTTP API',
+    preactivate=(('调用接口', 'api请求', '调接口', 'http请求'),),
+)
 def call_api(url, method="GET", params=None, json_body=None, data=None,
              headers=None, timeout=15):
     """通用外部 API 调用（自主 AI 的"万能接口"）。
@@ -5720,6 +4511,25 @@ def call_api(url, method="GET", params=None, json_body=None, data=None,
         return f"错误：API 调用失败（{type(e).__name__}: {str(e)[:120]}）"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "get_status",
+                "description": "全局态势总览：一次掌握系统、用量、运行任务、健康、待办、当前项目。默认返回核心摘要；需细节用 section 钻取（recent/processes/checkpoint 等）。涉全局/进度/状态/多任务时优先调用",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "section": {"type": "string", "description": "可选：钻取的详情区块（recent/processes/schedules/checkpoint/health），不填返回核心摘要"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='全局态势总览',
+    preactivate=(('全局', '概况', '整体情况', '运行情况', '什么情况', '进展', '状态', '工作台'),),
+)
 def get_status(section=None):
     """全局态势总览（单一事实源 build_situation）：默认核心摘要，section 取详情。
 
@@ -5828,6 +4638,26 @@ def _atomic_write(path, content):
     return created, real_size
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": "写文件（自动建目录，目录白名单校验 + 大小限制 + 原子写 + 自动 .bak）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "目标文件绝对路径（须在允许目录内）"},
+                        "content": {"type": "string", "description": "文件完整内容"},
+                    },
+                    "required": ["path", "content"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='写入文件',
+    preactivate=(('写', '保存', '创建', '生成'), ('修改', '编辑', '改动', '改一下', '改一次', '改成', '改为', '改下', '改改', '改掉', '更新', '替换', '重写', '覆盖', '重命名', '改名', '删掉', '删除')),
+)
 def write_file(path, content):
     """写文件：目录白名单 + 大小限制（按 UTF-8 字节计）+ 原子写 + 自动 .bak + 写入后真实核验。"""
     ok, reason = permissions.check_filesystem(path, write=True)
@@ -5859,6 +4689,28 @@ def write_file(path, content):
         return f"错误：写入失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "edit_file",
+                "description": "编辑文件：按文本替换或正则替换（自动备份 .bak），需 write 权限",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "文件绝对路径"},
+                        "old": {"type": "string", "description": "要替换的原文（与 regex 二选一，至少提供一个）"},
+                        "new": {"type": "string", "description": "替换后的新文本"},
+                        "regex": {"type": "string", "description": "可选：正则表达式模式（Python re 语法）"},
+                    },
+                    "required": ["path", "new"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='编辑文件（局部修改）',
+    preactivate=(('修改', '编辑', '改动', '改一下', '改一次', '改成', '改为', '改下', '改改', '改掉', '更新', '替换', '重写', '覆盖', '重命名', '改名', '删掉', '删除'),),
+)
 def edit_file(path, old="", new="", regex=None):
     """编辑文件：按文本或正则替换（自动备份 .bak）。"""
     ok, reason = permissions.check_filesystem(path, write=True)
@@ -5904,6 +4756,29 @@ def edit_file(path, old="", new="", regex=None):
         return f"错误：写入失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "git",
+                "description": "本地 Git 版本管理：init/status/add/commit/diff/log/checkout/branch。开发项目时 init 建仓、改一段 commit 一段、改坏用 checkout 回滚",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "操作：init/status/add/commit/diff/log/checkout/branch"},
+                        "path": {"type": "string", "description": "可选：目标目录（不填用工作目录）"},
+                        "message": {"type": "string", "description": "commit 时的提交说明"},
+                        "target": {"type": "string", "description": "checkout 的文件路径或分支名；branch 的分支名"},
+                        "files": {"type": "string", "description": "add 时要暂存的文件（默认 .）"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='本地 Git 版本管理',
+    preactivate=(('git', 'commit', '提交', '回滚', '版本控制', '版本管理', '仓库'),),
+)
 def git_tool(action, path=None, message=None, target=None, files=None):
     """本地 Git 版本管理（项目开发的安全网）。
 
@@ -5982,6 +4857,26 @@ def git_tool(action, path=None, message=None, target=None, files=None):
     return "错误：未知 action，可用 init/status/add/commit/diff/log/checkout/branch"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "project_map",
+                "description": "生成项目结构地图：文件树 + Python 符号表（函数/类+行号）+ import 依赖图。开发多文件项目前先调它掌握全貌，避免逐文件读全文、漏改跨文件依赖",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
+                        "max_files": {"type": "integer", "description": "可选：文件树/符号表扫描上限（默认 150）"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='项目结构地图',
+    preactivate=(('依赖图', '符号表', '项目结构', '代码地图', '函数定义', '调用关系', '引用'),),
+)
 def project_map(path=None, max_files=150):
     """生成项目结构地图：文件树 + Python 符号表（函数/类+行号）+ import 依赖图。
 
@@ -6050,6 +4945,27 @@ def project_map(path=None, max_files=150):
     return "\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "find_symbol",
+                "description": "定位 Python 符号（函数/类）的定义与引用位置（文件:行号）。改某个函数前先定位它的所有引用，避免漏改",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "符号名（函数名或类名）"},
+                        "path": {"type": "string", "description": "可选：项目目录（不填用工作目录）"},
+                        "max_files": {"type": "integer", "description": "可选：扫描文件数上限（默认 150）"},
+                    },
+                    "required": ["name"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='符号定位',
+    preactivate=(('依赖图', '符号表', '项目结构', '代码地图', '函数定义', '调用关系', '引用'),),
+)
 def find_symbol(name, path=None, max_files=150):
     """定位符号（函数/类）的定义与引用位置（Python ast）。
 
@@ -6130,6 +5046,27 @@ def _save_watch_state(state):
         pass
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "watch_files",
+                "description": "持续感知：监听目录文件变化（新增/修改/删除），首次建立基线、之后返回与上次的差异；适合定期查看产出目录/项目目录有没有新东西",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "要监听的目录绝对路径"},
+                        "pattern": {"type": "string", "description": "可选：文件通配符过滤，如 *.md"},
+                        "max_items": {"type": "integer", "description": "可选：每类变化最多列出条数（默认 50）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='文件变化监听',
+    preactivate=(('文件变化', '监听', '有没有新文件', '新东西', '持续感知', '看看变化'),),
+)
 def watch_files(path, pattern="", max_items=50):
     """持续感知：监听目录文件变化（新增/修改/删除），跨调用对比状态。
     首次调用建立基线快照；之后返回与上次的差异。适合定期查看产出目录有没有新东西。"""
@@ -6187,6 +5124,23 @@ def watch_files(path, pattern="", max_items=50):
     return "\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "track_web",
+                "description": "持续感知：追踪网页内容变化（抓取页面计算指纹对比上次）；首次建立基线、之后返回无变化或已更新；适合追踪公告/文档/价格页",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"url": {"type": "string", "description": "要追踪的 http(s) 网页 URL"}},
+                    "required": ["url"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='网页更新追踪',
+    preactivate=(('网页更新', '追踪网页', '页面变化', '监控网址', '网页变化'),),
+)
 def track_web(url):
     """持续感知：追踪网页内容变化。抓取页面内容并计算指纹，与上次对比。
     首次建立基线；之后返回「无变化」或「已更新」。适合追踪公告/文档/价格页。"""
@@ -6216,6 +5170,27 @@ def track_web(url):
     return f"🔔 网页已更新：{url}\n旧摘要：{str(prev.get('title', ''))[:60]}…\n新摘要：{title}…"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "recall_session",
+                "description": "情景记忆：回顾历史会话时间线（按日期或关键词过滤），返回名称/时间/消息数/首问/末答；跨会话延续上下文",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "可选：关键词（匹配会话名或开头内容）"},
+                        "date": {"type": "string", "description": "可选：日期 YYYY-MM-DD 过滤"},
+                        "limit": {"type": "integer", "description": "可选：最多返回几个会话（默认 5，最多 20）"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='历史会话回顾',
+    preactivate=(('之前聊过', '上次说', '回顾会话', '历史会话', '前几天', '之前的对话', '记得我们'),),
+)
 def recall_session(query="", date="", limit=5):
     """情景记忆：回顾历史会话时间线。按日期（YYYY-MM-DD）或关键词过滤，
     返回最近会话的名称/时间/消息数/首问/末答，延续跨会话上下文。"""
@@ -6262,6 +5237,23 @@ def recall_session(query="", date="", limit=5):
     return "\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "list_dir",
+                "description": "列出目录内容与文件大小（只读，默认允许，目录须在允许目录内）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "目录绝对路径"}},
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='列出目录',
+    preactivate=(('文件', '读取', '读一下', '打开'), ('搜索文件', '检索', '找文件')),
+)
 def list_dir(path):
     """列目录（只读）。"""
     ok, reason = permissions.check_filesystem(path, write=False)
@@ -6298,6 +5290,23 @@ def list_dir(path):
     return "\n".join(lines) + tail
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "description": "执行白名单命令（python/pip/pytest/git 等，禁止 shell 拼接），需开启 shell 权限并可能需确认",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string", "description": "完整命令行，如 python hello.py"}},
+                    "required": ["command"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='执行系统命令',
+    preactivate=(('执行命令', '终端', '命令行', '运行命令', 'cmd'),),
+)
 def run_command(command):
     """执行白名单命令（argv 直传，禁止 shell 拼接）。"""
     ok, reason, argv = permissions.check_shell(command)
@@ -6415,6 +5424,26 @@ def _process_reader(name):
     _emit_process(name, f"── 进程已退出（code={entry['code']}）──")
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "start_process",
+                "description": "在后台启动长驻进程（如网站服务器），实时输出显示在进程终端，返回进程名与 pid",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "完整命令行，如 python -m http.server 8000 或 uvicorn app:app"},
+                        "name": {"type": "string", "description": "可选：进程名（便于后续停止/查询）"},
+                    },
+                    "required": ["command"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='启动后台进程（服务器/长驻任务）',
+    preactivate=(('后台进程', '启动服务', '启动服务器', '停止进程', '看进程', '进程列表'),),
+)
 def start_process(command, name=""):
     """后台启动长驻进程（服务器等），输出实时推送终端面板。"""
     ok, reason, argv = permissions.check_shell(command)
@@ -6479,6 +5508,25 @@ def start_process(command, name=""):
     )
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "stop_process",
+                "description": "停止后台进程（按名称或 pid 定位并终止，进程由 start_process 启动）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target": {"type": "string", "description": "进程名或 pid，如 http.server 或 12345"},
+                    },
+                    "required": ["target"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='停止后台进程',
+    preactivate=(('后台进程', '启动服务', '启动服务器', '停止进程', '看进程', '进程列表'),),
+)
 def stop_process(target):
     """停止后台进程（按名称或 pid 定位并终止，进程由 start_process 启动）。"""
     target = str(target or "").strip()
@@ -6545,6 +5593,19 @@ def cleanup_all_processes():
     return len(cleanup_idle_processes(force_all=True))
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "list_processes",
+                "description": "列出所有后台进程的运行状态与最近输出（运行中/已退出，可配合停止进程）",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='查看后台进程列表',
+    preactivate=(('后台进程', '启动服务', '启动服务器', '停止进程', '看进程', '进程列表'),),
+)
 def list_processes():
     """列出后台进程状态与最近输出。"""
     entries = snapshot_processes()
@@ -6582,6 +5643,19 @@ _COMMON_PACKAGES = (
 )
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "environment_info",
+                "description": "获取运行环境信息：Python 版本、已安装的常用包、工作区磁盘空间（避免重复安装已存在的东西）",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='环境/依赖信息',
+    preactivate=(('环境信息', 'python版本', '已装库', '环境检查', '看环境'),),
+)
 def environment_info():
     """运行环境信息：避免 AI 重复安装/做无用假设。"""
     import importlib.util
@@ -6636,6 +5710,19 @@ def _py_stats(path):
         return "?"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "project_info",
+                "description": "感知鲸语自身代码库：版本、项目文件清单与规模（只读，自我进化分析用）",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='项目信息/文件树',
+    preactivate=(('自身代码', '读源码', '项目文件', '鲸语代码', '看代码库'),),
+)
 def project_info():
     """感知鲸语自身代码库（只读）。"""
     lines = [f"鲸语版本: {_current_version()}", "项目文件："]
@@ -6653,6 +5740,27 @@ def project_info():
     return "\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "read_project_file",
+                "description": "读取鲸语自身源码文件（仅限项目目录内 .py/.md/.json/.txt/.bat/.html，只读；支持 offset/limit 分页读取大文件）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "项目内文件路径，如 web_app.py 或 deepseek_client.py"},
+                        "offset": {"type": "integer", "description": "可选：起始字符偏移（分页读取）"},
+                        "limit": {"type": "integer", "description": "可选：本次读取字符数上限"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='读取项目文件',
+    preactivate=(('自身代码', '读源码', '项目文件', '鲸语代码', '看代码库'),),
+)
 def read_project_file(path, offset=0, limit=0):
     """读取鲸语自身源码（仅项目目录内白名单扩展名，只读）。
 
@@ -6692,6 +5800,37 @@ def read_project_file(path, offset=0, limit=0):
         return f"错误：读取失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "create_evolution",
+                "description": "自我进化提案：发现项目改进点（尤其方案性、需人决策、或不确定是否该直接改的）时，把改进后的代码写入 evolutions/ 分支（不改原文件），供人审阅采纳/忽略。确定要改且能验证的改动用 self_evolve 分支实施",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "提案名称，如 fix_typo / optimize_render"},
+                        "files": {
+                            "type": "array",
+                            "description": "修改后的文件列表",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {"type": "string", "description": "相对项目根目录的路径，如 web_app.py"},
+                                    "content": {"type": "string", "description": "修改后的完整文件内容"},
+                                },
+                                "required": ["path", "content"],
+                            },
+                        },
+                    },
+                    "required": ["name", "files"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='提进化提案（方案审阅）',
+    preactivate=(('进化提案', '改进提案', '提个方案', '改进建议'),),
+)
 def create_evolution(name, files):
     """自我进化提案：写入 evolutions/<name>_<ts>/ 分支，绝不修改原文件。
 
@@ -6945,6 +6084,27 @@ def _evolve_tests(base, rels):
         return f"错误：运行测试失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "self_evolve",
+                "description": "闭环自我进化：在 git 分支上实施自我改进补丁，四层验证（语法编译→ruff lint→导入冒烟→测试）全过才提交分支供合入，任何一级失败自动回滚，不碰生产代码。适合自主改进自身代码能力",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "feature_name": {"type": "string", "description": "改进点名称"},
+                        "files": {"type": "array", "items": {"type": "object"}, "description": "补丁文件列表 [{path, content}]"},
+                        "project_dir": {"type": "string", "description": "可选：项目目录（默认鲸语自身代码库）"},
+                    },
+                    "required": ["feature_name", "files"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='闭环自我进化',
+    preactivate=(('自我进化', '改进自己', '升级自己', '自我改进', '修复自己', '自省'),),
+)
 def self_evolve(feature_name, files, project_dir=None):
     """闭环自我进化：在 git 分支上实施自我改进补丁，四层验证后报告合入。
 
@@ -7094,6 +6254,27 @@ _SEARCH_EXTS = (
 _SEARCH_SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "build"}
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "search_local",
+                "description": "在允许目录内全文检索文本文件内容（只读，支持常见文本格式，可限量返回）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "要检索的目录绝对路径"},
+                        "query": {"type": "string", "description": "检索关键词"},
+                        "max_results": {"type": "integer", "description": "最多返回条数，默认 20"},
+                    },
+                    "required": ["path", "query"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='在允许目录内全文检索文件',
+    preactivate=(('文件', '读取', '读一下', '打开'), ('搜索文件', '检索', '找文件')),
+)
 def search_local(path, query, max_results=20):
     """在允许目录内检索文本文件内容（只读）。"""
     ok, reason = permissions.check_filesystem(path, write=False)
@@ -7163,6 +6344,28 @@ def _code_lookup_args(node):
     return ", ".join(parts) or "(无参数)"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "code_lookup",
+                "description": "代码结构定位（AST 只读）：定位 Python 符号的函数/类定义、调用点与导入来源，返回文件行号与摘要。改代码前先查定义与调用点，避免改 A 炸 B",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "要扫描的目录或 .py 文件绝对路径"},
+                        "symbol": {"type": "string", "description": "要定位的符号名（函数/类名，import 时可为模块名或别名）"},
+                        "kind": {"type": "string", "description": "def=函数定义（默认）/ class=类定义 / call=调用点 / import=导入来源"},
+                        "max_results": {"type": "integer", "description": "最多返回条数，默认 20"},
+                    },
+                    "required": ["path", "symbol"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='代码结构定位（函数/类定义、调用点、导入来源）',
+    preactivate=(('在哪定义', '定义在哪', '谁在调用', '调用点', '引用关系', '代码结构', '符号定位', '看下源码'),),
+)
 def code_lookup(path, symbol, kind="def", max_results=20):
     """代码结构定位（AST 级，只读）：在允许目录内解析 Python 文件，
     返回符号的定义/类/调用点/导入位置，一行一条「文件:行号 摘要」。
@@ -7245,6 +6448,29 @@ def code_lookup(path, symbol, kind="def", max_results=20):
     return f"符号「{sym}」（{k}）共 {len(hits)} 处：\n" + "\n".join(hits) + note
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "verify_files",
+                "description": "批量核验文件是否存在及其大小（写文件/建工程后核验产物真实存在；相对路径基于工作目录）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "paths": {
+                            "type": "array",
+                            "description": "要核验的文件路径列表（绝对路径或相对工作目录的路径）",
+                            "items": {"type": "string"},
+                        }
+                    },
+                    "required": ["paths"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='核验项目文件完整性',
+    preactivate=(('核验文件', '检查产物', '产物存在', '验证文件'),),
+)
 def verify_files(paths):
     """批量核验文件存在性与大小（写文件后自检，防幻觉）。
 
@@ -7292,6 +6518,27 @@ def verify_files(paths):
     return "\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "create_doc",
+                "description": "创建文档（.md/.html 原生支持；.docx 需安装 python-docx），需 write 权限",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "文档绝对路径"},
+                        "content": {"type": "string", "description": "文档内容（Markdown 或 HTML 文本）"},
+                        "doc_type": {"type": "string", "description": "md / html / docx，默认按扩展名推断"},
+                    },
+                    "required": ["path", "content"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='创建 Office 文档（docx/pptx/pdf）',
+    preactivate=(('写', '保存', '创建', '生成'),),
+)
 def create_doc(path, content, doc_type=""):
     """创建文档：.md/.html 原生；.docx 需 python-docx（可选）。"""
     ok, reason = permissions.check_filesystem(path, write=True)
@@ -7334,6 +6581,37 @@ def create_doc(path, content, doc_type=""):
         return f"错误：文档创建失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "write_code_project",
+                "description": "创建多文件代码工程（批量写文件，自动建目录，需 write 权限；单文件 ≤50MB、单次 ≤50 文件，无需担心内容字符上限）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project_dir": {"type": "string", "description": "工程根目录绝对路径（须在允许目录内）"},
+                        "files": {
+                            "type": "array",
+                            "description": "文件列表",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {"type": "string", "description": "相对工程根目录的路径，如 src/main.py"},
+                                    "content": {"type": "string", "description": "文件内容"},
+                                },
+                                "required": ["path", "content"],
+                            },
+                        },
+                    },
+                    "required": ["project_dir", "files"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='创建完整代码项目',
+    preactivate=(('写', '保存', '创建', '生成'),),
+)
 def write_code_project(project_dir, files):
     """创建多文件代码工程：批量写文件（逐文件原子写 + 越界防护）。"""
     ok, reason = permissions.check_filesystem(project_dir, write=True)
@@ -7407,6 +6685,19 @@ def _rpa_ready():
         return False, "桌面 RPA 需要安装 pyautogui：pip install pyautogui"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "rpa_screen_size",
+                "description": "获取当前屏幕分辨率（桌面 RPA 坐标用，需 pyautogui）",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    groups=['🖱 桌面自动化'],
+    phrases='获取屏幕尺寸',
+    preactivate=(('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'),),
+)
 def rpa_screen_size():
     """当前屏幕分辨率（RPA 坐标用）。"""
     ok, hint = _rpa_ready()
@@ -7420,6 +6711,28 @@ def rpa_screen_size():
         return f"错误：获取屏幕尺寸失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "rpa_click",
+                "description": "桌面 RPA：模拟鼠标点击屏幕坐标 (x,y)，button=left/right/middle",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "integer", "description": "屏幕 X 坐标"},
+                        "y": {"type": "integer", "description": "屏幕 Y 坐标"},
+                        "button": {"type": "string", "description": "可选：left/right/middle，默认 left"},
+                        "clicks": {"type": "integer", "description": "可选：连击次数 1-5，默认 1"},
+                    },
+                    "required": ["x", "y"],
+                },
+            },
+        },
+    groups=['🖱 桌面自动化'],
+    phrases='模拟点击（屏幕坐标）',
+    preactivate=(('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'),),
+)
 def rpa_click(x, y, button="left", clicks=1):
     """模拟鼠标点击。"""
     ok, hint = _rpa_ready()
@@ -7441,6 +6754,26 @@ def rpa_click(x, y, button="left", clicks=1):
         return f"错误：RPA 点击失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "rpa_type",
+                "description": "桌面 RPA：模拟键盘输入文本（需先点击目标输入框聚焦，可设按键间隔）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "要输入的文本"},
+                        "interval": {"type": "number", "description": "可选：每个字符间隔秒数，默认 0.02"},
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
+    groups=['🖱 桌面自动化'],
+    phrases='模拟键盘输入',
+    preactivate=(('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'),),
+)
 def rpa_type(text, interval=0.02):
     """模拟键盘输入文本。"""
     ok, hint = _rpa_ready()
@@ -7459,6 +6792,23 @@ def rpa_type(text, interval=0.02):
         return f"错误：RPA 输入失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "rpa_hotkey",
+                "description": "桌面 RPA：模拟组合键，如 ctrl+c / alt+tab / ctrl+shift+esc",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"keys": {"type": "string", "description": "组合键串，+ 分隔"}},
+                    "required": ["keys"],
+                },
+            },
+        },
+    groups=['🖱 桌面自动化'],
+    phrases='模拟快捷键',
+    preactivate=(('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'),),
+)
 def rpa_hotkey(keys):
     """模拟组合键，如 ctrl+c / alt+tab / ctrl+shift+esc。"""
     ok, hint = _rpa_ready()
@@ -7479,6 +6829,27 @@ def rpa_hotkey(keys):
         return f"错误：RPA 组合键失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "rpa_move",
+                "description": "桌面 RPA：把鼠标移动到屏幕坐标 (x,y)，可指定移动耗时",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "integer", "description": "X 坐标"},
+                        "y": {"type": "integer", "description": "Y 坐标"},
+                        "duration": {"type": "number", "description": "可选：移动耗时秒，默认 0.2"},
+                    },
+                    "required": ["x", "y"],
+                },
+            },
+        },
+    groups=['🖱 桌面自动化'],
+    phrases='移动鼠标',
+    preactivate=(('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'),),
+)
 def rpa_move(x, y, duration=0.2):
     """移动鼠标到坐标。"""
     ok, hint = _rpa_ready()
@@ -7495,6 +6866,27 @@ def rpa_move(x, y, duration=0.2):
         return f"错误：RPA 移动失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "rpa_scroll",
+                "description": "桌面 RPA：滚动鼠标滚轮（正数向上滚动，负数向下滚动，可指定位置）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "clicks": {"type": "integer", "description": "滚动格数 -50~50"},
+                        "x": {"type": "integer", "description": "可选：滚动位置 X"},
+                        "y": {"type": "integer", "description": "可选：滚动位置 Y"},
+                    },
+                    "required": ["clicks"],
+                },
+            },
+        },
+    groups=['🖱 桌面自动化'],
+    phrases='滚动页面',
+    preactivate=(('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'),),
+)
 def rpa_scroll(clicks, x=None, y=None):
     """滚动鼠标滚轮（正数向上，负数向下）。"""
     ok, hint = _rpa_ready()
@@ -7513,6 +6905,23 @@ def rpa_scroll(clicks, x=None, y=None):
         return f"错误：RPA 滚动失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "rpa_screenshot",
+                "description": "桌面 RPA：截取整个屏幕保存为 PNG（默认保存到工作区）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "可选：输出 PNG 绝对路径"}},
+                    "required": [],
+                },
+            },
+        },
+    groups=['🖱 桌面自动化'],
+    phrases='屏幕区域截图',
+    preactivate=(('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'),),
+)
 def rpa_screenshot(path=""):
     """截取当前屏幕保存为 PNG（不指定路径保存到工作区）。"""
     ok, hint = _rpa_ready()
@@ -7595,6 +7004,28 @@ def _browser_goto(page, url):
     return False
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "browser_navigate",
+                "description": "浏览器可视操作（open/click/type/fill/submit/select/get_text），需安装 playwright。浏览器实例复用：连续调用共享同一页面，登录态保持，click/type/submit 不重新导航（多步操作有效）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "目标网址（非 open 动作时若已在同页则不重复导航）"},
+                        "action": {"type": "string", "description": "open / click / type / fill / submit / select / get_text"},
+                        "selector": {"type": "string", "description": "CSS 选择器（click/type/fill/select/get_text 需要）"},
+                        "text": {"type": "string", "description": "要输入的文本（type/fill）或要选择的选项（select）"},
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='控制浏览器（打开网页/点击/输入/填表/提交/选择/取文本，共享登录态）',
+    preactivate=(('网页', 'url', '抓取', '爬'),),
+)
 def browser_navigate(url, action="open", selector="", text=""):
     """浏览器可视操作（Playwright 可选依赖，未安装时返回安装提示）。
 
@@ -7658,6 +7089,27 @@ def browser_navigate(url, action="open", selector="", text=""):
         return f"错误：浏览器操作失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "web_screenshot",
+                "description": "网页截图并保存到工作区，需安装 playwright（可选依赖）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "目标网址"},
+                        "width": {"type": "integer", "description": "视口宽度，默认 1280"},
+                        "height": {"type": "integer", "description": "视口高度，默认 800"},
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='网页截图保存',
+    preactivate=(('网页', 'url', '抓取', '爬'),),
+)
 def web_screenshot(url, width=1280, height=800):
     """网页截图并保存到工作区（Playwright 可选依赖，复用共享浏览器）。"""
     ok, hint = _playwright_ready()
@@ -7690,6 +7142,27 @@ def web_screenshot(url, width=1280, height=800):
         return f"错误：截图失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "publish_draft",
+                "description": "保存发布草稿到本地草稿箱（只建草稿不发布，发布权始终在用户手中）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "platform": {"type": "string", "description": "目标平台，如 公众号/博客/小红书"},
+                        "title": {"type": "string", "description": "草稿标题"},
+                        "content": {"type": "string", "description": "草稿正文"},
+                    },
+                    "required": ["platform", "title", "content"],
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='发布草稿',
+    preactivate=(('公众号', '公众号文章', '自动写作', '写公众号'), ('草稿', '草稿箱', '存草稿')),
+)
 def publish_draft(platform, title, content):
     """保存发布草稿到本地草稿箱（只建草稿不发布，双确认由审批流保证）。"""
     if not permissions.WORKSPACE_DIR:
@@ -7784,6 +7257,31 @@ def _save_schedules_plain(schedules):
         return False
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "schedule_task",
+                "description": "创建定时任务（每周五周报、每小时巡检、生日提醒等）。expr_type=cron（5字段）/time（HH:MM 每日）/every（每 N 分钟）；action=message 到点执行指令 / notify 提醒 / backup 备份",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expr_type": {"type": "string", "description": "cron / time / every（默认 cron）"},
+                        "expr": {"type": "string", "description": "表达式：cron 如 '30 9 * * 1'；time 如 '09:00'；every 如 '60'"},
+                        "content": {"type": "string", "description": "到点要执行的内容（message 发指令 / notify 提醒文本）"},
+                        "action": {"type": "string", "description": "message / notify / backup（默认 message）"},
+                        "name": {"type": "string", "description": "可选：任务名称（便于后续取消/查看）"},
+                        "enabled": {"type": "boolean", "description": "可选：是否启用（默认 true）"},
+                        "off_peak": {"type": "boolean", "description": "可选：高峰错峰省费——触发时刻处于高峰时段（9-12 / 14-18 时）自动顺延到低谷执行（默认 false）"},
+                    },
+                    "required": ["expr", "content"],
+                },
+            },
+        },
+    groups=['⏰ 定时与任务'],
+    phrases='定时任务（cron/每日/周期）',
+    preactivate=(('定时', '提醒', '计划', '日程'),),
+)
 def schedule_task(expr_type="cron", expr="", content="", action="message", name="", enabled=True, off_peak=False):
     """创建定时任务（与手动「定时任务」面板同文件同引擎，AI 可主动安排）。
 
@@ -7846,6 +7344,19 @@ def schedule_task(expr_type="cron", expr="", content="", action="message", name=
     return f"已创建定时任务（id={s['id']}）：{when} 执行「{s.get('text', '')[:60]}」"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "list_schedules",
+                "description": "列出全部定时任务（id/时间/动作/内容/启用状态），配合 cancel_schedule 管理",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    groups=['⏰ 定时与任务'],
+    phrases='查看定时任务',
+    preactivate=(('查看定时', '我的定时任务', '取消定时', '列出定时'),),
+)
 def list_schedules():
     """列出全部定时任务（含 id/时间/动作/内容/状态）。"""
     with SCHEDULES_LOCK:
@@ -7871,6 +7382,23 @@ def list_schedules():
     return "\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "cancel_schedule",
+                "description": "取消定时任务（按 list_schedules 返回的 id 或名称）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"target": {"type": "string", "description": "任务 id 或名称"}},
+                    "required": ["target"],
+                },
+            },
+        },
+    groups=['⏰ 定时与任务'],
+    phrases='取消定时任务',
+    preactivate=(('查看定时', '我的定时任务', '取消定时', '列出定时'),),
+)
 def cancel_schedule(target=""):
     """取消定时任务（按 id 或名称）。"""
     t = str(target or "").strip()
@@ -7921,6 +7449,27 @@ $toast = New-Object Windows.UI.Notifications.ToastNotification $template
 """
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "notify_desktop",
+                "description": "发送 Windows 桌面 Toast 通知（离线可用）：任务完成、定时任务触发、长任务结束时提醒",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "可选：通知标题（默认 鲸语提醒）"},
+                        "text": {"type": "string", "description": "通知正文"},
+                        "fallback_sound": {"type": "boolean", "description": "可选：系统通知音被禁用时是否播放备用提示音（默认 true）"},
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
+    groups=['🖱 桌面自动化'],
+    phrases='桌面通知',
+    preactivate=(('桌面通知', 'toast', '弹通知', '提醒通知'),),
+)
 def notify_desktop(title="鲸语提醒", text="", fallback_sound=True):
     """Windows 桌面 Toast 通知（离线可用，任务完成/定时任务触发时使用）。
     fallback_sound=False：toast 失败时不播兜底提示音（用户已关闭完成提示音的场景）。"""
@@ -8035,6 +7584,19 @@ def _win_clipboard_set(text):
         return False
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "clipboard_get",
+                "description": "读取用户剪贴板文本（隐私操作：读取用户复制的内容），适合用户复制内容后直接处理",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='读取剪贴板',
+    preactivate=(('剪贴板', '复制到剪贴板', '粘贴出来', '读剪贴板'),),
+)
 def clipboard_get():
     """读取用户剪贴板文本（敏感操作，走审批闸门默认需确认）。"""
     text = _win_clipboard_get()
@@ -8045,6 +7607,23 @@ def clipboard_get():
     return f"[剪贴板内容（{len(text)} 字符）]\n{text}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "clipboard_set",
+                "description": "把整理好的内容写入系统剪贴板，用户可直接粘贴到任意应用使用（只写不读）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string", "description": "要写入剪贴板的内容"}},
+                    "required": ["text"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='写入剪贴板',
+    preactivate=(('剪贴板', '复制到剪贴板', '粘贴出来', '读剪贴板'),),
+)
 def clipboard_set(text):
     """把内容写入剪贴板（用户可直接粘贴使用）。"""
     if not str(text or "").strip():
@@ -8087,6 +7666,26 @@ def _recycle_path(p):
     return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_file",
+                "description": "删除文件或目录（默认移入回收站可恢复；permanent=true 才物理删除）。高危：删除前自动快照可恢复",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "要删除的文件/目录绝对路径（须在允许目录内）"},
+                        "permanent": {"type": "boolean", "description": "可选：true 物理删除不可恢复（默认 false 移入回收站）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='删除文件/目录',
+    preactivate=(('修改', '编辑', '改动', '改一下', '改一次', '改成', '改为', '改下', '改改', '改掉', '更新', '替换', '重写', '覆盖', '重命名', '改名', '删掉', '删除'),),
+)
 def delete_file(path, permanent=False):
     """删除文件/目录。默认移入回收站（可恢复）；permanent=True 才物理删除。"""
     p = permissions.resolve(path)
@@ -8116,6 +7715,25 @@ def delete_file(path, permanent=False):
         return f"错误：删除失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "list_snapshots",
+                "description": "列出文件/数据库写操作自动快照（删除可恢复：写文件/编辑/重命名/数据库写前自动生成）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "description": "可选：最多列出条数（默认 50）"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='列出自动快照（写操作前生成，可恢复）',
+    preactivate=(('恢复', '撤销', '还原', '回滚文件', '找回', '误删'),),
+)
 def list_snapshots(limit=50):
     """列出文件/数据库写操作自动快照（删除可恢复：write/edit/rename/execute 前自动生成）。"""
     try:
@@ -8131,12 +7749,51 @@ def list_snapshots(limit=50):
     return "\n".join(lines[:60])
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "restore_snapshot",
+                "description": "从自动快照恢复文件原内容（写文件/编辑/重命名/数据库写操作前自动生成；id 来自 list_snapshots）。高危：恢复会覆盖文件当前内容",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "description": "快照 id（list_snapshots 返回的编号）"},
+                    },
+                    "required": ["id"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='从快照恢复文件原内容',
+    preactivate=(('恢复', '撤销', '还原', '回滚文件', '找回', '误删'),),
+)
 def restore_snapshot(id):
     """从自动快照恢复文件（写文件/编辑/重命名/数据库操作前的原内容）。id 来自 list_snapshots。"""
     ok, msg = snapshot_mod.restore_snapshot(str(id or "").strip())
     return msg if ok else f"错误：{msg}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "archive_files",
+                "description": "把多个文件/目录打包为 zip 压缩包（工作区内，自动创建目录）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "paths": {"type": "array", "description": "要打包的文件/目录绝对路径列表", "items": {"type": "string"}},
+                        "output": {"type": "string", "description": "输出 zip 文件绝对路径"},
+                    },
+                    "required": ["paths", "output"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='打包压缩',
+    preactivate=(('打包', '压缩成', '归档文件', '压缩包'),),
+)
 def archive_files(paths, output):
     """把多个文件/目录打包为 zip（工作区内，自动建目录，跳过 .git/__pycache__ 等）。"""
     if not isinstance(paths, list) or not paths:
@@ -8202,6 +7859,26 @@ def archive_files(paths, output):
         return f"错误：打包失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "extract_archive",
+                "description": "解压 zip 压缩包到目标目录（自动越界防护，防止路径穿越逃逸）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "zip 文件绝对路径"},
+                        "dest_dir": {"type": "string", "description": "解压目标目录绝对路径"},
+                    },
+                    "required": ["path", "dest_dir"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='解压归档',
+    preactivate=(('解压', '解包', '解压缩', '解压到'),),
+)
 def extract_archive(path, dest_dir):
     """解压 zip 到目标目录（zip-slip 越界防护）。"""
     p = permissions.resolve(path)
@@ -8297,6 +7974,28 @@ def extract_archive(path, dest_dir):
         return f"错误：解压失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "batch_rename",
+                "description": "批量重命名：把目录内所有文件名中的 pattern 替换为 replacement（dry_run=true 预览不实际改名）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {"type": "string", "description": "目录绝对路径"},
+                        "pattern": {"type": "string", "description": "要替换的字符串"},
+                        "replacement": {"type": "string", "description": "替换后的字符串"},
+                        "dry_run": {"type": "boolean", "description": "可选：true 仅预览"},
+                    },
+                    "required": ["directory", "pattern", "replacement"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='批量重命名',
+    preactivate=(('修改', '编辑', '改动', '改一下', '改一次', '改成', '改为', '改下', '改改', '改掉', '更新', '替换', '重写', '覆盖', '重命名', '改名', '删掉', '删除'), ('批量改名', '批量重命名')),
+)
 def batch_rename(directory, pattern, replacement, dry_run=False):
     """批量重命名：把文件名中的 pattern 全部替换为 replacement（含扩展名）。"""
     d = permissions.resolve(directory)
@@ -8335,6 +8034,26 @@ def batch_rename(directory, pattern, replacement, dry_run=False):
 
 
 # ---------- 媒体感知：图片理解 / 屏幕截图 / 语音识别 ----------
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "image_understand",
+                "description": "分析指定路径/URL 的图片文件（OCR 提取文字、放大细节、回答图片相关问题）。注意：用户消息中已附带的图片（对话中的图片块）你能直接看到，解读它们无需调用本工具，直接回答即可",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "图片文件绝对路径或 http(s) 图片 URL"},
+                        "question": {"type": "string", "description": "可选：要问的问题（默认描述图片内容）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='分析图片文件（OCR/细节/回答图片问题）',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
+)
 def image_understand(path, question=""):
     """用多模态模型理解图片（本地文件或 http(s) 图片 URL）。
 
@@ -8420,6 +8139,25 @@ def image_understand(path, question=""):
         return f"错误：图片理解失败: {e}（当前模型可能不支持视觉输入，可切换支持视觉的模型端点）"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "screen_capture",
+                "description": "截取当前屏幕保存到工作区（隐私操作）。配合 ocr_image/image_understand 描述屏幕内容",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "可选：输出 PNG 绝对路径（默认工作区 screenshots/）"},
+                        "area": {"type": "string", "description": "可选：区域 left,top,right,bottom（默认全屏）"},
+                    },
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='屏幕截图',
+    preactivate=(('截屏', '截个屏', '屏幕截图', '截屏看看'),),
+)
 def screen_capture(path="", area=""):
     """截取当前屏幕保存到工作区（默认全屏；area 形如 left,top,right,bottom）。"""
     if str(path or "").strip():
@@ -8540,6 +8278,25 @@ def _capture_screen_png(area=""):
         return None
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "screen_see",
+                "description": "截图并让视觉模型解读当前屏幕（一步完成 截图+看图）。RPA/浏览器操作后自查首选：看清界面后决定下一步（点击/输入/验证）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "description": "可选：要看什么（默认描述屏幕内容）"},
+                        "area": {"type": "string", "description": "可选：区域 left,top,right,bottom（默认全屏）"},
+                    },
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='截图并让视觉模型解读当前屏幕',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'), ('截屏', '截个屏', '屏幕截图', '截屏看看')),
+)
 def screen_see(question="", area=""):
     """截图并让视觉模型解读当前屏幕（一步完成 截图+看图）。
 
@@ -8556,6 +8313,26 @@ def screen_see(question="", area=""):
     return image_understand(path, question=q)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "chart_read",
+                "description": "图表截图 → 结构化数据 + 解读（折线/柱状/饼图/散点等，适合读报表/仪表盘截图）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "图表图片文件绝对路径"},
+                        "question": {"type": "string", "description": "可选：针对图表的具体问题"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='图表截图→结构化数据+解读',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
+)
 def chart_read(path, question=""):
     """图表截图 → 结构化数据 + 解读（折线/柱状/饼图/散点等）。"""
     if not str(path or "").strip():
@@ -8570,6 +8347,26 @@ def chart_read(path, question=""):
     return image_understand(path, question=q)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "screenshot_to_html",
+                "description": "UI/网页截图 → 还原为 HTML+CSS 页面（前端还原），可保存到文件",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "截图文件绝对路径"},
+                        "out_path": {"type": "string", "description": "可选：输出 HTML 绝对路径（默认仅返回代码）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='UI截图→HTML/CSS前端还原',
+    preactivate=(('截图转', 'ui转代码', '前端还原', '截图还原'),),
+)
 def screenshot_to_html(path, out_path=""):
     """UI/网页截图 → 还原为 HTML+CSS 页面（可保存到文件）。"""
     if not str(path or "").strip():
@@ -8599,6 +8396,25 @@ def screenshot_to_html(path, out_path=""):
     return result
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "debug_screenshot",
+                "description": "报错/异常截图 → 识别错误并给出诊断与修复建议（错误码/文案/行号/原因/修复）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "报错截图文件绝对路径"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='报错截图→诊断修复建议',
+    preactivate=(('报错截图', '错误截图', '异常截图', '报错诊断'),),
+)
 def debug_screenshot(path):
     """报错/异常截图 → 识别错误并给出诊断与修复建议。"""
     if not str(path or "").strip():
@@ -8610,6 +8426,26 @@ def debug_screenshot(path):
     return image_understand(path, question=q)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "scan_read",
+                "description": "扫描件/文档图片读取（图表、公式、手写、印刷混排），返回 Markdown 结构化内容",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "扫描件/文档图片绝对路径"},
+                        "question": {"type": "string", "description": "可选：要提取/回答的内容"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='扫描件/文档图片读取（图表/公式/手写）',
+    preactivate=(('扫描件', '文档图片', '识别图表', '识别公式'),),
+)
 def scan_read(path, question=""):
     """扫描件/文档图片读取（图表、公式、手写、印刷体混排）。"""
     if not str(path or "").strip():
@@ -8624,6 +8460,28 @@ def scan_read(path, question=""):
     return image_understand(path, question=q)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "image_batch",
+                "description": "批量视觉分析文件夹内图片：逐张理解后汇总报告（小并发，适合图库/截图/素材批量整理）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "folder": {"type": "string", "description": "图片所在目录绝对路径"},
+                        "question": {"type": "string", "description": "可选：每张图要回答的问题（默认描述）"},
+                        "pattern": {"type": "string", "description": "可选：文件通配符（默认 *.png，如 *.jpg / *.png 可组合）"},
+                        "max": {"type": "integer", "description": "可选：最多分析张数（1-200，默认 100）"},
+                    },
+                    "required": ["folder"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='批量视觉分析文件夹图片并汇总',
+    preactivate=(('批量看图', '批量分析图片', '批量识别', '整理图库'),),
+)
 def image_batch(folder, question="", pattern="*.png", max=100):
     """批量视觉分析文件夹内图片：逐张理解后汇总报告（小并发）。"""
     if not str(folder or "").strip():
@@ -8679,6 +8537,26 @@ _WHISPER_CACHE = {}
 _WHISPER_CACHE_LOCK = threading.Lock()
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "speech_to_text",
+                "description": "本地语音转文字（faster-whisper 离线识别，未安装时提示安装；首次运行自动下载所选模型）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "音频文件绝对路径（wav/mp3/m4a 等）"},
+                        "model": {"type": "string", "description": "可选：tiny/base/small/medium/large-v3（默认 base，tiny 最快）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='语音转文字',
+    preactivate=(('语音转文字', '语音识别', '听写'),),
+)
 def speech_to_text(path, model="base"):
     """本地语音转文字（faster-whisper，未安装时提示先安装）。
     model: tiny/base/small/medium/large-v3（首次运行需下载对应模型，tiny/base 较小）。"""
@@ -8755,6 +8633,25 @@ def _knowledge_snippet(text, query, width=800):
     return seg
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "knowledge_index",
+                "description": "对目录内文本文件建立语义检索索引（TF-IDF+bigram，零依赖）。建索引后可语义检索，措辞不同也能命中",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {"type": "string", "description": "可选：要索引的目录（默认工作区）"},
+                        "force": {"type": "boolean", "description": "可选：强制重建"},
+                    },
+                },
+            },
+        },
+    groups=['🧠 记忆与知识'],
+    phrases='建立知识库索引',
+    preactivate=(('建索引', '知识库索引', '语义检索', '知识库搜索'),),
+)
 def knowledge_index(directory="", force=False):
     """对目录内文本文件建立语义检索索引（增量：mtime/size 未变的文档直接复用）。"""
     root = permissions.resolve(str(directory or "").strip() or permissions.WORKSPACE_DIR or ".")
@@ -8833,6 +8730,26 @@ def knowledge_index(directory="", force=False):
         return f"错误：建索引失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "knowledge_search",
+                "description": "语义检索知识库（先 knowledge_index 建索引）：找『之前写过的关于预算的文档』这类措辞模糊的问题",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "检索关键词/语义描述"},
+                        "top_k": {"type": "integer", "description": "可选：返回条数（默认 5，最大 10）"},
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+    groups=['🧠 记忆与知识'],
+    phrases='语义检索知识库',
+    preactivate=(('建索引', '知识库索引', '语义检索', '知识库搜索'),),
+)
 def knowledge_search(query, top_k=5):
     """语义检索知识库（TF-IDF + bigram，措辞不同也能命中）。"""
     q = str(query or "").strip()
@@ -8871,6 +8788,28 @@ def knowledge_search(query, top_k=5):
 
 
 # ---------- 数据库写操作（高危：审批闸门 + 变更前备份） ----------
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "database_execute",
+                "description": "数据库写操作（UPDATE/INSERT/DELETE/DDL）。高危：变更前自动备份 + 审计；SQLite 的 connection 为数据库文件路径，mysql/postgres 用 db_config.json 的连接名",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "db_type": {"type": "string", "description": "sqlite / mysql / postgres"},
+                        "connection": {"type": "string", "description": "sqlite=数据库文件绝对路径；mysql/postgres=连接名（默认 default）"},
+                        "sql": {"type": "string", "description": "写操作 SQL 语句"},
+                        "backup": {"type": "boolean", "description": "可选：变更前备份（默认 true）"},
+                    },
+                    "required": ["db_type", "sql", "connection"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='数据库写操作（SQLite/MySQL/PG，带审批）',
+    preactivate=(('数据库写', '插入数据', '改数据库', '删除记录', 'update语句'),),
+)
 def database_execute(db_type="sqlite", connection="default", sql="", backup=True):
     """数据库写操作（UPDATE/INSERT/DELETE/DDL）。高危工具，走审批流 + 审计。
     db_type: sqlite / mysql / postgres；sqlite 的 connection 为数据库文件绝对路径。"""
@@ -9017,6 +8956,25 @@ def _db_execute_postgres(connection, stmt, backup):
 
 
 # ---------- 收邮件（IMAP，email_config.json 的 imap 段配置） ----------
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "read_email",
+                "description": "读取邮箱近期邮件（IMAP，email_config.json 配置 imap 段）。隐私操作：读取邮箱内容",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "description": "可选：最多返回封数（默认 10，最大 50）"},
+                        "since_days": {"type": "integer", "description": "可选：最近 N 天（默认 3，0=全部）"},
+                    },
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='读取邮件（IMAP）',
+    preactivate=(('邮件', '发邮件', '收件箱'),),
+)
 def read_email(limit=10, since_days=3):
     """读取邮箱近期邮件（IMAP，email_config.json 配置 imap 段：host/port/user/password/ssl）。"""
     if not EMAIL_CONFIG_FILE or not os.path.exists(EMAIL_CONFIG_FILE):
@@ -9100,6 +9058,25 @@ def read_email(limit=10, since_days=3):
 
 
 # ---------- 新邮件汇总（P1 收件箱模式） ----------
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "email_summary",
+                "description": "读取近期邮件并整理为清单，供 AI 生成新邮件摘要（IMAP 配置同 read_email）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "description": "可选：最多返回封数（默认 10，最大 50）"},
+                        "since_days": {"type": "integer", "description": "可选：最近 N 天（默认 1）"},
+                    },
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='邮件摘要/统计',
+    preactivate=(('邮件', '发邮件', '收件箱'), ('收件箱', '邮件助手', 'agent邮箱', '邮件列表', '邮件搜索')),
+)
 def email_summary(limit=10, since_days=1):
     """读取近期邮件并整理为可汇总的清单（供 AI 生成摘要）。"""
     raw = read_email(limit=limit, since_days=since_days)
@@ -9153,6 +9130,38 @@ def _agent_mail_tip():
     )
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "agent_mail",
+                "description": "Agent 原生邮箱（agently-cli）：me/list/search/read/send/reply/forward/trash/delete/download。写操作需两阶段确认：首次调用返回 confirmation-token，确认后再次调用",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "me / list / search / read / send / reply / forward / trash / delete / download"},
+                        "q": {"type": "string", "description": "search：关键词"},
+                        "id": {"type": "string", "description": "read/reply/forward/trash：msg_xxx"},
+                        "to": {"type": "string", "description": "send/forward：收件人，多个用逗号分隔"},
+                        "subject": {"type": "string", "description": "send：主题"},
+                        "body": {"type": "string", "description": "send/reply/forward：正文"},
+                        "dir": {"type": "string", "description": "list/search：inbox/sent/trash/spam"},
+                        "limit": {"type": "integer", "description": "list/search：返回条数（默认 10）"},
+                        "cursor": {"type": "string", "description": "list/search：翻页游标"},
+                        "confirmation_token": {"type": "string", "description": "写操作二次确认：首次调用返回的 ctk_xxx"},
+                        "attachment": {"type": "string", "description": "send/reply：附件路径，多个逗号分隔"},
+                        "msg": {"type": "string", "description": "download：msg_xxx"},
+                        "att": {"type": "string", "description": "download：att_xxx"},
+                        "output": {"type": "string", "description": "download：保存目录"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='Agent 邮箱（查看/列表/搜索/回复/转发）',
+    preactivate=(('收件箱', '邮件助手', 'agent邮箱', '邮件列表', '邮件搜索'),),
+)
 def agent_mail(action="list", q="", id="", to="", subject="", body="", dir="",
                limit=10, cursor="", confirmation_token="", attachment="", msg="", att="", output=""):
     """Agent 原生邮箱（通过 agently-cli）：me/list/search/read/send/reply/forward/trash/delete/download。
@@ -9262,6 +9271,29 @@ def agent_mail(action="list", q="", id="", to="", subject="", body="", dir="",
 
 
 # ---------- 任务检查点（断点续跑） ----------
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "task_checkpoint_save",
+                "description": "保存任务进度检查点（长任务每完成一步就保存，崩溃/重启后可用 task_checkpoint_load 从断点继续）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "任务名称"},
+                        "status": {"type": "string", "description": "可选：状态（进行中/已完成/阻塞等）"},
+                        "pending": {"type": "array", "description": "可选：剩余待办步骤列表", "items": {"type": "string"}},
+                        "notes": {"type": "string", "description": "可选：进度备注"},
+                        "auto": {"type": "boolean", "description": "可选：true 时自动保存（调用方内部使用，默认 false）"},
+                    },
+                    "required": ["name"],
+                },
+            },
+        },
+    groups=['⏰ 定时与任务'],
+    phrases='保存任务断点',
+    preactivate=(('断点', '检查点', '保存进度', '恢复进度', '继续上次'),),
+)
 def task_checkpoint_save(name="", status="进行中", pending=None, notes="", auto=False):
     """保存任务进度检查点（崩溃/重启后可从此继续）。
 
@@ -9307,6 +9339,19 @@ def task_checkpoint_clear():
         return "错误：清除检查点失败"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "task_checkpoint_load",
+                "description": "读取任务检查点，恢复未完成任务上下文（配合 task_checkpoint_save 使用）",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    groups=['⏰ 定时与任务'],
+    phrases='加载任务断点',
+    preactivate=(('断点', '检查点', '保存进度', '恢复进度', '继续上次'),),
+)
 def task_checkpoint_load():
     """读取任务检查点（断点续跑时恢复任务上下文）。"""
     if not CHECKPOINT_FILE or not os.path.exists(CHECKPOINT_FILE):
@@ -9372,6 +9417,23 @@ def _workflow_step_text(st, name=""):
     return str(st or "").strip()
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "run_workflow",
+                "description": "运行已保存的流程模板（workflows.json）：按顺序逐条发送指令，上一步完成后自动执行下一步",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string", "description": "流程名称"}},
+                    "required": ["name"],
+                },
+            },
+        },
+    groups=['⏰ 定时与任务'],
+    phrases='执行工作流',
+    preactivate=(('执行流程', '运行工作流', '跑流程', '流程模板'),),
+)
 def run_workflow(name):
     """运行已保存的流程模板：按顺序逐条发送指令，上一步完成后自动执行下一步。
 
@@ -9434,6 +9496,27 @@ def run_workflow(name):
 
 
 # ---------- 图片生成（OpenAI 兼容 images API） ----------
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "image_generate",
+                "description": "生成图片（需在 config.json 配置 image_api_key/image_base_url/image_model，OpenAI 兼容 images API）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {"type": "string", "description": "图片描述提示词"},
+                        "path": {"type": "string", "description": "可选：输出路径（默认工作区 images/）"},
+                        "size": {"type": "string", "description": "可选：尺寸如 1024x1024"},
+                    },
+                    "required": ["prompt"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='文生图',
+    preactivate=(('文生图', 'ai绘图', '生成一张图', '画一张'),),
+)
 def image_generate(prompt, path="", size="1024x1024"):
     """生成图片（需配置 image_api_key / image_base_url / image_model，OpenAI 兼容接口）。"""
     p = str(prompt or "").strip()
@@ -9531,6 +9614,22 @@ def image_generate(prompt, path="", size="1024x1024"):
 
 
 # ---------- 用量洞察报告 ----------
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "usage_report",
+                "description": "生成用量洞察报告（近 N 天 token/费用/缓存命中/逐日明细），可配合定时任务每周自动生成",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"days": {"type": "integer", "description": "可选：统计最近 N 天（默认 7，最大 90）"}},
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='用量/费用统计',
+    preactivate=(('用量', '费用统计', 'token统计', '花费多少', '花了多少'),),
+)
 def usage_report(days=7):
     """生成用量洞察报告（按天/模型汇总 token 与估算费用）。"""
     if not STATS_FILE or not os.path.exists(STATS_FILE):
@@ -9616,6 +9715,27 @@ PDF_EXTRACT_MAX_OUTPUT = 60000   # pdf_extract 单次输出上限（防撑爆上
 DOCX_MAX_DEFAULT = 50000         # docx_read 默认输出上限
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "pdf_extract",
+                "description": "从 PDF 提取文本（按页）、表格（Markdown 格式）或元数据；支持页码范围（如 1-5）。扫描件会提示改用 ocr_image",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "PDF 文件绝对路径（须在允许目录内）"},
+                        "pages": {"type": "string", "description": "可选：页码范围，如 '1-5' / '3' / 'all'（默认 all）"},
+                        "mode": {"type": "string", "description": "可选：text（文本，默认）/ table（表格）/ meta（元数据）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='提取 PDF 文本',
+    preactivate=(('pdf', '转pdf', 'pdf提取', 'pdf生成', '读pdf'),),
+)
 def pdf_extract(path, pages="all", mode="text"):
     """从 PDF 提取文本（按页）/ 表格（Markdown）/ 元数据；支持页码范围与扫描件提示。"""
     if not str(path or "").strip():
@@ -9711,6 +9831,28 @@ def pdf_extract(path, pages="all", mode="text"):
 
 # ---------- PDF 生成（reportlab，中文字体自动嵌入） ----------
 # _find_cjk_font / _register_cjk_font 已移至 pdf_utils.py
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "pdf_create",
+                "description": "把文本或 Markdown 内容生成 PDF 文件（自动嵌入中文字体；支持标题/列表/代码块/表格排版）。长文档请分段生成",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "description": "PDF 正文（文本或 Markdown），与 source_path 二选一"},
+                        "source_path": {"type": "string", "description": "可选：从本地 md/txt 文件读取内容（与 content 二选一）"},
+                        "output": {"type": "string", "description": "输出 PDF 绝对路径（须在允许目录内）"},
+                        "title": {"type": "string", "description": "可选：文档标题（默认取内容首行）"},
+                    },
+                    "required": ["output"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='生成 PDF',
+    preactivate=(('pdf', '转pdf', 'pdf提取', 'pdf生成', '读pdf'),),
+)
 def pdf_create(content="", source_path="", output="", title=""):
     """把文本/Markdown 内容生成 PDF（中文字体嵌入；支持标题/列表/代码块/表格）。"""
     try:
@@ -9821,6 +9963,26 @@ def pdf_create(content="", source_path="", output="", title=""):
         return f"错误：PDF 生成失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "docx_read",
+                "description": "读取 Word .docx 文档为 Markdown 结构（标题层级/段落/列表/表格），旧版 .doc 会提示转换",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": ".docx 文件绝对路径"},
+                        "max_chars": {"type": "integer", "description": "可选：输出字符上限（默认 50000，防超长文档撑爆上下文）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='读取 Word 文档',
+    preactivate=(('word', 'docx', '读word', '读取文档'),),
+)
 def docx_read(path, max_chars=50000):
     """读取 Word .docx 为 Markdown 结构（标题/段落/列表/表格，保持文档顺序）。"""
     try:
@@ -9885,6 +10047,26 @@ def docx_read(path, max_chars=50000):
         return f"错误：Word 读取失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "pptx_read",
+                "description": "提取 PowerPoint .pptx 每页幻灯片的标题、正文要点与演讲者备注；图片以占位标注",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": ".pptx 文件绝对路径"},
+                        "include_notes": {"type": "boolean", "description": "可选：是否包含演讲者备注（默认 true）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='读取 PPT',
+    preactivate=(('ppt', 'pptx', '演示文稿', '读ppt'),),
+)
 def pptx_read(path, include_notes=True):
     """提取 PowerPoint 每页幻灯片的标题、正文要点与备注；图片占位标注。"""
     try:
@@ -10009,6 +10191,28 @@ RSS_PRESET_SOURCES = [
 ]
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "rss_fetch",
+                "description": "RSS 订阅管理：list/preset 精选源/add/remove/fetch 抓最新条目（标题/链接/时间/摘要）。可配合 schedule_task 生成每日简报",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "list / preset / add / remove / fetch"},
+                        "url": {"type": "string", "description": "add / fetch 时必填：RSS 源地址（http(s)）"},
+                        "limit": {"type": "integer", "description": "可选：返回条数上限（默认 10，最大 20）"},
+                        "since_hours": {"type": "integer", "description": "可选：只返回最近 N 小时的新条目（默认 24，0=全部）"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='RSS 订阅/聚合阅读',
+    preactivate=(('rss', '订阅源', '聚合阅读', '订阅列表'),),
+)
 def rss_fetch(action="list", url="", limit=10, since_hours=24):
     """RSS 订阅管理（list/add/remove/preset）+ 抓取最新条目（标题/链接/时间/摘要）。
 
@@ -10151,6 +10355,30 @@ def rss_fetch(action="list", url="", limit=10, since_hours=24):
 # ============================================================================
 # 二维码：生成（qrcode 可选依赖）/ 识别（pyzbar 可选依赖，缺失降级提示）
 # ============================================================================
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "qrcode",
+                "description": "二维码：generate 把文本/链接生成 PNG 二维码；read 识别本地图片中的二维码（可识别多个）。识别需 pyzbar，缺失时降级提示",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "generate / read"},
+                        "text": {"type": "string", "description": "generate 必填：要编码的内容（链接/文本）"},
+                        "output": {"type": "string", "description": "generate 必填：输出 PNG 路径"},
+                        "image_path": {"type": "string", "description": "read 必填：待识别图片路径"},
+                        "size": {"type": "integer", "description": "可选：生成边长像素（默认 300，64-1024）"},
+                        "error_correction": {"type": "string", "description": "可选：纠错等级 L/M/Q/H（默认 M）"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='二维码生成/识别',
+    preactivate=(('二维码', '生成二维码', '识别二维码'),),
+)
 def qrcode(action="generate", text="", output="", image_path="", size=300, error_correction="M"):
     """二维码生成与识别。"""
     act = str(action or "generate").strip().lower()
@@ -10269,6 +10497,27 @@ def _save_secrets(data):
         return False
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "secret_store",
+                "description": "密钥保险箱：DPAPI 加密托管 API key/令牌等敏感值。action=set 保存（value 只写不显示）/ get 按名取用 / delete 删除 / list 仅列出名称",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "set / get / delete / list"},
+                        "name": {"type": "string", "description": "密钥名称（如 openai_key）"},
+                        "value": {"type": "string", "description": "set 必填：要托管的敏感值"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='加密密钥存储',
+    preactivate=(('密钥', 'api key', '令牌', '保险箱', '托管密码'),),
+)
 def secret_store(action="get", name="", value=""):
     """密钥保险箱：set / get / delete / list。value 只写不显示；list 只返回名称。"""
     act = str(action or "get").strip().lower()
@@ -10310,6 +10559,29 @@ def secret_store(action="get", name="", value=""):
 KV_VALUE_MAX_BYTES = 1024 * 1024  # value 上限 1MB
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "kv_store",
+                "description": "嵌入式键值存储：set 写入（可选 TTL 过期）/ get 读取 / delete 删除 / keys 列出全部 / search 按键或值模糊检索。适合缓存、配置、轻量状态（Redis 的零部署替代）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "set / get / delete / keys / search"},
+                        "key": {"type": "string", "description": "set/get/delete 必填：键"},
+                        "value": {"type": "string", "description": "set 必填：值（上限 1MB）"},
+                        "ttl_seconds": {"type": "integer", "description": "可选：set 时有效秒数（0=长期）"},
+                        "pattern": {"type": "string", "description": "search 必填：键或值的模糊检索关键词"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='轻量键值存储（缓存/状态）',
+    preactivate=(('键值', 'kv存储', '缓存读写', '轻量状态'),),
+)
 def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
     """嵌入式键值存储：set（可选 TTL）/ get / delete / keys / search。"""
     act = str(action or "get").strip().lower()
@@ -10435,6 +10707,30 @@ def _ffmpeg_run(args, timeout=MEDIA_TIMEOUT):
     return proc.returncode, (out or "") + (err or "")
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "media_ffmpeg",
+                "description": "音视频处理：info 读取时长/分辨率/码率/音频信息；thumbnail 指定时间点截图；transcode 转码（mp4/mp3 等）；extract_audio 提取音频。输入超 2GB 或耗时超 300 秒会拒绝",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "info / thumbnail / transcode / extract_audio"},
+                        "input": {"type": "string", "description": "源文件绝对路径"},
+                        "output": {"type": "string", "description": "thumbnail/transcode/extract_audio 必填：输出路径"},
+                        "time": {"type": "string", "description": "可选：截图时间点，如 00:01:30（默认取开头 1 秒）"},
+                        "width": {"type": "integer", "description": "可选：转码输出宽度（16-7680，保持宽高比）"},
+                        "format": {"type": "string", "description": "可选：转码/提取输出格式：mp4/mp3/webm/mkv/avi/mov/ogg/flac/wav"},
+                    },
+                    "required": ["action", "input"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='音视频处理（ffmpeg）',
+    preactivate=(('ffmpeg', '视频处理', '转码', '提取音频', '视频截图', '剪辑'),),
+)
 def media_ffmpeg(action="info", input="", output="", time="", width=0, format=""):
     """音视频：info / thumbnail / transcode / extract_audio（参数白名单化）。"""
     act = str(action or "info").strip().lower()
@@ -10569,6 +10865,27 @@ def _webdav_request(cfg, method, path, **kw):
     )
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "webdav",
+                "description": "WebDAV 云盘同步（坚果云/Nextcloud/群晖等）：list 列目录 / upload 上传 / download 下载 / delete 删除。连接在 webdav_config.json 配置（密码可加密）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "list / upload / download / delete"},
+                        "remote_path": {"type": "string", "description": "远端路径，如 /Documents/report.pdf（默认 /）"},
+                        "local_path": {"type": "string", "description": "upload/download 必填：本地文件绝对路径"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='WebDAV 云盘（坚果云/Nextcloud）上传下载',
+    preactivate=(('坚果云', 'nextcloud', 'webdav', '云盘同步'),),
+)
 def webdav(action="list", remote_path="/", local_path=""):
     """WebDAV 云盘操作：list / upload / download / delete。"""
     act = str(action or "list").strip().lower()
@@ -10734,6 +11051,27 @@ def webdav(action="list", remote_path="/", local_path=""):
 # ============================================================================
 # 公众号自动写作（wechat_writer 独立包，薄封装）
 # ============================================================================
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "run_wechat_writer",
+                "description": "运行公众号自动写作（WeChat Writer）：采集资讯→选题去重→LLM 写作→质量门禁→存草稿箱（只产草稿不发布）。dry_run 只预览，topic 指定主题，use_blocked 被墙信源走代理",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "dry_run": {"type": "boolean", "description": "可选：true 只预览不写草稿（默认 false）"},
+                        "topic": {"type": "string", "description": "可选：指定主题，跳过自动选题"},
+                        "use_blocked": {"type": "boolean", "description": "可选：true 时被墙信源自动经代理通道采集（需 fetch_blocked 能力就绪）"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='公众号文章生成/排版',
+    preactivate=(('公众号', '公众号文章', '自动写作', '写公众号'),),
+)
 def run_wechat_writer(dry_run=False, topic="", use_blocked=False):
     """运行公众号自动写作工具：采集→选题→写作→质检→存草稿箱（只产草稿）。
 
@@ -10786,6 +11124,26 @@ def run_wechat_writer(dry_run=False, topic="", use_blocked=False):
 # ============================================================================
 # 每日简报（主动助手：采集当日资讯 → LLM 提炼 → 落盘工作区 briefs/）
 # ============================================================================
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "daily_brief",
+                "description": "生成每日简报：采集当日 AI/科技资讯（RSS+搜索）→ LLM 提炼要点与点评 → 保存到工作区 briefs/。适合『今天的资讯有什么』『生成今日简报』等请求；可配合 schedule_task 定时生成晨报",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string", "description": "可选：主题关键词（仅保留相关素材）"},
+                        "max_items": {"type": "integer", "description": "可选：素材上限（默认 8，最大 15）"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['📧 邮件与消息'],
+    phrases='每日简报（采集当日资讯→提炼点评）',
+    preactivate=(('每日简报', '今日简报', '晨报', '简报生成'),),
+)
 def daily_brief(topic="", max_items=8):
     """生成每日简报：采集当日 AI/科技资讯（复用 WeChat Writer 采集引擎）
     → LLM 提炼要点与点评 → 保存到工作区 briefs/brief_YYYYMMDD.md。
@@ -10890,6 +11248,65 @@ def _to_tool_schema(t):
     }
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "create_plugin",
+                "description": "根据用户需求生成并安装鲸语插件：组合自定义工具/技能模板/自动化流程/场景配置，生成后立即生效。适合『添加一个XX工具』『创建一个XX流程』『帮我加个小红书文案技能』等需求",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "插件名称（简短，如 小红书文案助手）"},
+                        "description": {"type": "string", "description": "可选：插件说明"},
+                        "tools": {
+                            "type": "array",
+                            "description": "可选：自定义 HTTP 工具列表，每项 {name, endpoint, description, method, params}（params 为逗号分隔的参数名）",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string", "description": "工具名（英文标识）"},
+                                    "endpoint": {"type": "string", "description": "HTTP 地址（http/https）"},
+                                    "description": {"type": "string", "description": "工具描述（AI 何时调用）"},
+                                    "method": {"type": "string", "description": "可选：POST/GET（默认 POST）"},
+                                    "params": {"type": "string", "description": "可选：参数名，逗号分隔，如 topic, style"},
+                                },
+                            },
+                        },
+                        "skills": {
+                            "type": "array",
+                            "description": "可选：技能/提示词模板，每项 {name, text}（text 中 {{TEXT}} 会被输入框内容替换）",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string", "description": "技能名"},
+                                    "text": {"type": "string", "description": "提示词模板内容"},
+                                },
+                            },
+                        },
+                        "workflows": {
+                            "type": "object",
+                            "description": "可选：自动化流程 {流程名: {steps: [{text: 指令}]}}",
+                            "additionalProperties": {"type": "object"},
+                        },
+                        "scenario": {
+                            "type": "object",
+                            "description": "可选：一键场景配置 {name, thinking, system_prompt, enabled_tools}",
+                        },
+                        "requires": {
+                            "type": "array",
+                            "description": "可选：依赖的 pip 包名列表",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["name"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='创建用户插件',
+    preactivate=(('创建插件', '加个插件', '写个技能', '做一个插件'),),
+)
 def create_plugin(name, description="", tools=None, skills=None, workflows=None,
                   scenario=None, requires=None):
     """AI 生成并安装插件：根据需求组合工具/技能/流程/场景，生成后立即生效。
@@ -11033,6 +11450,26 @@ def _proc_capture(argv, timeout):
         return proc.returncode, data
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "app_manage",
+                "description": "Windows 应用安装与卸载管理（winget/choco 自动选择）：列出已装软件、搜索、静默安装、卸载、检查可升级。安装/卸载前应先向用户确认",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["managers", "list", "search", "install", "uninstall", "upgrade"], "description": "操作类型（默认 list 列出已安装应用）"},
+                        "query": {"type": "string", "description": "list 时为过滤关键字；search/install/uninstall 时为软件名或包 ID（必填）"},
+                        "source": {"type": "string", "enum": ["auto", "winget", "choco"], "description": "可选：指定包管理器（默认 auto 自动选）"},
+                    },
+                },
+            },
+        },
+    groups=['📦 应用与环境'],
+    phrases='应用安装/卸载管理（winget/choco）',
+    preactivate=(('装软件', '卸载软件', '应用管理', '安装程序', '软件列表'),),
+)
 def app_manage(action="list", query="", source="auto"):
     """Windows 应用安装与卸载管理。
 
@@ -11132,6 +11569,29 @@ def _extract_json_obj(text, must_keys=("left",)):
     return None
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "screen_find_click",
+                "description": "视觉定位点击闭环：截屏后用视觉模型按自然语言描述定位界面元素（如「右上角关闭按钮」），算出坐标并自动点击——看图+操作一步完成，适合自动化 Web 应用/旧桌面软件",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target": {"type": "string", "description": "要点击的目标描述（自然语言，如「登录按钮」「搜索框右侧的放大镜图标」）"},
+                        "area": {"type": "string", "description": "可选：限定区域 left,top,right,bottom（默认全屏，区域越小定位越准）"},
+                        "button": {"type": "string", "enum": ["left", "right", "middle"], "description": "可选：鼠标键（默认 left）"},
+                        "dry_run": {"type": "boolean", "description": "可选：true 只定位不点击（先确认位置再动手）"},
+                        "verify": {"type": "boolean", "description": "可选：点击后 0.6s 再截一张自查图（默认 true）"},
+                    },
+                    "required": ["target"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像', '🖱 桌面自动化'],
+    phrases='视觉定位点击（看图即点，一句话指定目标）',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
+)
 def screen_find_click(target, area="", button="left", dry_run=False, verify=True):
     """视觉定位点击闭环：截图 → 视觉模型定位目标元素坐标 → 移动鼠标点击。
 
@@ -11201,6 +11661,28 @@ def screen_find_click(target, area="", button="left", dry_run=False, verify=True
 _VISION_LOOP_ACTIONS = ("done", "click", "type", "scroll", "describe")
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "vision_loop",
+                "description": "视觉自动操作闭环：截屏→视觉模型判断当前状态→决定并执行下一步动作（点击/输入/滚动）→再截屏验证→直到目标达成。适合『看着屏幕』自主完成的多步操作（填表、点按钮、验证界面变化、操作旧桌面软件）。goal 用自然语言描述目标",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "goal": {"type": "string", "description": "要达到的目标（自然语言，如「登录并进入主页」「把表单填完并提交」）"},
+                        "steps": {"type": "string", "description": "可选：操作步骤提示或背景，帮助模型判断（如「先点登录，再输账号密码」）"},
+                        "max_iters": {"type": "integer", "description": "可选：最多闭环轮数（1-12，默认 5）"},
+                        "area": {"type": "string", "description": "可选：限定区域 left,top,right,bottom（默认全屏）"},
+                    },
+                    "required": ["goal"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='视觉操作闭环（看屏幕→动作→再验证，自主达成目标）',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
+)
 def vision_loop(goal, steps="", max_iters=5, area=""):
     """视觉自动操作闭环：截屏 → 视觉模型判断当前状态 → 决定下一步动作 → 执行 → 再截屏验证，直到目标达成。
 
@@ -11422,6 +11904,24 @@ def _speak_aloud(text, rate=0, volume=None, voice="", label=""):
         return ""  # 无声环境：静默跳过，调用方对话循环继续
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "tts_stop",
+                "description": "停止朗读：立即中断后台播放（传 sid 只停指定会话，留空停止全部）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "sid": {"type": "string", "description": "可选：tts_speak 返回的会话 id（留空=全部停止）"},
+                    },
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='停止朗读',
+    preactivate=(('朗读', '语音播报', '文字转语音', '读给我听', '停止朗读', 'tts'),),
+)
 def tts_stop(sid=""):
     """停止朗读：sid 为空停止全部当前朗读，否则只停指定会话。返回实际停止数。"""
     s = str(sid or "").strip()
@@ -11454,6 +11954,29 @@ def tts_stop(sid=""):
     return stopped
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "tts_speak",
+                "description": "朗读文本：立即返回，后台通过扬声器播放（配对 tts_stop 可随时打断）。适合提醒、播报、读结果给用户听",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "要朗读的文本（≤8000 字）"},
+                        "voice": {"type": "string", "description": "可选：音色名子串（如 Huihui / Xiaoxiao，留空=系统默认）"},
+                        "rate": {"type": "integer", "description": "可选：语速 -10~10（默认 0）"},
+                        "volume": {"type": "integer", "description": "可选：音量 0~100（默认 100）"},
+                        "save_path": {"type": "string", "description": "可选：同时把合成结果另存为 WAV 文件"},
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='立即朗读（后台播放，可打断）',
+    preactivate=(('朗读', '语音播报', '文字转语音', '读给我听', '停止朗读', 'tts'),),
+)
 def tts_speak(text, voice="", rate=0, volume=100, save_path=""):
     """朗读文本（立即返回，后台播放；配对 tts_stop 可随时停止）。
 
@@ -11478,6 +12001,28 @@ def tts_speak(text, voice="", rate=0, volume=100, save_path=""):
 _BYE_PAT = ("再见", "拜拜", "停止对话", "结束对话", "退下吧", "goodbye", "bye-bye")
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "voice_chat_loop",
+                "description": "实时语音对话循环：麦克风听用户说一句 → 本地转写 → AI 回复 → 直接朗读出声，循环多轮直到说完「再见」。适合免打字的快速问答节奏（需本机麦克风与 faster-whisper/sounddevice）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "rounds": {"type": "integer", "description": "可选：最多对话轮数（1-20，默认 3；中途说再见即结束）"},
+                        "model": {"type": "string", "description": "可选：whisper 模型 tiny/base/small（默认 base）"},
+                        "max_seconds": {"type": "integer", "description": "可选：每轮录音最长秒数（默认 15）"},
+                        "speak": {"type": "boolean", "description": "可选：是否朗读回复（默认 true）"},
+                        "rate": {"type": "integer", "description": "可选：语速 -10 到 10（默认 0 正常）"},
+                    },
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='实时语音对话（听一句答一句）',
+    preactivate=(('语音对话', '语音聊天', '语音交互', '免打字'),),
+)
 def voice_chat_loop(rounds=3, model="base", max_seconds=15, speak=True, rate=0):
     """全双工语音对话循环：麦克风听一句 → 转写 → 思考回复 → 朗读，循环多轮。
 
@@ -11558,6 +12103,27 @@ _TEAM_ROLE_PRESETS = {
 }
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "team_run",
+                "description": "多智能体团队协作编排：协调者把总目标拆解为多步计划，各专业角色（研究员/工程师/评审/设计师/分析师或自定义）按流水线接力执行（共享黑板传递中间成果），最后综合成完整交付物",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "goal": {"type": "string", "description": "总目标（一句话说清要交付什么）"},
+                        "roles": {"type": "array", "items": {"type": "string"}, "description": "可选：团队成员角色名列表（默认 [研究员,工程师,评审]；自定义角色名会按名字推断专长，最多 5 个）"},
+                        "steps": {"type": "integer", "description": "可选：限制最大步数（默认协调者自行拆解，最多 6 步）"},
+                    },
+                    "required": ["goal"],
+                },
+            },
+        },
+    groups=['💻 编程与执行'],
+    phrases='多智能体团队协作编排',
+    preactivate=(('多智能体', '团队协作', '分工协作', '角色分工'),),
+)
 def team_run(goal, roles=("研究员", "工程师", "评审"), steps=0):
     """多智能体协作编排：协调者拆解任务 → 各专业角色按流水线接力 → 综合产出报告。
 
@@ -11675,6 +12241,24 @@ def team_run(goal, roles=("研究员", "工程师", "评审"), steps=0):
 _NET_PROBE_REFS = ("https://www.msftconnecttest.com/connecttest.txt", "https://www.baidu.com")
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "net_diagnose",
+                "description": "网络诊断：对网址/主机做 全局连通→DNS→TCP→HTTP 分层探测，判定故障类别（断网/DNS 故障/端口不通/反爬 403/限流/超时被墙/TLS 问题），并给出自动降级建议策略",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target": {"type": "string", "description": "网址或主机名（留空则探测全局连通性）"},
+                    },
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='网络诊断（分层探测+降级建议）',
+    preactivate=(('网络诊断', '断网', '连不上', '网络问题', '上不去网'),),
+)
 def net_diagnose(target=""):
     """网络诊断：对一个网址/主机做 DNS→TCP→TLS→HTTP 分层探测并给出结论与降级建议。
 
@@ -11805,6 +12389,25 @@ def net_diagnose(target=""):
     return "\n".join(lines)
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_url_smart",
+                "description": "智能抓取网页：直连失败时自动做网络诊断并用内置代理通道降级重试（被墙站点/限流场景自愈），返回内容并注明走了哪条路径",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "http(s):// 页面地址"},
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+    groups=['🌐 浏览器与网页'],
+    phrases='智能抓取（失败自动走代理通道）',
+    preactivate=(('被墙', '爬墙', '代理抓取', '绕过封锁', '抓不了'),),
+)
 def fetch_url_smart(url):
     """智能抓取：直连优先，失败自动诊断并降级（被墙代理通道），返回内容 + 抓取路径说明。
 
@@ -11833,145 +12436,112 @@ def fetch_url_smart(url):
     return "\n".join(attempts)
 
 
-TOOL_CALL_MAP = {
-    "get_date": get_date,
-    "ask_user": None,  # 特殊处理：chat() 中通过 on_ask 回调询问用户
-    "request_permission": None,  # 特殊处理：chat() 中通过 on_request_permission 回调
-    "write_memory": write_memory,
-    "self_profile": self_profile,
-    "read_memory": read_memory,
-    "query_memory_graph": query_memory_graph,
-    "delete_memory": delete_memory,
-    "update_memory": update_memory,
-    "get_weather": get_weather,
-    "run_python": run_python,
-    "read_file": read_file,
-    "fetch_url": fetch_url,
-    "fetch_blocked": _run_fetch_blocked,
-    "search_web": search_web,
-    "search_github": search_github,
-    "search_realtime": search_realtime,
-    "call_api": call_api,
-    "get_status": get_status,
-    "git": git_tool,
-    "project_map": project_map,
-    "find_symbol": find_symbol,
-    "run_lint": run_lint,
-    "verify_project": verify_project,
-    "project_scaffold": project_scaffold,
-    "dev_plan": dev_plan,
-    "database_query": database_query,
-    "tts_save": tts_save,
-    "image_process": image_process,
-    "ocr_image": ocr_image,
-    "read_csv": read_csv,
-    "write_csv": write_csv,
-    "read_excel": read_excel,
-    "write_excel": write_excel,
-    "chart_data": chart_data,
-    "database_query_mysql": database_query_mysql,
-    "database_query_postgres": database_query_postgres,
-    "send_webhook": send_webhook,
-    "im_send": im_send,
-    "telegram_poll_updates": telegram_poll_updates,
-    "download_file": download_file,
-    "epub_read": epub_read,
-    "mobi_read": mobi_read,
-    "doc_read": doc_read,
-    "msg_read": msg_read,
-    "archive_list": archive_list,
-    "subagent_run": subagent_run,
-    "run_tests": run_tests,
-    "verify_output": verify_output,
-    "send_email": send_email,
-    "pip_install": pip_install,
-    "write_file": write_file,
-    "edit_file": edit_file,
-    "list_dir": list_dir,
-    "watch_files": watch_files,
-    "track_web": track_web,
-    "recall_session": recall_session,
-    "run_command": run_command,
-    "search_local": search_local,
-    "code_lookup": code_lookup,
-    "create_doc": create_doc,
-    "write_code_project": write_code_project,
-    "browser_navigate": browser_navigate,
-    "rpa_screen_size": rpa_screen_size,
-    "rpa_click": rpa_click,
-    "rpa_type": rpa_type,
-    "rpa_hotkey": rpa_hotkey,
-    "rpa_move": rpa_move,
-    "rpa_scroll": rpa_scroll,
-    "rpa_screenshot": rpa_screenshot,
-    "web_screenshot": web_screenshot,
-    "publish_draft": publish_draft,
-    "start_process": start_process,
-    "stop_process": stop_process,
-    "list_processes": list_processes,
-    "environment_info": environment_info,
-    "project_info": project_info,
-    "read_project_file": read_project_file,
-    "create_evolution": create_evolution,
-    "self_evolve": self_evolve,
-    "verify_files": verify_files,
-    # ===== v2 能力层（全新分类） =====
-    "schedule_task": schedule_task,
-    "list_schedules": list_schedules,
-    "cancel_schedule": cancel_schedule,
-    "notify_desktop": notify_desktop,
-    "clipboard_get": clipboard_get,
-    "clipboard_set": clipboard_set,
-    "delete_file": delete_file,
-    "list_snapshots": list_snapshots,
-    "restore_snapshot": restore_snapshot,
-    "archive_files": archive_files,
-    "extract_archive": extract_archive,
-    "batch_rename": batch_rename,
-    "image_understand": image_understand,
-    "screen_see": screen_see,
-    "chart_read": chart_read,
-    "screenshot_to_html": screenshot_to_html,
-    "debug_screenshot": debug_screenshot,
-    "scan_read": scan_read,
-    "image_batch": image_batch,
-    "screen_capture": screen_capture,
-    "speech_to_text": speech_to_text,
-    "tts_speak": tts_speak,
-    "tts_stop": tts_stop,
-    "app_manage": app_manage,
-    "screen_find_click": screen_find_click,
-    "vision_loop": vision_loop,
-    "voice_chat_loop": voice_chat_loop,
-    "team_run": team_run,
-    "net_diagnose": net_diagnose,
-    "fetch_url_smart": fetch_url_smart,
-    "knowledge_index": knowledge_index,
-    "knowledge_search": knowledge_search,
-    "database_execute": database_execute,
-    "read_email": read_email,
-    "email_summary": email_summary,
-    "agent_mail": agent_mail,
-    "task_checkpoint_save": task_checkpoint_save,
-    "task_checkpoint_load": task_checkpoint_load,
-    "run_workflow": run_workflow,
-    "image_generate": image_generate,
-    "usage_report": usage_report,
-    # ===== 文档 / 资讯 / 二维码 / KV / 媒体 / WebDAV =====
-    "pdf_extract": pdf_extract,
-    "pdf_create": pdf_create,
-    "docx_read": docx_read,
-    "pptx_read": pptx_read,
-    "rss_fetch": rss_fetch,
-    "qrcode": qrcode,
-    "kv_store": kv_store,
-    "secret_store": secret_store,
-    "media_ffmpeg": media_ffmpeg,
-    "webdav": webdav,
-    "run_wechat_writer": run_wechat_writer,
-    "daily_brief": daily_brief,
-    "create_plugin": create_plugin,
-}
+# ── 六层工具注册表（P1-3 单一来源）────────────────────────────────
+# TOOLS / TOOL_CALL_MAP / TOOL_GROUPS / _TOOL_ACTION_PHRASES /
+# _PREACTIVATE_HINTS 全部由 @tool() / register_tool() 声明生成（机制见 toolkit.py）；
+# 顺序常量（_TOOL_ORDER/_GROUP_ORDER/_HINT_ORDER）迁移自历史数据。
+# 新增/修改工具：只改函数定义处的装饰器，其余层自动同步；
+# 构建期一致性校验（重复名/顺序缺项/多余项）失败会直接抛错，早于任何 AST 门禁。
+
+register_tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "ask_user",
+                "description": "向用户提问（遇到歧义、缺少关键信息、需确认高风险操作时使用）。阻塞等待用户回答后继续",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"prompt": {"type": "string", "description": "向用户提出的问题（简洁明确，可给出选项）"}},
+                    "required": ["prompt"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='向用户提问（澄清/确认）',
+)
+register_tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "request_permission",
+                "description": "当工具执行被权限拒绝时，请求用户将操作加入白名单（允许目录 / 命令白名单 / 开启文件写权限）。用户同意后立即生效，可重试原操作",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action_type": {"type": "string", "description": "白名单类型：dir=加入允许目录 / command=加入命令白名单 / write=开启文件写权限"},
+                        "value": {"type": "string", "description": "要加入白名单的值：目录绝对路径 或 命令名；write 类型可留空"},
+                    },
+                    "required": ["action_type"],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='请求权限（白名单）',
+)
+
+_TOOL_ORDER = [
+    'get_date', 'ask_user', 'request_permission', 'write_memory', 'self_profile', 'read_memory', 'delete_memory', 'update_memory',
+    'query_memory_graph', 'get_weather', 'run_python', 'read_file', 'fetch_url', 'fetch_blocked', 'search_web', 'search_github',
+    'search_realtime', 'call_api', 'get_status', 'git', 'project_map', 'find_symbol', 'run_lint', 'verify_project',
+    'project_scaffold', 'dev_plan', 'database_query', 'send_email', 'pip_install', 'write_file', 'edit_file', 'list_dir',
+    'watch_files', 'track_web', 'recall_session', 'run_command', 'search_local', 'code_lookup', 'create_doc', 'write_code_project',
+    'rpa_screen_size', 'rpa_click', 'rpa_type', 'rpa_hotkey', 'rpa_move', 'rpa_scroll', 'rpa_screenshot', 'browser_navigate',
+    'web_screenshot', 'publish_draft', 'send_webhook', 'im_send', 'telegram_poll_updates', 'download_file', 'epub_read', 'mobi_read',
+    'doc_read', 'msg_read', 'archive_list', 'tts_save', 'image_process', 'ocr_image', 'read_csv', 'write_csv',
+    'read_excel', 'write_excel', 'chart_data', 'database_query_mysql', 'database_query_postgres', 'subagent_run', 'run_tests', 'verify_output',
+    'start_process', 'stop_process', 'list_processes', 'environment_info', 'project_info', 'read_project_file', 'create_evolution', 'self_evolve',
+    'verify_files', 'schedule_task', 'list_schedules', 'cancel_schedule', 'notify_desktop', 'clipboard_get', 'clipboard_set', 'delete_file',
+    'archive_files', 'extract_archive', 'list_snapshots', 'restore_snapshot', 'batch_rename', 'image_understand', 'screen_see', 'chart_read',
+    'screenshot_to_html', 'debug_screenshot', 'scan_read', 'image_batch', 'screen_capture', 'speech_to_text', 'tts_speak', 'tts_stop',
+    'app_manage', 'screen_find_click', 'vision_loop', 'voice_chat_loop', 'team_run', 'net_diagnose', 'fetch_url_smart', 'knowledge_index',
+    'knowledge_search', 'database_execute', 'read_email', 'email_summary', 'agent_mail', 'task_checkpoint_save', 'task_checkpoint_load', 'run_workflow',
+    'image_generate', 'usage_report', 'pdf_extract', 'pdf_create', 'docx_read', 'pptx_read', 'rss_fetch', 'qrcode',
+    'secret_store', 'kv_store', 'media_ffmpeg', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_plugin',
+]
+
+_GROUP_ORDER = [
+    '🌐 浏览器与网页', '💻 编程与执行', '📁 文件与目录', '📊 数据与文档',
+    '📧 邮件与消息', '🎨 媒体与图像', '🖱 桌面自动化', '📦 应用与环境',
+    '⏰ 定时与任务', '🧠 记忆与知识', '🔧 系统与基础',
+]
+
+_HINT_ORDER = [
+    ('全局', '概况', '整体情况', '运行情况', '什么情况', '进展', '状态', '工作台'), ('文件变化', '监听', '有没有新文件', '新东西', '持续感知', '看看变化'), ('网页更新', '追踪网页', '页面变化', '监控网址', '网页变化'),
+    ('之前聊过', '上次说', '回顾会话', '历史会话', '前几天', '之前的对话', '记得我们'), ('git', 'commit', '提交', '回滚', '版本控制', '版本管理', '仓库'), ('依赖图', '符号表', '项目结构', '代码地图', '函数定义', '调用关系', '引用'),
+    ('lint', '静态检查', '语法检查', '代码规范', 'ruff'), ('一键验证', '验证项目', '自测', '检查一下', '跑测试'), ('脚手架', '建项目', '初始化项目', '项目模板', '搭项目', '新项目'),
+    ('开发计划', '分步', '任务进度', '断点', '做到哪一步'), ('搜索', '搜一下', '查一下', '新闻', '资讯', '最新'), ('天气', '气温', '台风', '预报'),
+    ('下载',), ('邮件', '发邮件', '收件箱'), ('文件', '读取', '读一下', '打开'),
+    ('恢复', '撤销', '还原', '回滚文件', '找回', '误删'), ('写', '保存', '创建', '生成'), ('修改', '编辑', '改动', '改一下', '改一次', '改成', '改为', '改下', '改改', '改掉', '更新', '替换', '重写', '覆盖', '重命名', '改名', '删掉', '删除'),
+    ('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'), ('表格', 'excel', 'csv', '报表'), ('代码', '编程', 'python', 'bug', '脚本', '函数'),
+    ('定时', '提醒', '计划', '日程'), ('数据库', 'sql', 'mysql', 'postgres'), ('网页', 'url', '抓取', '爬'),
+    ('搜索文件', '检索', '找文件'), ('在哪定义', '定义在哪', '谁在调用', '调用点', '引用关系', '代码结构', '符号定位', '看下源码'), ('记忆', '记住', '偏好', '忘记', '删除记忆', '修改记忆'),
+    ('自我', '我是谁', '自我状态', '身份', '长期目标', '我的进化', '成长'), ('自我进化', '改进自己', '升级自己', '自我改进', '修复自己', '自省'), ('收件箱', '邮件助手', 'agent邮箱', '邮件列表', '邮件搜索'),
+    ('发微信', '发企微', '发telegram', '推送消息', '消息推送', '通知我'), ('telegram消息', 'tg更新', 'tg消息', '远程指令'), ('桌面通知', 'toast', '弹通知', '提醒通知'),
+    ('公众号', '公众号文章', '自动写作', '写公众号'), ('草稿', '草稿箱', '存草稿'), ('pdf', '转pdf', 'pdf提取', 'pdf生成', '读pdf'),
+    ('word', 'docx', '读word', '读取文档'), ('ppt', 'pptx', '演示文稿', '读ppt'), ('电子书', 'epub', 'mobi', 'kindle'),
+    ('outlook', 'msg邮件', 'msg文件', '旧版doc', 'rtf'), ('数据库写', '插入数据', '改数据库', '删除记录', 'update语句'), ('键值', 'kv存储', '缓存读写', '轻量状态'),
+    ('密钥', 'api key', '令牌', '保险箱', '托管密码'), ('写csv', '导出csv', '存成csv'), ('文生图', 'ai绘图', '生成一张图', '画一张'),
+    ('打包', '压缩成', '归档文件', '压缩包'), ('解压', '解包', '解压缩', '解压到'), ('创建插件', '加个插件', '写个技能', '做一个插件'),
+    ('执行命令', '终端', '命令行', '运行命令', 'cmd'), ('安装库', 'pip安装', '装个包', '缺库', '装依赖'), ('环境信息', 'python版本', '已装库', '环境检查', '看环境'),
+    ('后台进程', '启动服务', '启动服务器', '停止进程', '看进程', '进程列表'), ('核验输出', '对照检查', '检查结果', '自评', '核对答案'), ('核验文件', '检查产物', '产物存在', '验证文件'),
+    ('自身代码', '读源码', '项目文件', '鲸语代码', '看代码库'), ('进化提案', '改进提案', '提个方案', '改进建议'), ('子代理', '并行处理', '子智能体', '分头做'),
+    ('多智能体', '团队协作', '分工协作', '角色分工'), ('断点', '检查点', '保存进度', '恢复进度', '继续上次'), ('用量', '费用统计', 'token统计', '花费多少', '花了多少'),
+    ('报错截图', '错误截图', '异常截图', '报错诊断'), ('截图转', 'ui转代码', '前端还原', '截图还原'), ('扫描件', '文档图片', '识别图表', '识别公式'),
+    ('语音转文字', '语音识别', '听写'), ('语音对话', '语音聊天', '语音交互', '免打字'), ('ffmpeg', '视频处理', '转码', '提取音频', '视频截图', '剪辑'),
+    ('二维码', '生成二维码', '识别二维码'), ('截屏', '截个屏', '屏幕截图', '截屏看看'), ('rss', '订阅源', '聚合阅读', '订阅列表'),
+    ('github搜索', '搜开源项目', '找仓库', '搜代码库'), ('被墙', '爬墙', '代理抓取', '绕过封锁', '抓不了'), ('网络诊断', '断网', '连不上', '网络问题', '上不去网'),
+    ('调用接口', 'api请求', '调接口', 'http请求'), ('装软件', '卸载软件', '应用管理', '安装程序', '软件列表'), ('几号', '现在几点', '日期时间', '今天是几号'),
+    ('每日简报', '今日简报', '晨报', '简报生成'), ('坚果云', 'nextcloud', 'webdav', '云盘同步'), ('批量看图', '批量分析图片', '批量识别', '整理图库'),
+    ('建索引', '知识库索引', '语义检索', '知识库搜索'), ('剪贴板', '复制到剪贴板', '粘贴出来', '读剪贴板'), ('批量改名', '批量重命名'),
+    ('查看定时', '我的定时任务', '取消定时', '列出定时'), ('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'), ('朗读', '语音播报', '文字转语音', '读给我听', '停止朗读', 'tts'),
+    ('执行流程', '运行工作流', '跑流程', '流程模板'),
+]
+
+TOOLS = build_tool_list(_TOOL_ORDER)
+TOOL_CALL_MAP = build_call_map()
+TOOL_GROUPS = build_groups(_GROUP_ORDER, _TOOL_ORDER)
+_TOOL_ACTION_PHRASES = build_phrases()
+_PREACTIVATE_HINTS = build_preactivate(_HINT_ORDER, _TOOL_ORDER)
 
 MAX_TOOL_ROUNDS = 100
 MAX_EMPTY_RETRIES = 1
@@ -12044,19 +12614,6 @@ _TOOL_INDEX_CACHE = None
 _TOOL_INDEX_KEY = None
 
 # 能力地图分类（精确感知：类别 + 完整工具名 + 核心动作）。全部内置工具全覆盖。
-TOOL_GROUPS = [
-    ("🌐 浏览器与网页", ["browser_navigate", "web_screenshot", "fetch_url", "fetch_url_smart", "net_diagnose", "fetch_blocked", "search_web", "search_realtime", "search_github", "webdav", "download_file", "rss_fetch"]),
-    ("💻 编程与执行", ["run_python", "run_command", "pip_install", "run_tests", "run_lint", "verify_project", "project_scaffold", "dev_plan", "write_code_project", "subagent_run", "team_run", "verify_output", "start_process", "stop_process", "list_processes", "environment_info", "get_status", "git", "project_map", "find_symbol", "code_lookup"]),
-    ("📁 文件与目录", ["read_file", "write_file", "edit_file", "list_dir", "search_local", "delete_file", "archive_files", "extract_archive", "batch_rename", "list_snapshots", "restore_snapshot", "clipboard_get", "clipboard_set"]),
-    ("📊 数据与文档", ["read_csv", "write_csv", "read_excel", "write_excel", "chart_data", "database_query", "database_query_mysql", "database_query_postgres", "database_execute", "create_doc", "docx_read", "pptx_read", "pdf_extract", "pdf_create", "epub_read", "mobi_read", "doc_read", "archive_list", "secret_store", "kv_store"]),
-    ("📧 邮件与消息", ["send_email", "read_email", "email_summary", "agent_mail", "msg_read", "im_send", "telegram_poll_updates", "send_webhook", "publish_draft", "run_wechat_writer", "daily_brief"]),
-    ("🎨 媒体与图像", ["image_process", "image_understand", "screen_see", "chart_read", "screenshot_to_html", "debug_screenshot", "scan_read", "image_batch", "image_generate", "ocr_image", "screen_capture", "screen_find_click", "vision_loop", "speech_to_text", "voice_chat_loop", "tts_save", "tts_speak", "tts_stop", "media_ffmpeg", "qrcode"]),
-    ("🖱 桌面自动化", ["rpa_screen_size", "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot", "screen_find_click", "notify_desktop"]),
-    ("📦 应用与环境", ["app_manage"]),
-    ("⏰ 定时与任务", ["schedule_task", "list_schedules", "cancel_schedule", "task_checkpoint_save", "task_checkpoint_load", "run_workflow"]),
-    ("🧠 记忆与知识", ["write_memory", "read_memory", "delete_memory", "update_memory", "query_memory_graph", "self_profile", "knowledge_index", "knowledge_search"]),
-    ("🔧 系统与基础", ["get_date", "get_weather", "ask_user", "request_permission", "call_api", "project_info", "read_project_file", "create_evolution", "self_evolve", "verify_files", "usage_report", "create_plugin", "watch_files", "track_web", "recall_session"]),
-]
 
 # 组名 -> 成员工具名（activate_tools 支持按组激活：传组名一次激活整组）。
 # 键含两种形式：原文（含 emoji）与去掉 emoji 的裸组名（如「数据与文档」）。
@@ -12111,98 +12668,6 @@ def _expand_activation(wanted, available_names, activated):
 
 # 关键词预激活（chat 层兜底）：扫描最近 user 消息，命中常见意图关键词时
 # 预激活对应工具，让常见任务免点菜直接可用（仅提前加载定义，不改变权限）。
-_PREACTIVATE_HINTS = [
-    (("全局", "概况", "整体情况", "运行情况", "什么情况", "进展", "状态", "工作台"), ["get_status"]),
-    (("文件变化", "监听", "有没有新文件", "新东西", "持续感知", "看看变化"), ["watch_files"]),
-    (("网页更新", "追踪网页", "页面变化", "监控网址", "网页变化"), ["track_web"]),
-    (("之前聊过", "上次说", "回顾会话", "历史会话", "前几天", "之前的对话", "记得我们"), ["recall_session"]),
-    (("git", "commit", "提交", "回滚", "版本控制", "版本管理", "仓库"), ["git"]),
-    (("依赖图", "符号表", "项目结构", "代码地图", "函数定义", "调用关系", "引用"), ["project_map", "find_symbol"]),
-    (("lint", "静态检查", "语法检查", "代码规范", "ruff"), ["run_lint"]),
-    (("一键验证", "验证项目", "自测", "检查一下", "跑测试"), ["verify_project", "run_tests"]),
-    (("脚手架", "建项目", "初始化项目", "项目模板", "搭项目", "新项目"), ["project_scaffold", "dev_plan"]),
-    (("开发计划", "分步", "任务进度", "断点", "做到哪一步"), ["dev_plan"]),
-    (("搜索", "搜一下", "查一下", "新闻", "资讯", "最新"), ["search_web", "search_realtime", "fetch_url"]),
-    (("天气", "气温", "台风", "预报"), ["get_weather"]),
-    (("下载",), ["download_file", "fetch_url"]),
-    (("邮件", "发邮件", "收件箱"), ["send_email", "read_email", "email_summary"]),
-    (("文件", "读取", "读一下", "打开"), ["read_file", "list_dir", "search_local"]),
-    (("恢复", "撤销", "还原", "回滚文件", "找回", "误删"), ["list_snapshots", "restore_snapshot"]),
-    (("写", "保存", "创建", "生成"), ["write_file", "create_doc", "write_code_project"]),
-    # 改类动词单独成条：此前只有「写/保存/创建/生成」，用户说「修改/编辑/改一下/
-    # 更新/替换/重命名」时不会预激活写工具，模型看到的只有读工具，进而误判自己不能改文件。
-    (("修改", "编辑", "改动", "改一下", "改一次", "改成", "改为", "改下", "改改", "改掉",
-      "更新", "替换", "重写", "覆盖", "重命名", "改名", "删掉", "删除"),
-     ["edit_file", "write_file", "delete_file", "batch_rename"]),
-    (("图片", "图像", "截图", "看图", "图表", "视觉执行", "视觉闭环", "屏幕操作"), ["image_understand", "screen_see", "image_process", "chart_read", "chart_data", "ocr_image", "vision_loop", "screen_find_click"]),
-    (("表格", "excel", "csv", "报表"), ["read_excel", "write_excel", "read_csv", "chart_data"]),
-    (("代码", "编程", "python", "bug", "脚本", "函数"), ["run_python", "read_file", "run_tests"]),
-    (("定时", "提醒", "计划", "日程"), ["schedule_task"]),
-    (("数据库", "sql", "mysql", "postgres"), ["database_query", "database_query_mysql", "database_query_postgres"]),
-    (("网页", "url", "抓取", "爬"), ["fetch_url", "browser_navigate", "web_screenshot"]),
-    (("搜索文件", "检索", "找文件"), ["search_local", "list_dir"]),
-    (("在哪定义", "定义在哪", "谁在调用", "调用点", "引用关系", "代码结构", "符号定位", "看下源码"), ["code_lookup"]),
-    (("记忆", "记住", "偏好", "忘记", "删除记忆", "修改记忆"), ["write_memory", "read_memory", "delete_memory", "update_memory", "query_memory_graph"]),
-    (("自我", "我是谁", "自我状态", "身份", "长期目标", "我的进化", "成长"), ["self_profile"]),
-    (("自我进化", "改进自己", "升级自己", "自我改进", "修复自己", "自省"), ["self_evolve"]),
-    # ===== 全联通补充（v3）：为无触发词的工具补齐意图入口 =====
-    (("收件箱", "邮件助手", "agent邮箱", "邮件列表", "邮件搜索"), ["agent_mail", "email_summary"]),
-    (("发微信", "发企微", "发telegram", "推送消息", "消息推送", "通知我"), ["im_send", "send_webhook"]),
-    (("telegram消息", "tg更新", "tg消息", "远程指令"), ["telegram_poll_updates"]),
-    (("桌面通知", "toast", "弹通知", "提醒通知"), ["notify_desktop"]),
-    (("公众号", "公众号文章", "自动写作", "写公众号"), ["run_wechat_writer", "publish_draft"]),
-    (("草稿", "草稿箱", "存草稿"), ["publish_draft"]),
-    (("pdf", "转pdf", "pdf提取", "pdf生成", "读pdf"), ["pdf_extract", "pdf_create"]),
-    (("word", "docx", "读word", "读取文档"), ["docx_read"]),
-    (("ppt", "pptx", "演示文稿", "读ppt"), ["pptx_read"]),
-    (("电子书", "epub", "mobi", "kindle"), ["epub_read", "mobi_read"]),
-    (("outlook", "msg邮件", "msg文件", "旧版doc", "rtf"), ["msg_read", "doc_read"]),
-    (("数据库写", "插入数据", "改数据库", "删除记录", "update语句"), ["database_execute"]),
-    (("键值", "kv存储", "缓存读写", "轻量状态"), ["kv_store"]),
-    (("密钥", "api key", "令牌", "保险箱", "托管密码"), ["secret_store"]),
-    (("写csv", "导出csv", "存成csv"), ["write_csv"]),
-    (("文生图", "ai绘图", "生成一张图", "画一张"), ["image_generate"]),
-    (("打包", "压缩成", "归档文件", "压缩包"), ["archive_files", "archive_list"]),
-    (("解压", "解包", "解压缩", "解压到"), ["extract_archive", "archive_list"]),
-    (("创建插件", "加个插件", "写个技能", "做一个插件"), ["create_plugin"]),
-    (("执行命令", "终端", "命令行", "运行命令", "cmd"), ["run_command"]),
-    (("安装库", "pip安装", "装个包", "缺库", "装依赖"), ["pip_install"]),
-    (("环境信息", "python版本", "已装库", "环境检查", "看环境"), ["environment_info"]),
-    (("后台进程", "启动服务", "启动服务器", "停止进程", "看进程", "进程列表"), ["start_process", "stop_process", "list_processes"]),
-    (("核验输出", "对照检查", "检查结果", "自评", "核对答案"), ["verify_output"]),
-    (("核验文件", "检查产物", "产物存在", "验证文件"), ["verify_files"]),
-    (("自身代码", "读源码", "项目文件", "鲸语代码", "看代码库"), ["project_info", "read_project_file"]),
-    (("进化提案", "改进提案", "提个方案", "改进建议"), ["create_evolution"]),
-    (("子代理", "并行处理", "子智能体", "分头做"), ["subagent_run"]),
-    (("多智能体", "团队协作", "分工协作", "角色分工"), ["team_run"]),
-    (("断点", "检查点", "保存进度", "恢复进度", "继续上次"), ["task_checkpoint_save", "task_checkpoint_load"]),
-    (("用量", "费用统计", "token统计", "花费多少", "花了多少"), ["usage_report"]),
-    (("报错截图", "错误截图", "异常截图", "报错诊断"), ["debug_screenshot"]),
-    (("截图转", "ui转代码", "前端还原", "截图还原"), ["screenshot_to_html"]),
-    (("扫描件", "文档图片", "识别图表", "识别公式"), ["scan_read"]),
-    (("语音转文字", "语音识别", "听写"), ["speech_to_text"]),
-    (("语音对话", "语音聊天", "语音交互", "免打字"), ["voice_chat_loop"]),
-    (("ffmpeg", "视频处理", "转码", "提取音频", "视频截图", "剪辑"), ["media_ffmpeg"]),
-    (("二维码", "生成二维码", "识别二维码"), ["qrcode"]),
-    (("截屏", "截个屏", "屏幕截图", "截屏看看"), ["screen_capture", "screen_see"]),
-    (("rss", "订阅源", "聚合阅读", "订阅列表"), ["rss_fetch"]),
-    (("github搜索", "搜开源项目", "找仓库", "搜代码库"), ["search_github"]),
-    (("被墙", "爬墙", "代理抓取", "绕过封锁", "抓不了"), ["fetch_blocked", "fetch_url_smart"]),
-    (("网络诊断", "断网", "连不上", "网络问题", "上不去网"), ["net_diagnose"]),
-    (("调用接口", "api请求", "调接口", "http请求"), ["call_api"]),
-    (("装软件", "卸载软件", "应用管理", "安装程序", "软件列表"), ["app_manage"]),
-    (("几号", "现在几点", "日期时间", "今天是几号"), ["get_date"]),
-    (("每日简报", "今日简报", "晨报", "简报生成"), ["daily_brief"]),
-    (("坚果云", "nextcloud", "webdav", "云盘同步"), ["webdav"]),
-    (("批量看图", "批量分析图片", "批量识别", "整理图库"), ["image_batch"]),
-    (("建索引", "知识库索引", "语义检索", "知识库搜索"), ["knowledge_index", "knowledge_search"]),
-    (("剪贴板", "复制到剪贴板", "粘贴出来", "读剪贴板"), ["clipboard_get", "clipboard_set"]),
-    (("批量改名", "批量重命名"), ["batch_rename"]),
-    (("查看定时", "我的定时任务", "取消定时", "列出定时"), ["list_schedules", "cancel_schedule"]),
-    (("点击屏幕", "移动鼠标", "键盘输入", "模拟按键", "屏幕坐标", "模拟滚轮", "桌面自动化"), ["rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot", "rpa_screen_size"]),
-    (("朗读", "语音播报", "文字转语音", "读给我听", "停止朗读", "tts"), ["tts_save", "tts_speak", "tts_stop"]),
-    (("执行流程", "运行工作流", "跑流程", "流程模板"), ["run_workflow"]),
-]
 
 
 def _message_text(m):
@@ -12231,143 +12696,6 @@ def _preactivate_from_messages(messages, activated):
     return activated
 
 # 核心动作短语（能力感知关键：一行说清「能做什么」）
-_TOOL_ACTION_PHRASES = {
-    "browser_navigate": "控制浏览器（打开网页/点击/输入/填表/提交/选择/取文本，共享登录态）",
-    "web_screenshot": "网页截图保存",
-    "fetch_url": "抓取网页/接口的文本或 JSON",
-    "fetch_blocked": "抓取被墙站点（代理+指纹绕过封锁）",
-    "search_web": "联网搜索（多引擎聚合）",
-    "search_realtime": "实时热点/社区讨论搜索",
-    "search_github": "搜索 GitHub 仓库",
-    "webdav": "WebDAV 云盘（坚果云/Nextcloud）上传下载",
-    "download_file": "下载文件到本地",
-    "rss_fetch": "RSS 订阅/聚合阅读",
-    "run_python": "执行 Python 代码",
-    "run_command": "执行系统命令",
-    "pip_install": "安装 Python 包",
-    "run_tests": "运行项目测试",
-    "write_code_project": "创建完整代码项目",
-    "subagent_run": "派发子智能体并行处理",
-    "verify_output": "核验产物/输出",
-    "start_process": "启动后台进程（服务器/长驻任务）",
-    "stop_process": "停止后台进程",
-    "list_processes": "查看后台进程列表",
-    "environment_info": "环境/依赖信息",
-    "get_status": "全局态势总览",
-    "git": "本地 Git 版本管理",
-    "project_map": "项目结构地图",
-    "find_symbol": "符号定位",
-    "run_lint": "静态检查",
-    "verify_project": "一键验证",
-    "project_scaffold": "项目脚手架",
-    "dev_plan": "开发计划",
-    "read_file": "读取文件内容",
-    "write_file": "写入文件",
-    "edit_file": "编辑文件（局部修改）",
-    "list_dir": "列出目录",
-    "watch_files": "文件变化监听",
-    "track_web": "网页更新追踪",
-    "recall_session": "历史会话回顾",
-    "search_local": "在允许目录内全文检索文件",
-    "code_lookup": "代码结构定位（函数/类定义、调用点、导入来源）",
-    "delete_file": "删除文件/目录",
-    "list_snapshots": "列出自动快照（写操作前生成，可恢复）",
-    "restore_snapshot": "从快照恢复文件原内容",
-    "archive_files": "打包压缩",
-    "extract_archive": "解压归档",
-    "batch_rename": "批量重命名",
-    "clipboard_get": "读取剪贴板",
-    "clipboard_set": "写入剪贴板",
-    "read_csv": "读 CSV",
-    "write_csv": "写 CSV",
-    "read_excel": "读 Excel",
-    "write_excel": "写 Excel",
-    "chart_data": "数据可视化图表（线/柱/饼/散点）",
-    "database_query": "SQLite 只读查询",
-    "database_query_mysql": "MySQL 只读查询",
-    "database_query_postgres": "PostgreSQL 只读查询",
-    "database_execute": "数据库写操作（SQLite/MySQL/PG，带审批）",
-    "create_doc": "创建 Office 文档（docx/pptx/pdf）",
-    "docx_read": "读取 Word 文档",
-    "pptx_read": "读取 PPT",
-    "pdf_extract": "提取 PDF 文本",
-    "pdf_create": "生成 PDF",
-    "epub_read": "读取 epub 电子书",
-    "mobi_read": "读取 mobi 电子书",
-    "doc_read": "读取 doc/rtf 等旧格式",
-    "archive_list": "列出归档内容",
-    "secret_store": "加密密钥存储",
-    "kv_store": "轻量键值存储（缓存/状态）",
-    "send_email": "发送邮件（SMTP）",
-    "read_email": "读取邮件（IMAP）",
-    "email_summary": "邮件摘要/统计",
-    "agent_mail": "Agent 邮箱（查看/列表/搜索/回复/转发）",
-    "msg_read": "读取邮件消息",
-    "im_send": "IM 消息（Telegram/企业微信）",
-    "telegram_poll_updates": "轮询 Telegram 更新",
-    "send_webhook": "Webhook 推送（钉钉/ServerChan/Slack）",
-    "publish_draft": "发布草稿",
-    "run_wechat_writer": "公众号文章生成/排版",
-    "daily_brief": "每日简报（采集当日资讯→提炼点评）",
-    "image_process": "图像处理（缩放/裁剪/滤镜/格式转换）",
-    "image_understand": "分析图片文件（OCR/细节/回答图片问题）",
-    "screen_see": "截图并让视觉模型解读当前屏幕",
-    "chart_read": "图表截图→结构化数据+解读",
-    "screenshot_to_html": "UI截图→HTML/CSS前端还原",
-    "debug_screenshot": "报错截图→诊断修复建议",
-    "scan_read": "扫描件/文档图片读取（图表/公式/手写）",
-    "image_batch": "批量视觉分析文件夹图片并汇总",
-    "image_generate": "文生图",
-    "ocr_image": "图片文字识别 OCR",
-    "screen_capture": "屏幕截图",
-    "speech_to_text": "语音转文字",
-    "app_manage": "应用安装/卸载管理（winget/choco）",
-    "screen_find_click": "视觉定位点击（看图即点，一句话指定目标）",
-    "vision_loop": "视觉操作闭环（看屏幕→动作→再验证，自主达成目标）",
-    "voice_chat_loop": "实时语音对话（听一句答一句）",
-    "team_run": "多智能体团队协作编排",
-    "net_diagnose": "网络诊断（分层探测+降级建议）",
-    "fetch_url_smart": "智能抓取（失败自动走代理通道）",
-    "tts_save": "文字转语音（存文件）",
-    "tts_speak": "立即朗读（后台播放，可打断）",
-    "tts_stop": "停止朗读",
-    "media_ffmpeg": "音视频处理（ffmpeg）",
-    "qrcode": "二维码生成/识别",
-    "rpa_screen_size": "获取屏幕尺寸",
-    "rpa_click": "模拟点击（屏幕坐标）",
-    "rpa_type": "模拟键盘输入",
-    "rpa_hotkey": "模拟快捷键",
-    "rpa_move": "移动鼠标",
-    "rpa_scroll": "滚动页面",
-    "rpa_screenshot": "屏幕区域截图",
-    "notify_desktop": "桌面通知",
-    "schedule_task": "定时任务（cron/每日/周期）",
-    "list_schedules": "查看定时任务",
-    "cancel_schedule": "取消定时任务",
-    "task_checkpoint_save": "保存任务断点",
-    "task_checkpoint_load": "加载任务断点",
-    "run_workflow": "执行工作流",
-    "write_memory": "写入长期记忆",
-    "self_profile": "核心自我状态",
-    "read_memory": "检索长期记忆",
-    "query_memory_graph": "记忆知识图谱查询",
-    "delete_memory": "删除长期记忆（按关键词）",
-    "update_memory": "修改长期记忆（按关键词定位）",
-    "knowledge_index": "建立知识库索引",
-    "knowledge_search": "语义检索知识库",
-    "get_date": "获取当前日期/时间",
-    "get_weather": "查询天气",
-    "ask_user": "向用户提问（澄清/确认）",
-    "request_permission": "请求权限（白名单）",
-    "call_api": "调用任意 HTTP API",
-    "project_info": "项目信息/文件树",
-    "read_project_file": "读取项目文件",
-    "create_evolution": "提进化提案（方案审阅）",
-    "self_evolve": "闭环自我进化",
-    "verify_files": "核验项目文件完整性",
-    "usage_report": "用量/费用统计",
-    "create_plugin": "创建用户插件",
-}
 
 
 def build_tool_index(tools=None):
