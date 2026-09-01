@@ -220,11 +220,12 @@ def main(argv=None):
             flag(name, "短语表缺失", "能力地图将回退 description 截断 60 字")
 
     # 高危审批核对（写/删/命令/发信/RPA/DB 写等必须入 ACTION_TOOLS）
+    # L8: rpa_screenshot 属只读"看屏幕"（可保存到工作区但语义只读），已从审批清单降级，此处不同步要求
     high_risk = ["write_file", "edit_file", "run_command", "run_python", "send_email",
                  "delete_file", "batch_rename", "extract_archive", "start_process",
                  "stop_process", "publish_draft", "database_execute", "screen_capture",
                  "clipboard_get", "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move",
-                 "rpa_scroll", "rpa_screenshot", "webdav", "create_plugin", "pip_install",
+                 "rpa_scroll", "webdav", "create_plugin", "pip_install",
                  "read_email", "image_generate", "run_workflow", "pdf_create", "qrcode",
                  "media_ffmpeg", "create_doc", "write_code_project"]
     for t in high_risk:

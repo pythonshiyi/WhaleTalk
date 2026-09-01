@@ -6,6 +6,7 @@
 才执行 `from agent_tools import *`，此处 from-import 可安全解析。
 """
 
+import difflib
 import json
 import logging
 import os
@@ -16,7 +17,7 @@ from datetime import datetime
 
 import permissions
 
-from shared import cron_field_ok
+from shared import clamp_int, cron_field_ok
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
@@ -50,6 +51,40 @@ from deepseek_client import (
 # 被外层 except 吞掉变成"读取流程失败"）
 _WORKFLOW_RUNNING = False
 
+
+def _mem_similar(a, b):
+    """近重复记忆判定：difflib 字符相似度（0~1）。
+
+    实测校准（2026-09-01）：语序微调 0.92 / 标点差异 0.96 / 同义改写 0.70 /
+    实质不同（喝咖啡vs喝茶）0.77 —— 故阈值取 0.85（宁漏勿误，误并丢信息）。
+    关键数字集合不一致时强惩罚（凌晨3点 vs 凌晨4点 ≈0.89 会误并，需压到阈值下）。"""
+    if not a or not b:
+        return 0.0
+    sim = difflib.SequenceMatcher(None, a, b).ratio()
+    nums_a = set(re.findall(r"\d+(?:\.\d+)?", a))
+    nums_b = set(re.findall(r"\d+(?:\.\d+)?", b))
+    if nums_a and nums_b and nums_a != nums_b:
+        sim *= 0.5
+    return sim
+
+
+_MEM_SIM_MERGE = 0.85  # 近重复合并阈值（difflib 字符相似度）
+
+
+def _mem_entity_alias(e, known):
+    """实体别名归并：新实体与既有实体（相似度>=0.75 或包含关系）匹配时返回既有名。"""
+    if not e or not known:
+        return e
+    for k in known:
+        if not k:
+            continue
+        if e == k:
+            return k
+        if _mem_similar(e, k) >= 0.75:
+            return k
+        if len(e) >= 2 and len(k) >= 2 and (e in k or k in e):
+            return k if len(k) <= len(e) * 2 else e
+    return e
 
 
 @tool(
@@ -93,20 +128,53 @@ def write_memory(text, tags="", type="", entities="", relations=""):
         data = _load_memory()
         key = str(tags or "").strip().split(",")[0].strip() or "自动记忆"
         facts = data.get("facts") or []
+        # 实体别名归并：新实体优先映射到既有图谱节点（避免 张三/张三2 双节点）
+        known_ents = set()
         for f in facts:
-            if f.get("value") == text:
-                return "该内容已存在，未重复写入"
-        entry = {"key": key[:40], "value": text}
-        if str(type or "").strip():
-            entry["type"] = str(type).strip()[:20]
-        ent = [e.strip()[:30] for e in str(entities or "").split(",") if e.strip()]
-        if ent:
-            entry["entities"] = ent
+            known_ents.update(f.get("entities") or [])
+        ent = []
+        for e in str(entities or "").split(","):
+            e = e.strip()[:30]
+            if not e:
+                continue
+            ent.append(_mem_entity_alias(e, known_ents))
+        ent = list(dict.fromkeys(ent))  # 保序去重
         rels = []
         for r in str(relations or "").split(";"):
             parts = [p.strip() for p in str(r).split("-") if p.strip()]
             if len(parts) == 3:
                 rels.append({"rel": parts[1][:20], "to": parts[2][:30]})
+        for f in facts:
+            if f.get("value") == text:
+                return "该内容已存在，未重复写入"
+        # 近重复合并：轻微改写（高重合）不新增条目，而是并入 tags/type/entities/relations
+        for f in facts:
+            sim = _mem_similar(f.get("value", ""), text)
+            if sim < _MEM_SIM_MERGE:
+                continue
+            old_type = str(f.get("type") or "")
+            new_type = str(type or "").strip()[:20]
+            if new_type and new_type not in old_type:
+                f["type"] = (old_type + "|" + new_type)[:20] if old_type else new_type
+            merged_ents = list(dict.fromkeys(list(f.get("entities") or []) + ent))
+            if merged_ents:
+                f["entities"] = merged_ents
+            if rels:
+                exist_tri = {(r.get("rel"), r.get("to")) for r in f.get("relations") or []}
+                merged_rels = list(f.get("relations") or []) + [
+                    r for r in rels if (r.get("rel"), r.get("to")) not in exist_tri
+                ]
+                f["relations"] = merged_rels[:20]
+            f["ts"] = datetime.now().isoformat(timespec="seconds")
+            if _save_memory(data):
+                _brain_sync_memory(text, key, new_type, ent, rels)
+                return f"检测到近重复记忆（相似度 {sim:.0%}），已合并到现有条目"
+            return "错误：记忆写入失败"
+        entry = {"key": key[:40], "value": text}
+        if str(type or "").strip():
+            entry["type"] = str(type).strip()[:20]
+        if ent:
+            entry["entities"] = ent
         if rels:
             entry["relations"] = rels
         entry["ts"] = datetime.now().isoformat(timespec="seconds")
@@ -377,7 +445,7 @@ def read_memory(keyword="", max_items=20, type="", entity=""):
         if t:
             entries.append((t, t, {}))
     try:
-        limit = max(1, min(100, int(max_items or 20)))
+        limit = clamp_int(max_items, 20, lo=1, hi=100)
     except (TypeError, ValueError):
         limit = 20
     kw = str(keyword or "").strip()
@@ -454,7 +522,7 @@ def query_memory_graph(entity=None, relation="", max_items=20):
         if match_e and match_r:
             hits.append(f)
     try:
-        limit = max(1, min(100, int(max_items or 20)))
+        limit = clamp_int(max_items, 20, lo=1, hi=100)
     except (TypeError, ValueError):
         limit = 20
     hits = hits[-limit:]
@@ -604,7 +672,7 @@ def knowledge_search(query, top_k=5):
     if not docs:
         return "知识库为空（请先用 knowledge_index 建索引）"
     try:
-        k = max(1, min(10, int(top_k or 5)))
+        k = clamp_int(top_k, 5, lo=1, hi=10)
     except (TypeError, ValueError):
         k = 5
     qt = _mem_tokens(q)

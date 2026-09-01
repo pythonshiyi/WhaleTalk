@@ -51,7 +51,9 @@ DEFAULT_PERMISSIONS = {
         "send_email", "database_execute",
         "start_process", "stop_process",
         "write_code_project", "publish_draft", "create_plugin",
-        "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll", "rpa_screenshot",
+        # 写类 RPA 与视觉闭环需审批；rpa_screen_size/rpa_screenshot 只读不在此列（L8）
+        "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move", "rpa_scroll",
+        "screen_find_click", "vision_loop",
     ],
     "approval_mode": "auto",       # whitelist 模式用：auto / confirm / deny
     "approval_timeout": 120,
@@ -91,7 +93,8 @@ ACTION_TOOLS = (
     "rpa_hotkey",
     "rpa_move",
     "rpa_scroll",
-    "rpa_screenshot",
+    "screen_find_click",
+    "vision_loop",
 )
 
 
@@ -535,3 +538,48 @@ def audit(action, target, detail="", result="ok"):
             pass
     except Exception:
         logging.exception("审计日志写入失败")
+
+
+# 敏感字段：参数摘要中打码，防止密钥/口令落盘
+_SENSITIVE_ARG_KEYS = ("password", "token", "secret", "key", "api_key", "apikey", "auth", "cookie", "value")
+
+
+def _arg_summary(args, limit=120):
+    """工具参数摘要：只保留非敏感键值 + 打码敏感键，单行截断。"""
+    if not isinstance(args, dict):
+        return _audit_sanitize(str(args), limit)
+    parts = []
+    for k, v in args.items():
+        ks = str(k).lower()
+        if any(s in ks for s in _SENSITIVE_ARG_KEYS):
+            parts.append(f"{k}=***")
+        elif isinstance(v, (list, tuple)):
+            parts.append(f"{k}=[{len(v)}项]")
+        else:
+            parts.append(f"{k}={_audit_sanitize(str(v), 60)}")
+    s = " ".join(parts)
+    return s if len(s) <= limit else s[:limit] + "…"
+
+
+def tool_trace(name, args, result, duration):
+    """统一工具调用留痕（D2）：读/写/查一律记录——输入摘要 + 输出截断 + 耗时。
+    补齐 fetch_url/search_web 等读操作此前零留痕的排障盲区。"""
+    if not AUDIT_ENABLED or not AUDIT_LOG_DIR:
+        return
+    try:
+        os.makedirs(AUDIT_LOG_DIR, exist_ok=True)
+        res = _audit_sanitize(result, 200)
+        line = (
+            f"{datetime.now():%Y-%m-%d %H:%M:%S} [tool:{_audit_sanitize(name, 40)}] "
+            f"{_arg_summary(args)} | {res} | {duration:.2f}s\n"
+        )
+        path = os.path.join(AUDIT_LOG_DIR, "tools.log")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
+        try:
+            if os.path.getsize(path) > 10 * 1024 * 1024:
+                os.replace(path, path + ".1")
+        except OSError:
+            pass
+    except Exception:
+        logging.exception("工具留痕写入失败")

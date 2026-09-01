@@ -152,6 +152,134 @@ def cron_match(expr, now):
         return False
 
 
+# ============================ 跨进程文件锁（D3） ============================
+# web_app（服务端）与 CLI 双进程可能并发读写同一数据文件（记忆/密钥/KV），
+# 进程内 threading.Lock 无法互斥。用 OS 级文件锁：Windows 走 msvcrt.locking，
+# POSIX 走 fcntl.flock。锁文件为 <目标路径>.lock（占用极小，残留无害）。
+def file_lock(target_path, timeout=10.0):
+    """跨进程文件锁上下文管理器：对 target_path 的写临界区加 OS 级排它锁。
+
+    用法：
+        with file_lock(MEMORY_FILE):
+            ...读写文件...
+    超时抛 TimeoutError（调用方可捕获后重试/报错）。锁粒度按文件，
+    同一进程内重复进入（嵌套）会死锁——临界区要最小化。
+    """
+    import contextlib
+    import os as _os
+
+    @contextlib.contextmanager
+    def _ctx():
+        lock_path = str(target_path) + ".lock"
+        try:
+            _os.makedirs(_os.path.dirname(_os.path.abspath(lock_path)) or ".", exist_ok=True)
+        except OSError:
+            pass
+        fd = _os.open(lock_path, _os.O_CREAT | _os.O_RDWR)
+        try:
+            deadline = _monotonic() + timeout
+            if _os.name == "nt":
+                import msvcrt
+                while True:
+                    try:
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        if _monotonic() >= deadline:
+                            raise TimeoutError(f"文件锁等待超时：{lock_path}")
+                        _sleep(0.05)
+            else:
+                import fcntl
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError:
+                        if _monotonic() >= deadline:
+                            raise TimeoutError(f"文件锁等待超时：{lock_path}")
+                        _sleep(0.05)
+            yield
+        finally:
+            try:
+                if _os.name == "nt":
+                    import msvcrt
+                    _os.lseek(fd, 0, 0)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            _os.close(fd)
+    return _ctx()
+
+
+def _monotonic():
+    import time as _t
+    return _t.monotonic()
+
+
+def _sleep(sec):
+    import time as _t
+    _t.sleep(sec)
+
+
+# ============================ 参数校验辅助（D4） ============================
+# 收敛各工具手写的 try:int/except 三段式，统一语义：
+# 非法/缺省 → 默认值；显式合法 → 生效。返回类型稳定。
+def clamp_int(value, default, lo=None, hi=None):
+    """安全整数：非数值/None → default；越界 → 钳制到 [lo, hi]。"""
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        v = int(default)
+    if lo is not None and v < lo:
+        v = lo
+    if hi is not None and v > hi:
+        v = hi
+    return v
+
+
+def clamp_float(value, default, lo=None, hi=None):
+    """安全浮点数：非数值/None → default；越界 → 钳制到 [lo, hi]。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        v = float(default)
+    if lo is not None and v < lo:
+        v = lo
+    if hi is not None and v > hi:
+        v = hi
+    return v
+
+
+def clamp_str(value, default="", max_len=None):
+    """安全字符串：None → default；可选截断上限。"""
+    s = str(value) if value is not None else str(default)
+    if max_len is not None and len(s) > max_len:
+        s = s[:max_len]
+    return s
+
+
+def split_list(value, sep=",", dedup=False):
+    """安全列表：字符串按分隔符拆分 / 已有列表直通 / None → []，strip 空项。"""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        items = [str(x).strip() for x in value]
+    else:
+        items = [x.strip() for x in str(value).split(sep)]
+    items = [x for x in items if x]
+    if dedup:
+        seen, out = set(), []
+        for x in items:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+    return items
+
+
 # ============================ 本地路径正则 ============================
 # 形如 C:\path\file 的 Windows 绝对路径（文件/目录均可命中）
 PATH_RE = re.compile(

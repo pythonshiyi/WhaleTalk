@@ -6,11 +6,12 @@
 才执行 `from agent_tools import *`，此处 from-import 可安全解析。
 """
 
+import html
 import os
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import permissions
 
@@ -54,12 +55,60 @@ from deepseek_client import (
 
 
 
+# ---- C1: HTML 正文提取（纯标准库，防 fetch_url 返回整页 HTML 噪音） ----
+_HTML_SKIP_BLOCKS = re.compile(
+    r"<(?:script|style|noscript|svg|nav|header|footer|aside|form|iframe|template)[^>]*>.*?"
+    r"</(?:script|style|noscript|svg|nav|header|footer|aside|form|iframe|template)>",
+    re.I | re.S,
+)
+_HTML_TAG = re.compile(r"<[^>]+>")
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+_HTML_BLOCK_BREAK = re.compile(
+    r"</?(?:p|div|h[1-6]|li|tr|br|section|article|blockquote|table|ul|ol|pre|hr)[^>]*>",
+    re.I,
+)
+
+
+def _extract_page_text(html_text):
+    """把 HTML 页面提取为可读正文：剔除脚本/样式/导航噪音块 + 标签剥离 + 实体解码。"""
+    try:
+        s = _HTML_COMMENT.sub(" ", html_text)
+        s = _HTML_SKIP_BLOCKS.sub(" ", s)
+        s = _HTML_BLOCK_BREAK.sub("\n", s)
+        s = _HTML_TAG.sub("", s)
+        s = html.unescape(s)
+        lines = [ln.strip() for ln in s.splitlines()]
+        lines = [ln for ln in lines if ln]
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def _maybe_extract_article(text):
+    """C1: HTML 页面自动提取正文；JSON/纯文本原样返回。提取结果过短视为失败回退原文。"""
+    if not text or len(text) < 50:
+        return text  # 仅拦截空/极短文本；短 HTML 仍走提取（后面有 is_html 判定 + <10 回退双保险）
+    head = text[:2000].lstrip()
+    if head.startswith(("{", "[")):  # JSON 接口响应
+        return text
+    lower = text.lower()
+    is_html = "<html" in lower or "<body" in lower or (
+        text.count("<") > 30 and text.count(">") > 30
+    )
+    if not is_html:
+        return text
+    extracted = _extract_page_text(text)
+    if not extracted or len(extracted) < 10:
+        return text  # 提取失败/几乎无正文（如纯 JS 渲染页）：回退原始内容
+    return f"[HTML 正文提取，共 {len(extracted)} 字符]\n{extracted}"
+
+
 @tool(
         {
             "type": "function",
             "function": {
                 "name": "fetch_url",
-                "description": "抓取指定 URL 的文本/JSON 内容（超时 10 秒，最多 500KB）",
+                "description": "抓取指定 URL 的文本/JSON 内容（超时 10 秒，最多 500KB；HTML 页面自动提取正文，去导航/脚本噪音）",
                 "parameters": {
                     "type": "object",
                     "properties": {"url": {"type": "string", "description": "完整 URL，含 http(s)://"}},
@@ -72,11 +121,11 @@ from deepseek_client import (
     preactivate=(('搜索', '搜一下', '查一下', '新闻', '资讯', '最新'), ('下载',), ('网页', 'url', '抓取', '爬')),
 )
 def fetch_url(url):
-    """抓取网页/接口的文本或 JSON（外部内容以分隔标记包裹，防 prompt 注入）。"""
+    """抓取网页/接口的文本或 JSON；HTML 页面自动提取正文（外部内容以分隔标记包裹，防 prompt 注入）。"""
     text = _fetch_url_raw(url)
     if str(text or "").startswith("错误"):
         return text
-    return _wrap_external(text, url)
+    return _wrap_external(_maybe_extract_article(text), url)
 
 
 @tool(
@@ -84,12 +133,13 @@ def fetch_url(url):
             "type": "function",
             "function": {
                 "name": "download_file",
-                "description": "下载二进制文件（图片/附件/文档/安装包等任意格式）到工作区或指定目录；流式写盘，单文件 200MB 上限。",
+                "description": "下载二进制文件（图片/附件/文档/安装包等任意格式）到工作区或指定目录；流式写盘，单文件 200MB 上限；可选 expected_sha256 下载后校验完整性",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "url": {"type": "string", "description": "文件完整 URL（http/https）"},
                         "local_path": {"type": "string", "description": "可选：本地保存路径（留空保存到工作区 downloads/）"},
+                        "expected_sha256": {"type": "string", "description": "可选：期望的 SHA-256 校验和（64 位十六进制），提供则下载后校验，不匹配报错并删除文件"},
                     },
                     "required": ["url"],
                 },
@@ -99,17 +149,20 @@ def fetch_url(url):
     phrases='下载文件到本地',
     preactivate=(('下载',),),
 )
-def download_file(url, local_path=""):
+def download_file(url, local_path="", expected_sha256=""):
     """下载二进制文件（图片/附件/文档/安装包等）到工作区或指定目录。
 
     黑名单模式默认放行任意 URL（network.blocklist 除外）；流式写盘，超过
-    200MB 自动中止并删除半成品。
+    200MB 自动中止并删除半成品；提供 expected_sha256 时下载后校验完整性。
     """
     if not str(url or "").startswith(("http://", "https://")):
         return "错误：url 必须以 http:// 或 https:// 开头"
     err = _safe_url(url)
     if err:
         return f"错误：{err}"
+    exp = str(expected_sha256 or "").strip().lower()
+    if exp and not re.match(r"^[0-9a-f]{64}$", exp):
+        return "错误：expected_sha256 必须是 64 位十六进制字符串"
     try:
         from urllib.parse import urlparse, unquote
         fn = os.path.basename(unquote(urlparse(str(url)).path)) or f"download_{datetime.now():%Y%m%d_%H%M%S}.bin"
@@ -130,6 +183,8 @@ def download_file(url, local_path=""):
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
         total = 0
         too_large = False
+        import hashlib
+        h = hashlib.sha256()
         with _safe_stream("GET", url, timeout=60) as resp:
             resp.raise_for_status()
             with open(p, "wb") as f:
@@ -139,12 +194,23 @@ def download_file(url, local_path=""):
                         too_large = True
                         break
                     f.write(chunk)
+                    h.update(chunk)
         if too_large:
             try:
                 os.remove(p)
             except OSError:
                 pass
             return f"错误：文件超过 {DOWNLOAD_MAX_BYTES // 1024 // 1024}MB 上限，已中止"
+        if exp:
+            digest = h.hexdigest()
+            if digest != exp:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+                return f"错误：SHA-256 校验失败（期望 {exp[:16]}…，实际 {digest[:16]}…），已删除文件"
+            permissions.audit("download_file", url, f"{p} {total} 字节 sha256={digest[:16]}…")
+            return f"已下载 {url} → {p}（{total} 字节，SHA-256 校验通过 {digest[:16]}…）"
         permissions.audit("download_file", url, f"{p} {total} 字节")
         return f"已下载 {url} → {p}（{total} 字节）"
     except Exception as e:
@@ -331,18 +397,176 @@ def search_github(query, num=5, language=""):
     return "\n\n".join(lines)
 
 
+def _search_hn(query, num):
+    """C4: HN 源——无 query 返回实时热点榜；有 query 走 Algolia 全文搜索。"""
+    q = str(query or "").strip()
+    if q:
+        if len(q) > 120:
+            return "错误：搜索词过长（上限 120 字符）"
+        resp = _http_client().get(
+            "https://hn.algolia.com/api/v1/search",
+            params={"query": q, "hitsPerPage": num},
+            headers={"User-Agent": _SEARCH_UA},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        hits = (resp.json() or {}).get("hits") or []
+        if not hits:
+            return f"Hacker News 未找到与「{q}」相关的结果"
+        lines = [f"Hacker News 搜索结果（{len(hits)} 条）:"]
+        for i, h in enumerate(hits, 1):
+            title = str(h.get("title") or "").strip()[:120]
+            url = str(h.get("url") or "").strip() or (
+                f"https://news.ycombinator.com/item?id={h.get('objectID')}"
+            )
+            pts = h.get("points") or 0
+            cmts = h.get("num_comments") or 0
+            lines.append(f"{i}. {title}（👍{pts} 💬{cmts}）\n   {url}")
+        return "\n\n".join(lines)
+    resp = _http_client().get(
+        "https://hacker-news.firebaseio.com/v0/topstories.json",
+        headers={"User-Agent": _SEARCH_UA},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    ids = (resp.json() or [])[:num]
+    if not ids:
+        return "Hacker News 热点暂时为空"
+    items = []
+    for sid in ids:
+        try:
+            r = _http_client().get(
+                f"https://hacker-news.firebaseio.com/v0/item/{sid}.json",
+                headers={"User-Agent": _SEARCH_UA},
+                timeout=8,
+            )
+            it = r.json()
+            if it and it.get("title"):
+                items.append(it)
+        except Exception:
+            continue
+        if len(items) >= num:
+            break
+    if not items:
+        return "Hacker News 热点获取失败"
+    lines = [f"Hacker News 实时热点（{len(items)} 条）:"]
+    for i, it in enumerate(items, 1):
+        title = str(it.get("title") or "").strip()[:120]
+        url = str(it.get("url") or "").strip() or (
+            f"https://news.ycombinator.com/item?id={it.get('id')}"
+        )
+        pts = it.get("score") or 0
+        lines.append(f"{i}. {title}（👍{pts}）\n   {url}")
+    return "\n\n".join(lines)
+
+
+def _search_github_hot(query, num):
+    """C4: GitHub 源——无 query 返回近 7 天创建的热门仓库（按 Star）；有 query 走仓库搜索。"""
+    q = str(query or "").strip()
+    if len(q) > 200:
+        return "错误：搜索词过长（上限 200 字符）"
+    params = {"per_page": num, "sort": "stars", "order": "desc"}
+    if q:
+        params["q"] = q
+    else:
+        since = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        params["q"] = f"created:>{since}"
+    try:
+        resp = _http_client().get(
+            "https://api.github.com/search/repositories",
+            params=params,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": _SEARCH_UA},
+            timeout=10,
+        )
+        if resp.status_code == 403:
+            return "错误：GitHub API 限流（每小时 60 次），请稍后再试"
+        resp.raise_for_status()
+        items = (resp.json() or {}).get("items") or []
+    except Exception as e:
+        return f"错误：GitHub 搜索失败: {e}"
+    if not items:
+        return "GitHub 近期热门仓库为空" if not q else "未找到相关仓库"
+    head = "GitHub 近期热门仓库（近 7 天创建，按 Star）" if not q else f"GitHub 仓库搜索（{len(items)} 个）"
+    lines = [f"{head}:"]
+    for i, it in enumerate(items, 1):
+        desc = (it.get("description") or "").strip()[:120]
+        stars = it.get("stargazers_count", 0)
+        lines.append(f"{i}. {it.get('full_name', '?')} ⭐{stars}\n   {it.get('html_url', '')}\n   {desc}".rstrip())
+    return "\n\n".join(lines)
+
+
+def _search_bilibili_hot(num):
+    """C4: B站热门视频源——中文内容实时热点（免 key API，国内实测可达）。无搜索 API，仅热门榜。"""
+    try:
+        resp = _http_client().get(
+            "https://api.bilibili.com/x/web-interface/popular",
+            params={"ps": num},
+            headers={"User-Agent": _SEARCH_UA},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = (resp.json() or {}).get("data") or {}
+        items = (data.get("list") or [])[:num]
+    except Exception as e:
+        return f"错误：B站热门获取失败: {e}"
+    if not items:
+        return "B站热门视频暂时为空"
+    lines = [f"B站热门视频（{len(items)} 条）:"]
+    for i, it in enumerate(items, 1):
+        title = str(it.get("title") or "").strip()[:120]
+        bvid = str(it.get("bvid") or "")
+        owner = (it.get("owner") or {}).get("name") or ""
+        views = (it.get("stat") or {}).get("view") or 0
+        lines.append(f"{i}. {title}（👤{owner} ▶{views}）\n   https://www.bilibili.com/video/{bvid}")
+    return "\n\n".join(lines)
+
+
+def _search_stackoverflow(query, num):
+    """C4: Stack Overflow 源——技术问答搜索（Stack Exchange API，免 key 限流 300 次/日）。"""
+    q = str(query or "").strip()
+    if not q:
+        return "错误：stackoverflow 源需要 query 关键词"
+    if len(q) > 120:
+        return "错误：搜索词过长（上限 120 字符）"
+    try:
+        resp = _http_client().get(
+            "https://api.stackexchange.com/2.3/search/advanced",
+            params={
+                "q": q, "site": "stackoverflow", "pagesize": num,
+                "order": "desc", "sort": "relevance", "filter": "default",
+            },
+            headers={"User-Agent": _SEARCH_UA},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = (resp.json() or {}).get("items") or []
+    except Exception as e:
+        return f"错误：Stack Overflow 搜索失败: {e}"
+    if not items:
+        return f"Stack Overflow 未找到与「{q}」相关的问题"
+    lines = [f"Stack Overflow 搜索结果（{len(items)} 条）:"]
+    for i, it in enumerate(items, 1):
+        title = str(it.get("title") or "").strip()[:120]
+        link = str(it.get("link") or "")
+        votes = it.get("score") or 0
+        ans = it.get("answer_count") or 0
+        tags = ",".join((it.get("tags") or [])[:3])
+        lines.append(f"{i}. {title}（👍{votes} 答{ans} [#{tags}]）\n   {link}")
+    return "\n\n".join(lines)
+
+
 @tool(
         {
             "type": "function",
             "function": {
                 "name": "search_realtime",
-                "description": "实时信息通道（Hacker News）：不传 query 返回当前热点榜（含点赞数），传 query 走全文搜索（含点赞/评论数）。适合查询正在发生的热点、技术社区讨论、实时新闻（弥补 search_web 实时性短板）",
+                "description": "实时信息通道（多源）：hn=Hacker News 热点/搜索（默认）/ github=近期热门仓库或仓库搜索 / bilibili=B站热门视频 / stackoverflow=技术问答搜索。不传 query 返回对应源热点榜",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "可选：搜索关键词；留空返回实时热点榜"},
                         "num": {"type": "integer", "description": "可选：返回条数（1-20，默认 5）"},
-                        "source": {"type": "string", "description": "可选：数据源（当前仅支持 hn）"},
+                        "source": {"type": "string", "description": "可选：数据源 hn/github/bilibili/stackoverflow（默认 hn）"},
                     },
                     "required": [],
                 },
@@ -353,81 +577,22 @@ def search_github(query, num=5, language=""):
     preactivate=(('搜索', '搜一下', '查一下', '新闻', '资讯', '最新'),),
 )
 def search_realtime(query="", num=5, source="hn"):
-    """实时信息通道：Hacker News（热点/搜索），绕开通用搜索引擎的实时性短板。
-
-    HN 无 query 时返回 Top Stories 热点；有 query 时走 Algolia 全文搜索
-    （含 points/评论数/时间）。Reddit 等源在当前网络不可达，未接入。
-    """
+    """实时信息通道（多源）：hn / github / bilibili / stackoverflow。
+    各源无 query 时返回热点榜，有 query 时按源能力做搜索（bilibili 无搜索 API）。"""
     try:
         num = max(1, min(20, int(num)))
     except (TypeError, ValueError):
         num = 5
     src = str(source or "hn").strip().lower()
-    try:
-        if src != "hn":
-            return f"错误：暂不支持数据源 {src}（当前仅 hn）"
-        q = str(query or "").strip()
-        if q:
-            if len(q) > 120:
-                return "错误：搜索词过长（上限 120 字符）"
-            resp = _http_client().get(
-                "https://hn.algolia.com/api/v1/search",
-                params={"query": q, "hitsPerPage": num},
-                headers={"User-Agent": _SEARCH_UA},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            hits = (resp.json() or {}).get("hits") or []
-            if not hits:
-                return f"Hacker News 未找到与「{q}」相关的结果"
-            lines = [f"Hacker News 搜索结果（{len(hits)} 条）:"]
-            for i, h in enumerate(hits, 1):
-                title = str(h.get("title") or "").strip()[:120]
-                url = str(h.get("url") or "").strip() or (
-                    f"https://news.ycombinator.com/item?id={h.get('objectID')}"
-                )
-                pts = h.get("points") or 0
-                cmts = h.get("num_comments") or 0
-                lines.append(f"{i}. {title}（👍{pts} 💬{cmts}）\n   {url}")
-            return "\n\n".join(lines)
-        # 无 query：实时热点榜
-        resp = _http_client().get(
-            "https://hacker-news.firebaseio.com/v0/topstories.json",
-            headers={"User-Agent": _SEARCH_UA},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        ids = (resp.json() or [])[:num]
-        if not ids:
-            return "Hacker News 热点暂时为空"
-        items = []
-        for sid in ids:
-            try:
-                r = _http_client().get(
-                    f"https://hacker-news.firebaseio.com/v0/item/{sid}.json",
-                    headers={"User-Agent": _SEARCH_UA},
-                    timeout=8,
-                )
-                it = r.json()
-                if it and it.get("title"):
-                    items.append(it)
-            except Exception:
-                continue
-            if len(items) >= num:
-                break
-        if not items:
-            return "Hacker News 热点获取失败"
-        lines = [f"Hacker News 实时热点（{len(items)} 条）:"]
-        for i, it in enumerate(items, 1):
-            title = str(it.get("title") or "").strip()[:120]
-            url = str(it.get("url") or "").strip() or (
-                f"https://news.ycombinator.com/item?id={it.get('id')}"
-            )
-            pts = it.get("score") or 0
-            lines.append(f"{i}. {title}（👍{pts}）\n   {url}")
-        return "\n\n".join(lines)
-    except Exception as e:
-        return f"错误：实时信息获取失败: {e}"
+    if src == "hn":
+        return _search_hn(query, num)
+    if src == "github":
+        return _search_github_hot(query, num)
+    if src == "bilibili":
+        return _search_bilibili_hot(num)
+    if src == "stackoverflow":
+        return _search_stackoverflow(query, num)
+    return f"错误：暂不支持数据源 {src}（支持 hn / github / bilibili / stackoverflow）"
 
 
 @tool(
@@ -1302,9 +1467,9 @@ def _run_fetch_blocked(url, proxy=None, **kwargs):
     此前误写成单个 dict 参数导致 unexpected keyword argument 'url'。
     """
     if _fetch_blocked_impl is None:
-        return "错误: fetch_blocked 能力未安装（需要将 fetch_blocked.py 放入程序目录并启用后可用）"
+        return "错误：fetch_blocked 能力未安装（需要将 fetch_blocked.py 放入程序目录并启用后可用）"
     if not str(url or "").startswith(("http://", "https://")):
-        return "错误: URL 必须以 http:// 或 https:// 开头"
+        return "错误：URL 必须以 http:// 或 https:// 开头"
     # SSRF 校验由 fetch_blocked.py 内部实现执行（含内网/元数据拦截）；
     # 包装层只做协议与参数分发，避免在 DNS 被测试/网络环境临时改写时误伤。
     return _fetch_blocked_impl(url, proxy)

@@ -8,6 +8,7 @@ import；函数体内按需导入标准库（csv 等）保持原样。
 import itertools
 import os
 
+from shared import clamp_int  # D4: 参数校验辅助
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import permissions
 from db_utils import TABLE_CELL_MAX as _TABLE_CELL_MAX
@@ -47,7 +48,7 @@ def read_csv(path, max_rows=100, delimiter=","):
     import csv as _csv
 
     try:
-        limit = max(1, min(500, int(max_rows or 100)))
+        limit = clamp_int(max_rows, 100, lo=1, hi=500)
     except (TypeError, ValueError):
         limit = 100
     try:

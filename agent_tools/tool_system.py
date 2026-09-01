@@ -715,13 +715,15 @@ def git_tool(action, path=None, message=None, target=None, files=None):
             "type": "function",
             "function": {
                 "name": "notify_desktop",
-                "description": "发送 Windows 桌面 Toast 通知（离线可用）：任务完成、定时任务触发、长任务结束时提醒",
+                "description": "发送 Windows 桌面 Toast 通知（离线可用）：任务完成、定时任务触发、长任务结束时提醒；可选静音与显示时长",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "title": {"type": "string", "description": "可选：通知标题（默认 鲸语提醒）"},
                         "text": {"type": "string", "description": "通知正文"},
                         "fallback_sound": {"type": "boolean", "description": "可选：系统通知音被禁用时是否播放备用提示音（默认 true）"},
+                        "silent": {"type": "boolean", "description": "可选：静音通知（不播放系统提示音，默认 false）"},
+                        "duration": {"type": "string", "description": "可选：显示时长 short/long（默认 short）"},
                     },
                     "required": ["text"],
                 },
@@ -731,13 +733,18 @@ def git_tool(action, path=None, message=None, target=None, files=None):
     phrases='桌面通知',
     preactivate=(('桌面通知', 'toast', '弹通知', '提醒通知'),),
 )
-def notify_desktop(title="鲸语提醒", text="", fallback_sound=True):
+def notify_desktop(title="鲸语提醒", text="", fallback_sound=True, silent=False, duration="short"):
     """Windows 桌面 Toast 通知（离线可用，任务完成/定时任务触发时使用）。
-    fallback_sound=False：toast 失败时不播兜底提示音（用户已关闭完成提示音的场景）。"""
+    fallback_sound=False：toast 失败时不播兜底提示音（用户已关闭完成提示音的场景）。
+    C8: silent=True 静音（不播系统提示音）；duration=short/long 控制显示时长。"""
     if not str(text or "").strip():
         return "错误：text 必填"
     title = str(title or "鲸语提醒")[:60]
     body = str(text).strip()[:300]
+    dur = str(duration or "short").strip().lower()
+    if dur not in ("short", "long"):
+        return "错误：duration 仅支持 short/long"
+    silent_flag = "true" if silent else "false"
     try:
         import tempfile
 
@@ -750,6 +757,8 @@ def notify_desktop(title="鲸语提醒", text="", fallback_sound=True):
             title_sentinel = "__WHALETALK_TITLE__"
             script = _NOTIFY_PS.replace("@TITLE@", title_sentinel)
             script = script.replace("@BODY@", body_quoted)
+            script = script.replace("@DURATION@", dur)
+            script = script.replace("@SILENT@", silent_flag)
             script = script.replace(title_sentinel, title_quoted)
             with open(ps_path, "w", encoding="utf-8-sig") as f:
                 f.write(script)
@@ -769,7 +778,8 @@ def notify_desktop(title="鲸语提醒", text="", fallback_sound=True):
                     except Exception:
                         pass
                 return f"通知显示失败{'（已静音）' if not fallback_sound else '（已播放提示音）'}：{(proc.stderr or '')[:150]}"
-            return f"已发送桌面通知：{title}"
+            note = "（静音）" if silent else ""
+            return f"已发送桌面通知：{title}{note}"
         finally:
             try:
                 os.remove(ps_path)

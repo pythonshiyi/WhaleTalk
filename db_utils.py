@@ -8,6 +8,9 @@ import re
 # 单元格显示截断上限（防超长单元格撑爆上下文）
 TABLE_CELL_MAX = 100
 
+# 单次数据库写操作影响行数上限（L4：超过则拒绝执行，防止 DELETE/UPDATE 无谓全表扫）
+DB_EXECUTE_MAX_ROWS = 10000
+
 # 只读查询禁止的服务器端功能关键字（前缀白名单可被其绕过，读写服务器文件 / DoS）：
 # MySQL: SELECT ... INTO OUTFILE/DUMPFILE、LOAD_FILE、SLEEP
 # PostgreSQL: lo_export / pg_read_file / pg_write_file / pg_sleep
@@ -43,6 +46,25 @@ def readonly_stmt(sql):
         if kw in upper:
             return False
     return True
+
+
+def force_limit(stmt, limit):
+    """给只读 SELECT 强制追加 LIMIT n（防止无界查询全量执行撑爆内存/拖慢库）。
+
+    仅对 SELECT 生效；SHOW/DESC/PRAGMA/EXPLAIN 不追加。语句本身已含 LIMIT
+    （含注释内出现 limit 字样）时跳过，避免重复限制或破坏子查询语义。尾部
+    行/块注释在拼接前剥除，避免 LIMIT 被注释吞掉。"""
+    s = str(stmt or "").strip().rstrip().rstrip(";").rstrip()
+    if not s.upper().startswith("SELECT"):
+        return s
+    # 剥除尾部注释后再追加，确保 LIMIT 是真正的语句成分
+    s = re.sub(r"\s+--[^\n]*$", "", s).rstrip()
+    s = re.sub(r"/\*.*?\*/\s*$", "", s, flags=re.S).rstrip()
+    core = re.sub(r"--[^\n]*", "", s)
+    core = re.sub(r"/\*.*?\*/", "", core, flags=re.S)
+    if re.search(r"\bLIMIT\b", core, re.I):
+        return s
+    return s + f" LIMIT {max(1, int(limit))}"
 
 
 def db_preview_sql(stmt):

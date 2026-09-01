@@ -6,6 +6,7 @@
 才执行 `from agent_tools import *`，此处 from-import 可安全解析。
 """
 
+import json
 import os
 import re
 import shutil
@@ -19,8 +20,21 @@ from collections import deque
 import permissions
 import snapshot as snapshot_mod
 
+from shared import clamp_int  # D4: 参数校验辅助
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
+
+# ---- L5: search_local 进程内增量索引（避免每次调用全量重扫重读） ----
+# 结构：{normcase(root): {relpath: {"mtime": float, "size": int, "lines": [...], "trunc": bool}}}
+# 只读"变化"文件（mtime/size 比对），消失文件剔除；不持久化（进程重启后首次调用重建，
+# 代价与冷启动一致，符合"增量缓存"语义）。
+_SEARCH_IDX_LOCK = threading.Lock()
+_SEARCH_INDEX = {}
+_SEARCH_REFRESH_BUDGET = 200     # 单次调用最多增量读取的文件数（防超大目录卡调用）
+_SEARCH_CACHE_BYTES = 64 * 1024  # 单文件行缓存字节上限（超出标记 trunc，查询时实时补扫全文）
+_SEARCH_CACHE_LINES = 400        # 单文件行缓存行数上限
+_SEARCH_MAX_FILES = 3000         # 单 root 索引条目上限（防内存膨胀）
+_SEARCH_SKIP_BIG = 512 * 1024    # 超过该字节的文件不索引（与原实现一致）
 from deepseek_client import (
 
     EDIT_FILE_MAX_SIZE,
@@ -48,6 +62,38 @@ from deepseek_client import (
     snapshot_processes,
 )
 
+
+
+def _detect_text_encoding(path):
+    """文本编码探测：BOM 优先 -> UTF-8 严格校验 -> GB18030（中文 Windows 最常见）
+    -> BIG5 -> latin-1 兜底（单字节永不失败）。返回 (encoding, is_fallback)，
+    is_fallback=True 表示非 UTF-8，调用方可在结果中提示编码。"""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(8192)
+    except Exception:
+        return "utf-8", False
+    if not raw:
+        return "utf-8", False
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig", False
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "utf-16", False
+    if raw.startswith((b"\x00\x00\xfe\xff", b"\xff\xfe\x00\x00")):
+        return "utf-32", False
+    try:
+        raw.decode("utf-8")
+        return "utf-8", False
+    except UnicodeDecodeError:
+        pass
+    # GB18030 是 GBK 超集，覆盖中文 Windows 绝大多数文本；BIG5 覆盖繁体
+    for enc in ("gb18030", "big5"):
+        try:
+            raw.decode(enc)
+            return enc, True
+        except UnicodeDecodeError:
+            continue
+    return "latin-1", True
 
 
 @tool(
@@ -79,17 +125,20 @@ def read_file(path, start_line=None, max_lines=None):
     ok, reason = permissions.check_filesystem(path, write=False)
     if not ok:
         return reason
+    # L7: 编码探测（BOM/UTF-8/GB18030/BIG5/latin-1），替代固定 utf-8 造成的中文乱码
+    enc, is_fallback = _detect_text_encoding(path)
+    enc_note = f"\n[编码：{enc}]" if is_fallback else ""
     try:
         if start_line is not None or max_lines is not None:
             # 按行读取（适合超大文件）：start_line 从 1 开始，max_lines 默认 200
             try:
                 start = max(1, int(start_line or 1))
-                count = max(1, min(2000, int(max_lines or 200)))
+                count = clamp_int(max_lines, 200, lo=1, hi=2000)
             except (TypeError, ValueError):
                 return "错误：start_line / max_lines 必须是正整数"
             if start > 1_000_000:
                 return "错误：start_line 过大（超过 100 万行，请缩小范围）"
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            with open(path, "r", encoding=enc, errors="replace") as f:
                 for _ in range(start - 1):
                     f.readline()
                 # readline(上限)：单行可达数百 MB（minified JSON/日志），
@@ -109,12 +158,12 @@ def read_file(path, start_line=None, max_lines=None):
             if not body.endswith("\n"):
                 body += "\n"
             prefix = f"[按行读取 {path} 第 {start}-{start + len(lines) - 1} 行]\n"
-            return prefix + body
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return prefix + body + enc_note
+        with open(path, "r", encoding=enc, errors="replace") as f:
             content = f.read(READ_FILE_MAX_BYTES)
         if len(content) >= READ_FILE_MAX_BYTES:
             content += "\n[文件较大，已截断前 100KB]"
-        return content
+        return content + enc_note
     except Exception as e:
         return f"错误：无法读取文件 {path}: {e}"
 
@@ -175,7 +224,7 @@ def write_file(path, content):
             "type": "function",
             "function": {
                 "name": "edit_file",
-                "description": "编辑文件：按文本替换或正则替换（自动备份 .bak），需 write 权限",
+                "description": "编辑文件：按文本替换或正则替换（自动备份 .bak），支持 replacements 一次批量替换多处",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -183,6 +232,7 @@ def write_file(path, content):
                         "old": {"type": "string", "description": "要替换的原文（与 regex 二选一，至少提供一个）"},
                         "new": {"type": "string", "description": "替换后的新文本"},
                         "regex": {"type": "string", "description": "可选：正则表达式模式（Python re 语法）"},
+                        "replacements": {"type": "string", "description": "可选：批量替换列表（JSON 数组，如 [{\"old\":\"旧文本\",\"new\":\"新文本\"},{\"regex\":\"正则\",\"new\":\"替换\"}]，按顺序逐项替换；与 old/regex 互斥）"},
                     },
                     "required": ["path", "new"],
                 },
@@ -192,14 +242,16 @@ def write_file(path, content):
     phrases='编辑文件（局部修改）',
     preactivate=(('修改', '编辑', '改动', '改一下', '改一次', '改成', '改为', '改下', '改改', '改掉', '更新', '替换', '重写', '覆盖', '重命名', '改名', '删掉', '删除'),),
 )
-def edit_file(path, old="", new="", regex=None):
-    """编辑文件：按文本或正则替换（自动备份 .bak）。"""
+def edit_file(path, old="", new="", regex=None, replacements=None):
+    """编辑文件：按文本/正则替换（自动备份 .bak）；replacements 支持一次批量替换多处。"""
     ok, reason = permissions.check_filesystem(path, write=True)
     if not ok:
         return reason
     p = permissions.resolve(path)
     if not os.path.isfile(p):
         return f"错误：文件不存在：{p}"
+    if replacements and (old or regex):
+        return "错误：replacements 与 old/regex 不能同时使用"
     try:
         # 读入上限：允许目录内也可能有 GB 级文件，全量读入内存会 OOM
         if os.path.getsize(p) > EDIT_FILE_MAX_SIZE:
@@ -208,13 +260,46 @@ def edit_file(path, old="", new="", regex=None):
             content = f.read()
     except Exception as e:
         return f"错误：读取失败: {e}"
-    if regex:
+    n = 0
+    # L6: 批量替换（JSON 数组，按顺序逐项应用；单项不匹配跳过不视为失败）
+    if replacements:
+        try:
+            reps = json.loads(str(replacements))
+        except Exception as e:
+            return f"错误：replacements 不是合法 JSON: {e}"
+        if not isinstance(reps, list) or not reps:
+            return "错误：replacements 需为非空 JSON 数组"
+        for i, rep in enumerate(reps):
+            if not isinstance(rep, dict):
+                return f"错误：replacements[{i}] 需为对象（含 old 或 regex + new）"
+            r_old = str(rep.get("old") or "")
+            r_regex = str(rep.get("regex") or "")
+            r_new = str(rep.get("new") or "")
+            if not r_old and not r_regex:
+                return f"错误：replacements[{i}] 缺少 old/regex"
+            if r_regex:
+                if len(r_regex) > EDIT_FILE_REGEX_MAX:
+                    return f"错误：replacements[{i}] 正则过长（>{EDIT_FILE_REGEX_MAX} 字符）"
+                try:
+                    # lambda 返回 new 原样：re.sub 字符串替换会把 \1 /\g<1>/\\ 解释为分组引用，
+                    # 模型生成的替换文本含反斜杠时会被静默改写
+                    content, k = re.subn(r_regex, lambda m: r_new, content)
+                except re.error as e:
+                    return f"错误：replacements[{i}] 正则无效: {e}"
+                n += k
+            else:
+                if r_old not in content:
+                    continue  # 该项无匹配：跳过，其余项继续
+                k = content.count(r_old)
+                content = content.replace(r_old, r_new)
+                n += k
+    elif regex:
         if len(str(regex)) > EDIT_FILE_REGEX_MAX:
             return f"错误：正则过长（>{EDIT_FILE_REGEX_MAX} 字符）"
         try:
             # lambda 返回 new 原样：re.sub 的字符串替换会把 new 中的 \1 / \g<1> /
             # \\ 解释为分组引用与转义，模型生成的替换文本含反斜杠时会被静默改写
-            new_content, n = re.subn(regex, lambda m: new or "", content)
+            content, n = re.subn(regex, lambda m: new or "", content)
         except re.error as e:
             return f"错误：正则无效: {e}"
     else:
@@ -222,13 +307,13 @@ def edit_file(path, old="", new="", regex=None):
             return "错误：需要提供 old（原文）或 regex（正则）"
         if old not in content:
             return "错误：目标文本未找到"
-        new_content = content.replace(old, new or "")
         n = content.count(old)
+        content = content.replace(old, new or "")
     if n == 0:
         return "错误：无匹配内容，未做修改"
     try:
         snapshot_mod.snapshot_before("edit_file", p)
-        _atomic_write(p, new_content)
+        _atomic_write(p, content)
         if not os.path.exists(p):
             return f"错误：写入后核验失败，文件不存在：{p}"
         permissions.audit("edit_file", p, f"替换 {n} 处")
@@ -290,6 +375,102 @@ def list_dir(path):
     return "\n".join(lines) + tail
 
 
+def _search_index_file(full):
+    """读取文件前 N 字节/行进缓存（增量索引的"变化文件重建"单元）。超大文件返回 None 不索引。"""
+    try:
+        size = os.path.getsize(full)
+        if size > _SEARCH_SKIP_BIG:
+            return None
+        lines = []
+        total = 0
+        truncated = False
+        with open(full, "r", encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                total += len(ln.encode("utf-8", errors="replace"))
+                if total > _SEARCH_CACHE_BYTES or len(lines) >= _SEARCH_CACHE_LINES:
+                    truncated = True
+                    break
+                lines.append(ln)
+        return {
+            "mtime": os.path.getmtime(full),
+            "size": size,
+            "lines": lines,
+            "trunc": truncated,
+        }
+    except Exception:
+        return None
+
+
+def _search_refresh_root(root_walk, idx):
+    """增量刷新：walk 比对 mtime/size，预算内读入新/变化文件；剔除消失文件。
+
+    返回 (seen, refreshed, pending)：seen=本次看到的文件数（含未变化跳过），
+    refreshed=实际重建数，pending=需要索引但超出预算/索引上限未处理数。"""
+    seen = set()
+    refreshed = 0
+    pending = 0
+    try:
+        for cur_root, dirs, files in os.walk(root_walk):
+            dirs[:] = [d for d in dirs if d not in _SEARCH_SKIP_DIRS]
+            for fn in files:
+                if not fn.lower().endswith(_SEARCH_EXTS):
+                    continue
+                full = os.path.join(cur_root, fn)
+                rel = os.path.relpath(full, root_walk).replace("\\", "/")
+                seen.add(rel)
+                meta = idx.get(rel)
+                try:
+                    mtime = os.path.getmtime(full)
+                    size = os.path.getsize(full)
+                except OSError:
+                    continue
+                if meta and meta.get("mtime") == mtime and meta.get("size") == size:
+                    continue  # 未变化：命中缓存，零 IO
+                if len(idx) >= _SEARCH_MAX_FILES and rel not in idx:
+                    pending += 1
+                    continue  # 索引已满，不新增
+                if refreshed >= _SEARCH_REFRESH_BUDGET:
+                    pending += 1
+                    continue  # 预算耗尽：本次不读，下次调用续建
+                new_meta = _search_index_file(full)
+                if new_meta is None:
+                    continue
+                idx[rel] = new_meta
+                refreshed += 1
+    except Exception:
+        pass
+    for rel in list(idx):
+        if rel not in seen:
+            del idx[rel]  # 文件已消失，剔除索引
+    return len(seen), refreshed, pending
+
+
+def _search_match_root(idx, root_walk, q, limit, hits):
+    """在增量索引上匹配关键词。trunc 大文件缓存不完整，实时补扫全文（每文件至多 1 条命中）。"""
+    for rel, meta in idx.items():
+        lines = meta.get("lines") or []
+        if not lines:
+            continue
+        if meta.get("trunc"):
+            full = os.path.join(root_walk, *rel.split("/"))
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as f:
+                    for ln in f:
+                        if q in ln.lower():
+                            hits.append(f"{rel}: {ln.strip()[:150]}")
+                            break
+            except Exception:
+                continue
+        else:
+            for ln in lines:
+                if q in ln.lower():
+                    hits.append(f"{rel}: {ln.strip()[:150]}")
+                    if len(hits) >= limit:
+                        return
+            if len(hits) >= limit:
+                return
+
+
 @tool(
         {
             "type": "function",
@@ -312,7 +493,7 @@ def list_dir(path):
     preactivate=(('文件', '读取', '读一下', '打开'), ('搜索文件', '检索', '找文件')),
 )
 def search_local(path, query, max_results=20):
-    """在允许目录内检索文本文件内容（只读）。"""
+    """在允许目录内检索文本文件内容（只读，进程内增量索引加速重复检索）。"""
     ok, reason = permissions.check_filesystem(path, write=False)
     if not ok:
         return reason
@@ -320,40 +501,22 @@ def search_local(path, query, max_results=20):
     if not os.path.isdir(p):
         return f"错误：目录不存在：{p}"
     try:
-        limit = max(1, min(200, int(max_results or 20)))
+        limit = clamp_int(max_results, 20, lo=1, hi=200)
     except (TypeError, ValueError):
         limit = 20
     q = str(query or "").lower()
     if not q:
         return "错误：查询关键词为空"
-    hits = []
-    scanned = 0
-    _MAX_SCAN_FILES = 2000  # 扫描预算：大工作区防单次工具调用卡分钟级
-    try:
-        for root, dirs, files in os.walk(p):
-            dirs[:] = [d for d in dirs if d not in _SEARCH_SKIP_DIRS]
-            for fn in files:
-                if len(hits) >= limit or scanned >= _MAX_SCAN_FILES:
-                    return _search_local_result(hits, scanned, limit, q)
-                scanned += 1
-                if not fn.lower().endswith(_SEARCH_EXTS):
-                    continue
-                full = os.path.join(root, fn)
-                try:
-                    if os.path.getsize(full) > 512 * 1024:
-                        continue
-                    with open(full, "r", encoding="utf-8", errors="replace") as f:
-                        for ln in f:
-                            if q in ln.lower():
-                                rel = os.path.relpath(full, p)
-                                hits.append(f"{rel}: {ln.strip()[:150]}")
-                                if len(hits) >= limit:
-                                    return _search_local_result(hits, scanned, limit, q)
-                except Exception:
-                    continue
-    except Exception as e:
-        return f"错误：检索失败: {e}"
-    return _search_local_result(hits, scanned, limit, q)
+    root_key = os.path.normcase(os.path.normpath(p))
+    with _SEARCH_IDX_LOCK:
+        idx = _SEARCH_INDEX.setdefault(root_key, {})
+        seen, refreshed, pending = _search_refresh_root(p, idx)
+        hits = []
+        _search_match_root(idx, p, q, limit, hits)
+    result = _search_local_result(hits, seen, limit, q)
+    if pending:
+        result += f"\n[索引增量构建中：本次重建 {refreshed} 个文件，另有 {pending} 个新文件待后续检索]"
+    return result
 
 
 @tool(

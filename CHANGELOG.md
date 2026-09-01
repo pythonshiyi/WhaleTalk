@@ -2,6 +2,18 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🔧 设计/逻辑/能力三层优化批次（D1-D4 + L1-L8 + C1-C8 共 16 项）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。对全部 135 工具做三层审查后的一次性修复批次：设计缺陷（返回值格式统一/读操作留痕/进程间文件锁/参数校验收敛）+ 逻辑短板（输出相似度升级/记忆近重复合并/SQL 强制 LIMIT 与超时/写操作行数保护/进程内增量索引/批量替换/编码探测/权限分级）+ 能力缺口（HTML 正文提取/Excel 追加多表/图表多系列与字体探测/实时搜索多源/下载校验和/Webhook 签名/点击轮询等待/桌面通知静音时长）。
+
+### 变更
+- **D1** 工具返回值格式统一：成功/失败前缀规范化；**D2** 读操作调用留痕（audit）；**D3** 关键文件进程间文件锁；**D4** `shared.clamp_int` 参数钳制收敛
+- **L1** `verify_output` 相似度升级（difflib）；**L2** `write_memory` 近重复合并（difflib ratio≥0.85 + 数字集合冲突 ×0.5 强惩罚 + 实体别名归并）；**L3** `database_query` 强制 LIMIT（`db_utils.force_limit` 剥尾注释）+ SQLite 15s 语句超时（`set_progress_handler`）；**L4** `database_execute` 写操作行数保护（`DB_EXECUTE_MAX_ROWS=10000`，预览超限拒绝，无 WHERE 的 UPDATE/DELETE 入口拒绝）；**L5** `search_local` 进程内增量索引（mtime/size 零 IO 命中，单次刷新预算 200 文件，>512KB 不索引，>64KB/400 行截断实时补扫）；**L6** `edit_file` 批量替换 `replacements` 参数（JSON 数组，单项不匹配跳过）；**L7** `read_file` 编码探测（BOM→UTF-8→GB18030→BIG5→latin-1，非 UTF-8 追加 `[编码：xxx]` 提示）；**L8** RPA 只读操作（rpa_screenshot/rpa_screen_size）降级不入审批，写类仍双清单
+- **C1** `fetch_url` HTML 正文提取（纯标准库：剔除 script/nav/footer 等噪音块 + 块级标签换行 + 实体解码，JSON/纯文本原样，过短回退）；**C2** `write_excel` 追加模式 `mode=append` + 多表 `sheets` 参数（dict 行/数组行类型保留）；**C3** `chart_data` 多系列（`[{"name","data"}]`，调色板 + legend）+ 跨平台中文字体探测（Windows/macOS/Linux）；**C4** `search_realtime` 多源（hn/github/bilibili/stackoverflow，v2ex 因网络不可达换 B站热门，均实测连通）；**C5** `download_file` 可选 `expected_sha256` 下载后校验（不匹配删文件报错）；**C6** `send_webhook` HMAC-SHA256 签名（`X-Timestamp`+`X-Signature` 头，配置支持 `{"url","secret"}` 对象）；**C7** `rpa_click` 点击前等待（`wait_sec` 延迟 / `wait_pixel` 像素颜色轮询超时不点击）；**C8** `notify_desktop` 静音 `silent` + 时长 `duration`（Toast XML audio/duration 注入）
+
+### 回归
+- pytest **80 passed**；四门禁全绿（audit `--strict` error 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3）；前端三套件（longTextUtil / apiStreamChat / markdownRender）+ `tsc --noEmit` 全过；冒烟 29 项全过（本轮 8 个改动工具注册/签名/schema 逐项核对 + run_workflow 注入回归 + 路由/入口导入）
+
 ## v3.8.3（未发版追加）—— 🧩 P0-1 巨石拆分收官（第三~八批，117 工具全部迁入 agent_tools/）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。一次性规划 + 连续执行剩余全部批次，P0-1 拆分路线收官：`deepseek_client.py` 由 13,115 行瘦身至 **4,484 行**（−8,631），主文件仅剩「共享基建 + 六层注册表 + 薄 facade」。

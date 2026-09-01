@@ -73,12 +73,33 @@ def rpa_screen_size():
         return f"错误：获取屏幕尺寸失败: {e}"
 
 
+def _parse_rgb(spec):
+    """C7: 解析 'r,g,b' 或 '#rrggbb' 为 (r,g,b) 三元组；非法/空返回 None。"""
+    s = str(spec or "").strip()
+    if not s:
+        return None
+    if s.startswith("#") and len(s) == 7:
+        try:
+            return tuple(int(s[i:i + 2], 16) for i in (1, 3, 5))
+        except ValueError:
+            return None
+    parts = [p.strip() for p in s.split(",")]
+    if len(parts) == 3:
+        try:
+            vals = tuple(int(p) for p in parts)
+            if all(0 <= v <= 255 for v in vals):
+                return vals
+        except ValueError:
+            return None
+    return None
+
+
 @tool(
         {
             "type": "function",
             "function": {
                 "name": "rpa_click",
-                "description": "桌面 RPA：模拟鼠标点击屏幕坐标 (x,y)，button=left/right/middle",
+                "description": "桌面 RPA：模拟鼠标点击屏幕坐标 (x,y)，button=left/right/middle；可选 wait_sec 点击前延迟、wait_pixel 轮询等待目标像素颜色匹配后再点击",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -86,6 +107,9 @@ def rpa_screen_size():
                         "y": {"type": "integer", "description": "屏幕 Y 坐标"},
                         "button": {"type": "string", "description": "可选：left/right/middle，默认 left"},
                         "clicks": {"type": "integer", "description": "可选：连击次数 1-5，默认 1"},
+                        "wait_sec": {"type": "number", "description": "可选：点击前固定等待秒数（0-60，默认 0）"},
+                        "wait_pixel": {"type": "string", "description": "可选：期望像素颜色 'r,g,b' 或 '#rrggbb'，轮询 (x,y) 处颜色匹配后点击；超时则不点击报错"},
+                        "wait_timeout": {"type": "number", "description": "可选：wait_pixel 轮询超时秒数（1-60，默认 10）"},
                     },
                     "required": ["x", "y"],
                 },
@@ -95,8 +119,8 @@ def rpa_screen_size():
     phrases='模拟点击（屏幕坐标）',
     preactivate=(('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'),),
 )
-def rpa_click(x, y, button="left", clicks=1):
-    """模拟鼠标点击。"""
+def rpa_click(x, y, button="left", clicks=1, wait_sec=0, wait_pixel="", wait_timeout=10):
+    """模拟鼠标点击；支持点击前固定延迟或轮询等待目标像素颜色。"""
     ok, hint = _rpa_ready()
     if not ok:
         return hint
@@ -105,13 +129,38 @@ def rpa_click(x, y, button="left", clicks=1):
         x = int(x)
         y = int(y)
         button = str(button or "left").strip().lower()
-        clicks = max(1, min(5, int(clicks or 1)))
+        from shared import clamp_int
+        clicks = clamp_int(clicks, 1, lo=1, hi=5)  # D4: 收敛钳制（非法/缺省→1）
         if button not in ("left", "right", "middle"):
             return "错误：button 仅支持 left/right/middle"
+        # C7: 点击前等待（固定延迟 / 像素颜色轮询）
+        try:
+            wait_sec = max(0.0, min(60.0, float(wait_sec or 0)))
+        except (TypeError, ValueError):
+            wait_sec = 0.0
+        try:
+            wait_timeout = max(1.0, min(60.0, float(wait_timeout or 10)))
+        except (TypeError, ValueError):
+            wait_timeout = 10.0
+        target_rgb = _parse_rgb(wait_pixel)
+        if wait_pixel and not target_rgb:
+            return f"错误：wait_pixel 格式非法：{wait_pixel}（应为 'r,g,b' 或 '#rrggbb'）"
+        if wait_sec > 0:
+            time.sleep(wait_sec)
+        if target_rgb:
+            deadline = time.time() + wait_timeout
+            while time.time() < deadline:
+                if tuple(pyautogui.pixel(x, y)) == target_rgb:
+                    break
+                time.sleep(0.3)
+            else:
+                return f"错误：等待像素颜色 {wait_pixel} 超时（{wait_timeout:.0f}s），未执行点击"
         pyautogui.FAILSAFE = RPA_FAILSAFE
         pyautogui.click(x, y, button=button, clicks=clicks)
         permissions.audit("rpa_click", f"{x},{y}", f"{button} x{clicks}")
-        return f"已点击 ({x}, {y})，{button} 键 x{clicks}"
+        note = f"（等待 {wait_sec:.0f}s）" if wait_sec > 0 else ""
+        note = note or (f"（像素 {wait_pixel} 匹配后点击）" if target_rgb else "")
+        return f"已点击 ({x}, {y})，{button} 键 x{clicks}{note}"
     except Exception as e:
         return f"错误：RPA 点击失败: {e}"
 
@@ -439,7 +488,8 @@ def vision_loop(goal, steps="", max_iters=5, area=""):
     except ImportError:
         return "错误：屏幕截图需要 Pillow，请先安装：pip install Pillow"
     try:
-        max_iters = max(1, min(12, int(max_iters or 5)))
+        from shared import clamp_int
+        max_iters = clamp_int(max_iters, 5, lo=1, hi=12)  # D4: 收敛钳制
     except (TypeError, ValueError):
         max_iters = 5
     steps_hint = str(steps or "").strip()
@@ -738,7 +788,7 @@ def tts_stop(sid=""):
             stopped += 1
         except Exception:
             pass
-    return stopped
+    return f"已停止 {stopped} 个朗读会话" if stopped else "当前没有进行中的朗读"
 
 
 @tool(
@@ -771,7 +821,7 @@ def voice_chat_loop(rounds=3, model="base", max_seconds=15, speak=True, rate=0):
     """
     rounds_n = 3
     try:
-        rounds_n = max(1, min(20, int(rounds or 3)))
+        rounds_n = clamp_int(rounds, 3, lo=1, hi=20)
     except (TypeError, ValueError):
         rounds_n = 3
     client = get_active_client()

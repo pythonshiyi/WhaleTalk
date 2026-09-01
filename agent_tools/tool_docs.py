@@ -7,11 +7,13 @@
 """
 
 import os
+import re
 import shutil
 import subprocess
 
 import permissions
 
+from shared import clamp_int  # D4: 参数校验辅助
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
@@ -36,6 +38,10 @@ from deepseek_client import (
     _strip_html_tags,
     _table_to_md,
 )
+from db_utils import force_limit  # L3: SQL 层强制 LIMIT（防无界查询）
+
+# L3: SQLite 只读查询语句级超时（progress handler 中断慢查询，防占住共享工具线程池）
+_SQLITE_QUERY_TIMEOUT_S = 15.0
 
 
 
@@ -73,6 +79,8 @@ def database_query_mysql(connection="default", sql="", max_rows=20):
         return err
     if not _readonly_stmt(sql):
         return "错误：仅允许只读查询（SELECT / SHOW / DESC）"
+    limit = clamp_int(max_rows, 20, lo=1, hi=200)
+    sql = force_limit(sql, limit)  # L3: SQL 层强制 LIMIT
     try:
         conn = pymysql.connect(
             host=str(cfg.get("host") or "127.0.0.1"),
@@ -90,13 +98,13 @@ def database_query_mysql(connection="default", sql="", max_rows=20):
                 pass
             cur.execute(str(sql))
             cols = [d[0] for d in cur.description] if cur.description else []
-            rows = cur.fetchmany(max(1, min(200, int(max_rows or 20))))
+            rows = cur.fetchmany(limit)
             lines = [" | ".join(cols)] if cols else []
             for r in rows:
                 cells = [str(x) if x is not None else "" for x in r]
                 cells = [c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "") for c in cells]
                 lines.append(" | ".join(cells))
-            extra = "" if len(rows) < max(1, min(200, int(max_rows or 20))) else " [已截断]"
+            extra = "" if len(rows) < limit else " [已截断]"
             return "\n".join(lines) + extra if lines else "执行成功（无结果集）"
         finally:
             try:
@@ -141,6 +149,8 @@ def database_query_postgres(connection="default", sql="", max_rows=20):
         return err
     if not _readonly_stmt(sql):
         return "错误：仅允许只读查询（SELECT / SHOW / DESC）"
+    limit = clamp_int(max_rows, 20, lo=1, hi=200)
+    sql = force_limit(sql, limit)  # L3: SQL 层强制 LIMIT
     try:
         conn = psycopg2.connect(
             host=str(cfg.get("host") or "127.0.0.1"),
@@ -156,13 +166,13 @@ def database_query_postgres(connection="default", sql="", max_rows=20):
             cur = conn.cursor()
             cur.execute(str(sql))
             cols = [d[0] for d in cur.description] if cur.description else []
-            rows = cur.fetchmany(max(1, min(200, int(max_rows or 20))))
+            rows = cur.fetchmany(limit)
             lines = [" | ".join(cols)] if cols else []
             for r in rows:
                 cells = [str(x) if x is not None else "" for x in r]
                 cells = [c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "") for c in cells]
                 lines.append(" | ".join(cells))
-            extra = "" if len(rows) < max(1, min(200, int(max_rows or 20))) else " [已截断]"
+            extra = "" if len(rows) < limit else " [已截断]"
             return "\n".join(lines) + extra if lines else "执行成功（无结果集）"
         finally:
             try:
@@ -209,7 +219,7 @@ def read_excel(path, sheet=0, max_rows=100):
     if not ok:
         return reason
     try:
-        limit = max(1, min(500, int(max_rows or 100)))
+        limit = clamp_int(max_rows, 100, lo=1, hi=500)
     except (TypeError, ValueError):
         limit = 100
     try:
@@ -498,18 +508,39 @@ def archive_list(path):
         return f"错误：读取压缩包失败: {e}"
 
 
+def _excel_rows_columns(data_rows):
+    """C2: 从行数据推断列名：dict 行取首行 keys，否则返回 None（数组行无表头）。"""
+    if data_rows and isinstance(data_rows[0], dict):
+        return list(data_rows[0].keys())
+    return None
+
+
+def _excel_append_rows(ws, data_rows, cols):
+    """C2: 把数据行写入 worksheet；dict 行按 cols 取字段（缺键补空），混合行健壮化。
+    数组行保留原始类型（数字不转字符串），与 dict 行行为一致。"""
+    if cols is not None:
+        for row in data_rows:
+            vals = [row.get(c, "") for c in cols] if isinstance(row, dict) else [""] * len(cols)
+            ws.append(vals)
+    else:
+        for row in data_rows:
+            ws.append(list(row) if isinstance(row, (list, tuple)) else [row])
+
+
 @tool(
         {
             "type": "function",
             "function": {
                 "name": "write_excel",
-                "description": "写入 Excel 文件（.xlsx）。data 传 JSON 数组（行数组或对象数组）",
+                "description": "写入/追加 Excel 文件（.xlsx）。data 传 JSON 数组（行数组或对象数组）；mode=append 追加到已有文件；sheets 传 {表名: 数据行} 一次写多表（此时 data 可传空数组）",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "输出文件绝对路径"},
-                        "data": {"type": "array", "items": {}, "description": "数据行"},
+                        "data": {"type": "array", "items": {}, "description": "数据行（sheets 提供时可传 []）"},
                         "sheet": {"type": "string", "description": "可选：工作表名（默认 Sheet1）"},
+                        "mode": {"type": "string", "description": "可选：overwrite 覆盖（默认）/ append 追加到已有文件"},
+                        "sheets": {"type": "object", "description": "可选：{表名: 数据行} 多表一次写入，与 data 二选一"},
                     },
                     "required": ["path", "data"],
                 },
@@ -519,41 +550,141 @@ def archive_list(path):
     phrases='写 Excel',
     preactivate=(('表格', 'excel', 'csv', '报表'),),
 )
-def write_excel(path, data, sheet="Sheet1"):
-    """写入 Excel 文件（.xlsx）。data 为 JSON 数组（行数组或对象数组）。"""
+def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None):
+    """写入或追加 Excel 文件（.xlsx）。data 为 JSON 数组（行数组或对象数组）；
+    mode=append 追加到已有文件；sheets 为 {表名: 数据行} 一次写多表。"""
     try:
-        from openpyxl import Workbook
+        from openpyxl import Workbook, load_workbook
     except ImportError:
         return "错误：需要 openpyxl（pip install openpyxl）"
     if not path or not str(path).strip():
         return "错误：path 必填"
-    if not isinstance(data, list):
-        return "错误：data 必须是非空数组"
+    if mode not in ("overwrite", "append"):
+        return "错误：mode 仅支持 overwrite（覆盖）/ append（追加）"
     p = permissions.resolve(path)
     if not p:
         return "错误：路径无效"
     ok, reason = permissions.check_filesystem(p, write=True)
     if not ok:
         return reason
+    # 归一化写入计划：sheets（多表）优先；否则 data+sheet 单表
+    if sheets is not None:
+        if not isinstance(sheets, dict) or not sheets:
+            return "错误：sheets 必须是 {表名: 数据行} 的非空对象"
+        plan = {str(k)[:31]: v for k, v in sheets.items()}
+        for sname, rows in plan.items():
+            if not isinstance(rows, list):
+                return f"错误：表 {sname} 的数据必须是数组"
+    else:
+        if not isinstance(data, list):
+            return "错误：data 必须是非空数组"
+        plan = {str(sheet or "Sheet1")[:31]: data}
     try:
-        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        if mode == "append":
+            if not os.path.isfile(p):
+                return f"错误：追加模式要求文件已存在：{p}"
+            wb = load_workbook(p)
+            total = 0
+            for sname, rows in plan.items():
+                if sname in wb.sheetnames:
+                    ws = wb[sname]
+                    add_header = False  # 已有表直接追加数据，不重复写表头
+                else:
+                    ws = wb.create_sheet(sname)
+                    add_header = True
+                cols = _excel_rows_columns(rows)
+                if add_header and cols is not None:
+                    ws.append(cols)
+                _excel_append_rows(ws, rows, cols)
+                total += len(rows)
+            wb.save(p)
+            return f"已追加 Excel 至 {p}（{total} 行，{len(plan)} 个工作表）"
+        # overwrite：多表/单表全量重写
         wb = Workbook()
-        ws = wb.active
-        ws.title = str(sheet or "Sheet1")[:31]
-        if data and isinstance(data[0], dict):
-            cols = list(data[0].keys())
-            ws.append(cols)
-            for row in data:
-                # 混合 dict/非 dict 行健壮化：非 dict 行按空字典处理
-                vals = [row.get(c, "") for c in cols] if isinstance(row, dict) else [""] * len(cols)
-                ws.append(vals)
-        else:
-            for row in data:
-                ws.append([str(x) for x in row] if isinstance(row, (list, tuple)) else [str(row)])
+        wb.remove(wb.active)
+        total = 0
+        for sname, rows in plan.items():
+            ws = wb.create_sheet(sname)
+            cols = _excel_rows_columns(rows)
+            if cols is not None:
+                ws.append(cols)
+            _excel_append_rows(ws, rows, cols)
+            total += len(rows)
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
         wb.save(p)
-        return f"已写入 Excel 至 {p}（{len(data)} 行）"
+        return f"已写入 Excel 至 {p}（{total} 行，{len(plan)} 个工作表）"
     except Exception as e:
         return f"错误：写入 Excel 失败: {e}"
+
+
+def _chart_cjk_fonts():
+    """C3: 探测系统可用的中文字体（Windows/macOS/Linux），返回 matplotlib sans-serif 候选。
+    硬编码单字体在 Linux/无 YaHei 环境会中文变方块；这里按系统字体表实测筛选。"""
+    try:
+        from matplotlib import font_manager
+        available = {f.name for f in font_manager.fontManager.ttflist}
+        candidates = [
+            "Microsoft YaHei", "SimHei",  # Windows
+            "PingFang SC", "Hiragino Sans GB", "Heiti SC", "STHeiti",  # macOS
+            "Noto Sans CJK SC", "Source Han Sans SC", "Source Han Sans CN",  # Linux
+            "WenQuanYi Zen Hei", "WenQuanYi Micro Hei", "AR PL UMing CN",
+            "DejaVu Sans",  # 兜底（无中文但保证不崩）
+        ]
+        hits = [c for c in candidates if c in available]
+        return hits or ["DejaVu Sans"]
+    except Exception:
+        return ["DejaVu Sans"]
+
+
+def _chart_parse_series(data):
+    """C3: 把 chart_data 的 data 归一化为 [{"name", "xs", "ys"}] 系列列表（兼容旧单系列格式）。
+    多系列：data=[{"name":"A","data":[1,2,3]}, {"name":"B","data":[[x,y],...]}]（data 支持数值数组 /
+    [x,y] 对数组 / {"x":[], "y":[]} 对象）。"""
+    if isinstance(data, dict) and isinstance(data.get("series"), list):
+        data = data["series"]
+    if not isinstance(data, list) or not data:
+        raise ValueError("data 必须是非空数组")
+
+    def to_float(v):
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            raise ValueError(f"非数值数据：{v!r}（请只传数字）")
+
+    first = data[0]
+    if isinstance(first, dict) and "data" in first:
+        # 多系列：每项 {"name","data":[...]} 或 {"name","data":{"x":[],"y":[]}}
+        series = []
+        for item in data:
+            if not isinstance(item, dict) or "data" not in item:
+                raise ValueError(f"多系列项必须是 {{name, data}} 对象：{item!r}")
+            name = str(item.get("name", f"系列{len(series) + 1}"))
+            rows = item["data"]
+            if isinstance(rows, dict) and "y" in rows:
+                xs = [to_float(v) for v in rows.get("x", [])] or list(range(len(rows["y"])))
+                ys = [to_float(v) for v in rows["y"]]
+            elif rows and isinstance(rows[0], (list, tuple)) and len(rows[0]) >= 2:
+                xs = [str(r[0]) for r in rows]
+                ys = [to_float(r[1]) for r in rows]
+            elif rows and isinstance(rows[0], dict) and "y" in rows[0]:
+                xs = [str(d.get("x", "")) for d in rows]
+                ys = [to_float(d.get("y", 0)) for d in rows]
+            else:
+                xs = list(range(len(rows)))
+                ys = [to_float(v) for v in rows]
+            series.append({"name": name, "xs": xs, "ys": ys})
+        return series
+    # 旧单系列格式
+    if isinstance(first, dict) and "x" in first:
+        xs = [str(d.get("x", "")) for d in data]
+        ys = [to_float(d.get("y", 0)) for d in data]
+    elif isinstance(first, (list, tuple)) and len(first) >= 2:
+        xs = [str(r[0]) for r in data]
+        ys = [to_float(r[1]) for r in data]
+    else:
+        xs = list(range(len(data)))
+        ys = [to_float(x) for x in data]
+    return [{"name": "数据", "xs": xs, "ys": ys}]
 
 
 @tool(
@@ -561,11 +692,11 @@ def write_excel(path, data, sheet="Sheet1"):
             "type": "function",
             "function": {
                 "name": "chart_data",
-                "description": "数据可视化：生成图表 PNG（matplotlib）。data 传 [x,y] 数组或对象数组或数值数组；kind: line/bar/pie/scatter",
+                "description": "数据可视化：生成图表 PNG（matplotlib）。单系列 data 传 [x,y] 数组/对象数组/数值数组；多系列传 [{\"name\":\"A\",\"data\":[...]},...]；kind: line/bar/pie/scatter（pie 仅单系列）",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "data": {"type": "array", "items": {}, "description": "数据：[[x,y],...] 或 [{\"x\":..,\"y\":..},...] 或 [数值,...]"},
+                        "data": {"type": "array", "items": {}, "description": "数据：单系列 [[x,y],...] 或 [{\"x\":..,\"y\":..},...] 或 [数值,...]；多系列 [{\"name\":\"A\",\"data\":[数值 或 [x,y] 或 {\"x\":[],\"y\":[]}]},...]"},
                         "path": {"type": "string", "description": "输出 PNG 绝对路径"},
                         "kind": {"type": "string", "description": "可选：line/bar/pie/scatter（默认 line）"},
                         "title": {"type": "string", "description": "可选：图表标题"},
@@ -581,15 +712,15 @@ def write_excel(path, data, sheet="Sheet1"):
     preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'), ('表格', 'excel', 'csv', '报表')),
 )
 def chart_data(data, path, kind="line", title="", x_label="", y_label=""):
-    """数据可视化：生成图表 PNG（matplotlib）。data 为 JSON 数组：
-    [x1, x2, ...]（单系列）或 [[x,y],...] 或 [{"x":..,"y":..}]。kind: line/bar/pie/scatter。"""
+    """数据可视化：生成图表 PNG（matplotlib）。单系列 data 为 [x1,x2,...] / [[x,y],...] /
+    [{"x":..,"y":..}]；多系列为 [{"name":"A","data":[...]},...]。kind: line/bar/pie/scatter。"""
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        # 中文字体（Windows 环境）：避免标题/标签中文变方块
-        plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+        # C3: 系统字体探测（Windows/macOS/Linux 通用），避免中文变方块
+        plt.rcParams["font.sans-serif"] = _chart_cjk_fonts()
         plt.rcParams["axes.unicode_minus"] = False
     except ImportError:
         return "错误：需要 matplotlib（pip install matplotlib）"
@@ -604,47 +735,38 @@ def chart_data(data, path, kind="line", title="", x_label="", y_label=""):
     if not ok:
         return reason
     try:
-        def _to_float(v):
-            try:
-                return float(v or 0)
-            except (TypeError, ValueError):
-                raise ValueError(f"非数值数据：{v!r}（请只传数字）")
-
-        if isinstance(data[0], dict) and "x" in data[0]:
-            xs = [str(d.get("x", "")) for d in data]
-            ys = [_to_float(d.get("y", 0)) for d in data]
-        elif isinstance(data[0], (list, tuple)) and len(data[0]) >= 2:
-            xs = [str(r[0]) for r in data]
-            ys = [_to_float(r[1]) for r in data]
-        else:
-            xs = list(range(len(data)))
-            ys = [_to_float(x) for x in data]
-        # 非数值字符串在 float() 处会抛 ValueError：给出明确报错而不是笼统的失败
-        # （NaN/inf 也无法绘制：matplotlib 静默出空图，先挡掉）
-        if any(v != v or v in (float("inf"), float("-inf")) for v in ys):
-            return "错误：数据包含 NaN 或无穷值，请清洗后重试"
+        series_list = _chart_parse_series(data)
+        # NaN/inf 无法绘制：matplotlib 静默出空图，先挡掉
+        for s in series_list:
+            if any(v != v or v in (float("inf"), float("-inf")) for v in s["ys"]):
+                return "错误：数据包含 NaN 或无穷值，请清洗后重试"
         k = str(kind or "line").lower()
         if k not in ("line", "bar", "pie", "scatter"):
             return f"错误：kind 非法：{kind}（支持 line/bar/pie/scatter）"
+        multi = len(series_list) > 1
         if k == "pie":
-            if len(ys) > 20:
+            if multi:
+                return "错误：饼图仅支持单系列数据，请合并为一份后重试"
+            if len(series_list[0]["ys"]) > 20:
                 return "错误：饼图最多支持 20 个数据点，请聚合后重试"
-            if not any(v > 0 for v in ys):
+            if not any(v > 0 for v in series_list[0]["ys"]):
                 return "错误：饼图需要至少一个正值数据"
         if _dc.CHART_THEME == "light":
             face = "#ffffff"
             grid = "#d5e4ec"
             tick = "#5c7a96"
             title_c = "#14283f"
-            series = "#00a3c8"
             chart_bg = "#f5f9fc"
+            palette = ["#00a3c8", "#ff7f50", "#9acd32", "#9370db", "#ffb800",
+                       "#ff6b81", "#5cb85c", "#6c8ebf", "#e07020", "#b554c8"]
         else:
             face = "#0a101f"
             grid = "#14203a"
             tick = "#9db0d1"
             title_c = "#e9f1ff"
-            series = "#00d4ff"
             chart_bg = "#0a101f"
+            palette = ["#00d4ff", "#ff9e6d", "#b8e986", "#c9a8ff", "#ffd700",
+                       "#ff8fa3", "#7ee07e", "#8fb8e8", "#f09a55", "#dd88f0"]
         fig, ax = plt.subplots(figsize=(8, 5), dpi=110, facecolor=face)
         ax.set_facecolor(chart_bg)
         for spine in ax.spines.values():
@@ -654,15 +776,22 @@ def chart_data(data, path, kind="line", title="", x_label="", y_label=""):
         ax.yaxis.label.set_color(tick)
         ax.title.set_color(title_c)
         ax.grid(color=grid)
-        if k == "bar":
-            ax.bar(xs, ys, color=series)
-        elif k == "pie":
-            ax.pie(ys, labels=xs, autopct="%1.1f%%", textprops={"color": title_c})
-        elif k == "scatter":
-            # 保留用户传入的 x 坐标（此前 range(len(ys)) 会把 x 丢弃成序号）
-            ax.scatter(xs, ys, color=series)
-        else:
-            ax.plot(xs, ys, color=series, marker="o", markersize=4)
+        total_pts = 0
+        for idx, s in enumerate(series_list):
+            color = palette[idx % len(palette)]
+            xs, ys = s["xs"], s["ys"]
+            total_pts += len(ys)
+            if k == "bar":
+                ax.bar(xs, ys, color=color, label=s["name"] if multi else None)
+            elif k == "pie":
+                ax.pie(ys, labels=xs, autopct="%1.1f%%", textprops={"color": title_c})
+            elif k == "scatter":
+                # 保留用户传入的 x 坐标（此前 range(len(ys)) 会把 x 丢弃成序号）
+                ax.scatter(xs, ys, color=color, label=s["name"] if multi else None)
+            else:
+                ax.plot(xs, ys, color=color, marker="o", markersize=4, label=s["name"] if multi else None)
+        if multi:
+            ax.legend()
         if title:
             ax.set_title(str(title))
         if x_label:
@@ -674,7 +803,7 @@ def chart_data(data, path, kind="line", title="", x_label="", y_label=""):
         fig.savefig(p)
         plt.close(fig)
         size = os.path.getsize(p) if os.path.exists(p) else 0
-        return f"已生成图表至 {p}（{size} 字节，{k} 图，{len(ys)} 个数据点）"
+        return f"已生成图表至 {p}（{size} 字节，{k} 图，{len(series_list)} 系列，{total_pts} 个数据点）"
     except Exception as e:
         return f"错误：生成图表失败: {e}"
 
@@ -717,6 +846,7 @@ def database_query(db_path, sql, max_rows=20):
         return f"错误：数据库文件不存在：{p}"
     try:
         import sqlite3
+        import time as _t
         import urllib.parse
 
         # 路径含 ?/# 时按 URI 查询参数解析，需先 percent-encode
@@ -724,23 +854,37 @@ def database_query(db_path, sql, max_rows=20):
             f"file:{urllib.parse.quote(p)}?mode=ro", uri=True, timeout=5
         )
         try:
+            # L3: SQL 层强制 LIMIT——仅 fetchmany 截断不够，无 LIMIT 的查询仍会全量执行
+            limit = 20
+            try:
+                limit = clamp_int(max_rows, 20, lo=1, hi=200)
+            except (TypeError, ValueError):
+                pass
+            stmt = force_limit(stmt, limit)
+            # L3: 语句级超时（progress handler 每 500 条虚拟机指令检查一次，超时中断）
+            _q_start = _t.monotonic()
+            def _q_timeout():
+                return 1 if _t.monotonic() - _q_start > _SQLITE_QUERY_TIMEOUT_S else 0
+            conn.set_progress_handler(_q_timeout, 500)
             cur = conn.cursor()
             cur.execute(stmt)
             if cur.description is None:
                 return "执行成功（无结果集）"
             cols = [d[0] for d in cur.description]
-            try:
-                limit = max(1, min(200, int(max_rows or 20)))
-            except (TypeError, ValueError):
-                limit = 20
             rows = cur.fetchmany(limit)
             lines = [f"查询结果（{len(rows)} 行）:", " | ".join(str(c) for c in cols)]
             for r in rows:
                 cells = ["" if v is None else str(v) for v in r]
                 cells = [c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "") for c in cells]
                 lines.append(" | ".join(cells))
+            if len(rows) >= limit:
+                lines.append("⚠ 已达行数上限，如需更多请缩小范围后分页查询")
             return "\n".join(lines)
         finally:
+            try:
+                conn.set_progress_handler(None, 0)
+            except Exception:
+                pass
             conn.close()
     except Exception as e:
         return f"错误：查询失败: {e}"
@@ -776,6 +920,9 @@ def database_execute(db_type="sqlite", connection="default", sql="", backup=True
         return "错误：sql 必填"
     if not stmt.lstrip().upper().startswith(("UPDATE", "INSERT", "DELETE", "CREATE", "DROP", "ALTER", "REPLACE")):
         return "错误：database_execute 仅用于写操作；只读查询请用 database_query*"
+    # L4: 无 WHERE 的 UPDATE/DELETE 直接拒绝（防全表误操作；全表清空应分批带条件）
+    if stmt.lstrip().upper().startswith(("UPDATE", "DELETE")) and not re.search(r"\bWHERE\b", stmt, re.I):
+        return "错误：UPDATE/DELETE 必须带 WHERE 条件（防止全表误操作）；如需清空整表请分步删除并确认"
     dbtype = str(db_type or "sqlite").lower()
     try:
         if dbtype == "sqlite":

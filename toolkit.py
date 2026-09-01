@@ -178,6 +178,35 @@ def clear_registry() -> None:
 
 
 # ---------------------------------------------------------------------------
+# D1 返回契约辅助：统一成功/失败表达，杜绝「裸 int / 三形态并存」漂移。
+# 约定：错误一律「错误：」前缀；成功态用结构化 Markdown 模板（标题 + 明细行），
+# 需要纯数据时显式返回 JSON 字符串（以 { 开头）。新工具一律经此出口。
+# ---------------------------------------------------------------------------
+def fmt_err(msg: Any) -> str:
+    """统一错误出口：保证「错误：」前缀 + 全角冒号（消除 "错误: " 混用）。"""
+    s = str(msg)
+    return s if s.startswith("错误：") else "错误：" + s
+
+
+def fmt_ok(title: str, *lines: Any, sep: str = "\n") -> str:
+    """统一成功出口：Markdown 结构「标题 + 明细行」，可带子项。"""
+    parts = [str(title)]
+    for ln in lines:
+        if isinstance(ln, (list, tuple)):
+            parts.extend(f"  - {str(x)}" for x in ln)
+        elif str(ln).strip():
+            parts.append(str(ln))
+    return sep.join(parts)
+
+
+def fmt_json(obj: Any) -> str:
+    """统一数据出口：JSON 字符串（模型可程序化解析）。"""
+    import json as _json
+
+    return _json.dumps(obj, ensure_ascii=False, default=str)
+
+
+# ---------------------------------------------------------------------------
 # AST 重建：不执行模块即可拿到六层（供无依赖环境的独立审计/门禁工具）
 # ---------------------------------------------------------------------------
 

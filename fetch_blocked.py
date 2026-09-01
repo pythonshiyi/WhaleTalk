@@ -421,12 +421,12 @@ def fetch_blocked(url, proxy=None, prefer="curl"):
         网页文本（≤500KB）；失败返回以 "错误:" 开头的描述（与 fetch_url 约定一致）
     """
     if not str(url or "").startswith(("http://", "https://")):
-        return "错误: URL 必须以 http:// 或 https:// 开头"
+        return "错误：URL 必须以 http:// 或 https:// 开头"
     host = urlparse(url).hostname
     if not host:
-        return f"错误: URL 解析失败：{url[:80]}"
+        return f"错误：URL 解析失败：{url[:80]}"
     if _is_blocked_host(host):
-        return f"错误: 已阻止访问内网/回环地址（SSRF 防护）：{url[:80]}"
+        return f"错误：已阻止访问内网/回环地址（SSRF 防护）：{url[:80]}"
 
     if proxy:
         m = re.match(r"https?://([^:@/]+):([^@/]+)@([^:/]+):(\d+)", proxy)
@@ -435,15 +435,15 @@ def fetch_blocked(url, proxy=None, prefer="curl"):
                     "username": m.group(1), "password": m.group(2),
                     "name": "显式代理", "type": "http", "tls": True}
         else:
-            return "错误: proxy 格式应为 https://user:pass@server:port"
+            return "错误：proxy 格式应为 https://user:pass@server:port"
     else:
         nodes = _discover_nodes()
         if not nodes:
-            return ("错误: 未发现任何机场节点（可在 mihomo-party/clash 订阅缓存或环境变量 "
+            return ("错误：未发现任何机场节点（可在 mihomo-party/clash 订阅缓存或环境变量 "
                     "FETCH_PROXY_USER/PASS 配置）")
         node = _pick_node(nodes)
         if node is None:
-            return "错误: 已发现节点但全部不可用（可能订阅已过期）"
+            return "错误：已发现节点但全部不可用（可能订阅已过期）"
 
     try:
         if prefer == "curl":
@@ -455,4 +455,4 @@ def fetch_blocked(url, proxy=None, prefer="curl"):
                 raise
         return _fetch_via_proxy_stdlib(url, node)
     except Exception as e:
-        return f"错误: {type(e).__name__}: {str(e)[:200]}"
+        return f"错误：{type(e).__name__}: {str(e)[:200]}"

@@ -41,6 +41,7 @@ from security import (  # noqa: F401  # 供 main/tests 继续经 deepseek_client
 from db_utils import (  # noqa: F401  # 兼容旧访问名
     TABLE_CELL_MAX as _TABLE_CELL_MAX,
     DB_FORBIDDEN_KEYWORDS as _DB_FORBIDDEN_KEYWORDS,
+    DB_EXECUTE_MAX_ROWS as _DB_EXECUTE_MAX_ROWS,
     readonly_stmt as _readonly_stmt,
     db_preview_sql as _db_preview_sql,
     table_to_md as _table_to_md,
@@ -778,12 +779,28 @@ def _load_webhooks():
         return {}
 
 
+def _webhook_url_secret(cfg):
+    """C6: 从 webhook 配置项解析 (url, secret)：兼容字符串 URL 与 {"url":..., "secret":...} 对象。"""
+    if isinstance(cfg, dict):
+        return str(cfg.get("url") or ""), str(cfg.get("secret") or "")
+    return str(cfg or ""), ""
+
+
+def _webhook_sign(secret, body, ts):
+    """C6: HMAC-SHA256 签名：sign = hex(hmac_sha256(secret, \"{ts}.{body}\"))，防篡改 + 时间窗防重放。"""
+    import hashlib
+    import hmac
+    msg = f"{ts}.{body}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+
 def send_webhook_notify(text, title="鲸语提醒", channel=""):
     """发送 Webhook 推送（钉钉/ServerChan/Slack/通用）。
 
-    webhooks.json 格式：{"dingtalk": "https://oapi.dingtalk.com/robot/send?access_token=xxx",
-    "serverchan": "https://sctapi.ftqq.com/KEY.send", "slack": "https://hooks.slack.com/services/...",
-    "generic": "https://example.com/hook"}
+    webhooks.json 格式（值支持两种）：
+    - 字符串 URL："dingtalk": "https://oapi.dingtalk.com/robot/send?access_token=xxx"
+    - 对象（带 HMAC-SHA256 签名）："generic": {"url": "https://example.com/hook", "secret": "xxx"}
+      签名时发送 X-Timestamp + X-Signature: sha256=<hex> 头，接收方可用相同算法校验。
     """
     if not str(text or "").strip():
         return "错误：text 必填"
@@ -795,24 +812,31 @@ def send_webhook_notify(text, title="鲸语提醒", channel=""):
     else:
         candidates = cfgs
     sent = []
-    for name, url in candidates.items():
+    for name, cfg in candidates.items():
+        url, secret = _webhook_url_secret(cfg)
         if not url:
             continue
         try:
             ch = str(name).lower()
+            payload = _webhook_payload(ch, str(title), str(text))
             if ch == "serverchan":
-                # ServerChan 期望 application/x-www-form-urlencoded（title/desp）
-                resp = _http_client().post(
-                    str(url),
-                    data=_webhook_payload(ch, str(title), str(text)),
-                    timeout=10,
-                )
+                import urllib.parse
+                body_bytes = urllib.parse.urlencode(payload).encode("utf-8")
+                ctype = "application/x-www-form-urlencoded"
             else:
-                resp = _http_client().post(
-                    str(url),
-                    json=_webhook_payload(ch, str(title), str(text)),
-                    timeout=10,
-                )
+                body_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                ctype = "application/json"
+            headers = {"Content-Type": ctype}
+            if secret:
+                ts = str(int(time.time()))
+                headers["X-Timestamp"] = ts
+                headers["X-Signature"] = "sha256=" + _webhook_sign(secret, body_bytes.decode("utf-8", "replace"), ts)
+            resp = _http_client().post(
+                str(url),
+                content=body_bytes,
+                headers=headers,
+                timeout=10,
+            )
             ok = resp.status_code < 400
             sent.append(f"{name}:{'✅' if ok else '❌' + str(resp.status_code)}")
         except Exception as e:
@@ -1088,6 +1112,21 @@ def _save_memory(data):
     if not MEMORY_FILE:
         return False
     try:
+        from shared import file_lock
+    except Exception:
+        file_lock = None
+    try:
+        if file_lock is not None:
+            with file_lock(MEMORY_FILE, timeout=10):
+                return _save_memory_impl(data)
+        return _save_memory_impl(data)
+    except TimeoutError:
+        logging.warning("记忆保存等待文件锁超时")
+        return False
+
+
+def _save_memory_impl(data):
+    try:
         os.makedirs(os.path.dirname(MEMORY_FILE) or ".", exist_ok=True)
         tmp = MEMORY_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -1212,9 +1251,23 @@ def _load_self_profile():
 
 
 def _save_self_profile(data):
-    """原子写回核心自我状态。"""
+    """原子写回核心自我状态（D3：跨进程文件锁保护）。"""
     if not SELF_PROFILE_FILE:
         return False
+    try:
+        from shared import file_lock
+    except Exception:
+        file_lock = None
+    try:
+        if file_lock is not None:
+            with file_lock(SELF_PROFILE_FILE, timeout=10):
+                return _save_self_profile_impl(data)
+        return _save_self_profile_impl(data)
+    except TimeoutError:
+        return False
+
+
+def _save_self_profile_impl(data):
     try:
         os.makedirs(os.path.dirname(SELF_PROFILE_FILE) or ".", exist_ok=True)
         tmp = SELF_PROFILE_FILE + ".tmp"
@@ -1442,7 +1495,19 @@ def _legacy_system_status():
 
 def _atomic_write(path, content):
     """原子写：唯一临时文件（防并行写同一路径互相截断）+ os.replace，
-    覆盖前自动备份 .bak。返回 (created, real_size)。"""
+    覆盖前自动备份 .bak。返回 (created, real_size)。
+    D3：写临界区加跨进程文件锁（web_app 与 CLI 双进程并发写同一文件不竞争）。"""
+    try:
+        from shared import file_lock
+    except Exception:
+        file_lock = None
+    if file_lock is not None:
+        with file_lock(path, timeout=10):
+            return _atomic_write_impl(path, content)
+    return _atomic_write_impl(path, content)
+
+
+def _atomic_write_impl(path, content):
     created = not os.path.exists(path)
     if not created:
         try:
@@ -2017,6 +2082,21 @@ def _save_schedules_plain(schedules):
     if not SCHEDULES_FILE:
         return False
     try:
+        from shared import file_lock
+    except Exception:
+        file_lock = None
+    try:
+        if file_lock is not None:
+            with file_lock(SCHEDULES_FILE, timeout=10):
+                return _save_schedules_plain_impl(schedules)
+        return _save_schedules_plain_impl(schedules)
+    except TimeoutError:
+        logging.warning("保存定时任务等待文件锁超时")
+        return False
+
+
+def _save_schedules_plain_impl(schedules):
+    try:
         os.makedirs(os.path.dirname(SCHEDULES_FILE) or ".", exist_ok=True)
         tmp = SCHEDULES_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -2031,6 +2111,7 @@ def _save_schedules_plain(schedules):
 # ---------- 桌面通知（Windows Toast，零依赖） ----------
 # 占位符用 @TITLE@/@BODY@ 而非 $title/$body：用户内容若含字面 "$body" 会被
 # 顺序 replace 二次替换污染脚本（$title 先替换成含 "$body" 的内容时同样被污染）。
+# C8: @DURATION@（short/long）与 @SILENT@（true/false）由 notify_desktop 注入。
 _NOTIFY_PS = r"""
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -2048,6 +2129,10 @@ $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateCont
 $textNodes = $template.GetElementsByTagName("text")
 $textNodes.Item(0).AppendChild($template.CreateTextNode('@TITLE@')) | Out-Null
 $textNodes.Item(1).AppendChild($template.CreateTextNode('@BODY@')) | Out-Null
+$template.DocumentElement.SetAttribute('duration', '@DURATION@') | Out-Null
+$audio = $template.CreateElement('audio')
+$audio.SetAttribute('silent', '@SILENT@')
+$template.DocumentElement.AppendChild($audio) | Out-Null
 $toast = New-Object Windows.UI.Notifications.ToastNotification $template
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("鲸语 WhaleTalk").Show($toast)
 """
@@ -2315,7 +2400,14 @@ def _db_execute_sqlite(path, stmt, backup):
             sel = _db_preview_sql(stmt)
             if sel:
                 try:
-                    preview = f"\n变更预览：命中 {len(cur.execute(sel).fetchall())} 行"
+                    cnt = len(cur.execute(sel).fetchall())
+                    preview = f"\n变更预览：命中 {cnt} 行"
+                    # L4: 执行前校验影响行数上限，防全表误操作
+                    if cnt > _DB_EXECUTE_MAX_ROWS:
+                        return (
+                            f"错误：该语句将影响 {cnt} 行，超过单次上限 "
+                            f"{_DB_EXECUTE_MAX_ROWS}；请加 WHERE 缩小范围或分批执行"
+                        )
                 except Exception:
                     preview = ""
         cur.execute(stmt)
@@ -2356,7 +2448,14 @@ def _db_execute_mysql(connection, stmt, backup):
             if sel:
                 try:
                     cur.execute(sel)
-                    preview = f"\n变更预览：命中 {len(cur.fetchall())} 行"
+                    cnt = len(cur.fetchall())
+                    preview = f"\n变更预览：命中 {cnt} 行"
+                    # L4: 执行前校验影响行数上限，防全表误操作
+                    if cnt > _DB_EXECUTE_MAX_ROWS:
+                        return (
+                            f"错误：该语句将影响 {cnt} 行，超过单次上限 "
+                            f"{_DB_EXECUTE_MAX_ROWS}；请加 WHERE 缩小范围或分批执行"
+                        )
                 except Exception:
                     preview = ""
         cur.execute(stmt)
@@ -2394,7 +2493,14 @@ def _db_execute_postgres(connection, stmt, backup):
             if sel:
                 try:
                     cur.execute(sel)
-                    preview = f"\n变更预览：命中 {len(cur.fetchall())} 行"
+                    cnt = len(cur.fetchall())
+                    preview = f"\n变更预览：命中 {cnt} 行"
+                    # L4: 执行前校验影响行数上限，防全表误操作
+                    if cnt > _DB_EXECUTE_MAX_ROWS:
+                        return (
+                            f"错误：该语句将影响 {cnt} 行，超过单次上限 "
+                            f"{_DB_EXECUTE_MAX_ROWS}；请加 WHERE 缩小范围或分批执行"
+                        )
                 except Exception:
                     preview = ""
         cur.execute(stmt)
@@ -4195,6 +4301,12 @@ class DeepSeekClient:
                             except Exception as e:
                                 result = f"工具执行失败: {e}"
                     duration = time.monotonic() - t0
+                    # D2 统一留痕：读/写/查工具全部记录（输入摘要 + 输出截断 + 耗时）
+                    try:
+                        import permissions as _perms_trace
+                        _perms_trace.tool_trace(name, args, result, duration)
+                    except Exception:
+                        pass
                     return name, args, result, duration
 
                 # 交互工具串行（弹窗不能并发），其余工具并行执行（同轮多工具提速）

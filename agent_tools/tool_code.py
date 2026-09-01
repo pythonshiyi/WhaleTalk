@@ -14,6 +14,7 @@ import time
 
 import permissions
 
+from shared import clamp_int  # D4: 参数校验辅助
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
@@ -448,6 +449,9 @@ def project_scaffold(project_type, name=None, path=None):
     base = permissions.resolve(base) or base
 
     name = (name or "my_project").strip()
+    # S5 防路径穿越：name 是目录名，含路径分隔符或 .. 可把脚手架生成到 base 之外
+    if not name or name in (".", "..") or any(c in name for c in "/\\") or ".." in name.split("/") or ".." in name.split("\\"):
+        return "错误：非法项目名（不允许路径分隔符或 ..）：%s" % name[:80]
     proj_dir = os.path.join(base, name)
     created = []
 
@@ -842,7 +846,7 @@ def code_lookup(path, symbol, kind="def", max_results=20):
     if k not in ("def", "class", "call", "import"):
         return "错误：kind 仅支持 def/class/call/import"
     try:
-        limit = max(1, min(200, int(max_results or 20)))
+        limit = clamp_int(max_results, 20, lo=1, hi=200)
     except (TypeError, ValueError):
         limit = 20
     import ast as _ast
@@ -1009,6 +1013,11 @@ def pip_install(package):
     pkg = str(package or "").strip()
     if not pkg:
         return "错误：请提供要安装的包名"
+    # S4 防选项注入：包名以 - 开头（如 -r url / --index-url）会把 pip 的
+    # 选项带进来，可被利用从任意源拉取依赖；包名只允许合法字符（字母/数字/
+    # _-.[] 与版本比较符），拒绝空白分隔的选项拼接
+    if pkg.startswith("-") or not re.match(r"^[A-Za-z0-9_.\-\[\]=<>!~]+(?:[,\s][A-Za-z0-9_.\-\[\]=<>!~]+)*$", pkg):
+        return "错误：非法的包名（不允许以 - 开头或含特殊字符）：%s" % pkg[:80]
     base = re.split(r"[<>=!~]", pkg)[0].strip().lower()
     if _dc.PIP_ALLOWLIST is not None and base not in _dc.PIP_ALLOWLIST:
         return f"权限拒绝：仅允许安装白名单库：{_dc.PIP_ALLOWLIST}"
@@ -1081,7 +1090,7 @@ def subagent_run(tasks, parallel=2, context="", mode="text", output_dir=None):
         return "错误：tasks 必须是非空数组（每个元素是一个子任务目标）"
     tasks = [str(t) for t in tasks][:8]
     try:
-        parallel = max(1, min(4, int(parallel or 2)))
+        parallel = clamp_int(parallel, 2, lo=1, hi=4)
     except (TypeError, ValueError):
         parallel = 2
     client = get_active_client()
@@ -1167,7 +1176,12 @@ def subagent_run(tasks, parallel=2, context="", mode="text", output_dir=None):
     preactivate=(('核验输出', '对照检查', '检查结果', '自评', '核对答案'),),
 )
 def verify_output(expected, actual):
-    """对照标准答案自评：计算语义相似度并指出差异要点（自我验证闭环）。"""
+    """对照标准答案自评：计算语义相似度并指出差异要点（自我验证闭环）。
+
+    L1 升级：三维加权——① bigram F1（要点覆盖率）② difflib 字符相似度
+    （容忍同义改写/语序变化）③ 数值/日期/百分比结构化对比（关键数字漏报惩罚）。
+    此前仅靠 token 交集，同义改写全错判，是本工具最弱一环。
+    """
     e = str(expected or "")
     a = str(actual or "")
     if not e.strip():
@@ -1181,13 +1195,29 @@ def verify_output(expected, actual):
     recall = len(inter) / len(et)          # 预期要点覆盖率
     precision = len(inter) / len(at)       # 输出聚焦度
     f1 = 2 * recall * precision / (recall + precision) if (recall + precision) else 0.0
+    # ① 字符级相似度：difflib 对整串对齐，同义改写（bigram 全不交集）也有分
+    try:
+        from difflib import SequenceMatcher
+        ratio = SequenceMatcher(None, e, a).ratio()
+    except Exception:
+        ratio = f1
+    # ② 数值/日期/百分比结构化对比：关键数字（含单位）漏报单独扣分
+    _NUM_RE = re.compile(r"\d+(?:\.\d+)?(?:%|％|万|亿|年|月|日|人|元|个|次|小时|分钟|秒|GB|MB|KB|km|m)?")
+    e_nums = set(_NUM_RE.findall(e))
+    a_nums = set(_NUM_RE.findall(a))
+    num_recall = (len(e_nums & a_nums) / len(e_nums)) if e_nums else 1.0
+    # 综合评分：要点覆盖 50% + 字符相似 30% + 数值覆盖 20%
+    score = 0.5 * f1 + 0.3 * ratio + 0.2 * num_recall
+    verdict = "通过" if score >= 0.7 else ("基本通过" if score >= 0.5 else "未通过")
     missing = [t for t in et if t not in at][:10]
-    verdict = "通过" if f1 >= 0.7 else ("基本通过" if f1 >= 0.5 else "未通过")
     lines = [
-        f"评估：{verdict}（F1={f1:.2f}，覆盖率 {recall:.0%}，聚焦度 {precision:.0%}）",
+        f"评估：{verdict}（综合 {score:.2f} = F1 {f1:.2f} × 字符 {ratio:.2f} × 数值 {num_recall:.0%}）",
     ]
     if missing:
         lines.append("缺失要点：" + "、".join(missing))
+    if e_nums and num_recall < 1.0:
+        missing_nums = sorted(e_nums - a_nums)[:8]
+        lines.append("缺失数值：" + "、".join(missing_nums))
     if len(e) > 0 and len(a) > 0 and a.strip().startswith(TOOL_RESULT_FAIL_PREFIXES):
         lines.append("提示：实际输出以错误开头，请检查执行是否成功")
     return "\n".join(lines)
