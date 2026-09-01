@@ -1246,7 +1246,7 @@ button {
 .warn-text { color: var(--warn) !important; }
 .sys-path { font-family: var(--font-mono); font-size: var(--fs-xs); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
 
-/* ═══ 确认门（询问/审批/白名单） ═══════════════════ */
+/* ═══ 确认门（询问/审批） ═══════════════════ */
 .confirm-mask {
   position: fixed; inset: 0; z-index: 120;
   background: rgba(3, 7, 16, 0.6);

@@ -339,9 +339,6 @@ function useBackendChat({
             onApprovalRequest: (ev) => {
               if (alive && !stopRef.current) onPrompt && onPrompt({ type: "approval", ...ev });
             },
-            onPermissionRequest: (ev) => {
-              if (alive && !stopRef.current) onPrompt && onPrompt({ type: "permission", ...ev });
-            },
             onDone: () => finish(true),
             onError: (e) => {
               if (!alive) return;

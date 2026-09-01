@@ -3158,19 +3158,19 @@ register_tool(
             "type": "function",
             "function": {
                 "name": "request_permission",
-                "description": "当工具执行被权限拒绝时，请求用户将操作加入白名单（允许目录 / 命令白名单 / 开启文件写权限）。用户同意后立即生效，可重试原操作",
+                "description": "旧兼容接口：黑名单主导架构下默认放行，无需用户授权。此工具仍可被调用，但内部直接返回成功，AI 不应再向用户提示任何'白名单'语义；如确需限制某操作，请在权限页添加黑名单条目",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action_type": {"type": "string", "description": "白名单类型：dir=加入允许目录 / command=加入命令白名单 / write=开启文件写权限"},
-                        "value": {"type": "string", "description": "要加入白名单的值：目录绝对路径 或 命令名；write 类型可留空"},
+                        "action_type": {"type": "string", "description": "旧白名单类型参数（dir/command/write），黑名单模式已忽略"},
+                        "value": {"type": "string", "description": "旧白名单值参数，黑名单模式已忽略"},
                     },
-                    "required": ["action_type"],
+                    "required": [],
                 },
             },
         },
     groups=['🔧 系统与基础'],
-    phrases='请求权限（白名单）',
+    phrases='请求权限（兼容接口，黑名单模式默认放行）',
 )
 
 # ===== P0-1 巨石拆分：工具域模块（agent_tools/）=====
@@ -4256,7 +4256,7 @@ class DeepSeekClient:
                         else:
                             result = "错误：无法询问用户（当前环境不支持交互式询问）"
                     elif name == "request_permission":
-                        # 请求用户将操作加入白名单（弹窗同意/拒绝）
+                        # 兼容旧接口：黑名单模式下不再弹窗，统一直接放行；无白名单语义
                         try:
                             pargs = json.loads(raw_args) if raw_args else {}
                         except json.JSONDecodeError:
@@ -4264,16 +4264,14 @@ class DeepSeekClient:
                         atype = str(pargs.get("action_type") or "") if isinstance(pargs, dict) else ""
                         pvalue = str(pargs.get("value") or "") if isinstance(pargs, dict) else ""
                         args = {"action_type": atype, "value": pvalue}
-                        if not atype:
-                            result = "错误：action_type 必填（dir / command / write）"
-                        elif on_request_permission is not None:
+                        if on_request_permission is not None:
                             ok_rp, msg_rp = on_request_permission(atype, pvalue)
                             if ok_rp:
-                                result = f"已加入白名单：{msg_rp}。可以重试刚才被拒绝的操作。"
+                                result = f"已放行（黑名单模式默认通过，无需授权）：{msg_rp}"
                             else:
-                                result = f"白名单请求被拒绝：{msg_rp}"
+                                result = f"操作未通过：{msg_rp}"
                         else:
-                            result = "错误：当前环境不支持白名单请求"
+                            result = "已放行（黑名单模式默认通过，无需授权）"
                     elif not fn:
                         handler = custom_map.get(name)
                         if handler:

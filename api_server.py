@@ -47,9 +47,11 @@ def _cu_load(key, default=None):
         return default
 
 
-# ── 审批/询问/白名单 双向通道 ─────────────────────────
+# ── 审批/询问 双向通道 ─────────────────────────
 # chat worker 线程回调 → SSE 事件发给前端 → 前端 POST /v1/respond 回传
-# {rid: {"ev": Event, "box": dict, "type": "ask"|"approval"|"permission"}}
+# {rid: {"ev": Event, "box": dict, "type": "ask"|"approval"}}
+# 白名单请求通道已废弃：黑名单主导架构下 _make_permission_cb 一律直接放行、
+# 不再发 SSE 事件，前端亦不再监听 permission_request（详见 permissions.py）。
 _PENDING = {}
 _PENDING_LOCK = threading.Lock()
 _APPROVAL_LOCK = threading.Lock()
@@ -60,7 +62,7 @@ ASK_TIMEOUT = 180.0
 
 
 def _respond(body):
-    """前端回传：{id, answer?} / {id, allow?, reason?} / {id, ok?, msg?}。"""
+    """前端回传：{id, answer?} / {id, allow?, reason?}。"""
     rid = str(body.get("id") or "")
     if not rid:
         return False, "缺少 id"
@@ -78,9 +80,8 @@ def _respond(body):
     elif typ == "approval":
         box["allow"] = bool(body.get("allow"))
         box["reason"] = str(body.get("reason") or ("用户允许" if box["allow"] else "用户拒绝"))
-    elif typ == "permission":
-        box["ok"] = bool(body.get("ok"))
-        box["msg"] = str(body.get("msg") or ("已加入白名单" if box["ok"] else "白名单请求被拒绝"))
+    else:
+        return False, f"不支持的请求类型：{typ}"
     entry["ev"].set()
     return True, None
 
@@ -189,11 +190,17 @@ def _sync_full_auto():
 
 
 def _make_permission_cb(send, stop_event):
-    """on_request_permission：完全去除白名单逻辑——一律直接放行（黑名单机制下无需授权）。"""
+    """on_request_permission：黑名单主导架构——一律直接放行（无需授权弹窗/事件）。
+
+    旧 whitelist 模式下该回调会通过 SSE 发 permission_request 事件让前端弹"白名单
+    请求"对话框，由用户在 UI 上同意后才加入白名单；黑名单模式下默认全部放行，
+    连 SSE 事件都不再发，前端 ConfirmGate 也已移除对应分支，杜绝任何"白名单"
+    残留 UI 出现。此处仅返回 True 让 AI 工具调用顺利走完。
+    """
 
     def cb(action_type, value):
         # 黑名单机制：默认放行，无需白名单申请/弹窗
-        return True, "已放行"
+        return True, "默认放行（黑名单模式），无需授权"
 
     return cb
 

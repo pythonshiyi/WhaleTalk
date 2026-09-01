@@ -1,8 +1,10 @@
 import React from "react";
 
 // ── 确认门（对齐真实项目：ask_user 询问 / 审批弹窗）──
-// type: "ask" | "approval" | "permission"
+// type: "ask" | "approval"
 // 一次显示一个；响应后调用 onRespond(payload)
+// 说明：白名单通道已被「黑名单主导」架构废弃（permissions._make_permission_cb
+// 一律直接放行、不再发 SSE 事件），前端不应再渲染对应类型弹窗。
 export default function ConfirmGate({ req, onRespond }) {
   const [answer, setAnswer] = React.useState("");
   const [seconds, setSeconds] = React.useState(120);
@@ -31,7 +33,7 @@ export default function ConfirmGate({ req, onRespond }) {
       <div className="confirm-card">
         <div className="confirm-head">
           <b>
-            {req.type === "ask" ? "🤔 Agent 询问" : req.type === "approval" ? "🛡 AI 权限请求" : "🛡 白名单请求"}
+            {req.type === "ask" ? "🤔 Agent 询问" : "🛡 AI 权限请求"}
           </b>
           <span className={`confirm-timer ${expired ? "confirm-timer-over" : ""}`}>
             {expired ? "已超时（仍可响应）" : `${seconds}s`}
@@ -80,26 +82,6 @@ export default function ConfirmGate({ req, onRespond }) {
               </button>
               <button className="confirm-btn confirm-primary" onClick={() => close({ id: req.id, allow: true, reason: "用户允许" })}>
                 允许
-              </button>
-            </div>
-          </>
-        )}
-
-        {req.type === "permission" && (
-          <>
-            <div className="confirm-prompt">
-              AI 请求将以下操作加入白名单：
-            </div>
-            <div className="confirm-args">
-              类型：{req.action_type} · 值：{req.value || "（write 类型可留空）"}
-            </div>
-            <div className="confirm-note">加入后立即生效，可重试被拒绝的操作。</div>
-            <div className="confirm-foot">
-              <button className="confirm-btn" onClick={() => close({ id: req.id, ok: false, msg: "白名单请求被拒绝" })}>
-                拒绝
-              </button>
-              <button className="confirm-btn confirm-primary" onClick={() => close({ id: req.id, ok: true, msg: "已加入白名单" })}>
-                同意
               </button>
             </div>
           </>

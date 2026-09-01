@@ -34,9 +34,9 @@ const REQUEST_TIMEOUT = 15000;
  * SSE 流式事件（POST /v1/chat/stream 的 data 帧）。
  * 字段按事件类型取用：reasoning/content→text；tool_start/tool→name+args(+result)；
  * tool_duration→name+duration；usage→usage 对象；compressed→removed_turns 等；
- * ask/approval/permission_request→rid/kind/提示语；error→message。
+ * ask/approval→rid/kind/提示语；error→message。
  * @typedef {Object} SSEEvent
- * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"compressed"|"ask_request"|"approval_request"|"permission_request"|"done"|"error"} type 事件类型
+ * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"compressed"|"ask_request"|"approval_request"|"done"|"error"} type 事件类型
  * @property {string} [text] 增量文本
  * @property {string} [name] 工具名
  * @property {Object} [args] 工具参数
@@ -45,7 +45,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {{prompt:number, completion:number, cache_hit:number, cache_miss:number}} [usage] token 用量与缓存命中
  * @property {{removed_turns:number, mode:string, archived_path?:string}} [compressed] 上下文压缩信息
  * @property {string} [rid] 审批/询问请求 id（回传 /v1/respond）
- * @property {string} [kind] 审批类别（ask/approval/permission）
+ * @property {string} [kind] 审批类别（ask/approval）
  * @property {string} [message] 错误信息
  */
 
@@ -61,7 +61,6 @@ const REQUEST_TIMEOUT = 15000;
  * @property {(ev:SSEEvent)=>void} [onCompressed] 上下文已压缩
  * @property {(ev:SSEEvent)=>void} [onAskRequest] 询问（需 POST /v1/respond 回传）
  * @property {(ev:SSEEvent)=>void} [onApprovalRequest] 审批请求
- * @property {(ev:SSEEvent)=>void} [onPermissionRequest] 权限请求
  * @property {()=>void} [onDone] 正常结束（后端已自动落盘会话）
  * @property {(message:string)=>void} [onError] 错误
  */
@@ -329,7 +328,6 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
         else if (ev.type === "compressed") handlers.onCompressed?.(ev);
         else if (ev.type === "ask_request") handlers.onAskRequest?.(ev);
         else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);
-        else if (ev.type === "permission_request") handlers.onPermissionRequest?.(ev);
         else if (ev.type === "done") handlers.onDone?.();
         else if (ev.type === "error") handlers.onError?.(ev.message);
       }
@@ -427,7 +425,7 @@ export async function listAbilities() {
 }
 
 /**
- * 回传审批/询问/权限请求的答案（配合 SSE 的 ask/approval/permission_request）。
+ * 回传审批/询问的答案（配合 SSE 的 ask/approval_request）。
  * @param {{rid:string, kind?:string, answer?:any, action?:string, reason?:string}} payload
  * @returns {Promise<any>}
  */

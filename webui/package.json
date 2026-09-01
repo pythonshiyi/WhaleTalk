@@ -7,8 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/longTextUtil.test.mjs && node tests/apiStreamChat.test.mjs && node tests/markdownRender.test.mjs",
-    "test:fast": "node tests/longTextUtil.test.mjs && node tests/apiStreamChat.test.mjs",
+    "test": "node tests/longTextUtil.test.mjs && node tests/apiStreamChat.test.mjs && node tests/markdownRender.test.mjs && node tests/noWhitelistDialog.test.mjs",
+    "test:fast": "node tests/longTextUtil.test.mjs && node tests/apiStreamChat.test.mjs && node tests/noWhitelistDialog.test.mjs",
     "typecheck": "tsc --noEmit -p jsconfig.json"
   },
   "dependencies": {
