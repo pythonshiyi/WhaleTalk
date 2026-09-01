@@ -964,13 +964,13 @@ def image_generate(prompt, path="", size="1024x1024"):
             with open(out, "wb") as f:
                 f.write(base64.b64decode(items[0]["b64_json"]))
         elif items[0].get("url"):
-            # URL 图片大小不可信：20MB 上限，防写满磁盘；返回地址也做 SSRF 校验
+            # URL 图片大小不可信：20MB 上限，防写满磁盘；地址不做拦截（无限制模式）
             dl_url = str(items[0]["url"])
-            err = _safe_url(dl_url, allow_loopback=False)
+            err = _safe_url(dl_url)
             if err:
                 return f"错误：图片接口返回了不安全的下载地址（{err}）"
             try:
-                with _safe_stream("GET", dl_url, allow_loopback=False, timeout=60) as r:
+                with _safe_stream("GET", dl_url, timeout=60) as r:
                     total = 0
                     truncated = False
                     with open(out, "wb") as f:
