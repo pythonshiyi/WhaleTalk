@@ -4510,6 +4510,33 @@ def _chat_harvest(reply: str, user_text: str, cfg: dict):
     threading.Thread(target=_run, daemon=True).start()
 
 
+# P2-8：POST 端点路由表（装饰器注册，端点方法就近声明；路由表由 _post_route 动态生成）
+_POST_ROUTES = []  # (matcher, method_name)，顺序即匹配优先级（类定义时由 @_post_route 填充）
+
+
+def _post_route(matcher):
+    """端点装饰器：把 (matcher, 方法名) 注册进 _POST_ROUTES（顺序即优先级）。"""
+    def deco(fn):
+        _POST_ROUTES.append((matcher, fn.__name__))
+        return fn
+    return deco
+
+
+def _match_post_route(path):
+    """查表分发：返回匹配的端点方法名；无匹配返回 None。"""
+    for matcher, name in _POST_ROUTES:
+        if isinstance(matcher, str):
+            if path == matcher:
+                return name
+        elif matcher[0] == "set":
+            if path in matcher[1]:
+                return name
+        elif matcher[0] == "pre":
+            if path.startswith(matcher[1]) and path.endswith(matcher[2]):
+                return name
+    return None
+
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -5118,834 +5145,987 @@ class _Handler(BaseHTTPRequestHandler):
             # 静态资源（WebUI dist/）
             self._serve_static(self.path)
 
+    @_post_route("/v1/chat")
+    def _p_v1_chat(self):
+        self._handle_chat()
+
+
+    @_post_route("/v1/chat/stream")
+    def _p_v1_chat_stream(self):
+        self._handle_chat_stream()
+
+
+    @_post_route("/v1/brain")
+    def _p_v1_brain(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import brain_api
+            action = str(body.get("action") or "")
+            result = brain_api.brain_action(action, body)
+            self._json(200, result)
+        except Exception as e:  # noqa: BLE001
+            self._json(500, {"error": str(e)})
+
+
+    @_post_route("/v1/brain/memory")
+    def _p_v1_brain_memory(self):
+        # 大脑记忆管理：action=add|update|delete
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import brainkit as bk
+            act = str(body.get("action") or "")
+            if act == "add":
+                e = bk.remember_structured(
+                    str(body.get("text") or ""),
+                    type=str(body.get("type") or ""),
+                    importance=int(body.get("importance") or 3),
+                    tags=body.get("tags") or [],
+                    entities=body.get("entities") or [],
+                    source="手动",
+                )
+                self._json(200, {"ok": bool(e), "item": e})
+            elif act == "update":
+                ok = bk.update_memory(
+                    str(body.get("id") or ""),
+                    text=body.get("text"),
+                    type=body.get("type"),
+                    importance=body.get("importance"),
+                    tags=body.get("tags"),
+                )
+                self._json(200, {"ok": ok, "message": "已更新" if ok else "未找到该记忆"})
+            elif act == "delete":
+                ok = bk.delete_memory(str(body.get("id") or ""))
+                self._json(200, {"ok": ok, "message": "已删除" if ok else "未找到该记忆"})
+            else:
+                self._json(400, {"error": f"未知 action: {act}"})
+        except Exception as e:  # noqa: BLE001
+            self._json(500, {"error": str(e)})
+
+
+    @_post_route("/v1/deps/install")
+    def _p_v1_deps_install(self):
+        body = self._read_body()
+        key = str((body or {}).get("key") or "")
+        # 流式安装：NDJSON 逐行推送进度（前端实时显示安装日志）
+        try:
+            import deps as deps_mod
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            # 流式响应无 Content-Length：显式关闭连接标记结束
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            def emit(obj):
+                try:
+                    self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+            dep = None
+            for d in deps_mod.HEAVY_DEPS:
+                if key in (d.get("import"), d.get("label")):
+                    dep = d
+                    break
+            if dep is None:
+                for imp, pkg, label in deps_mod.AUTO_INSTALL_DEPS:
+                    if key in (imp, label):
+                        dep = {"import": imp, "label": label, "pip": pkg, "post_cmd": None, "note": ""}
+                        break
+            if dep is None:
+                emit({"type": "error", "message": f"未找到依赖：{key}"})
+            else:
+                emit({"type": "start", "label": dep["label"]})
+                ok = deps_mod.install_optional(dep, on_line=lambda s: emit({"type": "line", "message": s}))
+                # Piper 可选能力：依赖装完后自动下载中文语音模型 + g2pW（免折腾，镜像回退）
+                if ok and dep.get("import") == "piper":
+                    emit({"type": "line", "message": "Piper 依赖就绪，正在下载中文语音模型（约 220MB，含 g2pW 音素模型）…"})
+                    try:
+                        ok_v, msg_v = _piper_download("zh_CN-chaowen-medium")
+                        emit({"type": "line", "message": msg_v})
+                        ok = ok and ok_v
+                    except Exception as e:  # noqa: BLE001
+                        emit({"type": "line", "message": f"模型下载异常：{e}"})
+                        ok = False
+                emit({"type": "done", "ok": ok, "label": dep["label"]})
+        except Exception as e:  # noqa: BLE001
+            try:
+                self.wfile.write((json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n").encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
+
+
+    @_post_route("/v1/first_run/complete")
+    def _p_v1_first_run_complete(self):
+        # 首次引导完成（装完或跳过）→ 写标志，下次启动不再弹向导
+        self._json(200, {"ok": _mark_first_run_done()})
+
+
+    @_post_route("/v1/deps/install_many")
+    def _p_v1_deps_install_many(self):
+        # 批量安装（首次启动向导用）：body {keys: [import名/能力名...]}，NDJSON 逐项进度
+        body = self._read_body()
+        keys = (body or {}).get("keys") or []
+        if not isinstance(keys, list) or not keys:
+            self._json(400, {"error": "keys 必须是非空数组"})
+            return
+        try:
+            import deps as deps_mod
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            # 流式响应无 Content-Length：显式关闭连接标记结束，避免客户端等 EOF 挂起/连接复用竞态
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            def emit(obj):
+                try:
+                    self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+            emit({"type": "batch_start", "total": len(keys)})
+            failed = []
+            for i, key in enumerate(keys, 1):
+                dep = None
+                for d in deps_mod.HEAVY_DEPS:
+                    if str(key) in (d.get("import"), d.get("label")):
+                        dep = d
+                        break
+                if dep is None:
+                    for imp, pkg, label in deps_mod.AUTO_INSTALL_DEPS:
+                        if str(key) in (imp, label):
+                            dep = {"import": imp, "label": label, "pip": pkg, "post_cmd": None, "note": ""}
+                            break
+                if dep is None:
+                    emit({"type": "item_done", "ok": False, "index": i, "label": str(key), "key": str(key), "message": f"未找到依赖：{key}"})
+                    failed.append(str(key))
+                    continue
+                emit({"type": "item_start", "index": i, "label": dep["label"]})
+                ok = deps_mod.install_optional(dep, on_line=lambda s: emit({"type": "line", "message": s}))
+                if ok and dep.get("import") == "piper":
+                    emit({"type": "line", "message": "Piper 依赖就绪，正在下载中文语音模型（约 220MB，含 g2pW 音素模型）…"})
+                    try:
+                        ok_v, msg_v = _piper_download("zh_CN-chaowen-medium")
+                        emit({"type": "line", "message": msg_v})
+                        ok = ok and ok_v
+                    except Exception as e:  # noqa: BLE001
+                        emit({"type": "line", "message": f"模型下载异常：{e}"})
+                        ok = False
+                if not ok:
+                    failed.append(dep["label"])
+                emit({"type": "item_done", "ok": ok, "index": i, "label": dep["label"], "key": dep["import"]})
+            emit({"type": "batch_done", "ok": len(failed) == 0, "failed": failed})
+        except Exception as e:  # noqa: BLE001
+            try:
+                self.wfile.write((json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n").encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
+
+
+    @_post_route(("pre", "/v1/tools/", "/invoke"))
+    def _p_v1_tools_invoke(self):
+        name = self.path[len("/v1/tools/"):-len("/invoke")]
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        args = body.get("args")
+        if not isinstance(args, dict):
+            self._json(400, {"error": "args 必须是 JSON 对象"})
+            return
+        result = _tool_invoke(name, args)
+        self._json(200, {"name": name, "result": result})
+
+
+    @_post_route("/v1/fim")
+    def _p_v1_fim(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        import config_utils
+        import deepseek_client as dc
+        cfg = config_utils.load_config()
+        key = str(cfg.get("api_key") or "").strip()
+        if not key:
+            self._json(500, {"error": "未配置 DeepSeek API Key"})
+            return
+        base_url = str(cfg.get("base_url") or dc.DEFAULT_BASE_URL)
+        client = dc.DeepSeekClient(key, base_url=base_url, model=cfg.get("model") or dc.DEFAULT_MODEL, timeout=120)
+        try:
+            result = client.fim_complete(
+                str(body.get("prompt") or ""),
+                suffix=str(body.get("suffix") or ""),
+                max_tokens=int(body.get("max_tokens") or 2048),
+            )
+            self._json(200, {"result": str(result)})
+        except Exception as e:
+            self._json(500, {"error": str(e)})
+
+
+    @_post_route("/v1/cleanup")
+    def _p_v1_cleanup(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        self._json(200, _cleanup_items(body))
+
+
+    @_post_route("/v1/backup")
+    def _p_v1_backup(self):
+        body = self._read_body()
+        action = (body or {}).get("action") if body else None
+        if action == "create":
+            result, err = _backup_create()
+            if err:
+                self._json(400, {"error": err})
+            else:
+                self._json(200, result)
+        elif action == "delete":
+            result, err = _backup_delete((body or {}).get("name") or "")
+            if err:
+                self._json(400, {"error": err})
+            else:
+                self._json(200, result)
+        elif body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+        else:
+            self._json(200, {})
+
+
+    @_post_route("/v1/workflows")
+    def _p_v1_workflows(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _workflows_save(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/checkpoint")
+    def _p_v1_checkpoint(self):
+        result, err = _checkpoint_clear()
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/knowledge/search")
+    def _p_v1_knowledge_search(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _knowledge_search_api(str(body.get("query") or ""), int(body.get("top_k") or 5))
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/roles")
+    def _p_v1_roles(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _roles_save(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/schedules")
+    def _p_v1_schedules(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _schedules_save(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/services")
+    def _p_v1_services(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _services_save(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/evolutions/apply")
+    def _p_v1_evolutions_apply(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _evolution_apply(body.get("name") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/evolutions/ignore")
+    def _p_v1_evolutions_ignore(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _evolution_ignore(body.get("name") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/evolve_branches/detail")
+    def _p_v1_evolve_branches_detail(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _evolve_branch_detail(body.get("name") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/evolve_branches/merge")
+    def _p_v1_evolve_branches_merge(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _evolve_branch_merge(body.get("name") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/evolve_branches/delete")
+    def _p_v1_evolve_branches_delete(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _evolve_branch_delete(body.get("name") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/search")
+    def _p_v1_search(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        self._json(200, _global_search(body.get("query") or "", body.get("filters") or {}))
+
+
+    @_post_route("/v1/plugin_studio/generate")
+    def _p_v1_plugin_studio_generate(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _studio_generate(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/plugin_studio/install")
+    def _p_v1_plugin_studio_install(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _studio_install(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/plugins")
+    def _p_v1_plugins(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _plugins_action(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/plugin_market/install")
+    def _p_v1_plugin_market_install(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        self._json(200, _plugin_market_install(body))
+
+
+    @_post_route("/v1/profiles")
+    def _p_v1_profiles(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _profiles_post(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/tts/synthesize")
+    def _p_v1_tts_synthesize(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            text = _tts_clean_text(str(body.get("text") or ""))
+            if not text:
+                self._json(400, {"error": "清洗后无可朗读内容（代码块/纯符号）"})
+                return
+            if len(text) > 4000:
+                text = text[:4000]
+            vc = _voice_cfg()
+            rate = max(-10, min(10, int(body.get("rate") or vc["rate"])))
+            volume = max(0, min(100, int(body.get("volume") or vc["volume"])))
+            voice = str(body.get("voice") or vc["voice"])[:80]
+            engine_req = str(body.get("engine") or "").strip().lower()
+            digest = hashlib.sha1(
+                json.dumps([text, rate, volume, voice, engine_req], ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+            os.makedirs(_VOICE_CACHE_DIR, exist_ok=True)
+            # 引擎选择链：piper（本地离线，可用时优先）→ edge（在线）→ sapi（系统）
+            # 强制 engine：piper / edge / sapi；auto（默认）智能降级。
+            edge_ok = _edge_available()
+            voice_sel = str(voice).strip()
+            piper_voice_sel = str(vc.get("piper_voice") or "zh_CN-chaowen-medium")
+            _PIPER_IDS = {v["id"] for v in _PIPER_VOICES_RECOMMENDED}
+            _voice_is_piper = bool(voice_sel) and voice_sel in _PIPER_IDS
+            _voice_is_edge = bool(voice_sel) and (voice_sel in _EDGE_VOICE_IDS or voice_sel.endswith("Neural"))
+            piper_ok, piper_avail_err = _piper_available(voice_sel if _voice_is_piper else piper_voice_sel)
+            if engine_req == "piper":
+                use_piper, use_edge = piper_ok, False
+            elif engine_req == "edge":
+                use_piper, use_edge = False, edge_ok
+            elif engine_req == "sapi":
+                use_piper, use_edge = False, False
+            else:  # auto
+                use_piper = piper_ok and (not voice_sel or _voice_is_piper)
+                use_edge = (not use_piper) and edge_ok and (not voice_sel or _voice_is_edge)
+            # 候选顺序：piper → edge → sapi（失败逐级回退；sapi 为最后兜底）
+            plan = ([("piper", f"{digest}.wav")] if use_piper else []) + \
+                   ([("edge", f"{digest}.mp3")] if use_edge else []) + \
+                   [("sapi", f"{digest}.wav")]
+            piper_err = edge_err = sapi_err = ""
+            for eng, fn in plan:
+                fp = os.path.join(_VOICE_CACHE_DIR, fn)
+                if os.path.isfile(fp) and os.path.getsize(fp) > (500 if fn.endswith(".mp3") else 200):
+                    self._json(200, {"ok": True, "url": f"/v1/tts/audio/{fn}", "cached": True, "engine": eng})
+                    return
+                with _TTS_SEM:
+                    if eng == "piper":
+                        msg = _synthesize_piper(text, fp, rate, voice_sel if _voice_is_piper else piper_voice_sel)
+                    elif eng == "edge":
+                        msg = _synthesize_edge(text, fp, rate, volume, voice)
+                    else:
+                        msg = _synthesize_sapi(text, fp, rate, volume, voice)
+                if eng == "piper":
+                    piper_err = msg
+                elif eng == "edge":
+                    edge_err = msg
+                else:
+                    sapi_err = msg
+                if not msg:
+                    self._json(200, {"ok": True, "url": f"/v1/tts/audio/{fn}", "cached": False, "engine": eng})
+                    return
+                try:
+                    os.remove(fp)
+                except OSError:
+                    pass
+            # 全部引擎失败：按上下文报告最有信息量的一侧
+            if engine_req == "piper" and piper_avail_err:
+                detail = piper_avail_err
+            elif use_piper and piper_err:
+                detail = piper_err
+            elif edge_err:
+                detail = edge_err
+            else:
+                detail = (sapi_err or "合成失败")
+                if not edge_err and "语音包" in detail:
+                    detail = "本机无中文离线语音包且在线音色不可用，请安装 edge-tts、piper-tts 或中文语音包后重试"
+            self._json(500, {"error": detail})
+        except Exception as e:
+            logger.exception("TTS 合成失败")
+            self._json(500, {"error": str(e)})
+
+
+    @_post_route("/v1/tts/download_piper")
+    def _p_v1_tts_download_piper(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        voice_dl = str((body or {}).get("voice") or "")[:80] or "zh_CN-chaowen-medium"
+        ok_dl, msg_dl = _piper_download(voice_dl)
+        self._json(200, {"ok": ok_dl, "message": msg_dl})
+
+
+    @_post_route("/v1/tts/setup_piper")
+    def _p_v1_tts_setup_piper(self):
+        # Piper 一键部署：NDJSON 流式推送进度（依赖安装 → 模型下载 → 合成验证）
+        body = self._read_body()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        def emit(obj):
+            try:
+                self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
+
+        try:
+            _piper_setup(emit)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Piper 一键部署失败")
+            emit({"type": "error", "message": str(e)})
+
+
+    @_post_route("/v1/mode")
+    def _p_v1_mode(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import config_utils
+            import permissions as perms
+            mode = str(body.get("mode") or "")
+            if mode not in ("task", "dialog"):
+                self._json(400, {"error": "mode 必须是 task 或 dialog"})
+                return
+            cfg = config_utils.load_config()
+            cfg["full_auto"] = mode == "task"
+            cfg["pure_chat"] = mode == "dialog"
+            config_utils.save_config(cfg)
+            perms.set_full_auto(cfg["full_auto"])
+            _cached_invalidate("status")
+            self._json(200, {"ok": True, "mode": mode})
+        except Exception as e:
+            logger.exception("POST /v1/mode 失败")
+            self._json(500, {"error": str(e)})
+
+
+    @_post_route("/v1/respond")
+    def _p_v1_respond(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        ok, err = _respond(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, {"ok": True})
+
+
+    @_post_route("/v1/config")
+    def _p_v1_config(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import config_utils
+            cfg = config_utils.load_config()
+            for k, typ in (("model", str), ("thinking", str), ("scenario", str), ("max_tokens", int),
+                   ("tools_enabled", bool), ("privacy_mode", bool), ("system_prompt", str),
+                   ("temperature", float), ("top_p", float), ("seed", int), ("json_output", bool),
+                   ("beta_api", bool), ("strict_tools", bool), ("base_url", str),
+                   ("notify_on_done", bool), ("project_context", bool),
+                   ("completion_sound", bool), ("silent_start", bool),
+                   ("max_context_tokens", int), ("max_context_chars", int),
+                   ("min_kept_turns", int), ("timeout", float), ("max_tool_rounds", int),
+                   ("browser_headless", bool),
+                   ("peak_warning", bool), ("suggestions_enabled", bool),
+                   ("monthly_budget", float), ("block_on_budget", bool),
+                   ("autostart", bool), ("minimize_to_tray", bool)):
+                if k in body and body[k] is not None:
+                    v = body[k]
+                    if typ is bool:
+                        cfg[k] = bool(v)
+                    elif typ is int:
+                        try:
+                            cfg[k] = int(v)
+                        except (TypeError, ValueError):
+                            pass
+                    elif typ is float:
+                        try:
+                            cfg[k] = float(v)
+                        except (TypeError, ValueError):
+                            pass
+                    else:
+                        cfg[k] = str(v)[:500]
+            # 温度/top_p 落原程序键
+            if "temperature" in body and body["temperature"] is not None:
+                try:
+                    cfg["custom_temperature"] = max(0.0, min(2.0, float(body["temperature"])))
+                except (TypeError, ValueError):
+                    pass
+            if "top_p" in body and body["top_p"] is not None:
+                try:
+                    cfg["custom_top_p"] = max(0.0, min(1.0, float(body["top_p"])))
+                except (TypeError, ValueError):
+                    pass
+            if "stop" in body and body["stop"] is not None:
+                v = body["stop"]
+                if isinstance(v, str):
+                    cfg["stop"] = [s.strip() for s in v.split(",") if s.strip()][:16]
+                elif isinstance(v, list):
+                    cfg["stop"] = [str(s).strip() for s in v if str(s).strip()][:16]
+                else:
+                    cfg.pop("stop", None)
+            if "logprobs" in body and body["logprobs"] is not None:
+                cfg["logprobs"] = bool(body["logprobs"])
+            if "tool_choice" in body and body["tool_choice"] is not None:
+                cfg["tool_choice"] = str(body["tool_choice"])[:32]
+            if "voice_config" in body and isinstance(body["voice_config"], dict):
+                vreq = body["voice_config"]
+                mode = str(vreq.get("auto_mode") or "off")
+                try:
+                    rate_v = max(-10, min(10, int(vreq.get("rate") or 0)))
+                except (TypeError, ValueError):
+                    rate_v = 0
+                try:
+                    vol_v = max(0, min(100, int(vreq.get("volume") or 100)))
+                except (TypeError, ValueError):
+                    vol_v = 100
+                cfg["voice_config"] = {
+                    "auto_mode": mode if mode in ("off", "sentence", "full") else "off",
+                    "rate": rate_v,
+                    "volume": vol_v,
+                    "voice": str(vreq.get("voice") or "").strip()[:80],
+                }
+            # API Key：留空/缺省=不修改；非空 strip 后交给 save_config 加密落盘
+            if "api_key" in body and body["api_key"] is not None:
+                new_key = str(body["api_key"]).strip()
+                if new_key:
+                    cfg["api_key"] = new_key
+            config_utils.save_config(cfg)
+            # 开机自启注册（HKCU Run / 卸载）
+            if "autostart" in body and body["autostart"] is not None:
+                _apply_autostart(bool(body["autostart"]))
+            # 配置保存后热同步全部工具侧接线（路径/agent_mail/主题/工作目录/图片键）
+            _init_dc_paths()
+            # 密钥/网关/模型等影响 LLM 客户端的配置变更后，失效客户端缓存
+            # （get_active_client 下次调用按新配置重建；会话注入的由下次对话刷新）
+            if any(k in body for k in ("api_key", "base_url", "model")):
+                _reset_llm_client_cache()
+            if "api_key" in body and body["api_key"] is not None:
+                _cached_invalidate("status")
+            self._json(200, {"ok": True})
+        except Exception as e:
+            logger.exception("POST /v1/config 失败")
+            self._json(500, {"error": str(e)})
+
+
+    @_post_route("/v1/prompts")
+    def _p_v1_prompts(self):
+        # 兼容旧接口：整表覆盖用户指令（内置指令不入库，过滤掉）
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        items = body.get("prompts")
+        if not isinstance(items, list):
+            self._json(400, {"error": "prompts 必须是列表"})
+            return
+        _prompts_save_user([p for p in items if not p.get("builtin")] if all(isinstance(p, dict) for p in items) else items)
+        self._json(200, {"ok": True})
+
+
+    @_post_route(("set", ['/v1/prompts/save', '/v1/prompts/delete', '/v1/prompts/reorder', '/v1/prompts/import', '/v1/prompts/use', '/v1/prompts/restore_builtin']))
+    def _p_v1_prompts_save_actions(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            if self.path == "/v1/prompts/save":
+                result, err = _prompt_upsert(body)
+            elif self.path == "/v1/prompts/delete":
+                result, err = _prompt_delete(body)
+            elif self.path == "/v1/prompts/reorder":
+                result, err = _prompts_reorder(body)
+            elif self.path == "/v1/prompts/import":
+                result, err = _prompts_import(body)
+            elif self.path == "/v1/prompts/use":
+                result, err = _prompt_use(body)
+            else:
+                result, err = _prompts_restore_builtin()
+        except Exception as e:
+            logger.exception("指令库操作失败 %s", self.path)
+            result, err = None, f"操作失败：{e}"
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/sessions")
+    def _p_v1_sessions(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        sid, err = self._save_session(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, {"id": sid})
+
+
+    @_post_route("/v1/sessions/delete_batch")
+    def _p_v1_sessions_delete_batch(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        ok, removed, err = self._delete_sessions_batch(body.get("ids") or [])
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, {"ok": True, "removed": removed})
+
+
+    @_post_route("/v1/sessions/delete")
+    def _p_v1_sessions_delete(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        ok, err = self._delete_session(body.get("id") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, {"ok": True})
+
+
+    @_post_route("/v1/sessions/pin")
+    def _p_v1_sessions_pin(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        ok, err = self._pin_session(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, {"ok": True})
+
+
+    @_post_route("/v1/sessions/rename")
+    def _p_v1_sessions_rename(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        ok, err = self._patch_session(body, ("name",))
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, {"ok": True})
+
+
+    @_post_route("/v1/sessions/tags")
+    def _p_v1_sessions_tags(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        ok, err = self._patch_session(body, ("tags",))
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, {"ok": True})
+
+
+    @_post_route("/v1/permissions")
+    def _p_v1_permissions(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _permissions_set(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/dir")
+    def _p_v1_dir(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _set_dir(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/files/read")
+    def _p_v1_files_read(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        data, err = _read_file(body.get("path") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, data)
+
+
+    @_post_route("/v1/files/preview")
+    def _p_v1_files_preview(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        data, err = _file_preview(body.get("path") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, data)
+
+
+    @_post_route("/v1/files/open")
+    def _p_v1_files_open(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        data, err = open_path(body.get("path") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, data)
+
+
+    @_post_route("/v1/files/opendir")
+    def _p_v1_files_opendir(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        data, err = open_dir(body.get("path") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, data)
+
+
+    @_post_route("/v1/processes/stop")
+    def _p_v1_processes_stop(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _stop_process(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/processes/start")
+    def _p_v1_processes_start(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _start_process(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/upload")
+    def _p_v1_upload(self):
+        body = self._read_body(UPLOAD_BODY_MAX)
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _upload(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
     def do_POST(self):
         if not self._auth():
             self._json(401, {"error": "unauthorized"})
             return
         try:
             self.path = self._strip_api_prefix(self.path)
-            if self.path == "/v1/chat":
-                self._handle_chat()
-            elif self.path == "/v1/chat/stream":
-                self._handle_chat_stream()
-            elif self.path == "/v1/brain":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                try:
-                    import brain_api
-                    action = str(body.get("action") or "")
-                    result = brain_api.brain_action(action, body)
-                    self._json(200, result)
-                except Exception as e:  # noqa: BLE001
-                    self._json(500, {"error": str(e)})
-            elif self.path == "/v1/brain/memory":
-                # 大脑记忆管理：action=add|update|delete
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                try:
-                    import brainkit as bk
-                    act = str(body.get("action") or "")
-                    if act == "add":
-                        e = bk.remember_structured(
-                            str(body.get("text") or ""),
-                            type=str(body.get("type") or ""),
-                            importance=int(body.get("importance") or 3),
-                            tags=body.get("tags") or [],
-                            entities=body.get("entities") or [],
-                            source="手动",
-                        )
-                        self._json(200, {"ok": bool(e), "item": e})
-                    elif act == "update":
-                        ok = bk.update_memory(
-                            str(body.get("id") or ""),
-                            text=body.get("text"),
-                            type=body.get("type"),
-                            importance=body.get("importance"),
-                            tags=body.get("tags"),
-                        )
-                        self._json(200, {"ok": ok, "message": "已更新" if ok else "未找到该记忆"})
-                    elif act == "delete":
-                        ok = bk.delete_memory(str(body.get("id") or ""))
-                        self._json(200, {"ok": ok, "message": "已删除" if ok else "未找到该记忆"})
-                    else:
-                        self._json(400, {"error": f"未知 action: {act}"})
-                except Exception as e:  # noqa: BLE001
-                    self._json(500, {"error": str(e)})
-            elif self.path == "/v1/deps/install":
-                body = self._read_body()
-                key = str((body or {}).get("key") or "")
-                # 流式安装：NDJSON 逐行推送进度（前端实时显示安装日志）
-                try:
-                    import deps as deps_mod
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-                    self.send_header("Cache-Control", "no-cache")
-                    # 流式响应无 Content-Length：显式关闭连接标记结束
-                    self.send_header("Connection", "close")
-                    self.end_headers()
-
-                    def emit(obj):
-                        try:
-                            self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
-                            self.wfile.flush()
-                        except Exception:
-                            pass
-
-                    dep = None
-                    for d in deps_mod.HEAVY_DEPS:
-                        if key in (d.get("import"), d.get("label")):
-                            dep = d
-                            break
-                    if dep is None:
-                        for imp, pkg, label in deps_mod.AUTO_INSTALL_DEPS:
-                            if key in (imp, label):
-                                dep = {"import": imp, "label": label, "pip": pkg, "post_cmd": None, "note": ""}
-                                break
-                    if dep is None:
-                        emit({"type": "error", "message": f"未找到依赖：{key}"})
-                    else:
-                        emit({"type": "start", "label": dep["label"]})
-                        ok = deps_mod.install_optional(dep, on_line=lambda s: emit({"type": "line", "message": s}))
-                        # Piper 可选能力：依赖装完后自动下载中文语音模型 + g2pW（免折腾，镜像回退）
-                        if ok and dep.get("import") == "piper":
-                            emit({"type": "line", "message": "Piper 依赖就绪，正在下载中文语音模型（约 220MB，含 g2pW 音素模型）…"})
-                            try:
-                                ok_v, msg_v = _piper_download("zh_CN-chaowen-medium")
-                                emit({"type": "line", "message": msg_v})
-                                ok = ok and ok_v
-                            except Exception as e:  # noqa: BLE001
-                                emit({"type": "line", "message": f"模型下载异常：{e}"})
-                                ok = False
-                        emit({"type": "done", "ok": ok, "label": dep["label"]})
-                except Exception as e:  # noqa: BLE001
-                    try:
-                        self.wfile.write((json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n").encode("utf-8"))
-                        self.wfile.flush()
-                    except Exception:
-                        pass
-            elif self.path == "/v1/first_run/complete":
-                # 首次引导完成（装完或跳过）→ 写标志，下次启动不再弹向导
-                self._json(200, {"ok": _mark_first_run_done()})
-            elif self.path == "/v1/deps/install_many":
-                # 批量安装（首次启动向导用）：body {keys: [import名/能力名...]}，NDJSON 逐项进度
-                body = self._read_body()
-                keys = (body or {}).get("keys") or []
-                if not isinstance(keys, list) or not keys:
-                    self._json(400, {"error": "keys 必须是非空数组"})
-                    return
-                try:
-                    import deps as deps_mod
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-                    self.send_header("Cache-Control", "no-cache")
-                    # 流式响应无 Content-Length：显式关闭连接标记结束，避免客户端等 EOF 挂起/连接复用竞态
-                    self.send_header("Connection", "close")
-                    self.end_headers()
-
-                    def emit(obj):
-                        try:
-                            self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
-                            self.wfile.flush()
-                        except Exception:
-                            pass
-
-                    emit({"type": "batch_start", "total": len(keys)})
-                    failed = []
-                    for i, key in enumerate(keys, 1):
-                        dep = None
-                        for d in deps_mod.HEAVY_DEPS:
-                            if str(key) in (d.get("import"), d.get("label")):
-                                dep = d
-                                break
-                        if dep is None:
-                            for imp, pkg, label in deps_mod.AUTO_INSTALL_DEPS:
-                                if str(key) in (imp, label):
-                                    dep = {"import": imp, "label": label, "pip": pkg, "post_cmd": None, "note": ""}
-                                    break
-                        if dep is None:
-                            emit({"type": "item_done", "ok": False, "index": i, "label": str(key), "key": str(key), "message": f"未找到依赖：{key}"})
-                            failed.append(str(key))
-                            continue
-                        emit({"type": "item_start", "index": i, "label": dep["label"]})
-                        ok = deps_mod.install_optional(dep, on_line=lambda s: emit({"type": "line", "message": s}))
-                        if ok and dep.get("import") == "piper":
-                            emit({"type": "line", "message": "Piper 依赖就绪，正在下载中文语音模型（约 220MB，含 g2pW 音素模型）…"})
-                            try:
-                                ok_v, msg_v = _piper_download("zh_CN-chaowen-medium")
-                                emit({"type": "line", "message": msg_v})
-                                ok = ok and ok_v
-                            except Exception as e:  # noqa: BLE001
-                                emit({"type": "line", "message": f"模型下载异常：{e}"})
-                                ok = False
-                        if not ok:
-                            failed.append(dep["label"])
-                        emit({"type": "item_done", "ok": ok, "index": i, "label": dep["label"], "key": dep["import"]})
-                    emit({"type": "batch_done", "ok": len(failed) == 0, "failed": failed})
-                except Exception as e:  # noqa: BLE001
-                    try:
-                        self.wfile.write((json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n").encode("utf-8"))
-                        self.wfile.flush()
-                    except Exception:
-                        pass
-            elif self.path.startswith("/v1/tools/") and self.path.endswith("/invoke"):
-                name = self.path[len("/v1/tools/"):-len("/invoke")]
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                args = body.get("args")
-                if not isinstance(args, dict):
-                    self._json(400, {"error": "args 必须是 JSON 对象"})
-                    return
-                result = _tool_invoke(name, args)
-                self._json(200, {"name": name, "result": result})
-            elif self.path == "/v1/fim":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                import config_utils
-                import deepseek_client as dc
-                cfg = config_utils.load_config()
-                key = str(cfg.get("api_key") or "").strip()
-                if not key:
-                    self._json(500, {"error": "未配置 DeepSeek API Key"})
-                    return
-                base_url = str(cfg.get("base_url") or dc.DEFAULT_BASE_URL)
-                client = dc.DeepSeekClient(key, base_url=base_url, model=cfg.get("model") or dc.DEFAULT_MODEL, timeout=120)
-                try:
-                    result = client.fim_complete(
-                        str(body.get("prompt") or ""),
-                        suffix=str(body.get("suffix") or ""),
-                        max_tokens=int(body.get("max_tokens") or 2048),
-                    )
-                    self._json(200, {"result": str(result)})
-                except Exception as e:
-                    self._json(500, {"error": str(e)})
-            elif self.path == "/v1/cleanup":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                self._json(200, _cleanup_items(body))
-            elif self.path == "/v1/backup":
-                body = self._read_body()
-                action = (body or {}).get("action") if body else None
-                if action == "create":
-                    result, err = _backup_create()
-                    if err:
-                        self._json(400, {"error": err})
-                    else:
-                        self._json(200, result)
-                elif action == "delete":
-                    result, err = _backup_delete((body or {}).get("name") or "")
-                    if err:
-                        self._json(400, {"error": err})
-                    else:
-                        self._json(200, result)
-                elif body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                else:
-                    self._json(200, {})
-            elif self.path == "/v1/workflows":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _workflows_save(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/checkpoint":
-                result, err = _checkpoint_clear()
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/knowledge/search":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _knowledge_search_api(str(body.get("query") or ""), int(body.get("top_k") or 5))
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/roles":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _roles_save(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/schedules":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _schedules_save(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/services":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _services_save(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/evolutions/apply":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _evolution_apply(body.get("name") or "")
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/evolutions/ignore":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _evolution_ignore(body.get("name") or "")
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/evolve_branches/detail":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _evolve_branch_detail(body.get("name") or "")
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/evolve_branches/merge":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _evolve_branch_merge(body.get("name") or "")
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/evolve_branches/delete":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _evolve_branch_delete(body.get("name") or "")
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/search":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                self._json(200, _global_search(body.get("query") or "", body.get("filters") or {}))
-            elif self.path == "/v1/plugin_studio/generate":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _studio_generate(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/plugin_studio/install":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _studio_install(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/plugins":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _plugins_action(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/plugin_market/install":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                self._json(200, _plugin_market_install(body))
-            elif self.path == "/v1/profiles":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _profiles_post(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/tts/synthesize":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                try:
-                    text = _tts_clean_text(str(body.get("text") or ""))
-                    if not text:
-                        self._json(400, {"error": "清洗后无可朗读内容（代码块/纯符号）"})
-                        return
-                    if len(text) > 4000:
-                        text = text[:4000]
-                    vc = _voice_cfg()
-                    rate = max(-10, min(10, int(body.get("rate") or vc["rate"])))
-                    volume = max(0, min(100, int(body.get("volume") or vc["volume"])))
-                    voice = str(body.get("voice") or vc["voice"])[:80]
-                    engine_req = str(body.get("engine") or "").strip().lower()
-                    digest = hashlib.sha1(
-                        json.dumps([text, rate, volume, voice, engine_req], ensure_ascii=False).encode("utf-8")
-                    ).hexdigest()
-                    os.makedirs(_VOICE_CACHE_DIR, exist_ok=True)
-                    # 引擎选择链：piper（本地离线，可用时优先）→ edge（在线）→ sapi（系统）
-                    # 强制 engine：piper / edge / sapi；auto（默认）智能降级。
-                    edge_ok = _edge_available()
-                    voice_sel = str(voice).strip()
-                    piper_voice_sel = str(vc.get("piper_voice") or "zh_CN-chaowen-medium")
-                    _PIPER_IDS = {v["id"] for v in _PIPER_VOICES_RECOMMENDED}
-                    _voice_is_piper = bool(voice_sel) and voice_sel in _PIPER_IDS
-                    _voice_is_edge = bool(voice_sel) and (voice_sel in _EDGE_VOICE_IDS or voice_sel.endswith("Neural"))
-                    piper_ok, piper_avail_err = _piper_available(voice_sel if _voice_is_piper else piper_voice_sel)
-                    if engine_req == "piper":
-                        use_piper, use_edge = piper_ok, False
-                    elif engine_req == "edge":
-                        use_piper, use_edge = False, edge_ok
-                    elif engine_req == "sapi":
-                        use_piper, use_edge = False, False
-                    else:  # auto
-                        use_piper = piper_ok and (not voice_sel or _voice_is_piper)
-                        use_edge = (not use_piper) and edge_ok and (not voice_sel or _voice_is_edge)
-                    # 候选顺序：piper → edge → sapi（失败逐级回退；sapi 为最后兜底）
-                    plan = ([("piper", f"{digest}.wav")] if use_piper else []) + \
-                           ([("edge", f"{digest}.mp3")] if use_edge else []) + \
-                           [("sapi", f"{digest}.wav")]
-                    piper_err = edge_err = sapi_err = ""
-                    for eng, fn in plan:
-                        fp = os.path.join(_VOICE_CACHE_DIR, fn)
-                        if os.path.isfile(fp) and os.path.getsize(fp) > (500 if fn.endswith(".mp3") else 200):
-                            self._json(200, {"ok": True, "url": f"/v1/tts/audio/{fn}", "cached": True, "engine": eng})
-                            return
-                        with _TTS_SEM:
-                            if eng == "piper":
-                                msg = _synthesize_piper(text, fp, rate, voice_sel if _voice_is_piper else piper_voice_sel)
-                            elif eng == "edge":
-                                msg = _synthesize_edge(text, fp, rate, volume, voice)
-                            else:
-                                msg = _synthesize_sapi(text, fp, rate, volume, voice)
-                        if eng == "piper":
-                            piper_err = msg
-                        elif eng == "edge":
-                            edge_err = msg
-                        else:
-                            sapi_err = msg
-                        if not msg:
-                            self._json(200, {"ok": True, "url": f"/v1/tts/audio/{fn}", "cached": False, "engine": eng})
-                            return
-                        try:
-                            os.remove(fp)
-                        except OSError:
-                            pass
-                    # 全部引擎失败：按上下文报告最有信息量的一侧
-                    if engine_req == "piper" and piper_avail_err:
-                        detail = piper_avail_err
-                    elif use_piper and piper_err:
-                        detail = piper_err
-                    elif edge_err:
-                        detail = edge_err
-                    else:
-                        detail = (sapi_err or "合成失败")
-                        if not edge_err and "语音包" in detail:
-                            detail = "本机无中文离线语音包且在线音色不可用，请安装 edge-tts、piper-tts 或中文语音包后重试"
-                    self._json(500, {"error": detail})
-                except Exception as e:
-                    logger.exception("TTS 合成失败")
-                    self._json(500, {"error": str(e)})
-            elif self.path == "/v1/tts/download_piper":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                voice_dl = str((body or {}).get("voice") or "")[:80] or "zh_CN-chaowen-medium"
-                ok_dl, msg_dl = _piper_download(voice_dl)
-                self._json(200, {"ok": ok_dl, "message": msg_dl})
-            elif self.path == "/v1/tts/setup_piper":
-                # Piper 一键部署：NDJSON 流式推送进度（依赖安装 → 模型下载 → 合成验证）
-                body = self._read_body()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "close")
-                self.end_headers()
-
-                def emit(obj):
-                    try:
-                        self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
-                        self.wfile.flush()
-                    except Exception:
-                        pass
-
-                try:
-                    _piper_setup(emit)
-                except Exception as e:  # noqa: BLE001
-                    logger.exception("Piper 一键部署失败")
-                    emit({"type": "error", "message": str(e)})
-            elif self.path == "/v1/mode":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                try:
-                    import config_utils
-                    import permissions as perms
-                    mode = str(body.get("mode") or "")
-                    if mode not in ("task", "dialog"):
-                        self._json(400, {"error": "mode 必须是 task 或 dialog"})
-                        return
-                    cfg = config_utils.load_config()
-                    cfg["full_auto"] = mode == "task"
-                    cfg["pure_chat"] = mode == "dialog"
-                    config_utils.save_config(cfg)
-                    perms.set_full_auto(cfg["full_auto"])
-                    _cached_invalidate("status")
-                    self._json(200, {"ok": True, "mode": mode})
-                except Exception as e:
-                    logger.exception("POST /v1/mode 失败")
-                    self._json(500, {"error": str(e)})
-            elif self.path == "/v1/respond":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                ok, err = _respond(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, {"ok": True})
-            elif self.path == "/v1/config":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                try:
-                    import config_utils
-                    cfg = config_utils.load_config()
-                    for k, typ in (("model", str), ("thinking", str), ("scenario", str), ("max_tokens", int),
-                           ("tools_enabled", bool), ("privacy_mode", bool), ("system_prompt", str),
-                           ("temperature", float), ("top_p", float), ("seed", int), ("json_output", bool),
-                           ("beta_api", bool), ("strict_tools", bool), ("base_url", str),
-                           ("notify_on_done", bool), ("project_context", bool),
-                           ("completion_sound", bool), ("silent_start", bool),
-                           ("max_context_tokens", int), ("max_context_chars", int),
-                           ("min_kept_turns", int), ("timeout", float), ("max_tool_rounds", int),
-                           ("browser_headless", bool),
-                           ("peak_warning", bool), ("suggestions_enabled", bool),
-                           ("monthly_budget", float), ("block_on_budget", bool),
-                           ("autostart", bool), ("minimize_to_tray", bool)):
-                        if k in body and body[k] is not None:
-                            v = body[k]
-                            if typ is bool:
-                                cfg[k] = bool(v)
-                            elif typ is int:
-                                try:
-                                    cfg[k] = int(v)
-                                except (TypeError, ValueError):
-                                    pass
-                            elif typ is float:
-                                try:
-                                    cfg[k] = float(v)
-                                except (TypeError, ValueError):
-                                    pass
-                            else:
-                                cfg[k] = str(v)[:500]
-                    # 温度/top_p 落原程序键
-                    if "temperature" in body and body["temperature"] is not None:
-                        try:
-                            cfg["custom_temperature"] = max(0.0, min(2.0, float(body["temperature"])))
-                        except (TypeError, ValueError):
-                            pass
-                    if "top_p" in body and body["top_p"] is not None:
-                        try:
-                            cfg["custom_top_p"] = max(0.0, min(1.0, float(body["top_p"])))
-                        except (TypeError, ValueError):
-                            pass
-                    if "stop" in body and body["stop"] is not None:
-                        v = body["stop"]
-                        if isinstance(v, str):
-                            cfg["stop"] = [s.strip() for s in v.split(",") if s.strip()][:16]
-                        elif isinstance(v, list):
-                            cfg["stop"] = [str(s).strip() for s in v if str(s).strip()][:16]
-                        else:
-                            cfg.pop("stop", None)
-                    if "logprobs" in body and body["logprobs"] is not None:
-                        cfg["logprobs"] = bool(body["logprobs"])
-                    if "tool_choice" in body and body["tool_choice"] is not None:
-                        cfg["tool_choice"] = str(body["tool_choice"])[:32]
-                    if "voice_config" in body and isinstance(body["voice_config"], dict):
-                        vreq = body["voice_config"]
-                        mode = str(vreq.get("auto_mode") or "off")
-                        try:
-                            rate_v = max(-10, min(10, int(vreq.get("rate") or 0)))
-                        except (TypeError, ValueError):
-                            rate_v = 0
-                        try:
-                            vol_v = max(0, min(100, int(vreq.get("volume") or 100)))
-                        except (TypeError, ValueError):
-                            vol_v = 100
-                        cfg["voice_config"] = {
-                            "auto_mode": mode if mode in ("off", "sentence", "full") else "off",
-                            "rate": rate_v,
-                            "volume": vol_v,
-                            "voice": str(vreq.get("voice") or "").strip()[:80],
-                        }
-                    # API Key：留空/缺省=不修改；非空 strip 后交给 save_config 加密落盘
-                    if "api_key" in body and body["api_key"] is not None:
-                        new_key = str(body["api_key"]).strip()
-                        if new_key:
-                            cfg["api_key"] = new_key
-                    config_utils.save_config(cfg)
-                    # 开机自启注册（HKCU Run / 卸载）
-                    if "autostart" in body and body["autostart"] is not None:
-                        _apply_autostart(bool(body["autostart"]))
-                    # 配置保存后热同步全部工具侧接线（路径/agent_mail/主题/工作目录/图片键）
-                    _init_dc_paths()
-                    # 密钥/网关/模型等影响 LLM 客户端的配置变更后，失效客户端缓存
-                    # （get_active_client 下次调用按新配置重建；会话注入的由下次对话刷新）
-                    if any(k in body for k in ("api_key", "base_url", "model")):
-                        _reset_llm_client_cache()
-                    if "api_key" in body and body["api_key"] is not None:
-                        _cached_invalidate("status")
-                    self._json(200, {"ok": True})
-                except Exception as e:
-                    logger.exception("POST /v1/config 失败")
-                    self._json(500, {"error": str(e)})
-            elif self.path == "/v1/prompts":
-                # 兼容旧接口：整表覆盖用户指令（内置指令不入库，过滤掉）
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                items = body.get("prompts")
-                if not isinstance(items, list):
-                    self._json(400, {"error": "prompts 必须是列表"})
-                    return
-                _prompts_save_user([p for p in items if not p.get("builtin")] if all(isinstance(p, dict) for p in items) else items)
-                self._json(200, {"ok": True})
-            elif self.path in ("/v1/prompts/save", "/v1/prompts/delete", "/v1/prompts/reorder",
-                               "/v1/prompts/import", "/v1/prompts/use", "/v1/prompts/restore_builtin"):
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                try:
-                    if self.path == "/v1/prompts/save":
-                        result, err = _prompt_upsert(body)
-                    elif self.path == "/v1/prompts/delete":
-                        result, err = _prompt_delete(body)
-                    elif self.path == "/v1/prompts/reorder":
-                        result, err = _prompts_reorder(body)
-                    elif self.path == "/v1/prompts/import":
-                        result, err = _prompts_import(body)
-                    elif self.path == "/v1/prompts/use":
-                        result, err = _prompt_use(body)
-                    else:
-                        result, err = _prompts_restore_builtin()
-                except Exception as e:
-                    logger.exception("指令库操作失败 %s", self.path)
-                    result, err = None, f"操作失败：{e}"
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/sessions":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                sid, err = self._save_session(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, {"id": sid})
-            elif self.path == "/v1/sessions/delete_batch":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                ok, removed, err = self._delete_sessions_batch(body.get("ids") or [])
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, {"ok": True, "removed": removed})
-            elif self.path == "/v1/sessions/delete":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                ok, err = self._delete_session(body.get("id") or "")
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, {"ok": True})
-            elif self.path == "/v1/sessions/pin":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                ok, err = self._pin_session(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, {"ok": True})
-            elif self.path == "/v1/sessions/rename":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                ok, err = self._patch_session(body, ("name",))
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, {"ok": True})
-            elif self.path == "/v1/sessions/tags":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                ok, err = self._patch_session(body, ("tags",))
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, {"ok": True})
-            elif self.path == "/v1/permissions":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _permissions_set(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/dir":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _set_dir(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/files/read":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                data, err = _read_file(body.get("path") or "")
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, data)
-            elif self.path == "/v1/files/preview":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                data, err = _file_preview(body.get("path") or "")
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, data)
-            elif self.path == "/v1/files/open":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                data, err = open_path(body.get("path") or "")
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, data)
-            elif self.path == "/v1/files/opendir":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                data, err = open_dir(body.get("path") or "")
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, data)
-            elif self.path == "/v1/processes/stop":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _stop_process(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/processes/start":
-                body = self._read_body()
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _start_process(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            elif self.path == "/v1/upload":
-                body = self._read_body(UPLOAD_BODY_MAX)
-                if body is None:
-                    self._json(400, {"error": "invalid json or body too large"})
-                    return
-                result, err = _upload(body)
-                if err:
-                    self._json(400, {"error": err})
-                else:
-                    self._json(200, result)
-            else:
+            handler = _match_post_route(self.path)
+            if handler is None:
                 self._json(404, {"error": "not found"})
+                return
+            getattr(self, handler)()
         except Exception as e:
             logger.exception("POST %s 失败", self.path)
             self._json(500, {"error": _friendly_error(e), "code": 500, "detail": str(e)})
-
-    # ── SSE 工具 ─────────────────────────────────
 
     def _valid_messages(self, body):
         messages = body.get("messages") or []

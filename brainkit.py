@@ -559,10 +559,20 @@ def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
 def _snapshot_meta(m: dict, version: int) -> dict:
     lineage = load_json(LINEAGE_FILE, {})
     parent = lineage.get("last_archived") or lineage.get("restored_from_version")
+    # P2-3：完整血缘图——祖先链（最新在前，不含自身），供 _find_lca 真 LCA 求解；
+    # 老快照无该字段时 _find_lca 自动降级为 [self, parent, restored_from]。
+    ancestors = list(lineage.get("ancestors") or [])
+    for v in (parent, lineage.get("restored_from_version")):
+        if v is not None:
+            vi = int(v)
+            if vi not in ancestors:
+                ancestors.append(vi)
+    ancestors.sort(reverse=True)  # 最新在前，便于阅读与对账
     return {
         "version": version,
         "parent": parent,
         "restored_from": lineage.get("restored_from_version"),
+        "ancestors": ancestors,
         "brain_id": m.get("brain_id"),
         "created_at": now_iso(),
         "pubkey_fingerprint": m.get("pubkey_fingerprint"),
@@ -577,13 +587,18 @@ def _write_snapshot_meta(stage: Path, meta: dict) -> None:
 
 
 def _refresh_self_model() -> None:
-    """用最新能力模板刷新自我模型，校准「我知道 / 我不知道 / 我的局限」。
+    """用最新能力模板刷新自我模型基线，校准「我知道 / 我不知道 / 我的局限」。
 
     挂载与心跳时调用：能力进化后，旧大脑的自我认知自动同步，
     避免「能力已实现、自我模型却仍写着尚未实现」的认知过时。
+
+    P2-4（双来源优先级标记）：self_model.json 有两个写入来源——
+    本函数（静态模板）与 brain_api.refresh_self_model()（LLM 动态校准）。
+    若现有文件已带 source="llm"，说明 LLM 基于真实工具/记忆校准过，
+    这里**只刷新 baseline 模板、保留 LLM 认知**，不再互相覆盖。
     """
     now = now_iso()
-    save_json(BRAIN_DIR / "self_model.json", {
+    baseline = {
         "knows": [
             "我是「鲸语大脑」：身份/记忆/心跳都在 brain/ 目录，由 brainkit.py 管理",
             "我具备：心跳断点续接、时光快照（可加密）、跨躯体免密迁移、多快照分支合并（血缘 LCA 三路 + 冲突裁决）、自我模型校准",
@@ -597,8 +612,20 @@ def _refresh_self_model() -> None:
             "跨躯体免密依赖密钥包迁移仪式（export-key / import-key）；无密钥机器解不开加密快照",
             "快照加密需要 cryptography；未启用免密时快照为明文压缩包",
         ],
-        "updated_at": now,
-    })
+    }
+    existing = load_json(BRAIN_DIR / "self_model.json")
+    sm = {"baseline": baseline, "updated_at": now}
+    if existing and isinstance(existing, dict) and existing.get("source") == "llm":
+        # LLM 校准优先：保留其认知与校准时间，仅刷新基线模板
+        for k in ("knows", "unknowns", "limits"):
+            sm[k] = existing.get(k) or []
+        sm["source"] = "llm"
+        sm["calibrated_at"] = existing.get("calibrated_at")
+    else:
+        for k in ("knows", "unknowns", "limits"):
+            sm[k] = baseline[k]
+        sm["source"] = "template"
+    save_json(BRAIN_DIR / "self_model.json", sm)
 
 
 def cmd_init(args) -> int:
@@ -1188,7 +1215,15 @@ def cmd_archive(args) -> int:
         mode += "（已签名）"
 
     lineage = load_json(LINEAGE_FILE, {})
+    # P2-3：维护完整血缘链——新版本 n 的祖先 = 旧祖先链 + 旧 last_archived
+    old_last = lineage.get("last_archived")
     lineage["last_archived"] = n
+    anc = list(lineage.get("ancestors") or [])
+    if old_last is not None:
+        oi = int(old_last)
+        if oi not in anc:
+            anc.append(oi)
+    lineage["ancestors"] = sorted(set(anc), reverse=True)
     save_json(LINEAGE_FILE, lineage)
 
     keep = args.keep if args.keep is not None else DEFAULT_KEEP
@@ -1304,11 +1339,38 @@ def _chain(meta: dict) -> list:
     return chain
 
 
+def _ancestors(meta: dict) -> list:
+    """完整祖先版本链（最新在前）。优先血缘图 ancestors（P2-3）；
+    老快照无该字段时降级为 [version, parent, restored_from]。"""
+    chain = []
+    if not meta:
+        return chain
+    anc = meta.get("ancestors")
+    if isinstance(anc, list) and anc:
+        try:
+            chain = [int(x) for x in anc if isinstance(x, (int, str)) and str(x).lstrip("-").isdigit()]
+        except (TypeError, ValueError):
+            chain = []
+    for k in ("version", "parent", "restored_from"):
+        v = meta.get(k)
+        if v is not None and str(v).lstrip("-").isdigit():
+            vi = int(v)
+            if vi not in chain:
+                chain.append(vi)
+    return chain
+
+
 def _find_lca(a_meta: dict, b_meta: dict):
-    a = set(_chain(a_meta))
-    b = set(_chain(b_meta))
-    inter = a & b
-    return max(inter) if inter else None
+    """血缘图真 LCA（P2-3）：两条祖先链的公共版本中「最新」者即最近公共祖先。
+
+    修复原实现的启发式缺陷：① 字符串 max 在版本号 ≥10 时字典序错判
+    （"9" > "12"）；② 只取单层 parent/restored_from，无法覆盖多级分叉。
+    现按版本号数值比较；新快照携带完整 ancestors 链，分叉历史可精确求解。
+    """
+    a = _ancestors(a_meta)
+    b = set(_ancestors(b_meta))
+    common = [v for v in a if v in b]
+    return max(common) if common else None
 
 
 def _read_snapshot_to_dir(path: Path, passphrase: str, workdir: Path) -> Path:

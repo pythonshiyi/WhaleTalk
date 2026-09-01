@@ -2,6 +2,7 @@ import React from "react";
 import * as api from "../api.js";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 
+import { silentWarn } from "../quiet.js";
 // ── 启动即预取（不等打开面板才加载）──────────────────
 const PREFETCHED = {
   cfg: null,
@@ -107,7 +108,7 @@ function FilesTab({ onInject }) {
       try {
         const d = await api.api(`/v1/files?dir=${encodeURIComponent(path)}`);
         if (d && d.entries) setChildren((c) => ({ ...c, [path]: d.entries }));
-      } catch {}
+      } catch (e) { silentWarn(e, "AuxPanel"); }
       setLoading((l) => ({ ...l, [path]: false }));
     }
   };
@@ -195,7 +196,7 @@ function ProcessesTab({ onInject }) {
         if (!alive) return;
         setProcs(d.processes || {});
         setCurrent((c) => (c && d.processes[c] ? c : Object.keys(d.processes)[0] || null));
-      } catch {}
+      } catch (e) { silentWarn(e, "AuxPanel"); }
     };
     load();
     const iv = setInterval(load, 3000);
@@ -212,7 +213,7 @@ function ProcessesTab({ onInject }) {
     if (!current) return;
     try {
       await api.api("/v1/processes/stop", { method: "POST", body: JSON.stringify({ name: current }) });
-    } catch {}
+    } catch (e) { silentWarn(e, "AuxPanel"); }
   };
 
   const start = async () => {
@@ -220,7 +221,7 @@ function ProcessesTab({ onInject }) {
     try {
       const r = await api.api("/v1/processes/start", { method: "POST", body: JSON.stringify({ command: cmd.trim() }) });
       setCmd("");
-    } catch {}
+    } catch (e) { silentWarn(e, "AuxPanel"); }
   };
 
   const errPat = /Traceback|Error|ERROR|Exception|失败|错误|refused|NotImplemented/;

@@ -10,6 +10,8 @@
 //   2. 兜底：剥掉包装标签与 @long-text 前缀，保留剩余文本；
 //   3. 干净文本原样返回（零副作用）。
 
+import { silentWarn } from "./quiet.js";
+
 // 读取 JSON 字符串字面量（s[i] === '"'），正确处理 \n \" \\ \u 等转义。
 // 返回 { value, end }；解析失败返回 null。
 function readJsonString(s, i) {
@@ -50,7 +52,7 @@ function extractAssistantContent(str) {
         return m.content;
       }
     }
-  } catch {}
+  } catch (e) { silentWarn(e, "longTextUtil"); }
 
   // 2) 退化路径：非规范 JSON（如多个对象裸拼/被截断）——
   //    定位最后一个 "role":"assistant" 的 content 字符串并读取。

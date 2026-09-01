@@ -1,6 +1,7 @@
 // @ts-check
 // ── 后端 API 封装 ─────────────────────────────────────
-// 同源访问（生产：api_server 服务静态文件；开发：dev server 上直连 8745）。
+// 同源访问（生产：api_server 服务静态文件；开发：vite proxy 代理到后端 8745，
+// 见 vite.config.js）。全部请求走相对路径，无端口硬编码（P2-2）。
 // token 自动获取：1) localStorage → 2) URL ?token= → 3) 本机端点 /v1/token 自取。
 // 后端不可用时一律抛出带中文描述的异常，由界面明确提示（不提供任何假数据兜底）。
 //
@@ -10,7 +11,6 @@
 // `npm run typecheck`（tsc --noEmit）会直接报错——从根上杜绝 web_search 漏传
 // 这类静默失效（v3.8.2 曾发生：streamChat 解构/请求体漏掉该字段）。
 
-const API_PORT = 8745;
 const TOKEN_KEY = "whaletalk.api.token";
 const REQUEST_TIMEOUT = 15000;
 
@@ -107,9 +107,12 @@ const REQUEST_TIMEOUT = 15000;
 
 // ── 通用请求 ─────────────────────────────────────────
 
+import { silentWarn } from "./quiet.js";
+
 function getBase() {
-  // 生产构建由 api_server 同源服务（8745）；开发时跨域直连（CORS 已开）
-  return `http://127.0.0.1:${API_PORT}`;
+  // 生产（api_server 同源）与开发（vite proxy → 8745）统一相对路径（P2-2），
+  // 无端口硬编码：dev/prod 拓扑一致。
+  return "";
 }
 
 /** @returns {string} 本地缓存的访问令牌（无则空串） */
@@ -125,7 +128,7 @@ function getToken() {
         history.replaceState(null, "", location.pathname);
       }
     }
-  } catch {}
+  } catch (e) { silentWarn(e, "api"); }
   return t;
 }
 
@@ -140,11 +143,11 @@ async function _selfFetchToken() {
       if (tj.token) {
         try {
           localStorage.setItem(TOKEN_KEY, tj.token);
-        } catch {}
+        } catch (e) { silentWarn(e, "api"); }
         return tj.token;
       }
     }
-  } catch {}
+  } catch (e) { silentWarn(e, "api"); }
   return "";
 }
 
@@ -165,7 +168,7 @@ export async function checkBackend() {
       // token 缺失或失效：自取新 token 重试
       try {
         localStorage.removeItem(TOKEN_KEY);
-      } catch {}
+      } catch (e) { silentWarn(e, "api"); }
       token = await _selfFetchToken();
       r = await tryHealth(token);
     }
@@ -189,7 +192,7 @@ export async function probeBackendHealth() {
     let token = getToken();
     let r = await tryHealth(token);
     if (r.status === 401) {
-      try { localStorage.removeItem(TOKEN_KEY); } catch {}
+      try { localStorage.removeItem(TOKEN_KEY); } catch (e) { silentWarn(e, "api"); }
       token = await _selfFetchToken();
       r = await tryHealth(token);
     }
@@ -215,7 +218,7 @@ export function watchBackend(interval = 5000, onChange) {
     try { ok = await probeBackendHealth(); } catch { ok = false; }
     if (alive && ok !== last) {
       last = ok;
-      try { onChange(ok); } catch {}
+      try { onChange(ok); } catch (e) { silentWarn(e, "api"); }
       // 恢复连接时重置缓存，让各页面重新拉取真实数据
       if (ok) backendOk = null;
     }
@@ -235,7 +238,7 @@ async function _errMessage(r, fallback) {
       if (typeof j.error === "string" && j.error) return j.error;
       if (j.error && typeof j.error === "object" && typeof j.error.message === "string") return j.error.message;
     }
-  } catch {}
+  } catch (e) { silentWarn(e, "api"); }
   return fallback;
 }
 
@@ -269,7 +272,7 @@ async function api(path, opts = {}) {
     // token 缺失/失效（如启动时预取早于 checkBackend 拿到 token）：自取后重试一次
     try {
       localStorage.removeItem(TOKEN_KEY);
-    } catch {}
+    } catch (e) { silentWarn(e, "api"); }
     const token = await _selfFetchToken();
     if (token) r = await attempt(token);
   }

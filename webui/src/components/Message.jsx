@@ -5,6 +5,7 @@ import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
 
+import { silentWarn } from "../quiet.js";
 // 表格内嵌预览（CSV/XLSX）：分页展示，不超过后端返回的 rows 上限
 function TablePreview({ header = [], rows = [], total = 0, name = "" }) {
   const [pg, setPg] = React.useState(0);
@@ -129,7 +130,7 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
       await navigator.clipboard.writeText(unwrapLongText(msg.text || ""));
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
-    } catch {}
+    } catch (e) { silentWarn(e, "Message"); }
   };
 
   const [speaking, setSpeaking] = React.useState(false);
@@ -183,7 +184,7 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
   const prodAct = async (path, act) => {
     try {
       await api.api(`/v1/files/${act}`, { method: "POST", body: JSON.stringify({ path }) });
-    } catch {}
+    } catch (e) { silentWarn(e, "Message"); }
   };
 
   if (msg.role === "user") {

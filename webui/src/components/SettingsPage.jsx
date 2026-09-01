@@ -3,6 +3,7 @@ import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { enqueueSpeak, invalidateVoiceConfig, playTestTone, enableVoiceInterrupt, disableVoiceInterrupt } from "../ttsUtil.js";
 
+import { silentWarn } from "../quiet.js";
 const apiGet = async (path) => {
   try {
     return await api.api(path);
@@ -555,7 +556,7 @@ function DepsBlock() {
         const line = buf.slice(0, idx).trim();
         buf = buf.slice(idx + 1);
         if (line) {
-          try { onEvent(JSON.parse(line)); } catch {}
+          try { onEvent(JSON.parse(line)); } catch (e) { silentWarn(e, "SettingsPage"); }
         }
       }
     }
@@ -863,7 +864,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
           if (el) el.scrollIntoView({ behavior: "smooth" });
         }, 120);
       }
-    } catch {}
+    } catch (e) { silentWarn(e, "SettingsPage"); }
   }, []);
 
   // 文本输入本地草稿：编辑不落盘，失焦/回车才保存（避免打字过程写半截模型名）
@@ -951,10 +952,10 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
         <p>简单模式一键预设 · 高级模式全参数自定义</p>
       </div>
       <div className="set-modebar">
-        <button className={`ab-tab ${mode === "simple" ? "ab-tab-on" : ""}`} onClick={() => { setMode("simple"); try { localStorage.setItem("whaletalk.settingmode", "simple"); } catch {} }}>
+        <button className={`ab-tab ${mode === "simple" ? "ab-tab-on" : ""}`} onClick={() => { setMode("simple"); try { localStorage.setItem("whaletalk.settingmode", "simple"); } catch (e) { silentWarn(e, "SettingsPage"); } }}>
           🌱 简单模式
         </button>
-        <button className={`ab-tab ${mode === "advanced" ? "ab-tab-on" : ""}`} onClick={() => { setMode("advanced"); try { localStorage.setItem("whaletalk.settingmode", "advanced"); } catch {} }}>
+        <button className={`ab-tab ${mode === "advanced" ? "ab-tab-on" : ""}`} onClick={() => { setMode("advanced"); try { localStorage.setItem("whaletalk.settingmode", "advanced"); } catch (e) { silentWarn(e, "SettingsPage"); } }}>
           🚀 高级模式
         </button>
       </div>

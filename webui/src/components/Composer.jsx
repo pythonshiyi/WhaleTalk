@@ -2,6 +2,7 @@ import React from "react";
 import * as api from "../api.js";
 import { ToastContext } from "./FlashToast.jsx";
 
+import { silentWarn } from "../quiet.js";
 const SLASH_COMMANDS = [
   { cmd: "/code", desc: "插入代码块", text: "```\n\n```" },
   { cmd: "/quote", desc: "插入引用块", text: "> " },
@@ -88,7 +89,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     try {
       const draft = localStorage.getItem(DRAFT_KEY);
       if (draft && draft.trim()) setText(draft);
-    } catch {}
+    } catch (e) { silentWarn(e, "Composer"); }
   }, []);
 
   const draftTimer = React.useRef(null);
@@ -98,7 +99,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       draftTimer.current = setTimeout(() => {
         try {
           localStorage.setItem(DRAFT_KEY, text);
-        } catch {}
+        } catch (e) { silentWarn(e, "Composer"); }
       }, 1200);
     }
     return () => clearTimeout(draftTimer.current);
@@ -108,7 +109,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   React.useEffect(() => {
     try {
       histRef.current = JSON.parse(localStorage.getItem(HIST_KEY) || "[]");
-    } catch {}
+    } catch (e) { silentWarn(e, "Composer"); }
   }, []);
 
   // ── token 实时估算（对齐原程序：300ms 防抖）──
@@ -156,7 +157,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       try {
         const d = await api.getDirs();
         if (d) setDirs(d);
-      } catch {}
+      } catch (e) { silentWarn(e, "Composer"); }
     }
   };
 
@@ -165,7 +166,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       const r = await api.setDir(path);
       if (r && r.ok) setDirs({ ...dirs, active_dir: r.active_dir });
       setDirOpen(false);
-    } catch {}
+    } catch (e) { silentWarn(e, "Composer"); }
   };
 
   const onPickImage = (file) => {
@@ -180,7 +181,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
           setAttachments((a) => [...a, { path: r.path, name: r.name }]);
           if (r.note) toast("🖼 " + r.note);
         }
-      } catch {}
+      } catch (e) { silentWarn(e, "Composer"); }
       setUploading(false);
     };
     reader.readAsDataURL(file);
@@ -207,7 +208,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       if (hist.length > 200) hist.shift();
       try {
         localStorage.setItem(HIST_KEY, JSON.stringify(hist));
-      } catch {}
+      } catch (e) { silentWarn(e, "Composer"); }
     }
     histIdxRef.current = -1;
     onSend(v, attachments);

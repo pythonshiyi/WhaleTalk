@@ -3,7 +3,9 @@ import { unwrapLongText } from "../longTextUtil.js";
 import { parseMarkdown } from "../mdParser.js";
 import { parseInline } from "../mdInline.js";
 import { highlight } from "../mdHighlight.js";
+import { parseMath, mathToReact } from "../mdMath.js";
 
+import { silentWarn } from "../quiet.js";
 // ── 世界级 Markdown 渲染器（手写 · 零依赖 · 流式安全）────────────────
 // 渲染链路：文本 → unwrapLongText(解除模型 @long-text 包装)
 //        → parseMarkdown(块级 AST) → Block 分发
@@ -23,6 +25,12 @@ import { highlight } from "../mdHighlight.js";
 //         deferCode=true 时暂不渲染，父组件在流结束后补渲染。
 
 const LINK_OPTS = { onClick: (e) => e.preventDefault() };
+
+// ── 公式排版（P2-1：自研轻量 LaTeX 子集，见 mdMath.js）────────────
+const MathView = ({ expr }) => {
+  const nodes = useMemo(() => parseMath(expr || ""), [expr]);
+  return <span className="md-mx">{mathToReact(React, nodes)}</span>;
+};
 
 // ── 行内 tokens 渲染 ─────────────────────────
 function Tokens({ tokens }) {
@@ -83,7 +91,7 @@ function Tokens({ tokens }) {
       case "math":
         return (
           <span key={i} className="md-math">
-            {p.v}
+            <MathView expr={p.v} />
           </span>
         );
       case "img":
@@ -106,7 +114,7 @@ function Tokens({ tokens }) {
   });
 }
 
-const Inline = ({ text }) => <Tokens tokens={parseInline(text)} />;
+const Inline = React.memo(({ text }) => <Tokens tokens={parseInline(text)} />);
 
 // ── 代码块（高亮 + 复制）────────────────────────
 function CodeBlock({ lang, code }) {
@@ -125,7 +133,7 @@ function CodeBlock({ lang, code }) {
             await navigator.clipboard.writeText(code);
             setCopied(true);
             setTimeout(() => setCopied(false), 1200);
-          } catch {}
+          } catch (e) { silentWarn(e, "Markdown"); }
         }}
       >
         {copied ? "✓ 已复制" : "复制"}
@@ -272,7 +280,11 @@ function Block({ b }) {
         </pre>
       );
     case "math":
-      return <div className="md-math-block">{b.expr}</div>;
+      return (
+        <div className="md-math-block">
+          <MathView expr={b.expr} />
+        </div>
+      );
     case "hr":
       return <div className="md-hr" />;
     case "details":

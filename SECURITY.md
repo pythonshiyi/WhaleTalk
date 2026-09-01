@@ -20,6 +20,7 @@
 ## 已知安全设计（供审阅者参考）
 
 - **API Key 保护**：`config.json` 中的 Key 以 Windows DPAPI 加密存储（`crypto.py`），明文永不落盘（fail-closed）
+- **免密平台限制（预期行为）**：DPAPI 仅 Windows 可用；非 Windows（macOS/Linux）上 `_dpapi_ok()` 为假，本地免密（API Key、大脑密钥包）不可用，只能走口令（passphrase）路径——加密强度不变（仍受 Fernet/口令派生密钥保护），仅"免密便捷性"降级为"每次口令解锁"
 - **权限模型**：v2 默认 `blacklist`（默认放行 + 用户黑名单，黑名单默认空；用户可自行增删/清空），旧 `whitelist` 模式可回退；路径经 `resolve()` 规范化防穿越；审计日志只记不拦
 - **沙箱**：`run_python` 静态 AST 检查 + `-I -S` 隔离执行
 - **写操作可恢复**：`write_file`/`edit_file`/`batch_rename`/`database_execute` 写前自动快照（`snapshot.py`），`restore_snapshot` 恢复前另备份当前文件；删除默认进回收站

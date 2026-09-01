@@ -122,7 +122,42 @@ const check = (cond, name, extra = "") => {
   check(html.includes('class="md-hr"'), "分隔线");
 }
 
-// ═══ 用例 3：流式安全 ═════════════════
+// ═══ 用例 3：公式排版（P2-1 mdMath.js）═════════════
+{
+  const inline = await renderMarkdown({ text: "公式 $x^2 + \\frac{a}{b}$ 结束", deferCode: false });
+  check(inline.includes('class="md-math"'), "行内公式容器");
+  check(inline.includes('class="mx-sup"'), "上标渲染");
+  check(inline.includes('class="mx-frac"') && inline.includes('class="mx-num"') && inline.includes('class="mx-den"'), "分数渲染（分子/分母）");
+  check(inline.includes('class="mx-text">a<') && inline.includes('class="mx-text">b<'), "分数内容保留");
+
+  const greek = await renderMarkdown({ text: "$\\alpha + \\beta = \\gamma$", deferCode: false });
+  check(greek.includes("α") && greek.includes("β") && greek.includes("γ"), "希腊字母转写");
+
+  const ops = await renderMarkdown({ text: "$a \\times b \\leq c \\approx \\infty$", deferCode: false });
+  check(ops.includes("×") && ops.includes("≤") && ops.includes("≈") && ops.includes("∞"), "运算符转写");
+
+  const paren = await renderMarkdown({ text: "$\\left( \\frac{a}{b} \\right)$", deferCode: false });
+  check(paren.includes('class="mx-paren"') && paren.includes('class="mx-paren-open"'), "\\left\\right 括号配对");
+
+  const block = await renderMarkdown({
+    text: "```math\n\\sqrt[3]{y} = \\sum_{i=1}^{n} x_i\n```",
+    deferCode: false,
+  });
+  check(block.includes('class="md-math-block"'), "数学块容器");
+  check(block.includes('class="mx-sqrt"') && block.includes('class="mx-sqrt-idx"'), "根号渲染（含开方次数）");
+  check(block.includes("∑"), "求和符号");
+
+  const txt = await renderMarkdown({ text: "$E = mc^2 \\text{（质能方程）}$", deferCode: false });
+  check(txt.includes("质能方程"), "\\text{} 中文文本");
+
+  const evil = await renderMarkdown({ text: "$\\frac{<script>alert(1)</script>}{x}$", deferCode: false });
+  check(!evil.includes("<script>alert"), "公式内容 HTML 注入防护");
+
+  const stream = await renderMarkdown({ text: "半截 $\\frac{a", deferCode: false });
+  check(stream.includes("半截") && !stream.includes("mx-frac"), "未闭合公式不崩、不吞正文");
+}
+
+// ═══ 用例 4：流式安全 ═════════════════
 {
   const open = await renderMarkdown({ text: "前文\n```py\nx = 1", deferCode: false });
   check(open.includes("md-code-open"), "未闭合围栏占位（deferCode=false）");
@@ -130,7 +165,7 @@ const check = (cond, name, extra = "") => {
   check(!deferred.includes("md-code-open") && deferred.includes("前文"), "未闭合围栏跳过（deferCode=true）");
 }
 
-// ═══ 用例 4：安全边界 ═════════════════
+// ═══ 用例 5：安全边界 ═════════════════
 {
   const empty = await renderMarkdown({ text: "", deferCode: false });
   check(empty === '<div class="md"></div>', "空输入安全");

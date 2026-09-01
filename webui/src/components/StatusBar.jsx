@@ -2,6 +2,7 @@ import React from "react";
 import { getStatus } from "../api.js";
 import { FlashContext } from "./FlashToast.jsx";
 
+import { silentWarn } from "../quiet.js";
 // ── 底部状态栏（对齐原程序：模式/目录/累计/预算/高峰 | 模型/角色/场景/思考）──
 // 生成中状态：🤔 思考中… / ⚙ 正在执行「工具」（第 N 个）… / ⏳ 等待模型响应…
 export default function StatusBar({ mode, onSwitchMode, generating, generatingText }) {
@@ -15,7 +16,7 @@ export default function StatusBar({ mode, onSwitchMode, generating, generatingTe
       try {
         const s = await getStatus();
         if (alive && s) setStatus(s);
-      } catch {}
+      } catch (e) { silentWarn(e, "StatusBar"); }
     };
     load();
     const iv = setInterval(load, 8000);

@@ -178,6 +178,12 @@ def refresh_self_model():
             "knows": [str(x)[:120] for x in (data.get("knows") or [])][:5],
             "unknowns": [str(x)[:120] for x in (data.get("unknowns") or [])][:5],
             "limits": [str(x)[:120] for x in (data.get("limits") or [])][:5],
+            # P2-4：双来源优先级标记——LLM 校准结果置 source="llm"，
+            # brainkit._refresh_self_model 据此保留本结果不被静态模板覆盖；
+            # 同时保留静态 baseline，模板刷新时无需重算。
+            "baseline": (bk.load_json(bk.BRAIN_DIR / "self_model.json") or {}).get("baseline") or {},
+            "source": "llm",
+            "calibrated_at": bk.now_iso(),
             "updated_at": bk.now_iso(),
         }
         bk.save_json(bk.BRAIN_DIR / "self_model.json", sm)

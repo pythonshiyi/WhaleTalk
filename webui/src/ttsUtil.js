@@ -1,6 +1,7 @@
 // ── 语音朗读工具：文本清洗 / 分句 / 合成 / 播放队列 / 停止 ──
 import { api, getToken, getBase } from "./api.js";
 
+import { silentWarn } from "./quiet.js";
 // Markdown 清洗：代码块整段跳过、链接只读文字、去强调与表格符号
 const MD_STRIP = [
   [/```[\s\S]*?```/g, " "],
@@ -82,7 +83,7 @@ const listeners = new Set();  // 状态变化回调 ({speaking,loading,error})
 
 function emit() {
   const st = { speaking: !!currentAudio, loading: loadingCount > 0, error: lastError };
-  listeners.forEach((fn) => { try { fn(st); } catch {} });
+  listeners.forEach((fn) => { try { fn(st); } catch (e) { silentWarn(e, "ttsUtil"); } });
 }
 
 export function onSpeechState(fn) {
@@ -144,8 +145,8 @@ export async function enableVoiceInterrupt() {
 export function disableVoiceInterrupt() {
   bargeInOn = false;
   if (bargeInTimer) { clearInterval(bargeInTimer); bargeInTimer = null; }
-  if (bargeInStream) { try { bargeInStream.getTracks().forEach((t) => t.stop()); } catch {} }
-  if (bargeInCtx) { try { bargeInCtx.close(); } catch {} }
+  if (bargeInStream) { try { bargeInStream.getTracks().forEach((t) => t.stop()); } catch (e) { silentWarn(e, "ttsUtil"); } }
+  if (bargeInCtx) { try { bargeInCtx.close(); } catch (e) { silentWarn(e, "ttsUtil"); } }
   bargeInStream = null; bargeInCtx = null; bargeInAnalyser = null;
 }
 
@@ -159,7 +160,7 @@ export function primeAudio() {
     const p = a.play();
     if (p && p.then) p.then(() => { primed = true; a.pause(); }).catch(() => {});
     primed = true;
-  } catch {}
+  } catch (e) { silentWarn(e, "ttsUtil"); }
 }
 
 // 调后端合成（清洗由调用方完成后传入），返回 {url} 或抛错（含后端 error 详情）
@@ -180,19 +181,19 @@ async function synthesize(text, opts = {}) {
   let tok = getToken();
   let r = await once(tok);
   if (r.status === 401) {
-    try { localStorage.removeItem("whaletalk.api.token"); } catch {}
+    try { localStorage.removeItem("whaletalk.api.token"); } catch (e) { silentWarn(e, "ttsUtil"); }
     try {
       const tr = await fetch(`${getBase()}/v1/token`, { signal: AbortSignal.timeout(2500) });
       if (tr.ok) {
         const tj = await tr.json();
-        if (tj.token) { try { localStorage.setItem("whaletalk.api.token", tj.token); } catch {} tok = tj.token; }
+        if (tj.token) { try { localStorage.setItem("whaletalk.api.token", tj.token); } catch (e) { silentWarn(e, "ttsUtil"); } tok = tj.token; }
       }
-    } catch {}
+    } catch (e) { silentWarn(e, "ttsUtil"); }
     r = await once(tok);
   }
   if (!r.ok) {
     let msg = `合成失败 ${r.status}`;
-    try { const j = await r.json(); if (j && j.error) msg = j.error; } catch {}
+    try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (e) { silentWarn(e, "ttsUtil"); }
     throw new Error(msg);
   }
   return await r.json(); // {ok,url,cached,engine}
@@ -204,14 +205,14 @@ async function fetchAudio(urlPath) {
   });
   let resp = await once();
   if (resp.status === 401) {
-    try { localStorage.removeItem("whaletalk.api.token"); } catch {}
+    try { localStorage.removeItem("whaletalk.api.token"); } catch (e) { silentWarn(e, "ttsUtil"); }
     try {
       const tr = await fetch(`${getBase()}/v1/token`, { signal: AbortSignal.timeout(2500) });
       if (tr.ok) {
         const tj = await tr.json();
-        if (tj.token) { try { localStorage.setItem("whaletalk.api.token", tj.token); } catch {} }
+        if (tj.token) { try { localStorage.setItem("whaletalk.api.token", tj.token); } catch (e) { silentWarn(e, "ttsUtil"); } }
       }
-    } catch {}
+    } catch (e) { silentWarn(e, "ttsUtil"); }
     resp = await once();
   }
   return resp;
@@ -233,7 +234,7 @@ async function playUrl(urlPath, volumePct) {
       clearWatch();
       if (currentAudio === audio) currentAudio = null;
       if (currentResolve === done) currentResolve = null;
-      try { URL.revokeObjectURL(blobUrl); } catch {}
+      try { URL.revokeObjectURL(blobUrl); } catch (e) { silentWarn(e, "ttsUtil"); }
       resolve();
     };
     audio.onloadedmetadata = () => {
@@ -354,7 +355,7 @@ export function stopSpeak() {
   const had = !!currentAudio;
   generation += 1;
   if (currentAudio) {
-    try { currentAudio.pause(); } catch {}
+    try { currentAudio.pause(); } catch (e) { silentWarn(e, "ttsUtil"); }
     currentAudio = null;
     // 解除当前挂起的 playUrl，避免队列因 onended 不触发而永久卡死
     const r = currentResolve;

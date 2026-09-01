@@ -382,16 +382,36 @@ button {
 .md .md-mark { background: var(--warn-soft); color: inherit; padding: 0 2px; border-radius: 3px; }
 .md .md-img { max-width: 100%; border-radius: var(--r-md); margin: 4px 0; display: inline-block; }
 .md .md-math {
-  font-family: var(--font-mono); font-style: italic;
+  font-family: var(--font-mono);
   background: var(--code-inline-bg); border: 1px solid var(--code-inline-border);
   padding: 1px 4px; border-radius: 4px; color: var(--brand-strong);
 }
 .md .md-math-block {
-  text-align: center; font-family: var(--font-mono); font-style: italic;
+  text-align: center; font-family: var(--font-mono);
   background: var(--code-bg); color: var(--code-text);
   border: 1px solid var(--border); border-radius: var(--r-md);
   padding: 14px 16px; margin: 10px 0; overflow-x: auto;
 }
+/* ── 公式排版内部结构（mdMath.js）────────── */
+.md-mx { display: inline-block; vertical-align: middle; white-space: nowrap; font-size: 1.05em; }
+.md-mx .mx-text, .md-mx .mx-greek { font-style: italic; }
+.md-mx .mx-text { font-style: normal; }
+.md-mx .mx-op { padding: 0 2px; }
+.md-mx .mx-space { display: inline-block; }
+.md-mx .mx-script { display: inline-flex; align-items: baseline; vertical-align: baseline; }
+.md-mx .mx-base { display: inline-flex; align-items: baseline; }
+.md-mx .mx-sup { font-size: 0.72em; vertical-align: super; line-height: 1; margin-left: 1px; }
+.md-mx .mx-sub { font-size: 0.72em; vertical-align: sub; line-height: 1; margin-left: 1px; }
+.md-mx .mx-frac { display: inline-flex; flex-direction: column; vertical-align: middle; text-align: center; margin: 0 3px; line-height: 1.15; }
+.md-mx .mx-frac .mx-num, .md-mx .mx-frac .mx-den { padding: 0 3px; display: inline-flex; align-items: center; justify-content: center; }
+.md-mx .mx-frac .mx-line { border-top: 1.2px solid currentColor; }
+.md-mx .mx-sqrt { display: inline-flex; align-items: center; vertical-align: middle; margin: 0 2px; }
+.md-mx .mx-radical { font-size: 1.1em; padding-right: 2px; }
+.md-mx .mx-sqrt-body { border-top: 1.2px solid currentColor; padding: 0 2px; display: inline-flex; align-items: center; }
+.md-mx .mx-sqrt-idx { font-size: 0.7em; vertical-align: super; margin-right: 1px; }
+.md-mx .mx-paren { display: inline-flex; align-items: center; vertical-align: middle; }
+.md-mx .mx-paren-open, .md-mx .mx-paren-close { font-size: 1.15em; padding: 0 1px; }
+.md-mx .mx-paren-body { display: inline-flex; align-items: center; }
 
 /* 嵌套列表（缩进树 + 任务框） */
 .md-list { margin: 8px 0; padding-left: 24px; }

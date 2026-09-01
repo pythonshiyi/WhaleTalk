@@ -1,5 +1,7 @@
 // ── 会话导出（对齐原程序 exporters.py 的四格式行为）──
 
+import { silentWarn } from "./quiet.js";
+
 function buildMarkdown(messages, meta = {}) {
   const lines = [`# 会话记录`, ``, `- 模型：${meta.model || ""}`];
   if (meta.name) lines.push(`- 会话：${meta.name}`);
@@ -124,13 +126,13 @@ export function parseImportedText(raw) {
     const data = JSON.parse(text);
     if (Array.isArray(data)) return data;
     if (data && Array.isArray(data.messages)) return data.messages;
-  } catch {}
+  } catch (e) { silentWarn(e, "exporters"); }
   const msgs = [];
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
       msgs.push(JSON.parse(line));
-    } catch {}
+    } catch (e) { silentWarn(e, "exporters"); }
   }
   return msgs;
 }

@@ -1,6 +1,7 @@
 import React from "react";
 import * as api from "../api.js";
 
+import { silentWarn } from "../quiet.js";
 // 可选能力提示条：首次启动后如可选能力未安装，顶部显示一条提示，8 秒自动隐藏，
 // 且只出现一次（localStorage 记忆），点「知道了」立即关闭。绝不重复打扰。
 const SHOWN_KEY = "whaletalk.deps.banner.shown";
@@ -21,7 +22,7 @@ export default function DepsBanner({ onGoSettings }) {
         try {
           if (localStorage.getItem(SHOWN_KEY) === "1" || localStorage.getItem(DISMISS_KEY) === "1") return;
           localStorage.setItem(SHOWN_KEY, "1");
-        } catch {}
+        } catch (e) { silentWarn(e, "DepsBanner"); }
         setInfo({ n: missing.length, labels: missing.map((h) => h.label) });
         setVisible(true);
         // 8 秒后自动隐藏，无需用户操作
@@ -38,7 +39,7 @@ export default function DepsBanner({ onGoSettings }) {
   const dismiss = () => {
     try {
       localStorage.setItem(DISMISS_KEY, "1");
-    } catch {}
+    } catch (e) { silentWarn(e, "DepsBanner"); }
     setVisible(false);
   };
 

@@ -1,6 +1,7 @@
 import React from "react";
 import * as api from "../api.js";
 
+import { silentWarn } from "../quiet.js";
 // ── 能力测试台：JSON Schema → 表单 → 直调工具 ────────
 function Field({ name, prop, value, onChange, required }) {
   const type = prop.type || "string";
@@ -89,7 +90,7 @@ export default function ToolTest({ name, onClose }) {
       try {
         const s = await api.api(`/v1/tools/${encodeURIComponent(name)}`);
         if (alive && s) setSchema(s);
-      } catch {}
+      } catch (e) { silentWarn(e, "ToolTest"); }
     })();
     return () => {
       alive = false;

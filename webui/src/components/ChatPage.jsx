@@ -13,6 +13,7 @@ import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, splitSentences, enqueueSpeak, speakText, getVoiceConfig, onSpeechState, stopSpeak } from "../ttsUtil.js";
 
+import { silentWarn } from "../quiet.js";
 // 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
 export function BackendBanner() {
   const [down, setDown] = React.useState(false);
@@ -24,7 +25,7 @@ export function BackendBanner() {
       try {
         const ok = await api.probeBackendHealth();
         setDown(!ok);
-      } catch {}
+      } catch (e) { silentWarn(e, "ChatPage"); }
       setRetrying(false);
     })();
   };
@@ -223,7 +224,7 @@ function useBackendChat({
               }
             }
           }
-        } catch {}
+        } catch (e) { silentWarn(e, "ChatPage"); }
         onFinished && onFinished({ userText, msg, ok, isContinue });
       };
       try {
@@ -260,7 +261,7 @@ function useBackendChat({
               let parsed = args;
               try {
                 parsed = typeof args === "string" && args ? JSON.parse(args) : args;
-              } catch {}
+              } catch (e) { silentWarn(e, "ChatPage"); }
               if (isContinue) {
                 updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, tools: [...(x.tools || []), { tool: name, args: parsed, status: "running" }] } : x)));
               } else {
@@ -364,7 +365,7 @@ function useBackendChat({
             isContinue: false,
             error: err.message || String(err),
           });
-        } catch {}
+        } catch (e) { silentWarn(e, "ChatPage"); }
       }
     })();
 
@@ -374,7 +375,7 @@ function useBackendChat({
       // 中止进行中的流式请求：组件卸载/切换页面时立即断开，避免后台空跑
       try {
         if (stopSignalRef.current) stopSignalRef.current.abort();
-      } catch {}
+      } catch (e) { silentWarn(e, "ChatPage"); }
     };
   }, [busy]);
 }
@@ -425,11 +426,11 @@ function useDataSources() {
               usage: c.usage,
             });
           }
-        } catch {}
+        } catch (e) { silentWarn(e, "ChatPage"); }
         try {
           const st = await api.getStatus();
           if (st) setPeakInfo({ on: !!st.peak_hour, warn: st.peak_warning !== false });
-        } catch {}
+        } catch (e) { silentWarn(e, "ChatPage"); }
 
         setLoadErr("");
       } catch {
@@ -462,7 +463,7 @@ function useDataSources() {
                 let args = {};
                 try {
                   args = JSON.parse(tc.function?.arguments || "{}");
-                } catch {}
+                } catch (e) { silentWarn(e, "ChatPage"); }
                 let hit = -1;
                 for (let i = searchFrom; i < d.messages.length; i++) {
                   const mm = d.messages[i];
@@ -509,7 +510,7 @@ function useDataSources() {
           }
           return { messages: mapped, usage: d.usage_total, stars: d.stars, pinned: d.pinned, tags: d.tags };
         }
-      } catch {}
+      } catch (e) { silentWarn(e, "ChatPage"); }
       return null;
     },
     [mode]
@@ -693,7 +694,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             messages: updated,
           });
           refreshSessions();
-        } catch {}
+        } catch (e) { silentWarn(e, "ChatPage"); }
         continueRef.current = { active: false, idx: -1 };
         return;
       }
@@ -743,7 +744,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
           ).slice(-80);
           refreshSessions();
         }
-      } catch {}
+      } catch (e) { silentWarn(e, "ChatPage"); }
     };
     saveChatFinished();
   };
@@ -758,7 +759,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         toast("⏰ 当前为 DeepSeek 高峰时段，按高峰价计费（空闲时段为一半）");
         localStorage.setItem("whaletalk.peak.notified", today);
       }
-    } catch {}
+    } catch (e) { silentWarn(e, "ChatPage"); }
     let base = msgs;
     if (resendIdxRef.current != null) {
       // 编辑重发：删除该消息及之后
@@ -792,7 +793,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       } else if (d && d.error) {
         composerRef.current?.insertText(d.error);
       }
-    } catch {}
+    } catch (e) { silentWarn(e, "ChatPage"); }
   };
 
     const onContinue = (idx) => {
@@ -807,7 +808,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     if (stopSignalRef.current) {
       try {
         stopSignalRef.current.abort();
-      } catch {}
+      } catch (e) { silentWarn(e, "ChatPage"); }
     }
     setBusy(false);
     setGenState({ on: false, text: "" });
@@ -956,12 +957,12 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     let list = [];
     try {
       list = JSON.parse(localStorage.getItem(key) || "[]");
-    } catch {}
+    } catch (e) { silentWarn(e, "ChatPage"); }
     list.push({ text: m.text, think: m.think || "", ts: new Date().toISOString() });
     if (list.length > 20) list = list.slice(-20);
     try {
       localStorage.setItem(key, JSON.stringify(list));
-    } catch {}
+    } catch (e) { silentWarn(e, "ChatPage"); }
   };
 
   const openVariants = () => {
@@ -1010,7 +1011,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     try {
       await api.pinSession(id, pinned);
       refreshSessions();
-    } catch {}
+    } catch (e) { silentWarn(e, "ChatPage"); }
   };
 
   // ── A7 多选消息模式（对齐原程序 multi-bar）──
@@ -1063,7 +1064,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     try {
       const d = await api.searchSessions(searchQuery.trim(), { type: searchType });
       setSearchResults(d.results || []);
-    } catch {}
+    } catch (e) { silentWarn(e, "ChatPage"); }
     setSearchBusy(false);
   };
 
@@ -1075,7 +1076,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     try {
       const d = await api.searchSessions(q);
       setSearchResults(d.results || []);
-    } catch {}
+    } catch (e) { silentWarn(e, "ChatPage"); }
     setSearchBusy(false);
   };
 
@@ -1117,14 +1118,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     try {
       await api.renameSession(id, name);
       refreshSessions();
-    } catch {}
+    } catch (e) { silentWarn(e, "ChatPage"); }
   };
 
   const onEditTags = async (id, tags) => {
     try {
       await api.tagSession(id, tags);
       refreshSessions();
-    } catch {}
+    } catch (e) { silentWarn(e, "ChatPage"); }
   };
 
   const onExportSession = () => {
@@ -1149,7 +1150,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         messages: parsed.map((m) => ({ role: m.role, content: String(m.content || "") })),
       });
       if (sid) refreshSessions();
-    } catch {}
+    } catch (e) { silentWarn(e, "ChatPage"); }
   };
 
   // ── 窗口化渲染：会话切换/消息加载时重置窗口到末尾 ──
@@ -1414,7 +1415,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
           setPromptReq(null);
           try {
             await api.respond(payload);
-          } catch {}
+          } catch (e) { silentWarn(e, "ChatPage"); }
         }}
       />
 

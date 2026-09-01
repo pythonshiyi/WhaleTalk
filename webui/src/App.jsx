@@ -11,6 +11,7 @@ import PromptsPage from "./components/PromptsPage.jsx";
 import { FlashProvider, ToastProvider } from "./components/FlashToast.jsx";
 import * as api from "./api.js";
 
+import { silentWarn } from "./quiet.js";
 export const ThemeContext = React.createContext({ theme: "starfield", setTheme: () => {} });
 export const ModeContext = React.createContext({ mode: "task", setMode: () => {}, switchMode: () => {} });
 export const DisplayContext = React.createContext({ density: "comfort", setDensity: () => {}, fontSize: 14, setFontSize: () => {} });
@@ -89,7 +90,7 @@ export default function App() {
       const nv = !v;
       try {
         localStorage.setItem("whaletalk.quietMode", nv ? "1" : "");
-      } catch {}
+      } catch (e) { silentWarn(e, "App"); }
       return nv;
     });
   }, []);
@@ -104,19 +105,19 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     try {
       localStorage.setItem(THEME_KEY, theme);
-    } catch {}
+    } catch (e) { silentWarn(e, "App"); }
   }, [theme]);
 
   React.useEffect(() => {
     try {
       localStorage.setItem(DENSITY_KEY, density);
-    } catch {}
+    } catch (e) { silentWarn(e, "App"); }
   }, [density]);
 
   React.useEffect(() => {
     try {
       localStorage.setItem(FONT_KEY, String(fontSize));
-    } catch {}
+    } catch (e) { silentWarn(e, "App"); }
   }, [fontSize]);
 
   React.useEffect(() => {
@@ -126,7 +127,7 @@ export default function App() {
       try {
         const s = await api.getStatus();
         if (alive && s && s.mode) setMode(s.mode);
-      } catch {}
+      } catch (e) { silentWarn(e, "App"); }
     })();
     return () => {
       alive = false;
@@ -160,7 +161,7 @@ export default function App() {
     setMode(m);
     try {
       await api.setMode(m);
-    } catch {}
+    } catch (e) { silentWarn(e, "App"); }
   };
 
   // 首次启动：全屏依赖安装向导（装完/跳过 → 刷新进入主界面）
@@ -195,7 +196,7 @@ export default function App() {
                   <InstallBanner />
                   <DepsBanner
                     onGoSettings={() => {
-                      try { window.location.hash = "#deps"; } catch {}
+                      try { window.location.hash = "#deps"; } catch (e) { silentWarn(e, "App"); }
                       setPage("settings");
                     }}
                   />

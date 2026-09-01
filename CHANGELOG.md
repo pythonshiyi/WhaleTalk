@@ -2,6 +2,25 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🧹 P2 打磨批次（P2-1 ~ P2-8 全部落地）
+
+在 v3.8.3 基础上的低优先级打磨项全量收敛，**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3），涉及后端重构 + 前端优化 + 文档/门禁配套。
+
+### 后端
+- **P2-8 `do_POST` 路由表化**：829 行 if/elif 链收敛为**轻量路由表 + 装饰器**。`@_post_route(matcher)` 在端点方法处就近注册（exact/set/pre 三种 matcher），`_POST_ROUTES` 顺序即优先级；`do_POST` 仅 14 行（鉴权 → 去前缀 → 查表 → `getattr` 分发 → 404 兜底）。51 条路由 / 51 个 `_p_*` 方法，经行为等价验证（169 路径 0 不一致、51 方法体逐行一致）后写回；`tools/check_docs.py` 端点统计兼容新装饰器写法；新增 `tests/test_api_routes.py`（8 用例）锁定路由表结构与查表行为，防止回退内联 if/elif
+- **P2-3 大脑血缘图真 LCA**：`brain_api.py`/`brainkit.py` 由版本号集合交集启发式改为存完整血缘图求真 LCA
+- **P2-4 `self_model` 双来源优先级标记**：静态模板与 LLM 校准不再互相覆盖
+
+### 前端
+- **P2-1 数学公式轻量排版**：自研零依赖渲染（`mdMath.js`）
+- **P2-2 vite proxy 统一相对路径**：`vite.config.js` 配 `server.proxy`，dev/prod 拓扑一致
+- **P2-6 `Inline` 组件加 `React.memo`**：长文重复解析消除
+- **P2-7 前端 `catch` 静默吞错加告警**：各组件 `catch {}` 至少 `console.warn`
+
+### 其他
+- **P2-5 非 Windows 免密不可用补文档**（`SECURITY.md`）
+- 全量回归：pytest **54 passed**（46 原有 + 8 新增路由用例）、前端 `npm test`/`npm run typecheck` 通过、四工具门禁（audit/validate/island/check_docs）全绿
+
 ## v3.8.3（2026-08-31）—— 🧘 纯净对话：一键关闭整套个性能力
 
 新增「纯净对话」总开关——AI 随时挂着「大脑」（长期记忆 + 核心自我状态 + 鲸语大脑上下文三路注入），用户想安静执行一段不被打扰的对话时，记忆/大脑的存在可能干扰最终结果。现在一键即可让 AI 以全新姿态应答。

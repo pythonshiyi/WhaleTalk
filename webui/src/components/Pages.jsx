@@ -4,6 +4,7 @@ import * as api from "../api.js";
 import ToolTest from "./ToolTest.jsx";
 import EmptyState from "./EmptyState.jsx";
 
+import { silentWarn } from "../quiet.js";
 const apiGet = async (path) => {
   try {
     return await api.api(path);
@@ -203,7 +204,7 @@ export function MemoryPage({ embedded }) {
           setErr("");
           return;
         }
-      } catch {}
+      } catch (e) { silentWarn(e, "Pages"); }
       setErr(e.message || "记忆加载失败：后端未连接");
     }
   }, []);
@@ -386,7 +387,7 @@ function BrainGoals() {
     try {
       const d = await apiPost("/v1/brain", { action: "goals-list" });
       if (d && d.ok) setGoals((d.data?.goals || []).filter((g) => g.status === "active"));
-    } catch {}
+    } catch (e) { silentWarn(e, "Pages"); }
   }, []);
   React.useEffect(() => { load(); }, [load]);
 
@@ -394,7 +395,7 @@ function BrainGoals() {
     try {
       await apiPost("/v1/brain", { action, ...payload });
       load();
-    } catch {}
+    } catch (e) { silentWarn(e, "Pages"); }
   };
 
   const active = goals.filter((g) => g.status === "active");
@@ -537,7 +538,7 @@ export function PermissionsPage() {
         setSavedTip("已保存到 permissions.json");
         setTimeout(() => setSavedTip(""), 1800);
       }
-    } catch {}
+    } catch (e) { silentWarn(e, "Pages"); }
     setBusy(false);
   };
 
@@ -853,7 +854,7 @@ function SchedulesBlock() {
     try {
       await api.saveSchedules(items);
       refetch();  // 重新拉取，拿到后端计算的 next_run
-    } catch {}
+    } catch (e) { silentWarn(e, "Pages"); }
   };
 
   const add = () => {
@@ -1003,12 +1004,12 @@ export function WorkbenchPage({ onApply, onPickSession }) {
     try {
       await apiPost("/v1/processes/stop", { name });
       refresh();
-    } catch {}
+    } catch (e) { silentWarn(e, "Pages"); }
   };
   const openFile = async (path, dir = false) => {
     try {
       await apiPost(dir ? "/v1/files/opendir" : "/v1/files/open", { path });
-    } catch {}
+    } catch (e) { silentWarn(e, "Pages"); }
   };
   const resumeCheckpoint = () => {
     if (!checkpoint) return;

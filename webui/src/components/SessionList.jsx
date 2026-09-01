@@ -1,6 +1,7 @@
 import React from "react";
 import EmptyState from "./EmptyState.jsx";
 
+import { silentWarn } from "../quiet.js";
 export default function SessionList({ sessions, activeId, onPick, onClose, onDelete, onPin, onRename, onEditTags, onExport, onImport, onBatchDelete }) {
   const [q, setQ] = React.useState("");
   const [tagFilter, setTagFilter] = React.useState(null);
@@ -29,7 +30,7 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
       setWidth(w);
       try {
         localStorage.setItem("whaletalk.slwidth", String(w));
-      } catch {}
+      } catch (e) { silentWarn(e, "SessionList"); }
     };
     const onUp = () => {
       dragRef.current = null;

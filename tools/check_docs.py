@@ -57,6 +57,12 @@ def count_endpoints():
             return n.attr == "path"      # self.path
         return False
 
+    def add_str(v):
+        if isinstance(v, ast.Constant) and isinstance(v.value, str) \
+                and v.value.startswith("/v1/"):
+            paths.add(v.value)
+
+    # 1) 仍保留 if/elif 链（do_GET 等）里的 path 比较
     for node in ast.walk(tree):
         if not isinstance(node, ast.If):
             continue
@@ -66,16 +72,23 @@ def count_endpoints():
         op = t.ops[0]
         if isinstance(op, ast.Eq):
             for c in t.comparators:
-                if isinstance(c, ast.Constant) and isinstance(c.value, str) \
-                        and c.value.startswith("/v1/"):
-                    paths.add(c.value)
+                add_str(c)
         elif isinstance(op, ast.In):
             for c in t.comparators:
                 if isinstance(c, (ast.Tuple, ast.List)):
                     for el in c.elts:
-                        if isinstance(el, ast.Constant) and isinstance(el.value, str) \
-                                and el.value.startswith("/v1/"):
-                            paths.add(el.value)
+                        add_str(el)
+
+    # 2) P2-8：@_post_route(...) 装饰器注册的 POST 端点（单一来源）
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            for d in node.decorator_list:
+                if isinstance(d, ast.Call) and isinstance(d.func, ast.Name) \
+                        and d.func.id == "_post_route" and d.args:
+                    add_str(d.args[0])
+                    if isinstance(d.args[0], ast.Tuple):
+                        for el in d.args[0].elts:
+                            add_str(el)
     return len(paths)
 
 
