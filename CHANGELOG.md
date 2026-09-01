@@ -2,6 +2,17 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🧪 A6 执行链路测试固化（tests/test_run_capture.py）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。A6 抽 `_run_capture` 后，五个执行工具（run_python / run_command / run_lint / run_tests / pip_install）的执行路径此前仅靠临时冒烟脚本覆盖，本轮固化为正式 pytest 用例，防止后续改动回归。
+
+### 变更
+- 新增 `tests/test_run_capture.py` **22 用例**：`_run_capture` 六条路径（成功 / stderr 合并 / 非零退出 / 超时 kill 进程树 / 截断标记 / cwd 生效）+ 五工具参数校验与统一执行路径（成功/无输出/错误堆栈/超时文案/超长拦截/空参、退出码透传、blacklist 命中拒绝、pytest 单文件、ruff 优雅降级、pip 选项注入与非法字符拦截）
+- 测试导入顺序备忘：必须**先 `import deepseek_client`**（顶层完整构建六层注册表并加载 agent_tools），直接 `from agent_tools.tool_code import ...` 会触发 `__init__` 循环导入报 `TOOLS 顺序表含未注册工具`
+
+### 回归
+- pytest **102 passed**（80 原有 + 22 新增）；四门禁全绿（audit `--strict` error 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3）
+
 ## v3.8.3（未发版追加）—— 🧹 收尾批次：返回契约统一（A1）+ 公共执行辅助抽取（A6）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。对 C 系列遗留项的收尾：工具返回契约全库核对归一 + `tool_code.py` 五处重复的「spool 输出 + 超时 kill + 截断」内联模式收敛为单一公共辅助。
