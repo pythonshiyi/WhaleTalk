@@ -2,6 +2,23 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🤖 AI 自我进化提案实现：audit_preactivate_hints（六层审计补全）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。采纳并实现鲸语 AI 自提的进化提案 `evolutions/audit_preactivate_hints_20260901`——为 `tools/audit_tools.py` 补上六层注册表审计中唯一缺失的第 6 层 `_PREACTIVATE_HINTS` 覆盖检查。
+
+### 变更（仅 `tools/audit_tools.py`，纯只读审计逻辑，零业务风险）
+- **六层解包取用第 6 层**：新增 `hints = layers["_PREACTIVATE_HINTS"]`（此前该层从未被取用/检查）
+- **新增「预激活未覆盖」error 级检查**：建议参与预激活的每个工具必须至少声明一组 preactivate 关键词，防「工具加进系统但忘了挂预激活关键词」的静默漂移——与「不在任何分组」「短语表缺失」同等被 `--strict` 拦截
+- **豁免名单**：`ask_user` / `request_permission`（交互回调工具，有意不参与关键词预激活）+ `activate_tools`（分组/短语已豁免，同步豁免）
+- **新增 `_hint_membership` 辅助函数**：判断工具名是否命中任一组预激活关键词成员
+- **报告完整性**：txt 头部统计行与 JSON 增加 `hint_count`（预激活组数）
+- **顺带清理**：删除 `evolutions/` 下 6 个自检冒烟测试残留目录（`iso_test_*` ×5 + `t1_*` ×1），仅保留真实提案
+
+### 验证
+- 正向：`audit_tools.py --strict` → **error 0**（warn 15 与基线一致，零新增误报）
+- 负向：AST 剥离 `get_date` 的 `preactivate` 声明重建六层 → 精确命中「预激活未覆盖」1 条，无额外误报；三个豁免工具确认不在 hints 中（豁免必要且正确）
+- 回归：pytest **102 passed**；四门禁全绿（audit `--strict` error 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3）
+
 ## v3.8.3（未发版追加）—— 🖥 前端全量审查修复批次（2 P0 + 6 P1 + 12 P2）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。三路并行逐行审查全部 27 个组件 + 8 个模块（~1.17 万行）后的一次性修复批次。核心是聊天流式链路两处 P0 级缺陷与设置页两处 P1 级崩溃，其余为缺防御/死代码/竞态清理。

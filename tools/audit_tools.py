@@ -85,6 +85,7 @@ ERROR_KINDS = {
     "数组缺items", "required未定义参数",
     "签名有参数schema无", "schema有参数签名无",
     "不在任何分组", "短语表缺失", "高危未列入审批清单",
+    "预激活未覆盖",
 }
 # warn：质量提示与已知无害的别名，需人工甄别，不拦截 CI
 WARN_KINDS = {"实现别名", "描述过短", "描述超长将截断", "可疑表述"}
@@ -95,6 +96,15 @@ KNOWN_ALIASES = {
     "fetch_blocked": "_run_fetch_blocked",   # fetch_blocked 是保留字冲突，实现另起名
     "git": "git_tool",                       # git 与内部变量名冲突
 }
+
+
+def _hint_membership(name, hints):
+    """工具名是否出现在第 6 层任一组预激活关键词的成员中。
+
+    hints 结构（toolkit.build_preactivate）：[(关键词元组, [工具名...]), ...]，
+    同一关键词的多个工具聚合为一条。返回 bool。
+    """
+    return any(name in ms for _, ms in hints)
 
 
 def main(argv=None):
@@ -125,6 +135,7 @@ def main(argv=None):
     call_map = layers["TOOL_CALL_MAP"]          # 值 = 实现函数名（字符串）或 None
     phrases = layers["_TOOL_ACTION_PHRASES"]
     groups = layers["TOOL_GROUPS"]              # [(组名, [成员...])]
+    hints = layers["_PREACTIVATE_HINTS"]        # [(关键词元组, [工具名...])] 第 6 层（audit_preactivate_hints 提案）
 
     # ── 3. 权限清单 ──
     perm_tree = ast.parse(PERM.read_text(encoding="utf-8"))
@@ -218,6 +229,12 @@ def main(argv=None):
             flag(name, "不在任何分组", "")
         if name not in phrases and name not in ("ask_user", "request_permission", "activate_tools"):
             flag(name, "短语表缺失", "能力地图将回退 description 截断 60 字")
+        # 第 6 层 preactivate 覆盖（audit_preactivate_hints 提案）：交互回调工具豁免；
+        # 建议进入预激活的其余工具必须有声明，防"工具加进系统但忘了挂预激活关键词"的静默漂移
+        if name not in ("ask_user", "request_permission", "activate_tools"):
+            if not _hint_membership(name, hints):
+                flag(name, "预激活未覆盖",
+                     "_PREACTIVATE_HINTS 未收录，将无法通过口语关键词被预激活")
 
     # 高危审批核对（写/删/命令/发信/RPA/DB 写等必须入 ACTION_TOOLS）
     # L8: rpa_screenshot 属只读"看屏幕"（可保存到工作区但语义只读），已从审批清单降级，此处不同步要求
@@ -248,7 +265,7 @@ def main(argv=None):
     buf = []
     buf.append("=" * 100)
     buf.append(f"WhaleTalk 工具系统审计报告  |  {len(by_name)} schema / {len(call_map)} CALL_MAP / "
-               f"{len(phrases)} 短语 / {len(groups)} 组")
+               f"{len(phrases)} 短语 / {len(groups)} 组 / {len(hints)} 预激活组")
     buf.append(f"error {n_err} 处（拦截 CI）　|　warn {n_warn} 处（仅提示，需人工甄别）")
     buf.append("=" * 100)
     buf.append("")
@@ -296,6 +313,7 @@ def main(argv=None):
         json.dump({
             "schema_count": len(by_name), "callmap_count": len(call_map),
             "phrase_count": len(phrases), "group_count": len(groups),
+            "hint_count": len(hints),
             "action_tools": sorted(action_tools),
             "error_count": n_err, "warn_count": n_warn,
             "issues": issues_with_sev,
