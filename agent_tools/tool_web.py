@@ -32,7 +32,13 @@ from deepseek_client import (
     _NET_PROBE_REFS,
     _SEARCH_ENGINES,
     _SEARCH_UA,
+    _browser_active_page,
+    _browser_close_page,
     _browser_goto,
+    _browser_match_page,
+    _browser_new_page,
+    _browser_pages,
+    _browser_switch_to,
     _fetch_blocked_impl,
     _fetch_url_raw,
     _get_browser_page,
@@ -599,28 +605,31 @@ def search_realtime(query="", num=5, source="hn"):
             "type": "function",
             "function": {
                 "name": "browser_navigate",
-                "description": "浏览器可视操作（open/click/type/fill/submit/select/get_text），需安装 playwright。浏览器实例复用：连续调用共享同一页面，登录态保持，click/type/submit 不重新导航（多步操作有效）",
+                "description": "浏览器多标签可视操作：open/click/type/fill/submit/select/get_text（当前页签），tabs/new_tab/switch_tab/close_tab多标签管理，back/forward/reload导航；共享登录态",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "url": {"type": "string", "description": "目标网址（非 open 动作时若已在同页则不重复导航）"},
-                        "action": {"type": "string", "description": "open / click / type / fill / submit / select / get_text"},
+                        "url": {"type": "string", "description": "目标网址（tabs/new_tab/switch_tab/close_tab/back/forward 等动作可按需省略）"},
+                        "action": {"type": "string", "description": "open / tabs / new_tab / switch_tab / close_tab / back / forward / reload / click / type / fill / submit / select / get_text"},
                         "selector": {"type": "string", "description": "CSS 选择器（click/type/fill/select/get_text 需要）"},
                         "text": {"type": "string", "description": "要输入的文本（type/fill）或要选择的选项（select）"},
+                        "handle": {"type": "string", "description": "页签/窗口句柄（switch_tab/close_tab 用）：tabs 列表中的 #编号，或 URL/标题关键字"},
                     },
-                    "required": ["url"],
+                    "required": [],
                 },
             },
         },
     groups=['🌐 浏览器与网页'],
-    phrases='控制浏览器（打开网页/点击/输入/填表/提交/选择/取文本，共享登录态）',
+    phrases='控制浏览器（多标签页：打开/点击/输入/填表/提交/切换/关闭，共享登录态）',
     preactivate=(('网页', 'url', '抓取', '爬'),),
 )
-def browser_navigate(url, action="open", selector="", text=""):
+def browser_navigate(url="", action="open", selector="", text="", handle=""):
     """浏览器可视操作（Playwright 可选依赖，未安装时返回安装提示）。
 
-    浏览器实例复用（连续操作共享同一页面）：click/type/fill/submit 等动作
-    不重新导航，保留当前页面状态与登录态；open 才会跳转新页面。
+    多窗口/多标签模型：所有页签（含 window.open 弹窗）在同一共享上下文内，
+    tabs 可枚举全部句柄；switch_tab/close_tab 用 #编号 或 URL/标题关键字定位。
+    open/click/type/fill/submit/select/get_text 等作用于当前激活页签；
+    click/type/submit 不重新导航，保留页面状态与登录态。
     有头/无头跟随全局开关 BROWSER_HEADLESS。
     """
     ok, hint = _playwright_ready()
@@ -631,18 +640,70 @@ def browser_navigate(url, action="open", selector="", text=""):
         from playwright.sync_api import sync_playwright  # noqa: F401
     except Exception as e:
         return f"错误：playwright 初始化失败: {e}"
-    # SSRF 防护：与 fetch_url 同规则（模型可控 URL 禁止 file:// 与内网/回环）
-    err = _safe_url(url)
-    if err:
-        return f"错误：{err}"
+    if url:
+        err = _safe_url(url)
+        if err:
+            return f"错误：{err}"
     try:
         with _BROWSER_LOCK:  # playwright 非线程安全：浏览器操作串行化
-            page = _get_browser_page()
+            # ---------- 页签/窗口句柄管理 ----------
+            if action in ("tabs", "list_tabs"):
+                pages = _browser_pages()
+                if not pages:
+                    return "浏览器尚未打开任何页签（可用 action=new_tab 打开）"
+                active = _browser_active_page()
+                lines = []
+                for i, p in enumerate(pages):
+                    try:
+                        title = (p.title() or "")[:60]
+                    except Exception:
+                        title = ""
+                    try:
+                        u = p.url or ""
+                    except Exception:
+                        u = ""
+                    mark = "▶" if p is active else " "
+                    lines.append(f"{mark} #{i} {title}\n    {u}" if title else f"{mark} #{i} {u}")
+                return f"共 {len(pages)} 个页签/窗口（▶ 当前激活；switch_tab/close_tab 用 #编号 或 URL/标题）：\n" + "\n".join(lines)
+
+            if action in ("new_tab", "new"):
+                if not url:
+                    return "错误：new_tab 需要 url"
+                page = _browser_new_page(url)
+                return f"已新开页签并激活：{page.title() or url}\n当前 URL: {page.url}"
+
+            if action in ("switch_tab", "switch"):
+                page, err = _browser_switch_to(handle or text or selector or "")
+                if page is None:
+                    return err
+                return f"已切换到页签：{page.title() or page.url}\n当前 URL: {page.url}"
+
+            if action in ("close_tab", "close"):
+                ok_close, msg = _browser_close_page(handle or "")
+                return msg
+
+            # ---------- 导航类（作用于当前激活页签）----------
+            page = _browser_active_page()
             if action == "open":
+                if not url:
+                    return "错误：open 需要 url（列表页签用 action=tabs）"
                 _browser_goto(page, url)
                 return f"已打开：{page.title() or url}\n当前 URL: {page.url}"
-            # 非 open 动作：确保在目标页（已在此页则保持状态，不重复导航）
-            _browser_goto(page, url)
+            if action in ("back", "forward", "reload"):
+                if action == "back":
+                    page.go_back()
+                    note = "后退"
+                elif action == "forward":
+                    page.go_forward()
+                    note = "前进"
+                else:
+                    page.reload()
+                    note = "刷新"
+                page.wait_for_timeout(800)
+                return f"已{note}，当前 URL: {page.url}"
+            # 非导航动作：确保在目标页（已在此页则保持状态，不重复导航）
+            if url:
+                _browser_goto(page, url)
             if action == "get_text":
                 if not selector:
                     return "错误：get_text 需要 selector"
@@ -674,7 +735,7 @@ def browser_navigate(url, action="open", selector="", text=""):
                     return "错误：select 需要 selector"
                 page.select_option(selector, text or "")
                 return f"已在 {selector} 选择 {text}"
-            return f"错误：未知动作 {action}（open/click/type/fill/submit/select/get_text）"
+            return f"错误：未知动作 {action}（支持 open/tabs/new_tab/switch_tab/close_tab/back/forward/reload/click/type/fill/submit/select/get_text）"
     except Exception as e:
         return f"错误：浏览器操作失败: {e}"
 

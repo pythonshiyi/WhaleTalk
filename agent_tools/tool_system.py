@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from datetime import datetime
 
@@ -789,110 +790,359 @@ def notify_desktop(title="鲸语提醒", text="", fallback_sound=True, silent=Fa
         return f"错误：通知失败: {e}"
 
 
+# ===== app_manage 跨平台包管理器探测（辅助函数须在 @tool 之前） =====
+_PKG_PRIORITY = {
+    "nt": ("winget", "scoop", "choco"),
+    "darwin": ("brew",),
+    "linux": ("apt", "dnf", "pacman", "apk"),
+}
+_PKG_PLATFORM_LABEL = {"nt": "Windows", "darwin": "macOS", "linux": "Linux"}
+_PKG_BOOTSTRAP_HINT = {
+    "scoop": "PowerShell 免管理员一条命令：Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser; irm get.scoop.sh | iex",
+    "choco": "PowerShell(管理员) 安装脚本，见 https://chocolatey.org/install",
+    "brew": '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+}
+
+
+def _pkg_platform_key():
+    return "darwin" if sys.platform == "darwin" else ("nt" if os.name == "nt" else "linux")
+
+
+def _find_pkg_manager(name):
+    """探测单个包管理器可执行路径；scoop 是 PowerShell 函数 + shims，需按安装目录兜底。"""
+    if name == "scoop":
+        p = _which_any("scoop")
+        if p:
+            return p
+        for root in (os.environ.get("SCOOP") or "", os.path.expanduser("~/scoop")):
+            if not root:
+                continue
+            for cand in ("scoop.cmd", "scoop.exe", "scoop.ps1"):
+                fp = os.path.join(root, "shims", cand)
+                if os.path.isfile(fp):
+                    return fp
+        return None
+    return _which_any(name)
+
+
+def _pkg_available():
+    """按平台优先级自动探测 → [(name, 可执行路径), ...]（探测顺序即优先序）。"""
+    out = []
+    for name in _PKG_PRIORITY.get(_pkg_platform_key(), ()):
+        p = _find_pkg_manager(name)
+        if p:
+            out.append((name, p))
+    return out
+
+
+def _pkg_sudo_needed():
+    """Linux 系统包管理器的 install/uninstall 需 root；非 root 时补 sudo 前缀。"""
+    if os.name != "posix":
+        return False
+    try:
+        return os.geteuid() != 0
+    except (AttributeError, OSError):
+        return True
+
+
+def _pkg_argv(name, path, op, q=""):
+    """包管理器统一操作 argv；op ∈ search/install/uninstall/upgrade/list。"""
+    sudo = ["sudo"] if (_pkg_sudo_needed() and name in ("apt", "dnf", "pacman", "apk") and op in ("install", "uninstall")) else []
+    if name == "winget":
+        if op == "search":
+            return [path, "search", q]
+        if op == "install":
+            return [path, "install", "--id", q, "--silent", "--accept-package-agreements", "--accept-source-agreements"]
+        if op == "uninstall":
+            return [path, "uninstall", "--id", q]
+        if op == "upgrade":
+            return [path, "upgrade"]
+        if op == "list":
+            return [path, "list", "--accept-source-agreements"]
+    if name == "scoop":
+        if op == "search":
+            return [path, "search", q]
+        if op == "install":
+            return [path, "install", q]
+        if op == "uninstall":
+            return [path, "uninstall", q]
+        if op == "upgrade":
+            return [path, "status"]
+        if op == "list":
+            return [path, "list"]
+    if name == "choco":
+        if op == "search":
+            return [path, "search", q]
+        if op == "install":
+            return [path, "install", q, "-y"]
+        if op == "uninstall":
+            return [path, "uninstall", q, "-y"]
+        if op == "upgrade":
+            return [path, "outdated"]
+        if op == "list":
+            return [path, "list"]
+    if name == "brew":
+        if op == "search":
+            return [path, "search", q]
+        if op == "install":
+            return [path, "install", q]
+        if op == "uninstall":
+            return [path, "uninstall", q]
+        if op == "upgrade":
+            return [path, "outdated"]
+        if op == "list":
+            return [path, "list"]
+    # ---- Linux 系统包管理器（search/list 免 root；install/uninstall 走 sudo） ----
+    if name == "apt":
+        if op == "search":
+            return ["apt-cache", "search", q]
+        if op == "install":
+            return sudo + ["apt-get", "install", "-y", q]
+        if op == "uninstall":
+            return sudo + ["apt-get", "remove", "-y", q]
+        if op == "upgrade":
+            return ["apt", "list", "--upgradable"]
+        if op == "list":
+            return ["apt", "list", "--installed"]
+    if name == "dnf":
+        if op == "search":
+            return [path, "search", q]
+        if op == "install":
+            return sudo + [path, "install", "-y", q]
+        if op == "uninstall":
+            return sudo + [path, "remove", "-y", q]
+        if op == "upgrade":
+            return [path, "check-update"]
+        if op == "list":
+            return [path, "list", "--installed"]
+    if name == "pacman":
+        if op == "search":
+            return [path, "-Ss", q]
+        if op == "install":
+            return sudo + [path, "-S", "--noconfirm", q]
+        if op == "uninstall":
+            return sudo + [path, "-Rns", "--noconfirm", q]
+        if op == "upgrade":
+            return sudo + [path, "-Qu"]
+        if op == "list":
+            return [path, "-Q"]
+    if name == "apk":
+        if op == "search":
+            return [path, "search", q]
+        if op == "install":
+            return sudo + [path, "add", q]
+        if op == "uninstall":
+            return sudo + [path, "del", q]
+        if op == "upgrade":
+            return [path, "list", "--upgradable"]
+        if op == "list":
+            return [path, "info"]
+    return None
+
+
+def _pkg_run(name, path, op, q="", timeout=180):
+    """执行包管理器命令；scoop 的 .cmd/.ps1 shim 需经 cmd/powershell 包装。返回 (rc, 输出)。"""
+    argv = _pkg_argv(name, path, op, q)
+    if argv is None:
+        return None, f"包管理器 {name} 不支持该操作"
+    if name == "scoop":
+        exe, rest = argv[0], argv[1:]
+        if exe.lower().endswith((".cmd", ".bat")):
+            argv = [os.environ.get("COMSPEC", "cmd.exe"), "/c", exe] + rest
+        elif exe.lower().endswith(".ps1"):
+            argv = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", exe] + rest
+    return _proc_capture(argv, timeout)
+
+
+def _scoop_installed_apps(path):
+    """解析 `scoop list` → {name: version}（Scoop 便携应用不入注册表，list 需单独枚举）。"""
+    try:
+        _rc, out = _pkg_run("scoop", path, "list", timeout=120)
+    except Exception:
+        return {}
+    apps = {}
+    for ln in (out or "").splitlines():
+        parts = ln.split()
+        if len(parts) >= 2 and not ln.startswith(("Name", "----", "WARN", "ERROR")):
+            apps[parts[0]] = parts[1]
+    return apps
+
+
 @tool(
         {
             "type": "function",
             "function": {
                 "name": "app_manage",
-                "description": "Windows 应用安装与卸载管理（winget/choco 自动选择）：列出已装软件、搜索、静默安装、卸载、检查可升级。安装/卸载前应先向用户确认",
+                "description": "系统级应用安装管理：跨平台自动探测包管理器（winget/scoop/choco/brew/apt/dnf/pacman/apk）；列装/搜索/安装/卸载/查升级，缺失可bootstrap装Scoop；安装卸载前先确认",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["managers", "list", "search", "install", "uninstall", "upgrade"], "description": "操作类型（默认 list 列出已安装应用）"},
-                        "query": {"type": "string", "description": "list 时为过滤关键字；search/install/uninstall 时为软件名或包 ID（必填）"},
-                        "source": {"type": "string", "enum": ["auto", "winget", "choco"], "description": "可选：指定包管理器（默认 auto 自动选）"},
+                        "action": {"type": "string", "enum": ["managers", "list", "search", "install", "uninstall", "upgrade", "bootstrap"], "description": "操作类型（默认 list）：managers=探测并列出本机包管理器；bootstrap=自动引导安装缺失的包管理器（query 指定，默认 scoop）"},
+                        "query": {"type": "string", "description": "list 时为过滤关键字；search/install/uninstall 时为软件名或包 ID（必填）；bootstrap 时为要安装的管理器名（默认 scoop）"},
+                        "source": {"type": "string", "enum": ["auto", "winget", "scoop", "choco", "brew", "apt", "dnf", "pacman", "apk"], "description": "可选：指定包管理器（默认 auto 按平台优先级自动选）"},
                     },
                 },
             },
         },
     groups=['📦 应用与环境'],
-    phrases='应用安装/卸载管理（winget/choco）',
+    phrases='应用安装/卸载管理（自动探测 winget/scoop/choco/brew/apt）',
     preactivate=(('装软件', '卸载软件', '应用管理', '安装程序', '软件列表'),),
 )
 def app_manage(action="list", query="", source="auto"):
-    """Windows 应用安装与卸载管理。
+    """系统级应用安装管理（跨平台包管理器自动探测）。
 
     action：
-      managers — 检测本机可用的包管理器（winget/choco）
-      list     — 列出本机已安装应用（注册表枚举，query 可过滤）
-      search   — 在包管理器中搜索软件（query 必填）
-      install  — 安装软件（query 为名称或 --id 的 ID；敏感操作，请先向用户确认）
-      uninstall— 卸载软件（query 为包管理器中的 ID/名称；敏感操作，请先向用户确认）
-      upgrade  — 列出有可用更新的软件
+      managers  — 按平台探测并列出包管理器（winget/scoop/choco/brew/apt/dnf/pacman/apk）
+      list      — 列出已安装应用（Windows 走注册表枚举，query 可过滤；无注册表命中时补 Scoop 列表）
+      search    — 在包管理器中搜索软件（query 必填）
+      install   — 安装软件（query 为名称或包 ID；敏感操作，请先向用户确认）
+      uninstall — 卸载软件（敏感操作，请先向用户确认）
+      upgrade   — 列出有可用更新的软件
+      bootstrap — 自动引导安装缺失的包管理器（query 指定，默认 scoop；免管理员）
     """
     act = str(action or "list").strip().lower()
     q = str(query or "").strip()
-    winget = _which_any("winget")
-    choco = _which_any("choco")
+    src = str(source or "auto").strip().lower()
+    plat = _pkg_platform_key()
+    avail = _pkg_available()
+    prio = _PKG_PRIORITY.get(plat, ())
+    all_mgrs = sorted({m for mg in _PKG_PRIORITY.values() for m in mg})
     base_timeout = permissions.shell_timeout()
 
-    def _pkg_argv(op, args_extra):
-        use_winget = (source == "winget" or source == "auto") and winget
-        if use_winget:
-            return [winget] + op + args_extra
-        if (source == "choco" or source == "auto") and choco:
-            return ["choco"] + op + args_extra
-        return None
+    def _pick():
+        """按 source 返回 (name, path)；无可用管理器时返回 (None, None)。"""
+        if src == "auto":
+            return avail[0] if avail else (None, None)
+        if src not in all_mgrs:
+            return None, None
+        for name, path in avail:
+            if name == src:
+                return name, path
+        return None, None
+
+    def _tail(out, n=2500):
+        return (out or "").strip()[-n:]
 
     if act == "managers":
-        lines = [
-            f"- winget：{'✅ ' + winget if winget else '❌ 未安装'}",
-            f"- choco ：{'✅ ' + choco if choco else '❌ 未安装'}",
-        ]
-        hint = "" if (winget or choco) else "\n提示：两者均未安装，可先用 app_manage 安装（winget 需 Microsoft Store「应用安装程序」；choco 安装命令见 chocolatey.org）"
-        return "\n".join(lines) + hint
+        label = _PKG_PLATFORM_LABEL.get(plat, plat)
+        lines = [f"平台：{label}　自动探测顺序：{' → '.join(prio) or '（无）'}"]
+        for name in prio:
+            p = _find_pkg_manager(name)
+            if p:
+                lines.append(f"- {name}：✅ {p}")
+            else:
+                hint = _PKG_BOOTSTRAP_HINT.get(name)
+                lines.append(f"- {name}：❌ 未安装" + (f"（安装：{hint}）" if hint else ""))
+        if not avail:
+            lines.append("提示：当前没有任何包管理器。Windows 可直接 app_manage(action='bootstrap') 免管理员装 Scoop")
+        permissions.audit("app_manage", "managers", label)
+        return "\n".join(lines)
 
     if act == "list":
-        apps = _win_installed_apps()
-        if not apps:
-            return "未枚举到已安装应用（非 Windows 或注册表不可读）"
+        if os.name == "nt":
+            apps = _win_installed_apps()
+            if not apps:
+                return "未枚举到已安装应用（注册表不可读或本机无注册表条目）"
+            ql = q.lower()
+            rows = [
+                (n, m.get("version", ""), m.get("publisher", ""))
+                for n, m in sorted(apps.items())
+                if not ql or ql in n.lower()
+            ]
+            scoop_note = ""
+            if q and not rows:
+                scoop_path = next((p for nm, p in avail if nm == "scoop"), None)
+                if scoop_path:
+                    extra = _scoop_installed_apps(scoop_path)
+                    rows = [(n, v, "Scoop") for n, v in sorted(extra.items()) if ql in n.lower()]
+                    scoop_note = "（Scoop 便携应用不写注册表，此结果来自 scoop list）"
+            if not rows:
+                return f"没有匹配「{q}」的已安装应用"
+            total = len(rows)
+            rows = rows[:80]
+            lines = [f"{n}｜版本 {v or '?'}｜{pub or '?'}"[:150] for n, v, pub in rows]
+            tail = f"\n—— 共 {total} 项{'（截取前 80 条）' if total > 80 else ''}{scoop_note} ——"
+            permissions.audit("app_manage", "list", str(q)[:60])
+            return "\n".join(lines) + tail
+        # 非 Windows：用包管理器 list 命令枚举（过滤 query）
+        name, path = next(iter(avail), (None, None))
+        if not path:
+            return "错误：本机无可用包管理器，无法列装。Windows 可 bootstrap 装 Scoop；macOS 装 brew；Linux 用系统 apt/dnf/pacman/apk"
+        _rc, out = _pkg_run(name, path, "list", timeout=max(base_timeout, 180))
         ql = q.lower()
-        rows = [
-            (name, meta.get("version", ""), meta.get("publisher", ""))
-            for name, meta in sorted(apps.items())
-            if not ql or ql in name.lower()
-        ]
-        total = len(rows)
-        rows = rows[:80]
-        lines = [f"{n}｜版本 {v or '?'}｜{pub}"[:150] for n, v, pub in rows]
-        tail = f"\n—— 共 {total} 项{'（截取前 80 条）' if total > 80 else ''} ——"
-        permissions.audit("app_manage", "list", str(q)[:60])
-        return "\n".join(lines) + tail
+        rows = []
+        for ln in (out or "").splitlines():
+            tok = ln.split()
+            if not tok:
+                continue
+            nm0 = tok[0].rstrip(":")
+            nm = nm0.split("/", 1)[0] if "/" in nm0 else nm0  # apt: 名字/架构
+            if ql and ql not in nm.lower():
+                continue
+            ver = (tok[1].rstrip(",") if len(tok) >= 2 else "") or "?"
+            rows.append(f"{nm}｜{ver}｜{name}")
+            if len(rows) >= 80:
+                break
+        permissions.audit("app_manage", "list", f"{name} {q}"[:60])
+        if not rows:
+            return f"没有匹配「{q}」的已安装应用（{name}）"
+        return "\n".join(rows) + f"\n—— 共 {len(rows)} 项（截取前 80 条）——"
 
-    if act == "upgrade":
-        argv = _pkg_argv(["upgrade"], [])
-        if not argv:
-            return "错误：未找到可用包管理器（winget/choco）。可先运行 app_manage(action='managers') 查看"
-        rc, out = _proc_capture(argv, max(base_timeout, 300))
-        permissions.audit("app_manage", "upgrade", out[:60])
-        return f"退出码 {rc}\n{out.strip() or '（无输出）'}"
+    if act == "bootstrap":
+        want = (q or "scoop").lower()
+        if os.name != "nt" or want != "scoop":
+            hint = _PKG_BOOTSTRAP_HINT.get(want)
+            return ("Scoop 仅支持 Windows；" if os.name != "nt" and want == "scoop" else "") + (
+                f"暂仅支持自动引导安装 scoop（免管理员）。{want} 手动安装：{hint}" if hint
+                else "暂仅支持自动引导安装 scoop（免管理员）；其余管理器请手动安装"
+            )
+        if any(nm == "scoop" for nm, _p in avail):
+            return f"Scoop 已安装：{next(p for nm, p in avail if nm == 'scoop')}"
+        ps_cmd = (
+            "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; "
+            "irm get.scoop.sh | iex"
+        )
+        rc, out = _proc_capture(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+            max(base_timeout, 600),
+        )
+        permissions.audit("app_manage", "bootstrap", "scoop")
+        verdict = "成功（新开终端即可用 scoop）" if rc == 0 else f"失败（退出码 {rc}，可手动执行引导命令重试）"
+        return f"Scoop 引导安装：{verdict}\n{_tail(out)}"
 
-    if act in ("search", "install", "uninstall"):
-        if not q:
+    if act in ("search", "install", "uninstall", "upgrade"):
+        if act != "upgrade" and not q:
             return f"错误：action={act} 时 query 必填"
-        if act == "search":
-            argv = _pkg_argv(["search"], [q])
-            timeout = max(base_timeout, 120)
-        elif act == "install":
-            if winget and (source != "choco"):
-                argv = [winget, "install", "--id", q, "--silent", "--accept-package-agreements", "--accept-source-agreements"]
+        name, path = _pick()
+        if not path:
+            hint = "先 action=managers 查看；Windows 可直接 action=bootstrap 自动装 Scoop" if not avail else "可用 source 指定其它已装管理器"
+            return f"错误：未找到可用的包管理器执行 {act}（本机已探测：{'/'.join(n for n, _ in avail) or '无'}）。{hint}"
+        if act == "upgrade":
+            rc, out = _pkg_run(name, path, "upgrade", timeout=max(base_timeout, 300))
+            permissions.audit("app_manage", "upgrade", name)
+            # dnf check-update：退出码 100 = 有可用更新（非错误）
+            note = ""
+            if name == "dnf" and rc == 100:
+                rc, note = 0, "（dnf：退出码 100 表示有可用更新，已视为正常）"
+            return f"可用更新（{name}）退出码 {rc}{note}\n{_tail(out) or '（无输出，可能没有可用更新）'}"
+        timeout = {"search": 120, "install": 900, "uninstall": 600}.get(act, 180)
+        rc, out = _pkg_run(name, path, act, q, timeout=max(base_timeout, timeout))
+        note = ""
+        if rc != 0 and name == "winget" and act in ("install", "uninstall"):
+            # --id 未命中时按名称再试一次（winget 支持名称匹配安装）
+            fb_argv = [path, act, q]
+            if act == "install":
+                fb_argv += ["--silent", "--accept-package-agreements", "--accept-source-agreements"]
+            rc2, out2 = _proc_capture(fb_argv, timeout)
+            if rc2 == 0:
+                rc, out, note = rc2, out2, "（--id 未命中，已按名称匹配成功）"
             else:
-                argv = ["choco", "install", "-y", q]
-            timeout = max(base_timeout, 900)
-        else:
-            if winget and (source != "choco"):
-                argv = [winget, "uninstall", "--id", q]
-            else:
-                argv = ["choco", "uninstall", "-y", q]
-            timeout = max(base_timeout, 600)
-        if not argv:
-            return "错误：未找到可用包管理器（winget/choco），无法执行该操作。可让用户手动安装包管理器后再试"
-        rc, out = _proc_capture(argv, timeout)
-        permissions.audit("app_manage", act, f"{os.path.basename(argv[0])} {q}"[:80])
-        verdict = "成功" if rc == 0 else "失败（可尝试改用 --id 包 ID，或先 search 确认准确标识）"
-        return f"{act} {q}：{verdict}（退出码 {rc}）\n{out.strip() or '（无输出）'}"
+                note = "（--id 与名称均未命中，请先 search 确认准确包 ID/名称）"
+        permissions.audit("app_manage", act, f"{name} {q}"[:80])
+        verdict = "成功" if rc == 0 else "失败（可先 search 确认准确的包 ID/名称后重试）"
+        return f"{act} {q}（{name}）：{verdict}{note}（退出码 {rc}）\n{_tail(out)}"
 
-    return f"错误：未知 action={act}（支持 managers/list/search/install/uninstall/upgrade）"
+    return f"错误：未知 action={act}（支持 managers/list/search/install/uninstall/upgrade/bootstrap）"
 
 
 @tool(

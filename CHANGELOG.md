@@ -2,6 +2,35 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 📦 app_manage 跨平台包管理器自动探测（修复"无管理器不可用"）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。此前 app_manage 仅支持 winget/choco，本机无任一管理器时（managers 全 ❌）完全不可用；改造为按平台自动探测完整工具链，并支持一条命令引导安装 Scoop（免管理员）——"装软件"在任何机器上都能闭环。
+
+### 变更（agent_tools/tool_system.py）
+- **跨平台探测链**：Windows winget→scoop→choco、macOS brew、Linux apt/dnf/pacman/apk，按平台优先级自动选择；`source` 枚举同步扩展到 9 个管理器（auto/winget/scoop/choco/brew/apt/dnf/pacman/apk）
+- **Scoop 专项**：scoop 是 PowerShell 函数 + shims（无独立 exe）——除 shutil.which 外补 SCOOP 环境变量 / `~/scoop/shims` 目录兜底；`.cmd` shim 经 `cmd /c`、`.ps1` 经 `powershell -File` 包装执行（避免 WinError 193）
+- **action=bootstrap（新增）**：无任何包管理器时可直接引导安装 Scoop（免管理员）；managers 动作输出各管理器缺失时的精确安装指引
+- **跨平台 list**：Windows 注册表枚举，q 过滤无命中且已装 Scoop 时自动补 `scoop list` 便携应用（不写注册表）；macOS/Linux 走 brew/apt/dnf/pacman/apk 的 list 命令过滤（截 80 条）
+- **统一 argv 模板**：search/install/uninstall/upgrade 每管理器独立参数——winget `--id` + 失败按名称回退重试、choco `-y`、Linux 系统管理器非 root 自动补 `sudo` 前缀；upgrade 语义 = 列出可升级（winget upgrade / scoop status / choco outdated / brew outdated / apt list --upgradable…），dnf 退出码 100 视为正常
+
+### 回归
+- 新增 `tests/test_app_manage.py` 10 用例：平台优先级表、九包管理器 argv 模板、scoop `.cmd` shim 包装（cmd /c）、目录兜底探测（SCOOP 环境变量 / ~/scoop）、schema 枚举与 Python 签名一致性
+- 真实冒烟（本机确无 winget/scoop/choco，即原"不可用"场景）：managers 输出全部缺失 + bootstrap 引导；list(q=python) 正常返回 11 项；source=brew 提示可执行路径
+
+## v3.8.3（未发版追加）—— 🌐 browser_navigate 多窗口/多标签页签句柄管理
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。此前浏览器为"单共享页面"模型：跨页面任务只能不断 open 覆盖当前页，多窗口/多标签（对照页面、弹窗窗口）无法管理。改造为共享上下文多页签模型，页签/窗口可句柄级操作。
+
+### 变更
+- **基建（deepseek_client.py）**：非 persistent 模式由 `browser.new_page()`（每次独立上下文、登录态不共享）改为单一 BrowserContext 多页签模型（`ctx.new_page()`，弹窗/多标签共用 cookie/登录态）；persistent 模式页签枚举统一走 `ctx.pages`
+- **页签辅助（新增）**：`_browser_pages`（枚举全部窗口/页签，含 window.open 弹窗）、`_browser_active_page`（激活页签，失效自动回退相邻）、`_browser_new_page`、`_browser_switch_to`（#编号/URL/标题关键字三路匹配）、`_browser_close_page`（默认关激活页，关闭后自动接管相邻页签）、`_browser_match_page`
+- **工具层（agent_tools/tool_web.py）**：browser_navigate 新增 action——`tabs`（列出全部页签，▶ 标记当前激活）、`new_tab`、`switch_tab`、`close_tab`（`handle` 参数 = #编号/URL/标题）、`back`/`forward`/`reload`；open/click/type/fill/submit/select/get_text 改为作用于当前激活页签；schema 新增可选 `handle` 参数、url 不再必填
+- 描述收紧至 130 字门禁内（validate_tools compact 校验通过）
+
+### 回归
+- 四门禁全绿：audit `--strict` error 0（warn 13，描述超长类清零）/ validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3
+- pytest **116 passed**（106 + 新增 test_app_manage 10 用例）
+
 ## v3.8.3（未发版追加）—— 🚀 恢复默认自由：任务模式无限权限 + 黑名单主导（一键开关）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。回应用户对 P1-5「安全默认值」的纠偏：任务模式应回归「法无禁止皆可为」——默认 0 限制，限制只来自黑名单（带一键开关），不再由程序默认强加审批。

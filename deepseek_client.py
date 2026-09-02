@@ -1815,39 +1815,148 @@ def _rpa_ready():
 BROWSER_HEADLESS = True
 BROWSER_PROFILE_DIR = None  # 由 main 注入（DATA_DIR/browser_profile，登录态持久化）
 
-_BROWSER_LOCK = threading.RLock()  # 可重入：browser_navigate 持锁内调用 _get_browser_page
+_BROWSER_LOCK = threading.RLock()  # 可重入：browser_navigate 持锁内调用各页签辅助
 _BROWSER_PW = None
 _BROWSER = None          # Browser 或 persistent BrowserContext
-_BROWSER_PAGE = None     # 共享页面（多步操作保持状态/登录态）
+_BROWSER_CTX = None      # 共享 BrowserContext（非 persistent 模式：多页签/多窗口共用登录态）
+_BROWSER_PAGE = None     # 当前激活页签（open/click/type 等操作的作用对象）
 
 
 def _browser_headless():
     return BROWSER_HEADLESS
 
 
-def _get_browser_page():
-    """获取共享浏览器页面（实例复用 + 登录态持久 + 页面状态保持）。"""
-    global _BROWSER_PW, _BROWSER, _BROWSER_PAGE
+def _browser_context():
+    """确保浏览器已启动，返回共享上下文（persistent 模式 _BROWSER 即上下文本身）。
+
+    统一经 context 管理页签：window.open 弹窗 / 新开标签都落在同一上下文里，
+    页面间共享 cookie/登录态，tabs 列表才能枚举到全部窗口句柄。
+    """
+    global _BROWSER_PW, _BROWSER, _BROWSER_CTX
     with _BROWSER_LOCK:
         if _BROWSER is None:
             from playwright.sync_api import sync_playwright
 
             _BROWSER_PW = sync_playwright().start()
-            kwargs = {"headless": _browser_headless()}
             if BROWSER_PROFILE_DIR:
                 os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
-                ctx = _BROWSER_PW.chromium.launch_persistent_context(BROWSER_PROFILE_DIR, **kwargs)
-                _BROWSER = ctx
-                _BROWSER_PAGE = ctx.pages[0] if ctx.pages else ctx.new_page()
+                _BROWSER = _BROWSER_PW.chromium.launch_persistent_context(
+                    BROWSER_PROFILE_DIR, headless=_browser_headless()
+                )
             else:
-                _BROWSER = _BROWSER_PW.chromium.launch(**kwargs)
-                _BROWSER_PAGE = _BROWSER.new_page()
+                _BROWSER = _BROWSER_PW.chromium.launch(headless=_browser_headless())
+                _BROWSER_CTX = _BROWSER.new_context()
+        return _BROWSER if _BROWSER_CTX is None else _BROWSER_CTX
+
+
+def _browser_pages():
+    """共享上下文当前全部页签/窗口（含 window.open 弹窗产生的 Page）。"""
+    with _BROWSER_LOCK:
+        try:
+            return list(_browser_context().pages)
+        except Exception:
+            return []
+
+
+def _browser_active_page():
+    """当前激活页签；已关闭/失效时回退到第一个可用页签，无则新建。"""
+    global _BROWSER_PAGE
+    with _BROWSER_LOCK:
+        live = [p for p in _browser_pages() if not p.is_closed()]
+        if _BROWSER_PAGE is None or _BROWSER_PAGE.is_closed() or _BROWSER_PAGE not in live:
+            _BROWSER_PAGE = live[0] if live else _browser_context().new_page()
         return _BROWSER_PAGE
+
+
+def _get_browser_page():
+    """获取当前激活页签（兼容旧引用：实例复用 + 登录态持久 + 页面状态保持）。"""
+    return _browser_active_page()
+
+
+def _browser_match_page(target):
+    """按 数字索引（tabs 列表 #编号）/ URL 子串 / 标题子串 定位页签。
+
+    返回 (page, None) 或 (None, 错误信息)。
+    """
+    pages = _browser_pages()
+    t = str(target or "").strip()
+    if not t:
+        return None, "未指定页签句柄：传 tabs 列表里的 #编号，或 URL/标题关键字"
+    if t.isdigit():
+        i = int(t)
+        if 0 <= i < len(pages):
+            return pages[i], None
+        return None, f"页签索引 {i} 超出范围（共 {len(pages)} 个，#编号从 0 开始）"
+    for p in pages:
+        try:
+            if t.lower() in (p.url or "").lower():
+                return p, None
+        except Exception:
+            continue
+    for p in pages:
+        try:
+            if t.lower() in ((p.title() or "")[:200].lower()):
+                return p, None
+        except Exception:
+            continue
+    names = "；".join(f"#{i} {p.title() or p.url}" for i, p in enumerate(pages)) or "（空）"
+    return None, f"未找到匹配「{t}」的页签。当前页签：{names[:300]}"
+
+
+def _browser_new_page(url=""):
+    """新开页签并切换为激活页（多窗口/多标签句柄操作入口）。"""
+    global _BROWSER_PAGE
+    with _BROWSER_LOCK:
+        page = _browser_context().new_page()
+        if url:
+            page.goto(url, timeout=15000, wait_until="domcontentloaded")
+        _BROWSER_PAGE = page
+        return page
+
+
+def _browser_switch_to(target):
+    """切换激活页签到目标页签；返回 (page, None) 或 (None, 错误)。"""
+    global _BROWSER_PAGE
+    with _BROWSER_LOCK:
+        page, err = _browser_match_page(target)
+        if page is None:
+            return None, err
+        _BROWSER_PAGE = page
+        return page, None
+
+
+def _browser_close_page(target=""):
+    """关闭页签（默认关闭当前激活页）；关闭激活页后自动切到相邻页签。
+
+    返回 (成功?, 描述)。target 传空 = 关闭激活页；否则按 #编号/URL/标题匹配。
+    """
+    global _BROWSER_PAGE
+    with _BROWSER_LOCK:
+        pages = _browser_pages()
+        if not pages:
+            return False, "浏览器没有任何页签可关闭"
+        if target:
+            page, err = _browser_match_page(target)
+            if page is None:
+                return False, err
+        else:
+            page = _browser_active_page()
+        idx = next((i for i, p in enumerate(pages) if p is page), 0)
+        try:
+            page.close()
+        except Exception as e:
+            return False, f"关闭页签失败: {e}"
+        left = [p for p in _browser_pages() if not p.is_closed()]
+        if not left:
+            _BROWSER_PAGE = _browser_context().new_page()
+        elif _BROWSER_PAGE is None or _BROWSER_PAGE.is_closed() or _BROWSER_PAGE not in left:
+            _BROWSER_PAGE = left[min(idx, len(left) - 1)]
+        return True, f"已关闭页签 #{idx}（剩余 {len(left)} 个，当前激活 #{left.index(_BROWSER_PAGE)}）"
 
 
 def close_browser():
     """关闭共享浏览器（main 退出时调用，登录态已持久化不受影响）。"""
-    global _BROWSER_PW, _BROWSER, _BROWSER_PAGE
+    global _BROWSER_PW, _BROWSER, _BROWSER_CTX, _BROWSER_PAGE
     with _BROWSER_LOCK:
         try:
             if _BROWSER is not None:
@@ -1859,7 +1968,7 @@ def close_browser():
                 _BROWSER_PW.stop()
         except Exception:
             pass
-        _BROWSER_PW = _BROWSER = _BROWSER_PAGE = None
+        _BROWSER_PW = _BROWSER = _BROWSER_CTX = _BROWSER_PAGE = None
 
 
 def _browser_goto(page, url):
