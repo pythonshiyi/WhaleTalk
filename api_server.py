@@ -6554,8 +6554,15 @@ class _Handler(BaseHTTPRequestHandler):
                         _q = _txt[-60:] if _txt else ""
                     break
                 try:
-                    bc = brain_api.brain_context(query=_q) if _q else brain_api.brain_context()
-                except TypeError:  # 兼容旧签名/外部桩（无 query 参数）
+                    # L1 预算：大脑上下文控制在 ~1500 字符（不挤占其他注入段）；
+                    # 话题 query 优先（语义相关记忆），否则给同等的空 query 衰减注入
+                    _budget = int(cfg.get("brain_context_budget") or 1500) or 0
+                    if _budget <= 0:
+                        bc = brain_api.brain_context(query=_q) if _q else brain_api.brain_context()
+                    else:
+                        bc = brain_api.brain_context(query=_q, budget_chars=_budget) if _q \
+                            else brain_api.brain_context(budget_chars=_budget)
+                except TypeError:  # 兼容旧签名/外部桩（无 query/budget_chars 参数）
                     bc = brain_api.brain_context()
                 if bc:
                     parts.append(bc)

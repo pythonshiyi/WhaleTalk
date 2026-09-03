@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """鲸语大脑 (WhaleBrain) — 可迁移、可备份、可恢复、可合并、可永续的思维容器。
 
 鲸语是躯体，大脑是灵魂。本工具让「大脑」脱离运行环境独立存在：
@@ -102,8 +101,10 @@ PBKDF2_ITER = 200_000
 RSA_KEYSIZE = 2048
 SIGN_MAGIC = b"WHALEBRAIN-SIG\x00"  # 快照签名块分隔（文件 = data + magic + signature）
 
-# 记忆写路径进程内互斥；跨进程安全由「原子 append / tmp+os.replace」兜底
-_MEM_LOCK = threading.Lock()
+# 记忆写路径进程内互斥；跨进程安全由「原子 append / tmp+os.replace」兜底。
+# 用 RLock：save_memories/update/delete/version_replace/_record_hits 会嵌套
+# 调用（持锁后落盘），普通 Lock 会自锁死，RLock 允许同线程重入。
+_MEM_LOCK = threading.RLock()
 
 # ---------------------------------------------------------------- 基础工具
 
@@ -158,6 +159,37 @@ def append_line(path: Path, text: str) -> None:
         f.write(text.rstrip("\n") + "\n")
 
 
+def cross_process_lock(target: Path, timeout=10.0) -> bool:
+    """L5 跨进程文件锁：以 O_EXCL 独占创建 target.lock 实现；超时返回 False。
+
+    用于 CLI 与常驻 API 并发写 memory.jsonl / 快照版本号竞态。锁文件在
+    try/finally 中删除。非 Windows 也适用（基于文件系统原子性）。
+    """
+    import time as _t
+    lock_path = Path(str(target) + ".lock")
+    deadline = _t.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            if _t.monotonic() > deadline:
+                return False
+            _t.sleep(0.02)
+        except OSError:
+            return False
+
+
+def release_lock(target: Path) -> None:
+    lock_path = Path(str(target) + ".lock")
+    try:
+        lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def set_brain_dir(p: Path) -> None:
     """全局 --dir：让工具可指向任意大脑目录（分支演化 / 模拟他机）。"""
     global BRAIN_DIR, MEMORIES_DIR, THINKING_DIR, ARCHIVE_DIR, KEYS_DIR, LINEAGE_FILE
@@ -188,7 +220,7 @@ def verify_fingerprint(manifest: dict) -> bool:
 def load_manifest() -> dict:
     path = BRAIN_DIR / "manifest.json"
     if not path.exists():
-        print(f"[未初始化] 还没有大脑。先运行: python brainkit.py init", file=sys.stderr)
+        print("[未初始化] 还没有大脑。先运行: python brainkit.py init", file=sys.stderr)
         raise SystemExit(1)
     m = load_json(path)
     if not m:
@@ -819,6 +851,11 @@ def load_memories(include_archived: bool = False) -> list:
             e.setdefault("relations", [])
             e.setdefault("source", "手动")
             e.setdefault("archived", False)
+            e.setdefault("sensitivity", "public")  # L8 敏感度分级
+            e.setdefault("hit_count", 0)  # F3 重要度自学习：命中次数
+            e.setdefault("last_hit", "")   # F3 最近命中时间
+            e.setdefault("supersedes", "")  # F2 事实版本链：被覆盖的旧记忆 id
+            e.setdefault("version_id", "")  # F2 版本链祖先（不变）
             out.append(e)
             seen.add(e["id"])
     if MEMORIES_DIR.exists():
@@ -863,15 +900,21 @@ def save_memories(items: list) -> None:
             raise
 
 
-def remember_structured(text, type="", importance=3, tags=None, entities=None, relations=None, source="手动"):
+def remember_structured(text, type="", importance=3, tags=None, entities=None, relations=None, source="手动",
+                        sensitivity="public"):
     """写入一条结构化记忆到 memory.jsonl（同文本去重）。返回条目 dict 或 None。
 
     写入用「读-查重-原子追加」：单条新增是 O(1) append，不再整文件重写，
     规避记忆量大后的写放大；进程内加锁，跨进程由单行 append 的原子性兜底。
+
+    L8 敏感度分级：sensitivity ∈ public/private/secret，供 share-export 等脱敏用。
     """
     text = str(text or "").strip()
     if not text:
         return None
+    if str(sensitivity or "") not in ("public", "private", "secret"):
+        sensitivity = "public"
+    vid = _mem_id()  # F2 版本链祖先：一次记忆的多个 supersede 版本共享
     entry = {
         "id": _mem_id(), "ts": now_iso(), "type": str(type or "")[:20],
         "importance": max(1, min(5, int(importance or 3))),
@@ -880,6 +923,8 @@ def remember_structured(text, type="", importance=3, tags=None, entities=None, r
         "entities": [str(e).strip()[:30] for e in (entities or []) if str(e).strip()][:20],
         "relations": [r for r in (relations or []) if isinstance(r, dict)][:20],
         "source": str(source or "手动")[:10], "archived": False,
+        "sensitivity": sensitivity, "hit_count": 0, "last_hit": "",
+        "supersedes": "", "version_id": vid,
     }
     with _MEM_LOCK:
         items = load_memories(include_archived=True)
@@ -891,7 +936,13 @@ def remember_structured(text, type="", importance=3, tags=None, entities=None, r
     return entry
 
 
-def update_memory(mid: str, text=None, type=None, importance=None, tags=None, archived=None) -> bool:
+def update_memory(mid: str, text=None, type=None, importance=None, tags=None, archived=None, sensitivity=None) -> bool:
+    """就地更新一条记忆（id 已定位，用于精确同步）。
+
+    F2 事实版本链：工具层的 update_memory（改文本）走版本追加（见 brain_api/`version_replace_memory`，
+    本函数保持「同 id 就地改」以兼容旧调用）；此处 text 改动直接覆盖并保留原 id/version_id。
+    新增可选 sensitivity 就地更新。
+    """
     items = load_memories(include_archived=True)
     hit = next((e for e in items if e["id"] == mid), None)
     if not hit:
@@ -906,9 +957,55 @@ def update_memory(mid: str, text=None, type=None, importance=None, tags=None, ar
         hit["tags"] = [str(t).strip() for t in tags if str(t).strip()][:10]
     if archived is not None:
         hit["archived"] = bool(archived)
+    if sensitivity is not None and str(sensitivity) in ("public", "private", "secret"):
+        hit["sensitivity"] = str(sensitivity)
+    if text is not None and not hit.get("version_id"):
+        hit["version_id"] = hit["id"]  # 老条目无版本号时以其自身为链祖
     hit["ts"] = now_iso()
     save_memories(items)
     return True
+
+
+def version_replace_memory(mid: str, text: str, source="对话") -> str:
+    """F2 事实版本链：把 id=mid 的记忆替换为新文本——新条目 supersedes=mid，
+    旧条目标记 archived 但不删（保留溯源：可查「之前怎么说、为什么改」）。
+
+    返回新条目 id（供后续引用）；找不到原条目则回退 remember_structured。
+    """
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    with _MEM_LOCK:
+        items = load_memories(include_archived=True)
+        old = next((e for e in items if e["id"] == mid and not e.get("archived")), None)
+        if old is None:
+            # 无原条目（或原已归档）→ 直接新写一条
+            e = remember_structured(text, type=str(old.get("type") if old else "")[:20],
+                                    importance=old.get("importance") if old else 3,
+                                    tags=old.get("tags") if old else [],
+                                    entities=old.get("entities") if old else [],
+                                    relations=old.get("relations") if old else [],
+                                    source=str(source)[:10],
+                                    sensitivity=old.get("sensitivity") if old else "public")
+            return e["id"] if e else ""
+        old["archived"] = True
+        old["ts"] = now_iso()  # 记录被替换时刻，便于沿时间线追溯
+        entry = {
+            "id": _mem_id(), "ts": now_iso(),
+            "type": str(old.get("type") or "")[:20],
+            "importance": int(old.get("importance") or 3),
+            "text": text,
+            "tags": list(old.get("tags") or [])[:10],
+            "entities": list(old.get("entities") or [])[:20],
+            "relations": list(old.get("relations") or [])[:20],
+            "source": str(source or "对话")[:10], "archived": False,
+            "sensitivity": str(old.get("sensitivity") or "public"),
+            "hit_count": 0, "last_hit": "",
+            "supersedes": old["id"],  # F2：指向被替换的旧版本
+            "version_id": old.get("version_id") or old["id"],  # 同一事实链
+        }
+        save_memories(items + [entry])
+        return entry["id"]
 
 
 def delete_memory(mid: str) -> bool:
@@ -932,8 +1029,13 @@ def _mem_tokens(text: str) -> list:
     return out
 
 
-def search_memories(query: str, limit: int = 5) -> list:
-    """轻量相关性检索（IDF 加权余弦 + 覆盖率），无需外部依赖。空查询返回最新。"""
+def search_memories(query: str, limit: int = 5, record_hits: bool = False) -> list:
+    """轻量相关性检索（IDF 加权余弦 + 覆盖率），无需外部依赖。空查询返回最新。
+
+    L3 检索增强：tags/entities 作为补充语料参与匹配（命中给予小幅加分）；
+    record_hits=True 时（对话注入用）把命中条目的 hit_count/last_hit 回写，
+    供 F3 重要度自学习。
+    """
     items = load_memories()
     if not items:
         return []
@@ -941,7 +1043,11 @@ def search_memories(query: str, limit: int = 5) -> list:
         return sorted(items, key=lambda e: _ts_epoch(e.get("ts")), reverse=True)[:limit]
     import math
     q_toks = _mem_tokens(query)
-    doc_toks = [_mem_tokens(e["text"]) for e in items]
+    # L3：把 tags/entities 拼进文档语料——实体/标签命中显著提升相关性
+    doc_corpus = [str(e.get("text") or "") + " " +
+                  " ".join(str(t) for t in (e.get("tags") or [])) + " " +
+                  " ".join(str(x) for x in (e.get("entities") or [])) for e in items]
+    doc_toks = [_mem_tokens(dc) for dc in doc_corpus]
     n = len(items)
     idf = {}
     for t in set(q_toks):
@@ -955,9 +1061,38 @@ def search_memories(query: str, limit: int = 5) -> list:
         w = sum(idf.get(t, 1.0) for t in common)
         cosine = w / (len(set(q_toks)) ** 0.5 * len(set(dt)) ** 0.5)
         recall = len(common) / len(set(q_toks))
-        scored.append((0.55 * cosine + 0.45 * recall, e))
+        # L3 元数据加权：tags/entities 命中给小幅上调（语义往往承载在实体上）
+        ent_hits = set(q_toks) & set(_mem_tokens(" ".join(str(x) for x in (e.get("entities") or []))))
+        tag_hits = set(q_toks) & set(_mem_tokens(" ".join(str(t) for t in (e.get("tags") or []))))
+        meta_boost = 1.0 + 0.06 * len(ent_hits | tag_hits)
+        score = (0.55 * cosine + 0.45 * recall) * meta_boost
+        scored.append((score, e))
     scored.sort(key=lambda x: -x[0])
-    return [e for _, e in scored[:limit]]
+    top = [e for _, e in scored[:limit]]
+    if record_hits and top:
+        _record_hits(top)
+    return top
+
+
+def _record_hits(entries):
+    """F3 重要度自学习：命中条目的 hit_count+1、更新 last_hit（就地写回，避免整文件重写）。
+
+    被实际注入/使用的记忆权重随命中上升——记忆"因被用而重要"，而非写时一次性判断。
+    """
+    if not entries:
+        return
+    now = now_iso()
+    with _MEM_LOCK:
+        items = load_memories(include_archived=True)
+        ids = {e.get("id") for e in entries}
+        changed = False
+        for e in items:
+            if e.get("id") in ids and not e.get("archived"):
+                e["hit_count"] = int(e.get("hit_count") or 0) + 1
+                e["last_hit"] = now
+                changed = True
+        if changed:
+            save_memories(items)
 
 
 def consolidate_memories(min_importance=2, days=30):
@@ -1314,6 +1449,18 @@ def _prune_snapshots(versions: list, keep: int, protected=None):
 
 
 def cmd_archive(args) -> int:
+    """L5：快照归档跨进程串行化（防版本号竞态），内层完成实际打包。"""
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    if not cross_process_lock(ARCHIVE_DIR / "archive.lock", timeout=15.0):
+        print("[错误] 另一归档进行中（archive.lock 被占）或超时。", file=sys.stderr)
+        return 1
+    try:
+        return _archive_unlocked(args)
+    finally:
+        release_lock(ARCHIVE_DIR / "archive.lock")
+
+
+def _archive_unlocked(args) -> int:
     m = load_manifest()
     if not verify_fingerprint(m):
         print("!! 警告：指纹校验未通过，快照仍将生成（内容可能被改动过）。", file=sys.stderr)
@@ -1865,11 +2012,15 @@ def cmd_merge(args) -> int:
                     if p.is_file() and p.name not in ("snapshot_meta.json",):
                         rels.add(p.relative_to(d).as_posix())
 
-        out = Path(args.dir) if args.dir else MODULE_DIR / f"brain_merged-{now_compact()}"
-        if out.exists():
-            print(f"[错误] 输出目录已存在: {out}", file=sys.stderr)
-            return 1
-        out.mkdir(parents=True)
+        dry_run = bool(getattr(args, "dry_run", False))
+        if dry_run:
+            out = Path(tempfile.mkdtemp(prefix="whale-dryrun-"))  # 已创建，勿再 mkdir
+        else:
+            out = Path(args.dir) if args.dir else MODULE_DIR / f"brain_merged-{now_compact()}"
+            if out.exists():
+                print(f"[错误] 输出目录已存在: {out}", file=sys.stderr)
+                return 1
+            out.mkdir(parents=True)
         conflicts = []
 
         def read(d, rel):
@@ -1905,6 +2056,18 @@ def cmd_merge(args) -> int:
             out_rel = out / rel
             out_rel.parent.mkdir(parents=True, exist_ok=True)
             out_rel.write_bytes(val or b"") if val is not None else None
+
+        if dry_run:
+            # F8 预演：只在临时目录完成合并计算，不产出正式合并目录
+            shutil.rmtree(out, ignore_errors=True)
+            print(f"[预演完成(dry-run)] 无副作用。共同祖先: {'brain_v%d' % lca_v if lca_v is not None else '无'}")
+            if conflicts:
+                print(f"  将产生 {len(conflicts)} 条待裁决冲突（真实合并会写入 merge_conflicts.json）:")
+                for c in conflicts[:20]:
+                    print(f"    - {c['file']}  (ours={c['ours'][:24]}… vs theirs={c['theirs'][:24]}…)")
+            else:
+                print("  无冲突，可直接合并。")
+            return 0
 
         # 收尾：manifest / 血缘续链 / 合并史
         man = load_json(out / "manifest.json", {})
@@ -2106,6 +2269,219 @@ def cmd_list(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- 高级能力（doctor/identity史/图谱/借贷/审计）
+# F6 大脑体检 / F7 记忆图谱多跳 / F9 身份演化史 / F10 跨大脑记忆借贷 / L6 操作审计
+
+
+def audit_op(op: str, detail: str = ""):
+    """L6 操作审计：统一把关键操作追加到 brain_ops.log（防篡改留痕、便于回溯）。"""
+    try:
+        append_line(BRAIN_DIR / "brain_ops.log", json.dumps(
+            {"ts": now_iso(), "op": str(op)[:40], "detail": str(detail or "")[:200]},
+            ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def cmd_doctor(args) -> int:
+    """F6 大脑体检：检查重复率/陈旧率/未回执决策/冲突/快照新鲜度/密钥与依赖，给体检分 + 修复建议。
+
+    输出「健康度 0-100」及问题清单；--fix 自动执行安全修复（归档超期低价值记忆、清理已裁决冲突文件）。
+    """
+    load_manifest()
+    problems, score = [], 100
+    now_epoch = _dt.datetime.now().timestamp()
+    items = load_memories()
+    total = max(1, len(items))
+    # 陈旧度：>120 天且 importance<=2
+    stale = [e for e in items if (now_epoch - _ts_epoch(e.get("ts"))) / 86400.0 > 120
+             and int(e.get("importance") or 3) <= 2]
+    # 重复：同 type + token Jaccard>0.7
+    dups = 0
+    active = [e for e in items if not e.get("archived")]
+    for i in range(len(active)):
+        for j in range(i + 1, len(active)):
+            if str(active[i].get("type")) != str(active[j].get("type")):
+                continue
+            ta, tb = set(_mem_tokens(active[i]["text"])), set(_mem_tokens(active[j]["text"]))
+            if ta and tb and len(ta & tb) / len(ta | tb) > 0.7:
+                dups += 1
+    # 未回执决策
+    open_decs = [d for d in list_decisions(limit=500) if d.get("status") == "open"]
+    stale_decs = [d for d in open_decs if (now_epoch - _ts_epoch(d.get("ts"))) / 86400.0 > 7]
+    conflicts = load_json(MERGE_CONFLICT_FILE, {})
+    open_conflicts = len(conflicts.get("conflicts", [])) if conflicts else 0
+    # 快照新鲜度
+    versions = sorted(ARCHIVE_DIR.glob("brain_v*.whale")) if ARCHIVE_DIR.exists() else []
+    snap_days = None
+    if versions:
+        snap_days = (now_epoch - versions[-1].stat().st_mtime) / 86400.0
+    # 密钥
+    keyring = _keyring_ready()
+    # 计分
+    if stale:
+        score -= min(15, len(stale) * 3)
+        problems.append(f"陈旧低价值记忆 {len(stale)} 条（>120 天且重要度≤2）")
+    if dups:
+        score -= min(10, dups)
+        problems.append(f"疑似重复记忆 {dups} 组")
+    if stale_decs:
+        score -= min(10, len(stale_decs) * 2)
+        problems.append(f"超期未回执决策 {len(stale_decs)} 条（>7 天，decision resolve）")
+    if open_conflicts:
+        score -= 15
+        problems.append(f"待裁决冲突 {open_conflicts} 条")
+    if snap_days is not None and snap_days > 10:
+        score -= 5
+        problems.append(f"快照较旧（{snap_days:.0f} 天前）")
+    elif not versions:
+        score -= 5
+        problems.append("尚无快照（建议 archive）")
+    if not keyring:
+        score -= 5
+        problems.append("未启用免密密钥（keyring-setup）")
+    score = max(0, score)
+    print("=== 大脑体检 ===")
+    print(f"  健康度: {score}/100")
+    print(f"  记忆 {total} · 陈旧 {len(stale)} · 疑似重复 {dups} · 未回执决策 {len(open_decs)} · 快照 {len(versions)}")
+    if problems:
+        print("  问题清单:")
+        for p in problems:
+            print(f"    - {p}")
+    else:
+        print("  状态良好，无需处理。")
+    if args.fix:
+        fixed = []
+        if stale:
+            # 需对 include_archived 的全量做归档（stale 是活跃列表的副本，不能只改副本）
+            all_items = load_memories(include_archived=True)
+            stale_ids = {e["id"] for e in stale}
+            archived_n = 0
+            for it in all_items:
+                if it["id"] in stale_ids and not it.get("archived"):
+                    it["archived"] = True
+                    archived_n += 1
+            if archived_n:
+                save_memories(all_items)
+                fixed.append(f"归档陈旧记忆 {archived_n} 条")
+        if fixed:
+            audit_op("doctor-fix", "；".join(fixed))
+            print("  已修复: " + "；".join(fixed))
+        else:
+            print("  无自动可修复项。")
+    return 0
+
+
+def cmd_identity_history(args) -> int:
+    """F9 身份演化史：读取 identity_history.json（每次改 identity 追加快照），list 展示版本。"""
+    hist = load_json(BRAIN_DIR / "identity_history.json", {"versions": []})
+    versions = hist.get("versions") or []
+    if args.identity_cmd == "record":
+        ident = load_json(BRAIN_DIR / "identity.json", {})
+        versions.append({"ts": now_iso(), "identity": ident})
+        # 只留最近 50 版
+        if len(versions) > 50:
+            versions = versions[-50:]
+        save_json(BRAIN_DIR / "identity_history.json", {"versions": versions})
+        print(f"[身份已留痕] 当前第 {len(versions)} 版（共保留最近 {len(versions)} 版）")
+    else:  # list
+        if not versions:
+            print("（尚无身份版本历史）")
+        for v in versions[-20:]:
+            nm = (v.get("identity") or {}).get("name") or "未命名"
+            upd = (v.get("identity") or {}).get("vibe") or ""
+            print(f"  {str(v.get('ts') or '')[:16]}  {nm}  {upd}")
+    return 0
+
+
+def query_graph_multi_hop(entity, hops=1, max_items=20):
+    """F7 记忆图谱多跳查询：从指定实体出发，沿 entities/relations 逐跳扩散。
+
+    只支持 ≤2 跳，防止关系图爆炸；命中记忆按重要度+深度衰减排序返回。
+    """
+    entity = str(entity or "").strip()
+    if not entity:
+        return []
+    items = load_memories()
+    ents = {e["id"]: set(str(x) for x in (e.get("entities") or [])) for e in items}
+    # 一层：直接含 entity 的记忆
+    direct = [e for e in items if not e.get("archived") and entity in ents.get(e["id"], set())
+              or (entity in str(e.get("text") or ""))]
+    results = []
+    seen = set()
+    for e in direct:
+        results.append(e)
+        seen.add(e["id"])
+    if hops >= 2:
+        # 二跳：与直接命中记忆「共享实体」（图闭包）的记忆 —— 覆盖
+        # 张三(m1·实体项目A) → 李四(m2·实体项目A) 这类通过共同实体的关联
+        seed_ents = set()
+        for e in direct:
+            seed_ents |= ents.get(e["id"], set())
+        hop2 = [e for e in items if not e.get("archived") and e["id"] not in seen
+                and (ents.get(e["id"], set()) & seed_ents)]
+        for e in hop2:
+            results.append(e)
+            seen.add(e["id"])
+    results.sort(key=lambda e: (-int(e.get("importance") or 3), _ts_epoch(e.get("ts"))))
+    return results[:max_items]
+
+
+def cmd_graph(args) -> int:
+    load_manifest()
+    res = query_graph_multi_hop(args.entity, hops=int(getattr(args, "hops", 1) or 1))
+    if not res:
+        print(f"[图谱] 未找到与「{args.entity}」相关的记忆。")
+        return 0
+    print(f"[图谱] 与「{args.entity}」相关（≤{getattr(args, 'hops', 1)} 跳）{len(res)} 条:")
+    for e in res:
+        ent = "、".join(str(x) for x in (e.get("entities") or [])[:3])
+        print(f"  - [{e.get('type')}·{e.get('importance')}] {str(e.get('text') or '')[:60]}" + (f"  实体:{ent}" if ent else ""))
+    return 0
+
+
+def cmd_borrow(args) -> int:
+    """F10 跨大脑记忆借贷：从另一大脑目录导入含关键词的记忆，记录来源 source=借贷。"""
+    src = Path(args.src_dir)
+    if not (src / "manifest.json").exists():
+        print(f"[错误] {args.src_dir} 不是有效大脑目录", file=sys.stderr)
+        return 1
+    kw = str(args.keyword or "").strip()
+    if not kw:
+        print("[错误] --keyword 必填（要借贷的记忆关键词）", file=sys.stderr)
+        return 1
+    # 直接读源大脑文件解析（不切全局 BRAIN_DIR，避免副作用）；secret 记忆不外借
+    src_mem = src / "memories" / "memory.jsonl"
+    items = []
+    if src_mem.exists():
+        for line in src_mem.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                items.append(json.loads(line))
+            except Exception:
+                continue
+    kwl = kw.lower()
+    imported = 0
+    for e in items:
+        if e.get("archived") or str(e.get("sensitivity") or "public") == "secret":
+            continue
+        if kwl in str(e.get("text") or "").lower() or kwl in " ".join(str(x) for x in (e.get("entities") or [])).lower():
+            new = remember_structured(
+                str(e.get("text") or "")[:400], type=str(e.get("type") or "借贷")[:20],
+                importance=int(e.get("importance") or 3),
+                tags=[str(t)[:20] for t in (e.get("tags") or [])][:5],
+                entities=[str(x)[:30] for x in (e.get("entities") or [])][:10],
+                source="借贷", sensitivity="public")
+            if new:
+                imported += 1
+    if imported:
+        audit_op("borrow", f"从 {src.name} 导入 {imported} 条记忆（kw={kw}）")
+    print(f"[借贷完成] 从 {src.name} 导入 {imported} 条记忆（已脱敏为 public，关键词: {kw}）")
+    return 0
+
+
 # ---------------------------------------------------------------- CLI 入口
 
 
@@ -2194,6 +2570,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--note", help="add: 实现说明（adopted 时）")
     sp.set_defaults(func=cmd_evolution)
 
+    sp = sub.add_parser("doctor", help="F6 大脑体检：健康度 + 问题清单，--fix 自动安全修复")
+    sp.add_argument("--fix", action="store_true", help="自动归档陈旧低价值记忆")
+    sp.set_defaults(func=cmd_doctor)
+
+    sp = sub.add_parser("identity-history", help="F9 身份演化史：record（留痕当前人格）/ list")
+    sp.add_argument("identity_cmd", choices=["record", "list"], nargs="?", default="list")
+    sp.set_defaults(func=cmd_identity_history)
+
+    sp = sub.add_parser("graph", help="F7 记忆图谱：查询与实体相关的记忆（含多跳）")
+    sp.add_argument("entity", help="实体名（如 张三 / 项目A）")
+    sp.add_argument("--hops", type=int, default=1, help="关系跳数 1-2（默认 1）")
+    sp.set_defaults(func=cmd_graph)
+
+    sp = sub.add_parser("borrow", help="F10 跨大脑记忆借贷：从另一大脑目录导入含关键词的记忆")
+    sp.add_argument("src_dir", help="源大脑目录（含 manifest.json）")
+    sp.add_argument("--keyword", help="要借贷的记忆关键词")
+    sp.set_defaults(func=cmd_borrow)
+
     sp = sub.add_parser("archive", help="生成快照 brain_v{n}.whale（默认免密加密）")
     sp.add_argument("--passphrase", help="额外附上口令包裹（fallback 解密路径）")
     sp.add_argument("--keep", type=int, default=DEFAULT_KEEP, help="保留最近 N 份快照")
@@ -2207,11 +2601,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="指纹不匹配时仍恢复")
     sp.set_defaults(func=cmd_restore)
 
-    sp = sub.add_parser("merge", help="合并两个分支快照（血缘三路合并 + 冲突裁决）")
+    sp = sub.add_parser("merge", help="合并两个分支快照（血缘三路合并 + 冲突裁决）；--dry-run 预演不产出")
     sp.add_argument("snap_a", help="主干快照 .whale")
     sp.add_argument("snap_b", help="分支快照 .whale")
     sp.add_argument("--strategy", choices=["auto", "ours", "theirs"], default="auto", help="冲突默认策略")
     sp.add_argument("--dir", help="合并结果输出目录（默认 brain_merged-时间戳）")
+    sp.add_argument("--dry-run", action="store_true", help="F8 预演：仅报告冲突，不生成合并目录")
     sp.add_argument("--passphrase", help="快照口令（若分支快照无本地密钥）")
     sp.set_defaults(func=cmd_merge)
 

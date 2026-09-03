@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """鲸语大脑 · 前端 API 适配层。
 
 把 brainkit 的 CLI 命令包装为 api_server 可调用的纯函数：
@@ -15,7 +14,7 @@ import shutil
 import sys
 import tempfile
 import time
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -153,8 +152,8 @@ def refresh_self_model():
     无可用 LLM 时保持现状（不破坏已有自我认知）。返回是否成功。
     """
     try:
-        import deepseek_client as dc
         import brainkit as bk
+        import deepseek_client as dc
         tools = sorted(dc.TOOL_CALL_MAP.keys()) if getattr(dc, "TOOL_CALL_MAP", None) else []
         mems = bk.load_memories()
         goals = [g for g in bk.load_goals() if g.get("status") == "active"]
@@ -350,19 +349,31 @@ def brain_action(action, payload=None):
                          passphrase=str(payload.get("passphrase") or ""))
         return {"ok": code == 0, "message": out, "data": {"output": out}}
     if action == "share-export":
-        # 脱敏导出：身份 + 记忆精华（不包含密钥/私密文件）
+        # 脱敏导出（L8）：身份 + 记忆精华（不含密钥/私密文件）。
+        # sensitivity=secret 的记忆默认排除（可经 include_secret 显式包含），
+        # 分享端与秘密端隔离——防止把最高敏感事实随手带出。
+        include_secret = bool(payload.get("include_secret") or False)
         ident = bk.load_json(bk.BRAIN_DIR / "identity.json", {})
-        mems = sorted(bk.load_memories(), key=lambda e: -int(e.get("importance") or 3))[:50]
+        mems = [e for e in bk.load_memories()
+                if not e.get("archived")
+                and (include_secret or str(e.get("sensitivity") or "public") != "secret")]
+        mems.sort(key=lambda e: (-int(e.get("importance") or 3), bk._ts_epoch(e.get("ts"))))
+        mems = mems[:50]
         share = {
             "format": "whale-brain-share-v1",
             "brain_id": bk.load_manifest().get("brain_id"),
             "identity": {"name": ident.get("name"), "vibe": ident.get("vibe"),
                          "principles": ident.get("principles")},
             "memories": [{"type": e.get("type"), "importance": e.get("importance"),
-                          "text": e.get("text")} for e in mems],
+                          "text": e.get("text"), "sensitivity": str(e.get("sensitivity") or "public")}
+                         for e in mems],
         }
         data_b64 = base64.b64encode(json.dumps(share, ensure_ascii=False).encode("utf-8")).decode("ascii")
-        return {"ok": True, "message": f"已导出 {len(share['memories'])} 条记忆精华（脱敏）",
+        excl = sum(1 for e in bk.load_memories() if not e.get("archived") and str(e.get("sensitivity") or "") == "secret")
+        msg = f"已导出 {len(share['memories'])} 条记忆精华（脱敏）"
+        if excl and not include_secret:
+            msg += f"；已排除 {excl} 条 secret 敏感记忆"
+        return {"ok": True, "message": msg,
                 "data": {"download": {"filename": "whale_share.json", "data_b64": data_b64}}}
     if action == "share-import":
         file_b64 = str(payload.get("file_b64") or "")
@@ -462,12 +473,64 @@ def _mem_decay_score(e: dict, now_epoch: float) -> float:
     return imp / (1.0 + age_days / 30.0)
 
 
-def brain_context(max_memories=4, query=""):
-    """注入 AI 对话的大脑上下文摘要（身份 + 断点 + 自我认知 + 未决决策 + 相关记忆）。
+def _decay_with_hits(e: dict, now_epoch: float) -> float:
+    """F3 增强的注入打分：基础衰减分 + 命中奖励。
 
-    query 非空时按相关性检索；为空时按「重要度 × 时间衰减」取 Top-N（破陈旧固化）。
-    自我模型（unknowns/limits）与待回执决策也在此注入——它们不再只写不读，
-    而是随对话进入推理上下文，让自省真正影响后续行为。
+    命中次数是"这条记忆确实有用"的证据——多命中应小幅上浮，
+    与"重要性随被用而增长"自洽。
+    """
+    base = _mem_decay_score(e, now_epoch)
+    hits = int(e.get("hit_count") or 0)
+    if hits <= 0:
+        return base
+    last = str(e.get("last_hit") or "")
+    # 若最近仍在使用（30 天内），命中给真实加分
+    recency_bonus = 0.0
+    if last:
+        age_d = (now_epoch - bk._ts_epoch(last)) / 86400.0
+        if 0 <= age_d <= 30:
+            recency_bonus = 0.4
+    return base + min(0.6, 0.08 * hits) + recency_bonus
+
+
+_SPACED_INTERVALS = (1, 3, 7, 14, 30, 60)  # F4 复习间隔（天）
+
+
+def _spaced_review_due(now_epoch: float, limit: int = 2) -> list:
+    """F4 间隔复习：选出「到期该复习」的高价值记忆（importance≥4）。
+
+    规则：① 年龄 ≥7 天（跨过首个真正复习间隔）且 <90 天；② 近 3 天未
+    被命中（last_hit 距现在 >3 天 或从未命中）——避免同一记忆每轮重复占用
+    注入位；③ 按年龄降序取 Top-N。成熟高价值记忆得以定期回到上下文，
+    抵消时间衰减的埋葬。"""
+    out = []
+    for e in bk.load_memories():
+        if e.get("archived") or int(e.get("importance") or 3) < 4:
+            continue
+        if str(e.get("sensitivity") or "public") == "secret":
+            continue
+        age_d = max(0.0, (now_epoch - bk._ts_epoch(e.get("ts"))) / 86400.0)
+        if not (7 <= age_d < 90):
+            continue
+        last_hit = str(e.get("last_hit") or "")
+        recently_hit = False
+        if last_hit:
+            hit_age = (now_epoch - bk._ts_epoch(last_hit)) / 86400.0
+            recently_hit = 0 <= hit_age <= 3
+        if recently_hit:
+            continue
+        out.append(e)
+    out.sort(key=lambda e: -int(e.get("importance") or 3))
+    return out[:limit]
+
+
+def brain_context(max_memories=4, query="", budget_chars=0):
+    """注入 AI 对话的大脑上下文摘要（身份 + 断点 + 自我认知 + 未决决策 + 复习 + 相关记忆）。
+
+    - query 非空按话题检索（record_hits 记录命中 → F3）；空则按重要度×时间衰减+命中取 Top-N。
+    - budget_chars>0 时（L1 预算仲裁）超限按优先级截断。
+    - 待回执决策已到期（>3 天 open）会带"请回执"提示。
+    - F4 复习：高价值记忆到期候选合并进注入。
     未初始化返回 None。
     """
     try:
@@ -477,56 +540,88 @@ def brain_context(max_memories=4, query=""):
     ident = bk.load_json(bk.BRAIN_DIR / "identity.json", {})
     hb = bk.load_json(bk.BRAIN_DIR / "heartbeat.json", {})
     name = (ident.get("name") or "未命名").strip()
-    lines = [f"[鲸语大脑] 我是「{name}」，一个可迁移、可备份、可恢复的思维容器。"]
+    now_epoch = time.time()
+    # 段模型：每段 (标题, 内容行[], 权重) —— 供预算仲裁按优先级降级
+    segs = []
+
+    def add(title, rows, weight=10):
+        if rows:
+            segs.append((title, rows, weight))
+
+    lines0 = [f"[鲸语大脑] 我是「{name}」，一个可迁移、可备份、可恢复的思维容器。"]
     hint = str(hb.get("resume_hint") or "").strip()
     if hint:
-        lines.append(f"上次思考断点：{hint}")
-    # 进行中目标注入（让 AI 记得正在推进的事）
+        lines0.append(f"上次思考断点：{hint}")
+    add("身份", lines0, 100)
     try:
         active_goals = [g for g in bk.load_goals() if g.get("status") == "active"]
         if active_goals:
-            lines.append("进行中目标：")
-            for g in active_goals[:4]:
-                extra = f"（{g.get('progress') or ''}）" if g.get("progress") else ""
-                lines.append(f"- {g.get('title')}{extra}")
+            add("进行中目标", [f"- {g.get('title')}" + (f"（{g.get('progress') or ''}）" if g.get("progress") else "")
+                              for g in active_goals[:4]], 60)
     except Exception:
         pass
-    # 自我认知注入：unknowns / limits 精简 2-3 条（诚实声明不确定与局限，防幻觉）
     try:
         sm = bk.load_json(bk.BRAIN_DIR / "self_model.json", {})
-        caps = [("我知道", sm.get("knows") or []), ("我不确定", sm.get("unknowns") or []),
-                ("我的局限", sm.get("limits") or [])]
-        for label, items in caps:
-            vals = [str(x).strip()[:70] for x in items if str(x or "").strip()][:2]
+        cap_rows = []
+        for label, key in (("我知道", "knows"), ("我不确定", "unknowns"), ("我的局限", "limits")):
+            vals = [str(x).strip()[:70] for x in (sm.get(key) or []) if str(x or "").strip()][:2]
             if vals:
-                lines.append(f"自我认知 · {label}：" + "；".join(vals))
+                cap_rows.append(f"· {label}：" + "；".join(vals))
+        if cap_rows:
+            add("自我认知", cap_rows, 50)
     except Exception:
         pass
-    # 待回执决策注入（前额叶闭环：让 AI 记得自己作过什么决定、等待验证）
     try:
-        open_decs = [d for d in bk.list_decisions(limit=60) if d.get("status") == "open"]
+        open_decs = [d for d in bk.list_decisions(limit=120) if d.get("status") == "open"]
         if open_decs:
-            lines.append("未决决策：")
-            for d in open_decs[:2]:
+            rows = []
+            for d in open_decs[:3]:
                 exp = str(d.get("expected") or "").strip()
-                lines.append(f"- {str(d.get('decision') or '')[:50]}" + (f"（预期：{exp[:40]}）" if exp else ""))
+                age_d = (now_epoch - bk._ts_epoch(d.get("ts"))) / 86400.0 if d.get("ts") else 0
+                due_tag = "（请回执结果）" if age_d >= 3 else ""
+                rows.append(f"- {str(d.get('decision') or '')[:48]}{due_tag}"
+                            + (f"（预期：{exp[:36]}）" if exp else ""))
+            add("未决决策", rows, 45)
     except Exception:
         pass
-    # 相关/近期记忆（无 query 时按「重要度 × 时间衰减」打分排序）
+    # F4 间隔复习
     try:
-        if str(query or "").strip():
-            recent = bk.search_memories(query, max_memories)
-        else:
-            mems = bk.load_memories()
-            _now_epoch = time.time()
-            mems.sort(key=lambda e: (-_mem_decay_score(e, _now_epoch), str(e.get("ts") or "")))
-            recent = mems[:max_memories]
+        review = _spaced_review_due(now_epoch, limit=2)
+        if review:
+            add("复习提醒", [f"- {str(e.get('text') or '')[:60]}" for e in review], 40)
     except Exception:
+        pass
+    # 相关/近期记忆
+    try:
         recent = []
-    if recent:
-        lines.append("近期记忆：")
-        for e in recent:
-            t = str(e.get("type") or "记忆").strip()
-            imp = int(e.get("importance") or 3)
-            lines.append(f"- [{t}·{imp}] {str(e.get('text') or '')[:80]}")
-    return "\n".join(lines)
+        if str(query or "").strip():
+            recent = bk.search_memories(query, max_memories, record_hits=True)
+        else:
+            mems = [e for e in bk.load_memories()
+                    if str(e.get("sensitivity") or "public") != "secret"]
+            mems.sort(key=lambda e: (-_decay_with_hits(e, now_epoch), str(e.get("ts") or "")))
+            recent = mems[:max_memories]
+        if recent:
+            rows = []
+            for e in recent:
+                t = str(e.get("type") or "记忆").strip()
+                imp = int(e.get("importance") or 3)
+                hits = int(e.get("hit_count") or 0)
+                rows.append(f"- [{t}·{imp}" + (f"·命中{hits}" if hits else "") + f"] {str(e.get('text') or '')[:70]}")
+            add("近期记忆", rows, 35)
+    except Exception:
+        pass
+    # L1 预算仲裁：按权重从低到高截断，直到总长不超 budget_chars
+    segs.sort(key=lambda s: -s[2])
+    total = 0
+    kept = []
+    for title, rows, _weight in segs:
+        block = title + "：\n" + "\n".join(rows)
+        if budget_chars > 0 and total + len(block) > budget_chars:
+            if not kept:
+                block = block[:budget_chars]  # 极端：唯一高权重段也截断
+            else:
+                break
+        kept.append(block)
+        total += len(block)
+    return "\n".join(kept)

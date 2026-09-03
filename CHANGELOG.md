@@ -2,6 +2,36 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.5（未发版追加·增强二批）—— 🧠 大脑增强：反馈回路 + 检索增强 + 记忆版本链 + 新命令
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。据《大脑增强建议路线图（2026-09-04）》，除"明确不建议做"项外，落地第一批核心增强：让记忆"被写后会被用、被用后有回执、会自我修正"。
+
+### 记忆生命周期闭环（brainkit / brain_api）
+- **F2 事实版本链**：`version_replace_memory` 替换记忆时新建 supersedes=旧id 的新条目、旧条目标记归档不删、共享 version_id 溯源——`update_memory` 不再永久覆盖丢旧值
+- **F3 重要度自学习**：`search_memories(record_hits=True)` 回写 hit_count/last_hit；注入打分 `_decay_with_hits` 给"近期仍被用的记忆"真实加分——记忆因被用而重要
+- **F4 间隔复习**：`_spaced_review_due` 选出 ≥7 天高价值(imp≥4)、近 3 天未命中的记忆周期性带回上下文，抵消时间衰减埋葬
+- **F6 大脑体检**：`doctor` 命令——重复率/陈旧率/未回执决策/冲突/快照新鲜度/密钥 → 健康度 0-100 + 问题清单；`--fix` 自动归档陈旧低价值记忆
+- **F9 身份演化史**：`identity-history record|list` 把人格基线留痕到 `identity_history.json`
+- **F7 记忆图谱多跳**：`query_graph_multi_hop`/`graph` 命令按实体 + 共享实体 2 跳扩散
+- **F10 跨大脑记忆借贷**：`borrow <src> --keyword` 从另一大脑导入匹配记忆（secret 不外借、落 source=借贷）
+- **F5 决策回执提示**：brain_context 对 open>3 天决策带"（请回执结果）"提示
+
+### 检索 / 预算 / 一致性
+- **L3 检索增强**：search 把 tags/entities 拼入语料 + 命中加分
+- **L1 上下文预算**：`brain_context(budget_chars=N)` 段模型（身份/目标/自我认知/决策/复习/记忆 各带权重），超限按优先级截断（api_server 注入层逐步接入）
+- **L8 敏感度分级**：记忆加 sensitivity(public/private/secret)，`share-export` 默认排除 secret（可 include_secret 显式包含）
+- **L6 操作审计**：`audit_op` 写 `brain_ops.log`（doctor-fix/borrow 等埋点）
+- **L5 跨进程锁**：`cross_process_lock`/`release_lock`；`cmd_archive` 重构为加锁包装 + `_archive_unlocked`（防多进程版本号竞态）
+- **F8 merge 预演**：`merge --dry-run` 在临时目录完成冲突计算、无副作用产出，打印将产生的冲突清单
+
+### 修复
+- **重大**：`_MEM_LOCK` 由 `threading.Lock` 改 `threading.RLock`——save_memories/version_replace/_record_hits 等持锁后嵌套落盘会自锁死（全量 pytest 卡死的根因），RLock 允许同线程重入
+- `cmd_doctor --fix` 归档逻辑改为对 include_archived 全量改写（原对副本改无效）
+
+### 回归
+- 新增 `tests/test_brain_enhance2.py` **13 用例**（版本链/命中/复习/doctor/graph 多跳/身份历史/借贷/脱敏导出/审计/dry-run 无副作用/跨进程锁/不变量）
+- pytest **159 passed**（146 + 13）；四门禁全绿（audit 0/0、validate 135、island 135×9、check_docs 135·85·3.8.4）
+
 ## v3.8.5（未发版追加）—— 🧠 鲸语大脑深度思考修复批次：jsonl 行级合并 / prune 保血缘 / 认知回路接通
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。依据《大脑功能深度思考报告》（2026-09-03）对大脑全链路（brainkit/brain_api/集成点）的审计结论实施修复：大脑从「记忆档案馆」向「AI 的自我」补齐读侧回路——P0 架构断裂三条 + P1 符号-行为断裂四条 + P2 一致性七项全部落地。
