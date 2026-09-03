@@ -64,7 +64,7 @@ def count_endpoints():
                 and v.value.startswith("/v1/"):
             paths.add(v.value)
 
-    # 1) 仍保留 if/elif 链（do_GET 等）里的 path 比较
+    # 1) 仍保留 if/elif 链（do_GET token 特例等）里的 path 比较
     for node in ast.walk(tree):
         if not isinstance(node, ast.If):
             continue
@@ -81,12 +81,13 @@ def count_endpoints():
                     for el in c.elts:
                         add_str(el)
 
-    # 2) P2-8：@_post_route(...) 装饰器注册的 POST 端点（单一来源）
+    # 2) 端点路由表单一来源：@_post_route / @_get_route 装饰器注册
+    #    （P2-2 后 do_GET 主链已路由表化；qpath/pre 型元组内的 /v1 路径一并登记）
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef):
             for d in node.decorator_list:
                 if isinstance(d, ast.Call) and isinstance(d.func, ast.Name) \
-                        and d.func.id == "_post_route" and d.args:
+                        and d.func.id in ("_post_route", "_get_route") and d.args:
                     add_str(d.args[0])
                     if isinstance(d.args[0], ast.Tuple):
                         for el in d.args[0].elts:

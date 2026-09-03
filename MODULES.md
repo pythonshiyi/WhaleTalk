@@ -8,7 +8,7 @@
 web_app.py（唯一入口：浏览器 + 托盘 + 快捷方式 + 依赖自检）
     │
     ▼
-api_server.py（本地 HTTP API：REST + SSE，79 /v1 端点）
+api_server.py（本地 HTTP API：REST + SSE，85 /v1 端点）
     │
     ▼
 deepseek_client.py（能力引擎：DeepSeekClient + 135 工具 + smart_tools）

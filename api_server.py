@@ -4539,9 +4539,16 @@ def _post_route(matcher):
     return deco
 
 
-def _match_post_route(path):
-    """查表分发：返回匹配的端点方法名；无匹配返回 None。"""
-    for matcher, name in _POST_ROUTES:
+def _match_routes(path, table):
+    """通用查表分发：返回匹配的端点方法名；无匹配返回 None。
+
+    matcher 形态（POST/GET 两表共用）：
+    - str                     ：精确匹配
+    - ("set", [paths,...])    ：集合匹配
+    - ("pre", prefix, suffix) ：前缀+后缀匹配（任一段可为空串 → 纯前缀/纯后缀）
+    - ("qpath", path)         ：去掉查询串后精确匹配（GET 查询端点，如 /v1/files?dir=）
+    """
+    for matcher, name in table:
         if isinstance(matcher, str):
             if path == matcher:
                 return name
@@ -4551,7 +4558,33 @@ def _match_post_route(path):
         elif matcher[0] == "pre":
             if path.startswith(matcher[1]) and path.endswith(matcher[2]):
                 return name
+        elif matcher[0] == "qpath":
+            if path.split("?", 1)[0] == matcher[1]:
+                return name
     return None
+
+
+def _match_post_route(path):
+    """POST 查表分发（_POST_ROUTES）。"""
+    return _match_routes(path, _POST_ROUTES)
+
+
+# P2-2：GET 端点路由表（装饰器注册，端点方法就近声明；由 @_get_route 动态填充）。
+# do_GET 原先 46 分支 if/elif 链迁移而来——表顺序即匹配优先级，语义与旧链一致。
+_GET_ROUTES = []  # (matcher, method_name)，顺序即匹配优先级（类定义时由 @_get_route 填充）
+
+
+def _get_route(matcher):
+    """GET 端点装饰器：把 (matcher, 方法名) 注册进 _GET_ROUTES（顺序即优先级）。"""
+    def deco(fn):
+        _GET_ROUTES.append((matcher, fn.__name__))
+        return fn
+    return deco
+
+
+def _match_get_route(path):
+    """GET 查表分发（_GET_ROUTES）。"""
+    return _match_routes(path, _GET_ROUTES)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -4914,250 +4947,393 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             try:
                 self.path = stripped
-                if self.path == "/health":
-                    self._json(200, {"ok": True, "service": "whaletalk-api", "webui": "v0.2"})
-                elif self.path == "/v1/sessions":
-                    self._json(200, {"sessions": self._list_sessions()})
-                elif self.path == "/v1/models":
-                    self._json(200, _models())
-                elif self.path == "/v1/deps":
-                    self._json(200, _deps())
-                elif self.path == "/v1/first_run":
-                    # 首次启动引导状态：是否首次 + 依赖全量清单（core/heavy/install）
-                    self._json(200, {"first_run": _is_first_run(), "deps": _deps()})
-                elif self.path == "/v1/update/check":
-                    self._json(200, _update_check())
-                elif self.path == "/v1/backup":
-                    self._json(200, _backup_list())
-                elif self.path == "/v1/workflows":
-                    self._json(200, _workflows_get())
-                elif self.path == "/v1/checkpoint":
-                    self._json(200, _checkpoint_get())
-                elif self.path == "/v1/tasklog":
-                    self._json(200, _tasklog_get())
-                elif self.path == "/v1/knowledge":
-                    self._json(200, _knowledge_get())
-                elif self.path == "/v1/profiles":
-                    self._json(200, _profiles_get())
-                elif self.path == "/v1/audit":
-                    self._json(200, _audit_get())
-                elif self.path == "/v1/approvals":
-                    self._json(200, _approvals_get())
-                elif self.path == "/v1/evolve_branches":
-                    self._json(200, _evolve_branches())
-                elif self.path == "/v1/self_profile":
-                    try:
-                        import deepseek_client as dc
-                        self._json(200, {"text": dc.self_profile("get")})
-                    except Exception as e:
-                        self._json(200, {"text": f"（自我状态读取失败：{e}）"})
-                elif self.path == "/v1/failures":
-                    items = []
-                    if os.path.exists(FAILURES_PATH):
-                        try:
-                            with open(FAILURES_PATH, "r", encoding="utf-8") as f:
-                                items = json.load(f)
-                        except Exception:
-                            items = []
-                    if not isinstance(items, list):
-                        items = []
-                    self._json(200, {"failures": items[-100:]})
-                elif self.path == "/v1/schedules":
-                    self._json(200, _schedules_get())
-                elif self.path == "/v1/services":
-                    self._json(200, _services_get())
-                elif self.path == "/v1/permissions":
-                    self._json(200, _permissions_get())
-                elif self.path == "/v1/prompts":
-                    self._json(200, _prompts())
-                elif self.path == "/v1/prompts/export":
-                    self._json(200, {"prompts": _prompts_load_user(), "exported_at": time.strftime("%Y-%m-%d %H:%M:%S")})
-                elif self.path == "/v1/plugin_skills":
-                    self._json(200, _plugin_skills())
-                elif self.path == "/v1/dir":
-                    self._json(200, _dirs())
-                elif self.path == "/v1/roles":
-                    self._json(200, _roles())
-                elif self.path.startswith("/v1/tools/"):
-                    name = self.path[len("/v1/tools/"):]
-                    schema = _tool_schema(name)
-                    if schema is None:
-                        self._json(404, {"error": "tool not found"})
-                    else:
-                        self._json(200, schema)
-                elif self.path == "/v1/processes":
-                    self._json(200, _processes())
-                elif self.path == "/v1/files" or self.path.startswith("/v1/files?"):
-                    import urllib.parse
-                    qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                    if qs.get("dir"):
-                        data, err = _list_dir(qs["dir"][0])
-                        if err:
-                            self._json(400, {"error": err})
-                        else:
-                            self._json(200, data)
-                    else:
-                        self._json(200, _files())
-                elif self.path == "/v1/tasks":
-                    self._json(200, _tasks())
-                elif self.path == "/v1/evolutions":
-                    self._json(200, _evolutions())
-                elif self.path.startswith("/v1/evolutions/"):
-                    name = self.path[len("/v1/evolutions/"):]
-                    detail = _evolution_detail(name)
-                    if detail is None:
-                        self._json(404, {"error": "evolution not found"})
-                    else:
-                        self._json(200, detail)
-                elif self.path == "/v1/status":
-                    self._json(200, _status())
-                elif self.path == "/v1/brain":
-                    try:
-                        import brain_api
-                        self._json(200, {"ok": True, "brain": brain_api.brain_status()})
-                    except Exception as e:  # noqa: BLE001
-                        self._json(200, {"ok": False, "brain": None, "error": str(e)})
-                elif self.path.split("?")[0] == "/v1/brain/memories":
-                    # 大脑记忆列表/搜索：?query=关键词&limit=N
-                    try:
-                        import brain_api
-                        import brainkit as bk
-                        from urllib.parse import parse_qs, urlparse
-                        qs = parse_qs(urlparse(self.path).query)
-                        q = (qs.get("query") or [""])[0]
-                        try:
-                            limit = int((qs.get("limit") or ["20"])[0])
-                        except (TypeError, ValueError):
-                            limit = 20
-                        limit = max(1, min(200, limit))
-                        items = bk.search_memories(q, limit) if q else bk.load_memories()
-                        items.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
-                        self._json(200, {"ok": True, "items": items[:limit], "total": len(bk.load_memories())})
-                    except Exception as e:  # noqa: BLE001
-                        self._json(200, {"ok": False, "error": str(e)})
-                elif self.path == "/v1/situation":
-                    self._json(200, build_situation("full"))
-                elif self.path == "/v1/mode":
-                    self._json(200, {"mode": _status()["mode"]})
-                elif self.path == "/v1/abilities":
-                    self._json(200, _abilities())
-                elif self.path == "/v1/memory":
-                    self._json(200, _memory_full())
-                elif self.path == "/v1/plugins":
-                    self._json(200, _plugins())
-                elif self.path == "/v1/plugin_market":
-                    self._json(200, _plugin_market())
-                elif self.path.startswith("/v1/plugins/"):
-                    import urllib.parse as _up
-                    name = _up.unquote(self.path[len("/v1/plugins/"):])
-                    detail = _plugin_detail(name)
-                    if detail is None:
-                        self._json(404, {"error": "plugin not found"})
-                    else:
-                        self._json(200, detail)
-                elif self.path == "/v1/context":
-                    import deepseek_client as dc
-                    tools = sorted({t["function"]["name"] for t in dc.TOOLS})
-                    try:
-                        costv = _status()["monthly_cost"]
-                    except Exception:
-                        costv = None
-                    prompt_n, completion_n, cached = _usage_month_summary()
-                    self._json(200, {
-                        "tools": tools,
-                        "memory": self._memory_summary(),
-                        # 本月真实累计 token（stats.json）+ 缓存命中率 + 本月成本
-                        "usage": {"prompt": prompt_n, "completion": completion_n,
-                                  "cached": cached, "cost": costv},
-                    })
-                elif self.path == "/v1/config":
-                    import config_utils
-                    import deepseek_client as dc
-                    cfg = config_utils.load_config()
-                    key_val = str(cfg.get("api_key") or "").strip()
-                    self._json(200, {
-                        "models": list(dc.MODELS.keys()),
-                        "thinking_modes": list(dc.THINKING_MODES.keys()),
-                        "scenarios": list(dc.SCENARIOS.keys()),
-                        "model": cfg.get("model") or dc.DEFAULT_MODEL,
-                        "thinking": cfg.get("thinking") or "high",
-                        "scenario": cfg.get("scenario") or "通用",
-                        "max_tokens": int(cfg.get("max_tokens") or 16384),
-                        "tools_enabled": bool(cfg.get("tools_enabled")),
-                        "base_url": cfg.get("base_url") or dc.DEFAULT_BASE_URL,
-                        "has_key": bool(key_val),
-                        # 脱敏提示（前3 + 尾4），绝不回传明文密钥
-                        "key_hint": (f"{key_val[:3]}***{key_val[-4:]}" if len(key_val) >= 8 else ("***" if key_val else "")),
-                        "system_prompt": str(cfg.get("system_prompt") or ""),
-                        "temperature": float(cfg.get("custom_temperature") or 1.0),
-                        "top_p": float(cfg.get("custom_top_p") or 1.0),
-                        "seed": int(cfg.get("seed") or 0),
-                        "json_output": bool(cfg.get("json_output")),
-                        "beta_api": bool(cfg.get("beta_api")),
-                        "strict_tools": bool(cfg.get("strict_tools")),
-                        "stop": [str(s) for s in (cfg.get("stop") or [])][:16],
-                        "logprobs": bool(cfg.get("logprobs")),
-                        "tool_choice": str(cfg.get("tool_choice") or "auto"),
-                        "privacy_mode": bool(cfg.get("privacy_mode")),
-                        "notify_on_done": bool(cfg.get("notify_on_done")),
-                        "completion_sound": bool(cfg.get("completion_sound", True)),
-                        "silent_start": bool(cfg.get("silent_start", False)),
-                        "project_context": bool(cfg.get("project_context")),
-                        "monthly_budget": float(cfg.get("monthly_budget") or 0.0),
-                        "block_on_budget": bool(cfg.get("block_on_budget")),
-                        "max_context_tokens": int(cfg.get("max_context_tokens") or 400000),
-                        "max_context_chars": int(cfg.get("max_context_chars") or 500000),
-                        "min_kept_turns": int(cfg.get("min_kept_turns") or 8),
-                        "timeout": float(cfg.get("timeout") or 120.0),
-                        "max_tool_rounds": int(cfg.get("max_tool_rounds") or 100),
-                                                "browser_headless": bool(cfg.get("browser_headless")),
-                        "peak_warning": bool(cfg.get("peak_warning")),
-                        "suggestions_enabled": bool(cfg.get("suggestions_enabled")),
-                        "voice_config": _voice_cfg(),
-                    })
-                elif self.path.startswith("/v1/tts/audio/"):
-                    fn = self.path.rsplit("/", 1)[-1]
-                    base, _, ext = fn.partition(".")
-                    ok_fn = (
-                        ext in ("wav", "mp3") and len(base) >= 8 and len(base) <= 40
-                        and all(c in "0123456789abcdef" for c in base)
-                    )
-                    if not ok_fn:
-                        self._json(400, {"error": "invalid audio name"})
-                        return
-                    fp = os.path.join(_VOICE_CACHE_DIR, fn)
-                    if not os.path.isfile(fp):
-                        self._json(404, {"error": "audio not found"})
-                        return
-                    try:
-                        with open(fp, "rb") as f:
-                            data = f.read()
-                    except OSError:
-                        self._json(500, {"error": "read audio failed"})
-                        return
-                    self.send_response(200)
-                    self.send_header("Content-Type", "audio/wav" if ext == "wav" else "audio/mpeg")
-                    self.send_header("Content-Length", str(len(data)))
-                    self._cors_headers()
-                    self.end_headers()
-                    self.wfile.write(data)
-                elif self.path == "/v1/tts/voices":
-                    self._json(200, _tts_voices())
-                elif self.path.startswith("/v1/sessions/") and self.path.endswith("/messages"):
-                    sid = self.path[len("/v1/sessions/"):-len("/messages")]
-                    data = self._load_session_messages(sid)
-                    if data is None:
-                        self._json(404, {"error": "session not found"})
-                    else:
-                        self._json(200, data)
-                else:
+                # P2-2：GET 路由表分发（_GET_ROUTES，@_get_route 按源码顺序注册）
+                handler = _match_get_route(self.path)
+                if handler is None:
                     self._json(404, {"error": "not found"})
+                    return
+                getattr(self, handler)()
             except Exception as e:
                 logger.exception("GET %s 失败", self.path)
                 self._json(500, {"error": _friendly_error(e), "code": 500, "detail": str(e)})
         else:
             # 静态资源（WebUI dist/）
             self._serve_static(self.path)
+
+
+    # ── GET 端点（@_get_route 装饰器注册；路由表 _GET_ROUTES，顺序 = 源码顺序）──
+    @_get_route("/health")
+    def _g_health(self):
+        self._json(200, {"ok": True, "service": "whaletalk-api", "webui": "v0.2"})
+
+
+    @_get_route("/v1/sessions")
+    def _g_v1_sessions(self):
+        self._json(200, {"sessions": self._list_sessions()})
+
+
+    @_get_route("/v1/models")
+    def _g_v1_models(self):
+        self._json(200, _models())
+
+
+    @_get_route("/v1/deps")
+    def _g_v1_deps(self):
+        self._json(200, _deps())
+
+
+    @_get_route("/v1/first_run")
+    def _g_v1_first_run(self):
+        # 首次启动引导状态：是否首次 + 依赖全量清单（core/heavy/install）
+        self._json(200, {"first_run": _is_first_run(), "deps": _deps()})
+
+
+    @_get_route("/v1/update/check")
+    def _g_v1_update_check(self):
+        self._json(200, _update_check())
+
+
+    @_get_route("/v1/backup")
+    def _g_v1_backup(self):
+        self._json(200, _backup_list())
+
+
+    @_get_route("/v1/workflows")
+    def _g_v1_workflows(self):
+        self._json(200, _workflows_get())
+
+
+    @_get_route("/v1/checkpoint")
+    def _g_v1_checkpoint(self):
+        self._json(200, _checkpoint_get())
+
+
+    @_get_route("/v1/tasklog")
+    def _g_v1_tasklog(self):
+        self._json(200, _tasklog_get())
+
+
+    @_get_route("/v1/knowledge")
+    def _g_v1_knowledge(self):
+        self._json(200, _knowledge_get())
+
+
+    @_get_route("/v1/profiles")
+    def _g_v1_profiles(self):
+        self._json(200, _profiles_get())
+
+
+    @_get_route("/v1/audit")
+    def _g_v1_audit(self):
+        self._json(200, _audit_get())
+
+
+    @_get_route("/v1/approvals")
+    def _g_v1_approvals(self):
+        self._json(200, _approvals_get())
+
+
+    @_get_route("/v1/evolve_branches")
+    def _g_v1_evolve_branches(self):
+        self._json(200, _evolve_branches())
+
+
+    @_get_route("/v1/self_profile")
+    def _g_v1_self_profile(self):
+        try:
+            import deepseek_client as dc
+            self._json(200, {"text": dc.self_profile("get")})
+        except Exception as e:
+            self._json(200, {"text": f"（自我状态读取失败：{e}）"})
+
+
+    @_get_route("/v1/failures")
+    def _g_v1_failures(self):
+        items = []
+        if os.path.exists(FAILURES_PATH):
+            try:
+                with open(FAILURES_PATH, "r", encoding="utf-8") as f:
+                    items = json.load(f)
+            except Exception:
+                items = []
+        if not isinstance(items, list):
+            items = []
+        self._json(200, {"failures": items[-100:]})
+
+
+    @_get_route("/v1/schedules")
+    def _g_v1_schedules(self):
+        self._json(200, _schedules_get())
+
+
+    @_get_route("/v1/services")
+    def _g_v1_services(self):
+        self._json(200, _services_get())
+
+
+    @_get_route("/v1/permissions")
+    def _g_v1_permissions(self):
+        self._json(200, _permissions_get())
+
+
+    @_get_route("/v1/prompts")
+    def _g_v1_prompts(self):
+        self._json(200, _prompts())
+
+
+    @_get_route("/v1/prompts/export")
+    def _g_v1_prompts_export(self):
+        self._json(200, {"prompts": _prompts_load_user(), "exported_at": time.strftime("%Y-%m-%d %H:%M:%S")})
+
+
+    @_get_route("/v1/plugin_skills")
+    def _g_v1_plugin_skills(self):
+        self._json(200, _plugin_skills())
+
+
+    @_get_route("/v1/dir")
+    def _g_v1_dir(self):
+        self._json(200, _dirs())
+
+
+    @_get_route("/v1/roles")
+    def _g_v1_roles(self):
+        self._json(200, _roles())
+
+
+    @_get_route(("pre", "/v1/tools/", ""))
+    def _g_v1_tools_item(self):
+        name = self.path[len("/v1/tools/"):]
+        schema = _tool_schema(name)
+        if schema is None:
+            self._json(404, {"error": "tool not found"})
+        else:
+            self._json(200, schema)
+
+
+    @_get_route("/v1/processes")
+    def _g_v1_processes(self):
+        self._json(200, _processes())
+
+
+    @_get_route(("qpath", "/v1/files"))
+    def _g_v1_files(self):
+        import urllib.parse
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        if qs.get("dir"):
+            data, err = _list_dir(qs["dir"][0])
+            if err:
+                self._json(400, {"error": err})
+            else:
+                self._json(200, data)
+        else:
+            self._json(200, _files())
+
+
+    @_get_route("/v1/tasks")
+    def _g_v1_tasks(self):
+        self._json(200, _tasks())
+
+
+    @_get_route("/v1/evolutions")
+    def _g_v1_evolutions(self):
+        self._json(200, _evolutions())
+
+
+    @_get_route(("pre", "/v1/evolutions/", ""))
+    def _g_v1_evolutions_item(self):
+        name = self.path[len("/v1/evolutions/"):]
+        detail = _evolution_detail(name)
+        if detail is None:
+            self._json(404, {"error": "evolution not found"})
+        else:
+            self._json(200, detail)
+
+
+    @_get_route("/v1/status")
+    def _g_v1_status(self):
+        self._json(200, _status())
+
+
+    @_get_route("/v1/brain")
+    def _g_v1_brain(self):
+        try:
+            import brain_api
+            self._json(200, {"ok": True, "brain": brain_api.brain_status()})
+        except Exception as e:  # noqa: BLE001
+            self._json(200, {"ok": False, "brain": None, "error": str(e)})
+
+
+    @_get_route(("qpath", "/v1/brain/memories"))
+    def _g_v1_brain_memories(self):
+        # 大脑记忆列表/搜索：?query=关键词&limit=N
+        try:
+            import brain_api
+            import brainkit as bk
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            q = (qs.get("query") or [""])[0]
+            try:
+                limit = int((qs.get("limit") or ["20"])[0])
+            except (TypeError, ValueError):
+                limit = 20
+            limit = max(1, min(200, limit))
+            items = bk.search_memories(q, limit) if q else bk.load_memories()
+            items.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
+            self._json(200, {"ok": True, "items": items[:limit], "total": len(bk.load_memories())})
+        except Exception as e:  # noqa: BLE001
+            self._json(200, {"ok": False, "error": str(e)})
+
+
+    @_get_route("/v1/situation")
+    def _g_v1_situation(self):
+        self._json(200, build_situation("full"))
+
+
+    @_get_route("/v1/mode")
+    def _g_v1_mode(self):
+        self._json(200, {"mode": _status()["mode"]})
+
+
+    @_get_route("/v1/abilities")
+    def _g_v1_abilities(self):
+        self._json(200, _abilities())
+
+
+    @_get_route("/v1/memory")
+    def _g_v1_memory(self):
+        self._json(200, _memory_full())
+
+
+    @_get_route("/v1/plugins")
+    def _g_v1_plugins(self):
+        self._json(200, _plugins())
+
+
+    @_get_route("/v1/plugin_market")
+    def _g_v1_plugin_market(self):
+        self._json(200, _plugin_market())
+
+
+    @_get_route(("pre", "/v1/plugins/", ""))
+    def _g_v1_plugins_item(self):
+        import urllib.parse as _up
+        name = _up.unquote(self.path[len("/v1/plugins/"):])
+        detail = _plugin_detail(name)
+        if detail is None:
+            self._json(404, {"error": "plugin not found"})
+        else:
+            self._json(200, detail)
+
+
+    @_get_route("/v1/context")
+    def _g_v1_context(self):
+        import deepseek_client as dc
+        tools = sorted({t["function"]["name"] for t in dc.TOOLS})
+        try:
+            costv = _status()["monthly_cost"]
+        except Exception:
+            costv = None
+        prompt_n, completion_n, cached = _usage_month_summary()
+        self._json(200, {
+            "tools": tools,
+            "memory": self._memory_summary(),
+            # 本月真实累计 token（stats.json）+ 缓存命中率 + 本月成本
+            "usage": {"prompt": prompt_n, "completion": completion_n,
+                      "cached": cached, "cost": costv},
+        })
+
+
+    @_get_route("/v1/config")
+    def _g_v1_config(self):
+        import config_utils
+        import deepseek_client as dc
+        cfg = config_utils.load_config()
+        key_val = str(cfg.get("api_key") or "").strip()
+        self._json(200, {
+            "models": list(dc.MODELS.keys()),
+            "thinking_modes": list(dc.THINKING_MODES.keys()),
+            "scenarios": list(dc.SCENARIOS.keys()),
+            "model": cfg.get("model") or dc.DEFAULT_MODEL,
+            "thinking": cfg.get("thinking") or "high",
+            "scenario": cfg.get("scenario") or "通用",
+            "max_tokens": int(cfg.get("max_tokens") or 16384),
+            "tools_enabled": bool(cfg.get("tools_enabled")),
+            "base_url": cfg.get("base_url") or dc.DEFAULT_BASE_URL,
+            "has_key": bool(key_val),
+            # 脱敏提示（前3 + 尾4），绝不回传明文密钥
+            "key_hint": (f"{key_val[:3]}***{key_val[-4:]}" if len(key_val) >= 8 else ("***" if key_val else "")),
+            "system_prompt": str(cfg.get("system_prompt") or ""),
+            "temperature": float(cfg.get("custom_temperature") or 1.0),
+            "top_p": float(cfg.get("custom_top_p") or 1.0),
+            "seed": int(cfg.get("seed") or 0),
+            "json_output": bool(cfg.get("json_output")),
+            "beta_api": bool(cfg.get("beta_api")),
+            "strict_tools": bool(cfg.get("strict_tools")),
+            "stop": [str(s) for s in (cfg.get("stop") or [])][:16],
+            "logprobs": bool(cfg.get("logprobs")),
+            "tool_choice": str(cfg.get("tool_choice") or "auto"),
+            "privacy_mode": bool(cfg.get("privacy_mode")),
+            "notify_on_done": bool(cfg.get("notify_on_done")),
+            "completion_sound": bool(cfg.get("completion_sound", True)),
+            "silent_start": bool(cfg.get("silent_start", False)),
+            "project_context": bool(cfg.get("project_context")),
+            "monthly_budget": float(cfg.get("monthly_budget") or 0.0),
+            "block_on_budget": bool(cfg.get("block_on_budget")),
+            "max_context_tokens": int(cfg.get("max_context_tokens") or 400000),
+            "max_context_chars": int(cfg.get("max_context_chars") or 500000),
+            "min_kept_turns": int(cfg.get("min_kept_turns") or 8),
+            "timeout": float(cfg.get("timeout") or 120.0),
+            "max_tool_rounds": int(cfg.get("max_tool_rounds") or 100),
+            "browser_headless": bool(cfg.get("browser_headless")),
+            "peak_warning": bool(cfg.get("peak_warning")),
+            "suggestions_enabled": bool(cfg.get("suggestions_enabled")),
+            "voice_config": _voice_cfg(),
+        })
+
+
+    @_get_route(("pre", "/v1/tts/audio/", ""))
+    def _g_v1_tts_audio(self):
+        fn = self.path.rsplit("/", 1)[-1]
+        base, _, ext = fn.partition(".")
+        ok_fn = (
+            ext in ("wav", "mp3") and len(base) >= 8 and len(base) <= 40
+            and all(c in "0123456789abcdef" for c in base)
+        )
+        if not ok_fn:
+            self._json(400, {"error": "invalid audio name"})
+            return
+        fp = os.path.join(_VOICE_CACHE_DIR, fn)
+        if not os.path.isfile(fp):
+            self._json(404, {"error": "audio not found"})
+            return
+        try:
+            with open(fp, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._json(500, {"error": "read audio failed"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/wav" if ext == "wav" else "audio/mpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(data)
+
+
+    @_get_route("/v1/tts/voices")
+    def _g_v1_tts_voices(self):
+        self._json(200, _tts_voices())
+
+
+    @_get_route(("pre", "/v1/sessions/", "/messages"))
+    def _g_v1_sessions_messages(self):
+        sid = self.path[len("/v1/sessions/"):-len("/messages")]
+        data = self._load_session_messages(sid)
+        if data is None:
+            self._json(404, {"error": "session not found"})
+        else:
+            self._json(200, data)
 
     @_post_route("/v1/chat")
     def _p_v1_chat(self):

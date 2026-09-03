@@ -21,7 +21,7 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 ```
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
-├── api_server.py           # 本地 HTTP API（REST + SSE，79+ /v1 端点）
+├── api_server.py           # 本地 HTTP API（REST + SSE，85+ /v1 端点）
 ├── deepseek_client.py      # 能力引擎：DeepSeekClient + 135 工具 + smart_tools（4,484 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
 ├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop 共 11 模块 117 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
