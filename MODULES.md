@@ -89,8 +89,8 @@ deepseek_client.py（能力引擎：DeepSeekClient + 135 工具 + smart_tools）
 
 | 模块 | 职责 |
 |---|---|
-| `brainkit.py` | 大脑 CLI：init/keyring-setup/mount/unmount/heartbeat/think/remember/import-memory/consolidate（睡眠巩固）/goal（目标）/decision（决策日志）/archive/restore/merge/merge-resolve/status/list/diff/export-key/import-key；指纹防篡改、DPAPI 免密密钥体系、RSA 快照签名验签、LCA 三路合并、语义检索（IDF 加权余弦 + 中文 bigram 分词） |
-| `brain_api.py` | 大脑 → API 适配层（把 CLI 命令包装为 api_server 可调用的纯函数 + 大脑上下文注入 + `consolidate_with_llm` LLM 提炼） |
+| `brainkit.py` | 大脑 CLI：init/keyring-setup/mount/unmount/heartbeat/think/remember/import-memory/consolidate（睡眠巩固）/goal（目标）/decision（决策日志）/evolution（演化账本）/archive/restore/merge/merge-resolve/status/list/diff/export-key/import-key；指纹防篡改、DPAPI 免密密钥体系、RSA 快照签名验签、LCA 三路合并（记忆 jsonl 行级智能合并：同 id 文本冲突自动取 ts 新者，永不整文件冲突）、prune 豁免血缘引用快照、语义检索（IDF 加权余弦 + 中文 bigram 分词，`_ts_epoch` 混时区统一口径） |
+| `brain_api.py` | 大脑 → API 适配层（把 CLI 命令包装为 api_server 可调用的纯函数 + `brain_context` 注入——身份/断点/目标/自我认知/未决决策/记忆（话题 query 检索或重要度×时间衰减 top-N）+ `consolidate_with_llm` LLM 提炼） |
 
 ### 子包
 

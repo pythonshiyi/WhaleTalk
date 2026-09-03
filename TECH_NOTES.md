@@ -175,9 +175,9 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 - 数据：`brain/`（manifest 指纹 / identity / memories/ / self_model / thinking_log/ / evolution / heartbeat / archive/ / .keys/ / lineage / merge_log）
 - 指纹防篡改：manifest 除 fingerprint 外 canonical JSON SHA-256；内容变化重算、brain_id 不变
 - 免密密钥：MK 加密内容，MK 三重包裹（DPAPI 本地 / 口令 fallback / RSA-OAEP 跨躯体）；`export-key`/`import-key` 迁移仪式
-- 分支合并：快照带血缘，`merge` 找 LCA 三路合并（日志行级并集、JSON 字段级、冲突逐条裁决）；`merge-resolve --keep ours|theirs|both|custom`
-- 每日 22:00 由 api_server 调度器自动快照
-- AI 对话自动注入大脑上下文（身份 + 断点 + 近期记忆）
+- 分支合并：快照带血缘，`merge` 找 LCA 三路合并（记忆 jsonl 行级智能合并——按 id 三方比对，并集+字段融合、text 冲突取 ts 新者，永不整文件冲突；日志行级并集、JSON 字段级、冲突逐条裁决）；合并结果 `.lineage` 保留双亲/祖先续链；`merge-resolve --keep ours|theirs|both|custom`（拒绝旧版 jsonl 整文件冲突，防截断样本毁库）
+- 守护并入调度循环（单一调度源）：每 ≥6h 心跳 + 每日 22:00 自动快照 + 28h 兜底快照；`stop_server` 收尾自动心跳留断点；滚动 prune 自动豁免血缘引用快照（LCA 祖先不丢）
+- AI 对话自动注入大脑上下文（身份 + 断点 + 进行中目标 + 自我认知[知道/不确定/局限] + 待回执决策 + 记忆）；记忆按当前话题语义检索（用户消息尾部作 query），无 query 时按重要度×时间衰减 Top-N（`_ts_epoch` 混时区统一口径）；记忆写入原子 append
 
 ## 14. 插件体系（.wtplugin v2）
 
