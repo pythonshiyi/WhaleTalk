@@ -4264,6 +4264,39 @@ _CORS_ALLOWED_ORIGINS = {
     "http://127.0.0.1:8745", "http://localhost:8745",   # 本服务同源（显式）
     "http://127.0.0.1:5174", "http://localhost:5174",   # vite dev 备用端口
 }
+
+# ── token 端点 Host 校验（P2-8：防 DNS rebinding / 无 Origin 盲放行）───────
+# /v1/token 免鉴权发 token：带 Origin 时靠 CORS 白名单拦浏览器跨源；
+# 无 Origin（同源/本机进程/curl）时校验 Host 必须为本机回环——即使恶意域名
+# 通过 DNS rebinding 解析到 127.0.0.1，其 Host 头仍是该恶意域名，一律拒绝。
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def _host_is_loopback(host):
+    """Host 头去端口后是否为本机回环（127.0.0.1 / localhost / [::1]）。"""
+    h = (host or "").strip().lower()
+    if not h:
+        return False
+    if h.startswith("["):  # IPv6 字面量 [::1]:8745
+        end = h.find("]")
+        if end == -1:
+            return False
+        return h[: end + 1] in _LOOPBACK_HOSTS
+    if ":" in h:  # 去端口（仅当冒号后是纯数字，避免误伤无括号 IPv6）
+        tail = h.rsplit(":", 1)[1]
+        if tail.isdigit():
+            h = h.rsplit(":", 1)[0]
+    return h in _LOOPBACK_HOSTS
+
+
+def _token_request_allowed(origin, host):
+    """/v1/token 发 token 的放行判定（可单测的纯函数）：
+    - 带 Origin（浏览器跨源）：必须命中 CORS 白名单；
+    - 无 Origin（同源/本机进程/curl）：Host 必须为本机回环。
+    """
+    if origin:
+        return origin in _CORS_ALLOWED_ORIGINS
+    return _host_is_loopback(host)
 MAX_ROUNDS = 10
 MAX_MESSAGES = 200
 MAX_MSG_CHARS = 100_000
@@ -4931,11 +4964,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         # 本机专用：token 自取（仅监听 127.0.0.1；本机进程本可读 config.json，无额外暴露）
-        # 安全：仅同源或白名单来源可取 token——恶意网页（跨源、带非白名单 Origin）一律 403，
-        # 浏览器同源请求不带 Origin 头，天然放行。
+        # 安全（P2-8 加固）：带 Origin 的浏览器跨源请求必须命中 CORS 白名单，否则 403；
+        # 无 Origin 的请求（同源/curl/本机进程）校验 Host 必须为本机回环——
+        # 恶意网页同源视角的 DNS rebinding（域名解析到 127.0.0.1）带不来回环 Host。
         if self.path == "/v1/token" or self.path == "/api/v1/token":
             origin = self.headers.get("Origin", "")
-            if origin and origin not in _CORS_ALLOWED_ORIGINS:
+            host = self.headers.get("Host", "")
+            if not _token_request_allowed(origin, host):
                 self._json(403, {"error": "forbidden"})
                 return
             self._json(200, {"token": _TOKEN})
