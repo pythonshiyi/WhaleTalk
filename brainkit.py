@@ -1599,7 +1599,7 @@ def cmd_restore(args) -> int:
 # ---------------------------------------------------------------- 合并引擎（三路 + 血缘）
 
 # jsonl 行级合并的自动取舍计数容器（_merge_file → cmd_merge 收尾记录）
-_MERGE_AUTO_CTX = {"jsonl_auto": 0}
+_MERGE_AUTO_CTX = {"jsonl_auto": 0, "jsonl_auto_hi": 0}
 
 
 class _Conflict(Exception):
@@ -1779,10 +1779,12 @@ def _parse_jsonl_lines(text) -> list:
 
 
 def _row_merge(b, o, t, rel, key):
-    """同键三路取舍（jsonl 行级，永不抛冲突）：
+    """同键三路取舍（jsonl 行级，永不抛冲突）。
 
     并集哲学 + 字段级融合；唯一语义冲突字段 text 双方都改时取 ts 更新者
     （自动取舍，记入返回值 auto），保证合并永不因记忆格式阻塞。
+    高重要度(≥4)双方都改会被计为 auto 并留痕在 merge_log.jsonl_auto_hi
+    （见 _merge_jsonl_text），供事后人工核对，避免静默丢弃高价值语义。
     """
     if o == t:
         return o, None
@@ -1810,7 +1812,7 @@ def _row_merge(b, o, t, rel, key):
             continue
         if bv is not None and tv == bv:
             continue
-        if f == "text":  # 语义冲突：取 ts 更新的一方（确定性方向）
+        if f == "text":
             merged = t if _ts_epoch(t.get("ts")) > _ts_epoch(o.get("ts")) else o
             auto = f
             break
@@ -1852,6 +1854,16 @@ def _merge_jsonl_text(base, ours, theirs, strategy):
         o, t = om.get(k), tm.get(k)
         if o is None and t is None:
             continue  # 两侧都删除
+        # L2 留痕：同键 text 双方都相对 base 改且互不相同、重要度≥4 →
+        # 记入高重要度自动取舍计数（真正会 auto-resolve 的语义冲突）
+        b0 = bm.get(k) or {}
+        o_changed = o is not None and str(o.get("text") or "") != str(b0.get("text") or "")
+        t_changed = t is not None and str(t.get("text") or "") != str(b0.get("text") or "")
+        if (o_changed and t_changed and o is not None and t is not None
+                and o.get("text") != t.get("text")):
+            imp = max(int(o.get("importance") or 3), int(t.get("importance") or 3))
+            if imp >= 4:
+                _MERGE_AUTO_CTX["jsonl_auto_hi"] += 1
         row, auto = _row_merge(bm.get(k), o, t, "", k)
         if auto:
             auto_n += 1
@@ -2092,6 +2104,7 @@ def cmd_merge(args) -> int:
 
         merge_log = load_json(out / "merge_log.json", {"merges": []})
         _jsonl_auto = int(_MERGE_AUTO_CTX.get("jsonl_auto") or 0)
+        _jsonl_hi = int(_MERGE_AUTO_CTX.get("jsonl_auto_hi") or 0)
         merge_log["merges"].append({
             "merged_at": now_iso(),
             "a": a_path.name, "a_version": a_meta.get("version"),
@@ -2099,6 +2112,7 @@ def cmd_merge(args) -> int:
             "lca": lca_v, "strategy": args.strategy,
             "conflicts": [c["id"] for c in conflicts],
             "jsonl_auto": _jsonl_auto,
+            "jsonl_auto_hi": _jsonl_hi,  # L2 留痕：重要度≥4 的语义自动取舍，供事后核对
             "brain_id": man.get("brain_id"),
         })
         save_json(out / "merge_log.json", merge_log)
@@ -2106,7 +2120,7 @@ def cmd_merge(args) -> int:
         evo = load_json(out / "evolution.json", {})
         evo.setdefault("adopted", []).append({
             "id": f"merge-{now_compact()}", "date": now_iso(),
-            "implemented": f"分支合并: {a_path.name} × {b_path.name}（LCA={lca_v or '无'}，冲突 {len(conflicts)} 条，记忆行自动取舍 {_jsonl_auto} 条）",
+            "implemented": f"分支合并: {a_path.name} × {b_path.name}（LCA={lca_v or '无'}，冲突 {len(conflicts)} 条，记忆行自动取舍 {_jsonl_auto} 条{('，含高价值 ' + str(_jsonl_hi) + ' 条待人工核对') if _jsonl_hi else ''}）",
         })
         save_json(out / "evolution.json", evo)
 
@@ -2118,11 +2132,14 @@ def cmd_merge(args) -> int:
             print(f"[合并完成] 无冲突。{out}")
         if _jsonl_auto:
             print(f"  记忆行自动取舍 {_jsonl_auto} 条（同 id 双方均改文本时取 ts 更新者）")
+        if _jsonl_hi:
+            print(f"  ⚠ 其中 {_jsonl_hi} 条为高重要度(≥4)语义取舍，建议事后核对（merge_log.jsonl_auto_hi）")
         print(f"  大脑ID不变: {man.get('brain_id')}  指纹已按合并结果重算")
         return 0
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
         _MERGE_AUTO_CTX["jsonl_auto"] = 0
+        _MERGE_AUTO_CTX["jsonl_auto_hi"] = 0
 
 
 def _safe_str(v) -> str:

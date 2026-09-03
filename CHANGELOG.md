@@ -23,6 +23,7 @@
 - **L6 操作审计**：`audit_op` 写 `brain_ops.log`（doctor-fix/borrow 等埋点）
 - **L5 跨进程锁**：`cross_process_lock`/`release_lock`；`cmd_archive` 重构为加锁包装 + `_archive_unlocked`（防多进程版本号竞态）
 - **F8 merge 预演**：`merge --dry-run` 在临时目录完成冲突计算、无副作用产出，打印将产生的冲突清单
+- **L2 高价值语义取舍留痕**：jsonl 合并中重要度≥4 的记忆 text 双方都改时，merge_log 记录 `jsonl_auto_hi` 并在合并输出提示——不静默丢弃高价值语义（仍行级 auto，不引入整文件冲突）
 
 ### 修复
 - **重大**：`_MEM_LOCK` 由 `threading.Lock` 改 `threading.RLock`——save_memories/version_replace/_record_hits 等持锁后嵌套落盘会自锁死（全量 pytest 卡死的根因），RLock 允许同线程重入

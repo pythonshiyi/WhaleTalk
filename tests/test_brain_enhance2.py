@@ -242,6 +242,22 @@ def test_cross_process_lock_exclusive(btmp):
     bk.release_lock(target)
 
 
+# ---- L2 jsonl 高价值语义自动取舍留痕 ----
+
+def test_l2_high_value_auto_flagged(btmp):
+    """重要度≥4 的 text 双方都改：仍行级 auto（不整文件冲突），但 jsonl_auto_hi 计数留痕。"""
+    base = json.dumps(_mk("m1", "旧文本", ts="2026-09-01T00:00:00+08:00", imp=4), ensure_ascii=False) + "\n"
+    ours = json.dumps(_mk("m1", "主干改法", ts="2026-09-02T10:00:00+08:00", imp=4), ensure_ascii=False) + "\n"
+    theirs = json.dumps(_mk("m1", "分支改法", ts="2026-09-02T11:00:00+08:00", imp=4), ensure_ascii=False) + "\n"
+    old_hi = bk._MERGE_AUTO_CTX.get("jsonl_auto_hi")
+    text, auto = bk._merge_jsonl_text(base, ours, theirs, "auto")
+    assert auto == 1  # 行级 auto 取 ts 新者，无整文件冲突
+    assert "分支改法" in text
+    assert bk._MERGE_AUTO_CTX.get("jsonl_auto_hi", 0) == old_hi + 1  # 高价值取舍留痕
+    # 复位避免污染其他用例
+    bk._MERGE_AUTO_CTX["jsonl_auto_hi"] = old_hi
+
+
 # ---- L7 记忆不变量：增删不丢 id / 全量可解析 ----
 
 def test_memory_invariants(btmp):
