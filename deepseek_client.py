@@ -48,7 +48,6 @@ from shared import (  # P1-3 re-export：工具域阈值常量/锁已下沉 shar
     MEMORY_MAX_ITEMS,
     MEMORY_MAX_TEXT,
     PDF_EXTRACT_MAX_OUTPUT,
-    PIP_ALLOWLIST_NOTICE,
     PROJECT_DIR,
     PROJECT_READ_EXTS,
     READ_FILE_MAX_BYTES,

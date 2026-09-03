@@ -79,27 +79,27 @@ def test_capture_respects_cwd():
 # ── run_python ─────────────────────────────────────────────────────
 
 def test_run_python_success():
-    r = run_python("print(1+1)", with_site=False)
+    r = run_python("print(1+1)")
     assert r.startswith("2")
 
 
 def test_run_python_no_output():
-    r = run_python("x = 1", with_site=False)
+    r = run_python("x = 1")
     assert "无输出" in r
 
 
 def test_run_python_error_traceback():
-    r = run_python("raise ValueError('boom')", with_site=False)
+    r = run_python("raise ValueError('boom')")
     assert "boom" in r
 
 
 def test_run_python_timeout_text():
-    r = run_python("import time; time.sleep(30)", with_site=False)
+    r = run_python("import time; time.sleep(30)")
     assert "超时" in r
 
 
 def test_run_python_oversize_blocked():
-    r = run_python("x" * 100000, with_site=False)
+    r = run_python("x" * 100000)
     assert "错误" in r
 
 

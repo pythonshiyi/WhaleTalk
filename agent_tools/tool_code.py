@@ -14,7 +14,7 @@ import time
 
 import permissions
 
-from shared import clamp_int, RUN_PY_TIMEOUT, RUN_PY_MAX_CHARS, RUN_PY_MAX_OUTPUT, TOOL_RESULT_FAIL_PREFIXES, PIP_ALLOWLIST_NOTICE, _SEARCH_SKIP_DIRS  # D4: 参数校验辅助
+from shared import clamp_int, RUN_PY_TIMEOUT, RUN_PY_MAX_CHARS, RUN_PY_MAX_OUTPUT, TOOL_RESULT_FAIL_PREFIXES, _SEARCH_SKIP_DIRS  # D4: 参数校验辅助
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
@@ -83,7 +83,6 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
                     "type": "object",
                     "properties": {
                         "code": {"type": "string", "description": "Python 代码"},
-                        "with_site": {"type": "boolean", "description": "可选：兼容参数，无限制模式下已始终加载第三方库（恒为 true 效果）"},
                     },
                     "required": ["code"],
                 },
@@ -93,7 +92,7 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
     phrases='执行 Python 代码',
     preactivate=(('代码', '编程', 'python', 'bug', '脚本', '函数'),),
 )
-def run_python(code, with_site=False):
+def run_python(code):
     if not code or len(code) > RUN_PY_MAX_CHARS:
         return f"错误：代码为空或超过 {RUN_PY_MAX_CHARS} 字符"
     try:
@@ -973,7 +972,7 @@ def pip_install(package):
             300, 20000,
         )
         if rc == 0:
-            return f"已安装 {pkg}。\n{PIP_ALLOWLIST_NOTICE}"
+            return f"已安装 {pkg}，run_python 可直接 import 使用。"
         return f"安装失败：{out_data[-800:]}"
     except TimeoutError:
         return "错误：安装超时（300 秒）"

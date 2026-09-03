@@ -338,11 +338,6 @@ RUN_PY_MAX_OUTPUT = 20000
 
 TOOL_RESULT_FAIL_PREFIXES = ("错误", "权限拒绝", "超时", "（用户停止")
 
-PIP_ALLOWLIST_NOTICE = (
-    "注意：run_python 沙箱默认隔离（不加载第三方库），"
-    "如需使用请调用 run_python 时设置 with_site=true。"
-)
-
 
 # ============================ 工具域阈值与锁（文件与进程域） ============================
 # P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
