@@ -20,10 +20,12 @@ def check(cond, name):
 h = api_server._Handler.__new__(api_server._Handler)
 
 # ── 桩：三路注入源全部返回“有内容” ──
+_REAL_MEMORY_FULL = api_server._memory_full
 api_server._memory_full = lambda: {"facts": [{"text": "用户偏好中文回复"}, {"text": "项目采用纯静态架构"}]}
 dc.self_profile = lambda *a, **k: "[核心自我状态] 我是鲸语，专注而冷静。"
 import brain_api
-brain_api.brain_context = lambda: "[大脑上下文] 身份：鲸语；近期记忆：正在开发纯净对话开关。"
+_REAL_BRAIN_CONTEXT = brain_api.brain_context
+brain_api.brain_context = lambda *a, **k: "[大脑上下文] 身份：鲸语；近期记忆：正在开发纯净对话开关。"
 
 def inject(quiet_mode, memory_enabled=True, pure_chat=True):
     cfg = {"memory_enabled": memory_enabled, "quiet_mode": quiet_mode}
@@ -74,3 +76,8 @@ if callable(_dcm.self_profile) and _dcm.self_profile.__module__ != "agent_tools.
     # 重新从域模块取回真实实现（自检隔离：不破坏后续 pytest 对工具归属的断言）
     from agent_tools.tool_brain import self_profile as _real_self_profile
     _dcm.self_profile = _real_self_profile
+# brain_context / _memory_full 的桩也要归还——本文件顶层脚本在 pytest 收集时
+# 会执行（collect 0 用例但副作用存在），不恢复会污染同进程后续测试
+if brain_api.brain_context.__name__ == "<lambda>":
+    brain_api.brain_context = _REAL_BRAIN_CONTEXT
+api_server._memory_full = _REAL_MEMORY_FULL

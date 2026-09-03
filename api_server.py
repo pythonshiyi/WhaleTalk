@@ -2568,14 +2568,17 @@ _SCHEDULER_THREAD = None
 
 
 _BRAIN_SNAPSHOT_LAST_DATE = None
+_BRAIN_GUARD_LAST_BEAT = None  # 守护心跳上次时间戳（进程内，随调度循环维护）
+_BRAIN_GUARD_LAST_SNAP = None  # 自动快照上次时间戳（进程内）
 
 
 def _brain_daily_snapshot(now):
-    """鲸语大脑内置每日快照：每天指定时间自动归档 + 心跳（config 开关，默认开启）。
+    """鲸语大脑每日快照：每天指定时间自动归档 + 心跳（config 开关，默认开启）。
 
-    产品级：随应用常驻、跨机器可用，不依赖任何外部定时工具。
+    与调度循环内的大脑守护（_brain_guard_tick）共用一个时间轴，成功归档后
+    更新守护快照时间，避免同一天重复归档。产品级：随应用常驻、跨机器可用。
     """
-    global _BRAIN_SNAPSHOT_LAST_DATE
+    global _BRAIN_SNAPSHOT_LAST_DATE, _BRAIN_GUARD_LAST_SNAP
     try:
         cfg = config_utils.load_config()
     except Exception:
@@ -2595,9 +2598,47 @@ def _brain_daily_snapshot(now):
         brain_api.brain_action("heartbeat", {"thought": "每日自动快照"})
         brain_api.brain_action("archive", {})
         _BRAIN_SNAPSHOT_LAST_DATE = today_str
+        _BRAIN_GUARD_LAST_SNAP = now.timestamp()
         logger.info("鲸语大脑每日快照已完成")
     except Exception:
         logger.exception("鲸语大脑每日快照失败")
+
+
+def _brain_guard_tick(now):
+    """大脑守护并入调度循环（单一调度源，替代原独立守护线程）：
+
+    - 每 ≥6h 心跳一次（断点续接）；
+    - 若距上次自动快照 >28h（错过每日 22:00，如进程跨日未运行）则兜底归档。
+    大脑未初始化/密钥未就绪时静默跳过；与 22:00 每日快照钩子共享时间轴防重复。
+    """
+    global _BRAIN_GUARD_LAST_BEAT, _BRAIN_GUARD_LAST_SNAP
+    try:
+        import brainkit as _bk
+        _bk.load_manifest()
+    except SystemExit:
+        return
+    except Exception:
+        return
+    ts = now.timestamp()
+    if _BRAIN_GUARD_LAST_BEAT is None:
+        _BRAIN_GUARD_LAST_BEAT = ts
+    if _BRAIN_GUARD_LAST_SNAP is None:
+        _BRAIN_GUARD_LAST_SNAP = ts
+    try:
+        if ts - _BRAIN_GUARD_LAST_BEAT >= 6 * 3600:
+            _bk.cmd_heartbeat(__import__("argparse").Namespace(thought="守护心跳：仍在运行"))
+            _BRAIN_GUARD_LAST_BEAT = ts
+        if ts - _BRAIN_GUARD_LAST_SNAP >= 28 * 3600 and _bk._keyring_ready():
+            try:
+                _cfg = config_utils.load_config()
+                auto_snap = bool(_cfg.get("brain_auto_snapshot", True))
+            except Exception:
+                auto_snap = True
+            if auto_snap:
+                _bk.cmd_archive(__import__("argparse").Namespace(passphrase="", keep=_bk.DEFAULT_KEEP))
+                _BRAIN_GUARD_LAST_SNAP = ts
+    except Exception:
+        logger.exception("大脑守护心跳/快照失败")
 
 
 def _scheduler_loop():
@@ -2610,6 +2651,7 @@ def _scheduler_loop():
             items = stores.load_schedules(SCHEDULES_PATH)
             now = _dt.now()
             _brain_daily_snapshot(now)
+            _brain_guard_tick(now)
             for s in items:
                 if not s.get("enabled"):
                     continue
@@ -6492,10 +6534,29 @@ class _Handler(BaseHTTPRequestHandler):
                     parts.append(sp)
             except Exception:
                 pass
-            # 鲸语大脑上下文注入（挂载大脑后，AI 对话自动携带身份/断点/近期记忆）
+            # 鲸语大脑上下文注入（挂载大脑后，AI 对话自动携带身份/断点/自我认知/相关记忆）
+            # 以最近一条用户消息尾部文本作 query 走语义检索——接通闲置的
+            # brain_context(query) 通道，让记忆注入跟随当前话题而非固定 top-N
             try:
                 import brain_api
-                bc = brain_api.brain_context()
+                _q = ""
+                for _m in reversed(messages):
+                    if not isinstance(_m, dict) or _m.get("role") != "user":
+                        continue
+                    _c = _m.get("content")
+                    if isinstance(_c, str) and str(_c).strip():
+                        _q = str(_c).strip()[-60:]
+                    elif isinstance(_c, list):
+                        _txt = "".join(
+                            str(x.get("text") or "").strip()
+                            for x in _c if isinstance(x, dict) and x.get("type") == "text"
+                            and str(x.get("text") or "").strip())
+                        _q = _txt[-60:] if _txt else ""
+                    break
+                try:
+                    bc = brain_api.brain_context(query=_q) if _q else brain_api.brain_context()
+                except TypeError:  # 兼容旧签名/外部桩（无 query 参数）
+                    bc = brain_api.brain_context()
                 if bc:
                     parts.append(bc)
             except Exception:
@@ -6753,41 +6814,20 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
     _SERVER = server
     _THREAD = threading.Thread(target=server.serve_forever, daemon=True)
     _THREAD.start()
-    _start_brain_guard()  # 大脑守护：自动心跳 + 定期快照（大脑未初始化时静默跳过）
     logger.info("本地 API 服务已启动：http://127.0.0.1:%s", _PORT)
     return _PORT, _TOKEN, None
 
 
-def _start_brain_guard():
-    """大脑守护线程：每 6h 心跳、每 24h 自动快照（大脑未初始化/密钥未就绪时跳过）。"""
-    import threading
-
-    def _loop():
-        import time as _t
-        import brainkit as _bk
-        beat = _t.time()
-        snap = _t.time()
-        while True:
-            _t.sleep(1800)  # 30 分钟粒度
-            now = _t.time()
-            try:
-                if _bk.load_manifest():
-                    if now - beat >= 6 * 3600:
-                        _bk.cmd_heartbeat(__import__("argparse").Namespace(thought="守护心跳：仍在运行"))
-                        beat = now
-                    if now - snap >= 24 * 3600 and _bk._keyring_ready():
-                        _bk.cmd_archive(__import__("argparse").Namespace(passphrase="", keep=_bk.DEFAULT_KEEP))
-                        snap = now
-            except SystemExit:
-                pass
-            except Exception:
-                pass
-
-    threading.Thread(target=_loop, daemon=True).start()
-
-
 def stop_server():
     global _SERVER, _THREAD
+    # 大脑收尾钩子：服务停止前写一次心跳断点（会话生命周期与大脑对齐，
+    # 下次启动 brain_context 可带回「上次思考断点」）
+    try:
+        import brain_api
+        if brain_api.brain_status() is not None:
+            brain_api.brain_action("heartbeat", {"thought": "服务停止，记忆已落盘"})
+    except Exception:
+        pass
     if _SERVER is not None:
         try:
             # 终止全部后台子进程（AI 起的服务/浏览器等），防孤儿进程残留

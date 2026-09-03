@@ -1070,7 +1070,10 @@ def _mem_score(query_tokens, idf, text):
 
 
 def _brain_sync_memory(text, key, type, entities, relations):
-    """记忆同步进鲸语大脑（memories/memory.jsonl）；大脑未初始化时静默跳过。"""
+    """记忆同步进鲸语大脑（memories/memory.jsonl）；大脑未初始化时静默跳过。
+
+    写入为「同文本去重 + 原子追加」，brain 侧由 brainkit 保证 id 级一致性。
+    """
     try:
         import brainkit as bk
         bk.remember_structured(
@@ -1086,25 +1089,47 @@ def _brain_sync_memory(text, key, type, entities, relations):
         pass
 
 
+def _find_brain_entry(bk, keyword):
+    """定位待更新的大脑记忆：精确全文匹配优先，找不到再退子串包含——
+    避免旧版纯子串首条命中在关键词宽泛时误更新无关记忆。返回 (entry, 命中方式)。"""
+    kw = str(keyword or "").strip().lower()
+    if not kw:
+        return None, None
+    items = bk.load_memories()
+    exact = next((e for e in items if str(e.get("text") or "").strip().lower() == kw), None)
+    if exact is not None:
+        return exact, "exact"
+    sub = next((e for e in items if kw in str(e.get("text") or "").lower()), None)
+    return (sub, "sub") if sub is not None else (None, None)
+
+
 def _brain_sync_delete(keyword):
-    """删除大脑中匹配的记忆条目（与 memory.json 同步）。"""
+    """删除大脑中匹配的记忆条目。
+
+    与 memory.json 侧 delete_memory 语义对等：子串命中全部删除
+    （本地也是按关键词删全部匹配，两侧必须一致，不能只删一条）。"""
     try:
         import brainkit as bk
+        kw = str(keyword or "").strip().lower()
+        if not kw:
+            return
         for e in bk.load_memories():
-            if str(keyword or "").lower() in (e.get("text") or "").lower():
+            if kw in str(e.get("text") or "").lower():
                 bk.delete_memory(e["id"])
     except Exception:
         pass
 
 
 def _brain_sync_update(old, new):
-    """更新大脑中匹配的记忆条目（与 memory.json 同步）。"""
+    """更新大脑中匹配的记忆条目（精确优先、子串兜底；与 memory.json 同步）。
+
+    memory.json 侧 update_memory 为「多个匹配只更新最新一条」，大脑侧同样只改一条：
+    精确全文命中优先，避免旧版纯子串首条在关键词宽泛时误更新无关记忆。"""
     try:
         import brainkit as bk
-        for e in bk.load_memories():
-            if str(old or "").lower() in (e.get("text") or "").lower():
-                bk.update_memory(e["id"], text=new)
-                break
+        e, _how = _find_brain_entry(bk, old)
+        if e is not None:
+            bk.update_memory(e["id"], text=new)
     except Exception:
         pass
 

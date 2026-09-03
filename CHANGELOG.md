@@ -2,6 +2,33 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.5（未发版追加）—— 🧠 鲸语大脑深度思考修复批次：jsonl 行级合并 / prune 保血缘 / 认知回路接通
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。依据《大脑功能深度思考报告》（2026-09-03）对大脑全链路（brainkit/brain_api/集成点）的审计结论实施修复：大脑从「记忆档案馆」向「AI 的自我」补齐读侧回路——P0 架构断裂三条 + P1 符号-行为断裂四条 + P2 一致性七项全部落地。
+
+### P0 · 架构断裂修复
+- **P0-1 记忆 jsonl 与三路合并引擎撕裂**（`brainkit.py`）：新增 `_merge_jsonl_text`/`_row_merge`——按记忆 id 主键三方比对，任一分支保留的键并入（记忆不丢）、单边改动取改动方、同 id 双方均改走字段级融合（text 冲突自动取 ts 更新者，merge_log 记录 `jsonl_auto` 计数）；`.jsonl` 经 `_merge_file` 正确分派，**不再整文件标量冲突**（旧版整文件冲突在 `merge-resolve` 中被拒绝，防截断样本毁库）
+- **P0-2 prune 与血缘自相矛盾**：`_protected_snapshot_versions()` 从 lineage（last_archived/restored_from/ancestors）与 merge_log（a/b/lca）汇总血缘引用版本，`_prune_snapshots()` 滚动清理时一律豁免并打印——LCA 祖先不再被 7 日滚动删除，merge 不静默降级双路
+- **P0-3 记忆写路径一致性加固**：`remember_structured` 改「读-查重-原子 append」（O(1)，不再整文件重写）；`save_memories` tmp + `os.replace` 原子写 + `_MEM_LOCK` 进程内互斥；`_brain_sync_update` 精确全文匹配优先、子串兜底（防宽泛关键词误更无关记忆）；`_brain_sync_delete` 保持与 memory.json 侧一致的子串全删语义
+
+### P1 · 认知回路接通（写后无读 → 写后必读）
+- **P1-1 自我模型 / 决策日志进入推理上下文**：`brain_context()` 新增注入「自我认知 · 我知道/我不确定/我的局限」（各 2 条，诚实声明防幻觉）与「未决决策」（open 状态 2 条）——自省结果首次塑造对话行为；`brain_status` 增 `open_decisions`/`self_model_source`
+- **P1-2 对话按话题检索**：api_server chat 组装以最近一条用户消息尾部文本作 query 调 `brain_context(query=…)`——闲置的语义检索通道接通（兼容旧签名/外部桩的 TypeError 兜底）
+- **P1-3 时间语义修复**：新增 `_ts_epoch`（任意偏移 → UTC epoch），search 空查询排序、consolidate 天数归档、brain_context 排序全部改 epoch 口径——历史混写 +08/+01 不再失真
+- **记忆排序破陈旧固化**：`brain_context` 无 query 时改「重要度 × 时间衰减」打分（半衰期 30 天）取 Top-N，高重要度旧记忆不再永久霸占注入位
+
+### P2 · 一致性打磨
+- **调度收敛**：心跳（≥6h）/兜底快照（>28h）并入 `scheduler_loop`（`_brain_guard_tick`），删除独立守护线程 `_start_brain_guard`——单一调度源；每日 22:00 快照钩子共享时间轴防重复
+- **会话生命周期对齐**：`stop_server()` 收尾自动 heartbeat（「服务停止，记忆已落盘」），下次启动断点续接
+- **merge 血缘续链**：合并结果 `.lineage.json` 记录双亲/祖先并集（原为清空），合体后可继续分支演化、再次以双亲为 LCA
+- **演化账本可用**：新增 `record_evolution`/`cmd_evolution`（add/list，adopted/proposed）+ brain_api `evolution-record` 动作；注释明确与主程序 self_evolve（能力自举）双轨关系；cmd_init 预置记录无 title 的列表显示兜底
+- **self_model 模板如实化**：baseline.limits 补 jsonl 行级合并语义与 prune 血缘豁免语义；`cmd_status` 增自我模型源/待回执决策行
+
+### 回归
+- 新增 `tests/test_brain_fixes.py` **15 用例**（jsonl 三路并集/单边改/双边 ts 裁决/删除不传播、prune 血缘豁免、原子 append+去重、自我模型+决策注入、时间衰减排序、混时区 epoch、演化账本、merge-resolve 拒绝 jsonl）
+- 修复 `test_quiet_mode.py` 收集期副作用：stub 归还 brain_context/_memory_full（此前 monkeypatch 在 pytest 收集阶段污染同进程后续测试）
+- pytest **146 passed**（131 + 15）；四门禁全绿（audit error 0 · warn 0 / validate 135 / island 135×9 无孤岛 / check_docs 135 工具 · 85 路由 · 3.8.4）；quiet_mode 门控脚本通过
+
 ## v3.8.4（2026-09-03）—— 🏷 正式固化「未发版追加」系列：版本号 3.8.3 → 3.8.4
 
 **正式发版**：`config_defaults.VERSION` 3.8.3 → **3.8.4**。v3.8.3（2026-08-31）以来代码审查驱动的全部「未发版追加」提交首次固化并打 tag（下方各「v3.8.3（未发版追加）」段 + 本节 P1/P2 收尾即为本版本内容明细）；「默认自由，法无禁止皆可为」安全模型随 README / SECURITY.md / CHANGELOG 最终对齐。**本版本不引入任何默认限制回退**——只让用户可控机制（黑名单/审批清单，均默认 off）真正生效。

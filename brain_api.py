@@ -85,6 +85,8 @@ def brain_status():
         "resume_hint": hb.get("resume_hint"),
         "lineage": lineage,
         "open_conflicts": len(conflicts.get("conflicts", [])) if conflicts else 0,
+        "open_decisions": sum(1 for d in bk.list_decisions(limit=500) if d.get("status") == "open"),
+        "self_model_source": (bk.load_json(bk.BRAIN_DIR / "self_model.json", {}) or {}).get("source"),
         "current_version": int(versions[-1].stem.rsplit("_v", 1)[-1]) if versions else 0,
         "context_preview": context_preview,
         "snapshots": [
@@ -417,6 +419,12 @@ def brain_action(action, payload=None):
     if action == "goals-delete":
         ok = bk.delete_goal(str(payload.get("id") or ""))
         return {"ok": ok, "message": "目标已删除" if ok else "未找到该目标"}
+    if action == "evolution-record":
+        rec = bk.record_evolution(str(payload.get("title") or ""),
+                                  kind=str(payload.get("kind") or "adopted"),
+                                  note=str(payload.get("note") or ""))
+        return {"ok": bool(rec), "message": f"演化账本已记录 {rec['id']}" if rec else "标题为空",
+                "data": {"record": rec}}
     return {"ok": False, "message": f"未知动作: {action}"}
 
 
@@ -440,10 +448,27 @@ def _snapshot_path(v):
     return str(p.resolve()) if p.exists() else str(p)
 
 
-def brain_context(max_memories=4, query=""):
-    """注入 AI 对话的大脑上下文摘要（身份 + 断点 + 相关记忆）；未初始化返回 None。
+def _mem_decay_score(e: dict, now_epoch: float) -> float:
+    """记忆新鲜度打分：重要度 × 时间衰减（半衰期约 30 天）。
 
-    query 非空时按相关性检索；为空时按「重要度 × 最新」取 Top-N。
+    旧实现按 (-importance, ts) 纯重要度排序——高重要度旧记忆会长期霸占
+    注入位（陈旧固化），新相关记忆反而进不来。打分 = importance / (1 + age_days/30)。
+    """
+    try:
+        imp = float(e.get("importance") or 3)
+        age_days = max(0.0, (now_epoch - bk._ts_epoch(e.get("ts"))) / 86400.0)
+    except Exception:
+        imp, age_days = 3.0, 0.0
+    return imp / (1.0 + age_days / 30.0)
+
+
+def brain_context(max_memories=4, query=""):
+    """注入 AI 对话的大脑上下文摘要（身份 + 断点 + 自我认知 + 未决决策 + 相关记忆）。
+
+    query 非空时按相关性检索；为空时按「重要度 × 时间衰减」取 Top-N（破陈旧固化）。
+    自我模型（unknowns/limits）与待回执决策也在此注入——它们不再只写不读，
+    而是随对话进入推理上下文，让自省真正影响后续行为。
+    未初始化返回 None。
     """
     try:
         bk.load_manifest()
@@ -466,12 +491,35 @@ def brain_context(max_memories=4, query=""):
                 lines.append(f"- {g.get('title')}{extra}")
     except Exception:
         pass
+    # 自我认知注入：unknowns / limits 精简 2-3 条（诚实声明不确定与局限，防幻觉）
+    try:
+        sm = bk.load_json(bk.BRAIN_DIR / "self_model.json", {})
+        caps = [("我知道", sm.get("knows") or []), ("我不确定", sm.get("unknowns") or []),
+                ("我的局限", sm.get("limits") or [])]
+        for label, items in caps:
+            vals = [str(x).strip()[:70] for x in items if str(x or "").strip()][:2]
+            if vals:
+                lines.append(f"自我认知 · {label}：" + "；".join(vals))
+    except Exception:
+        pass
+    # 待回执决策注入（前额叶闭环：让 AI 记得自己作过什么决定、等待验证）
+    try:
+        open_decs = [d for d in bk.list_decisions(limit=60) if d.get("status") == "open"]
+        if open_decs:
+            lines.append("未决决策：")
+            for d in open_decs[:2]:
+                exp = str(d.get("expected") or "").strip()
+                lines.append(f"- {str(d.get('decision') or '')[:50]}" + (f"（预期：{exp[:40]}）" if exp else ""))
+    except Exception:
+        pass
+    # 相关/近期记忆（无 query 时按「重要度 × 时间衰减」打分排序）
     try:
         if str(query or "").strip():
             recent = bk.search_memories(query, max_memories)
         else:
             mems = bk.load_memories()
-            mems.sort(key=lambda e: (-int(e.get("importance") or 3), str(e.get("ts") or "")))
+            _now_epoch = time.time()
+            mems.sort(key=lambda e: (-_mem_decay_score(e, _now_epoch), str(e.get("ts") or "")))
             recent = mems[:max_memories]
     except Exception:
         recent = []

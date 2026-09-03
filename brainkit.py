@@ -65,6 +65,7 @@ import shutil
 import struct
 import sys
 import tempfile
+import threading
 import uuid
 import zipfile
 from pathlib import Path
@@ -101,6 +102,9 @@ PBKDF2_ITER = 200_000
 RSA_KEYSIZE = 2048
 SIGN_MAGIC = b"WHALEBRAIN-SIG\x00"  # 快照签名块分隔（文件 = data + magic + signature）
 
+# 记忆写路径进程内互斥；跨进程安全由「原子 append / tmp+os.replace」兜底
+_MEM_LOCK = threading.Lock()
+
 # ---------------------------------------------------------------- 基础工具
 
 
@@ -114,6 +118,22 @@ def today() -> str:
 
 def now_compact() -> str:
     return _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def _ts_epoch(ts) -> float:
+    """任意脑时间戳 → UTC epoch 秒（统一比较口径）。
+
+    历史数据可能混写本地偏移（如 +08:00 与 +01:00 并存）——字符串倒序与
+    naive 天数差都会失真；一律解析为带 tz 的绝对时间再比较即彻底消除。
+    解析失败返回 0.0（老条目垫底，不干扰排序）。
+    """
+    try:
+        raw = str(ts or "").strip()
+        if not raw:
+            return 0.0
+        return _dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
 
 
 def canonical_json(obj) -> str:
@@ -608,9 +628,10 @@ def _refresh_self_model() -> None:
             "大脑未来会学到什么，取决于之后的每一次挂载",
         ],
         "limits": [
-            "合并是文件级三路合并：日志并集、JSON 字段级、其余按内容；恢复仍是「整脑替换」",
+            "合并是文件级三路合并：记忆 jsonl 行级智能合并（同 id 文本冲突自动取新者）、日志并集、JSON 字段级、其余按内容；恢复仍是「整脑替换」",
             "跨躯体免密依赖密钥包迁移仪式（export-key / import-key）；无密钥机器解不开加密快照",
             "快照加密需要 cryptography；未启用免密时快照为明文压缩包",
+            "自动快照滚动清理默认保留最近 7 份，但血缘引用的版本（LCA/双亲）会豁免保留",
         ],
     }
     existing = load_json(BRAIN_DIR / "self_model.json")
@@ -825,14 +846,29 @@ def load_memories(include_archived: bool = False) -> list:
 
 
 def save_memories(items: list) -> None:
+    """全量落盘（update/delete/consolidate 用）：tmp + os.replace 原子写，崩溃不损坏。
+
+    进程内以 _MEM_LOCK 互斥；os.replace 保证读方永远看到完整文件。
+    """
     MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
-    with open(MEMORY_JSONL, "w", encoding="utf-8") as f:
-        for e in items:
-            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    with _MEM_LOCK:
+        tmp = MEMORY_JSONL.with_suffix(".jsonl.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            for e in items:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        try:
+            os.replace(tmp, MEMORY_JSONL)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
 
 
 def remember_structured(text, type="", importance=3, tags=None, entities=None, relations=None, source="手动"):
-    """写入一条结构化记忆到 memory.jsonl（同文本去重）。返回条目 dict 或 None。"""
+    """写入一条结构化记忆到 memory.jsonl（同文本去重）。返回条目 dict 或 None。
+
+    写入用「读-查重-原子追加」：单条新增是 O(1) append，不再整文件重写，
+    规避记忆量大后的写放大；进程内加锁，跨进程由单行 append 的原子性兜底。
+    """
     text = str(text or "").strip()
     if not text:
         return None
@@ -845,12 +881,13 @@ def remember_structured(text, type="", importance=3, tags=None, entities=None, r
         "relations": [r for r in (relations or []) if isinstance(r, dict)][:20],
         "source": str(source or "手动")[:10], "archived": False,
     }
-    items = load_memories(include_archived=True)
-    for it in items:
-        if it.get("text") == entry["text"] and not it.get("archived"):
-            return it
-    items.append(entry)
-    save_memories(items)
+    with _MEM_LOCK:
+        items = load_memories(include_archived=True)
+        for it in items:
+            if it.get("text") == entry["text"] and not it.get("archived"):
+                return it
+        MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
+        append_line(MEMORY_JSONL, json.dumps(entry, ensure_ascii=False))
     return entry
 
 
@@ -901,7 +938,7 @@ def search_memories(query: str, limit: int = 5) -> list:
     if not items:
         return []
     if not str(query or "").strip():
-        return sorted(items, key=lambda e: e.get("ts") or "", reverse=True)[:limit]
+        return sorted(items, key=lambda e: _ts_epoch(e.get("ts")), reverse=True)[:limit]
     import math
     q_toks = _mem_tokens(query)
     doc_toks = [_mem_tokens(e["text"]) for e in items]
@@ -929,19 +966,17 @@ def consolidate_memories(min_importance=2, days=30):
     返回 {"archived": n, "merged": n, "kept": n}。LLM 增强版见 brain_api.consolidate_with_llm。
     """
     items = load_memories(include_archived=True)
-    now = _dt.datetime.now()
+    now_epoch = _dt.datetime.now().timestamp()
     archived = merged = 0
     # 1) 低重要度 + 超过 days 天 → 归档（不删除，保留可查）
+    #    天数判定用 UTC epoch 差（_ts_epoch 吸收历史混写时区），naive 墙钟差会失真
     for e in items:
         if e.get("archived"):
             continue
-        try:
-            ts = _dt.datetime.fromisoformat(str(e.get("ts") or "").replace("Z", "+00:00"))
-            if ts.tzinfo is not None:
-                ts = ts.replace(tzinfo=None)  # 统一 naive 比较，避免 aware/naive 报错
-        except Exception:
+        age_days = (now_epoch - _ts_epoch(e.get("ts"))) / 86400.0
+        if age_days < 0:
             continue
-        if int(e.get("importance") or 3) < min_importance and (now - ts).days > days:
+        if int(e.get("importance") or 3) < min_importance and age_days > days:
             e["archived"] = True
             archived += 1
     # 2) 同类型相似记忆合并（token Jaccard > 0.6）：保留重要度/时间更高的一方
@@ -1150,6 +1185,64 @@ def cmd_remember(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- 演化账本（evolution.json）
+# 注意：与主程序 self_evolve（能力自举：create_evolution/self_evolve 四层验证闸）
+# 是互补双轨——本账本记录「大脑自身能力的演进史」（合并/快照/迁移等设计变更），
+# self_evolve 记录「运行时能力提案」。各自留档，不混写。
+
+
+def _evolution_path():
+    return BRAIN_DIR / "evolution.json"
+
+
+def _next_evo_id(evo: dict) -> str:
+    import re
+    mx = 0
+    for rec in (evo.get("proposals") or []) + (evo.get("adopted") or []):
+        mm = re.match(r"^P-(\d+)$", str(rec.get("id") or ""))
+        if mm:
+            mx = max(mx, int(mm.group(1)))
+    return "P-" + str(mx + 1).zfill(3)
+
+
+def record_evolution(title, kind="adopted", note=""):
+    """追加一条演化账本记录（proposed 提议 / adopted 已采纳）。返回记录 dict 或 None。"""
+    title = str(title or "").strip()
+    if not title:
+        return None
+    evo = load_json(_evolution_path(), {}) or {}
+    rec = {"id": _next_evo_id(evo), "date": now_iso(), "title": title[:120]}
+    if kind == "proposed":
+        rec["status"] = "proposed"
+        evo.setdefault("proposals", []).append(rec)
+    else:
+        if note:
+            rec["implemented"] = str(note)[:200]
+        evo.setdefault("adopted", []).append(rec)
+    save_json(_evolution_path(), evo)
+    return rec
+
+
+def cmd_evolution(args) -> int:
+    load_manifest()
+    if args.evo_cmd == "add":
+        rec = record_evolution(args.title, args.kind or "adopted", args.note or "")
+        print(f"[演化账本] {rec['id']} 已记录（{args.kind or 'adopted'}）: {rec['title'][:40]}" if rec
+              else "[错误] 标题为空")
+    else:  # list
+        evo = load_json(_evolution_path(), {}) or {}
+        props = evo.get("proposals") or []
+        adps = evo.get("adopted") or []
+        if not props and not adps:
+            print("（账本为空）")
+        for rec in props:
+            print(f"  [提议] {rec.get('id')}  {rec.get('title')}")
+        for rec in adps:
+            title = rec.get('title') or str(rec.get('implemented') or '—')[:48]
+            print(f"  [采纳] {rec.get('id')}  {title}  {rec.get('implemented') or ''}")
+    return 0
+
+
 def cmd_import_memory(args) -> int:
     load_manifest()
     if not MEMORY_SOURCE_DIR.exists():
@@ -1170,6 +1263,54 @@ def cmd_import_memory(args) -> int:
         print(f"  + 导入 {src.name}")
     print(f"[完成] 共导入 {imported} 条现有记忆到 memory.jsonl。")
     return 0
+
+
+def _protected_snapshot_versions() -> set:
+    """血缘引用的版本号集合：prune 不得删除（否则 merge 的 LCA/双亲会消失）。
+
+    来源：lineage（last_archived / restored_from_version / ancestors）+
+    merge_log（每次合并的 a_version / b_version / lca）。"""
+    protected = set()
+    lin = load_json(LINEAGE_FILE, {})
+    for k in ("last_archived", "restored_from_version"):
+        v = lin.get(k)
+        if v is not None and str(v).lstrip("-").isdigit():
+            protected.add(int(v))
+    for v in (lin.get("ancestors") or []):
+        if str(v).lstrip("-").isdigit():
+            protected.add(int(v))
+    mlog = load_json(MERGE_LOG_FILE, {"merges": []})
+    for mg in (mlog.get("merges") or []):
+        if not isinstance(mg, dict):
+            continue
+        for k in ("a_version", "b_version", "lca"):
+            v = mg.get(k)
+            if v is not None and str(v).lstrip("-").isdigit():
+                protected.add(int(v))
+    return protected
+
+
+def _prune_snapshots(versions: list, keep: int, protected=None):
+    """删除 keep 之外过期快照；protected（血缘引用版本）一律豁免。
+
+    返回 (已删除文件名列表, 被豁免的版本号列表)。"""
+    protected = protected if protected is not None else _protected_snapshot_versions()
+    pruned, skipped = [], []
+    doomed = versions[:-keep] if keep > 0 else list(versions)
+    for v in doomed:
+        try:
+            ver = int(v.stem.rsplit("_v", 1)[-1])
+        except Exception:
+            ver = None
+        if ver is not None and ver in protected:
+            skipped.append(str(ver))
+            continue
+        try:
+            v.unlink(missing_ok=True)
+            pruned.append(v.name)
+        except OSError:
+            print(f"  !! 无法删除过期快照 {v.name}（跳过）", file=sys.stderr)
+    return pruned, skipped
 
 
 def cmd_archive(args) -> int:
@@ -1227,18 +1368,14 @@ def cmd_archive(args) -> int:
     save_json(LINEAGE_FILE, lineage)
 
     keep = args.keep if args.keep is not None else DEFAULT_KEEP
-    pruned = 0
-    for v in versions[:-keep] if keep > 0 else versions:
-        try:
-            v.unlink(missing_ok=True)
-            pruned += 1
-        except OSError:
-            print(f"  !! 无法删除过期快照 {v.name}（跳过）", file=sys.stderr)
+    pruned, skipped = _prune_snapshots(versions, keep)
 
     print(f"[快照已归档] {target}")
     print(f"  大小: {len(data) / 1024:.1f} KB   加密: {mode}")
     if pruned:
-        print(f"  已清理 {pruned} 份过期快照（保留最近 {keep} 份）")
+        print(f"  已清理 {len(pruned)} 份过期快照（保留最近 {keep} 份）")
+    if skipped:
+        print(f"  已豁免 {len(skipped)} 份血缘引用快照（merge 依赖）: " + "、".join(sorted(skipped)))
     return 0
 
 
@@ -1313,6 +1450,9 @@ def cmd_restore(args) -> int:
 
 
 # ---------------------------------------------------------------- 合并引擎（三路 + 血缘）
+
+# jsonl 行级合并的自动取舍计数容器（_merge_file → cmd_merge 收尾记录）
+_MERGE_AUTO_CTX = {"jsonl_auto": 0}
 
 
 class _Conflict(Exception):
@@ -1468,8 +1608,114 @@ def _merge_mapping(base, ours, theirs, strategy, path=""):
     return out
 
 
+def _jsonl_key(e: dict, raw: str) -> str:
+    """记忆行主键：优先 id（分支同源记忆 id 相同才能三方比对）；
+    无 id 的裸行退回内容哈希，保证并入不丢。"""
+    if isinstance(e, dict) and e.get("id"):
+        return "id:" + str(e["id"])[:40]
+    return "h:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _parse_jsonl_lines(text) -> list:
+    out = []
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue  # 容忍单行损坏，与 load_memories 一致
+        if isinstance(e, dict):
+            out.append(e)
+    return out
+
+
+def _row_merge(b, o, t, rel, key):
+    """同键三路取舍（jsonl 行级，永不抛冲突）：
+
+    并集哲学 + 字段级融合；唯一语义冲突字段 text 双方都改时取 ts 更新者
+    （自动取舍，记入返回值 auto），保证合并永不因记忆格式阻塞。
+    """
+    if o == t:
+        return o, None
+    if o is None:
+        return t, None
+    if t is None:
+        return o, None
+    if b and o == b:
+        return t, None
+    if b and t == b:
+        return o, None
+    merged, auto = dict(o), None
+    for f in set(o) | set(t):
+        if f not in o:
+            merged[f] = t[f]
+            continue
+        if f not in t:
+            continue  # o 已含
+        ov, tv = o[f], t[f]
+        if ov == tv:
+            continue
+        bv = b.get(f) if isinstance(b, dict) else None
+        if bv is not None and ov == bv:
+            merged[f] = tv
+            continue
+        if bv is not None and tv == bv:
+            continue
+        if f == "text":  # 语义冲突：取 ts 更新的一方（确定性方向）
+            merged = t if _ts_epoch(t.get("ts")) > _ts_epoch(o.get("ts")) else o
+            auto = f
+            break
+        if f in ("tags", "entities", "relations") and isinstance(ov, list) and isinstance(tv, list):
+            merged[f] = list(dict.fromkeys(list(ov) + list(tv)))  # 元数据并集
+            continue
+        if f == "ts":
+            merged[f] = max(ov, tv)
+            continue
+        if f in ("id",):
+            continue
+        try:  # importance 等数值冲突取较高
+            merged[f] = ov if int(ov) >= int(tv) else tv
+        except Exception:
+            merged[f] = ov
+    return merged, auto
+
+
+def _merge_jsonl_text(base, ours, theirs, strategy):
+    """memory.jsonl 行级三路合并。
+
+    修复历史撕裂：jsonl 既非 .md 也非 .json，旧实现落入标量比较，
+    两分支各自新增过记忆即整文件冲突。现改为：按主键（记忆 id）三方比对——
+    任一分支保留的键并入（记忆不丢）；同键仅一方改动取改动方；
+    同键双方都改走字段级融合，text 冲突自动取 ts 新者。
+    返回 (合并文本, 自动取舍计数)。"""
+    def parse(t):
+        return {_jsonl_key(e, json.dumps(e, ensure_ascii=False)): e for e in _parse_jsonl_lines(t)}
+
+    bm, om, tm = parse(base), parse(ours), parse(theirs)
+    keys, seen = [], set()
+    for src in (bm, om, tm):
+        for k in src:
+            if k not in seen:
+                seen.add(k)
+                keys.append(k)
+    out_lines, auto_n = [], 0
+    for k in keys:
+        o, t = om.get(k), tm.get(k)
+        if o is None and t is None:
+            continue  # 两侧都删除
+        row, auto = _row_merge(bm.get(k), o, t, "", k)
+        if auto:
+            auto_n += 1
+        out_lines.append(json.dumps(row, ensure_ascii=False))
+    text = "\n".join(out_lines)
+    return (text + "\n") if out_lines else "", auto_n
+
+
 def _merge_file(rel: str, base_val, ours_val, theirs_val, strategy):
-    """三路合并单个文件；日志走行级，JSON 走字段级，其余走标量。"""
+    """三路合并单个文件；记忆 jsonl 走行级智能合并，日志(.md)走行级并集，
+    JSON 走字段级，其余走标量。"""
     if ours_val is None:
         return theirs_val
     if theirs_val is None:
@@ -1481,6 +1727,11 @@ def _merge_file(rel: str, base_val, ours_val, theirs_val, strategy):
     if ours_val == theirs_val:
         return ours_val
     name = Path(rel).name
+    if rel.endswith(".jsonl"):
+        text, auto_n = _merge_jsonl_text(base_val, ours_val, theirs_val, strategy)
+        if auto_n:
+            _MERGE_AUTO_CTX["jsonl_auto"] += auto_n
+        return text
     if name.endswith(".md") and ("memories" in rel or "thinking_log" in rel):
         return "\n".join(_merge_md_lines(
             base_val.splitlines() if base_val else [],
@@ -1655,19 +1906,36 @@ def cmd_merge(args) -> int:
             out_rel.parent.mkdir(parents=True, exist_ok=True)
             out_rel.write_bytes(val or b"") if val is not None else None
 
-        # 收尾：manifest / 血缘 / 合并史
+        # 收尾：manifest / 血缘续链 / 合并史
         man = load_json(out / "manifest.json", {})
         man["fingerprint"] = compute_fingerprint(man)
         save_json(out / "manifest.json", man)
-        save_json(out / ".lineage.json", {})
+        # 血缘续链（原为空 {} 导致合并结果断链，无法再作为分支继续演化）：
+        # 继承双亲及其祖先版本，合并结果后续 archive 时 snapshot_meta 会携带
+        # 完整祖先链，再次分叉/合体可继续以本次双亲为 LCA。
+        _merge_anc = set()
+        for meta in (a_meta, b_meta):
+            for x in (meta.get("ancestors") or []):
+                if str(x).lstrip("-").isdigit():
+                    _merge_anc.add(int(x))
+        for v in (a_meta.get("version"), b_meta.get("version")):
+            if v is not None and str(v).lstrip("-").isdigit():
+                _merge_anc.add(int(v))
+        save_json(out / ".lineage.json", {
+            "merged_from": {"a": a_meta.get("version"), "b": b_meta.get("version"),
+                            "lca": lca_v, "at": now_iso()},
+            "ancestors": sorted(_merge_anc, reverse=True),
+        })
 
         merge_log = load_json(out / "merge_log.json", {"merges": []})
+        _jsonl_auto = int(_MERGE_AUTO_CTX.get("jsonl_auto") or 0)
         merge_log["merges"].append({
             "merged_at": now_iso(),
             "a": a_path.name, "a_version": a_meta.get("version"),
             "b": b_path.name, "b_version": b_meta.get("version"),
             "lca": lca_v, "strategy": args.strategy,
             "conflicts": [c["id"] for c in conflicts],
+            "jsonl_auto": _jsonl_auto,
             "brain_id": man.get("brain_id"),
         })
         save_json(out / "merge_log.json", merge_log)
@@ -1675,7 +1943,7 @@ def cmd_merge(args) -> int:
         evo = load_json(out / "evolution.json", {})
         evo.setdefault("adopted", []).append({
             "id": f"merge-{now_compact()}", "date": now_iso(),
-            "implemented": f"分支合并: {a_path.name} × {b_path.name}（LCA={lca_v or '无'}，冲突 {len(conflicts)} 条）",
+            "implemented": f"分支合并: {a_path.name} × {b_path.name}（LCA={lca_v or '无'}，冲突 {len(conflicts)} 条，记忆行自动取舍 {_jsonl_auto} 条）",
         })
         save_json(out / "evolution.json", evo)
 
@@ -1685,10 +1953,13 @@ def cmd_merge(args) -> int:
             print(f"  冲突 {len(conflicts)} 条待裁决: python brainkit.py merge-resolve <id> --keep ours|theirs|both|custom --dir {out}")
         else:
             print(f"[合并完成] 无冲突。{out}")
+        if _jsonl_auto:
+            print(f"  记忆行自动取舍 {_jsonl_auto} 条（同 id 双方均改文本时取 ts 更新者）")
         print(f"  大脑ID不变: {man.get('brain_id')}  指纹已按合并结果重算")
         return 0
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
+        _MERGE_AUTO_CTX["jsonl_auto"] = 0
 
 
 def _safe_str(v) -> str:
@@ -1726,6 +1997,13 @@ def cmd_merge_resolve(args) -> int:
         val = (hit["ours"] + "\n" + hit["theirs"]) if hit["ours"] else hit["theirs"]
     else:
         val = args.value
+
+    # jsonl 整文件冲突只会来自旧版合并引擎（新版走行级智能合并，不再产生）；
+    # 冲突样本已被 _safe_str 截断，整文件覆盖会毁掉记忆库 → 拒绝并给出出路。
+    if hit["file"].endswith(".jsonl"):
+        print("[拒绝] 该冲突是旧版合并遗留的 jsonl 整文件冲突，无法安全裁决。", file=sys.stderr)
+        print("       请人工处理该文件；或删除冲突后用新版（行级合并）重新 merge。", file=sys.stderr)
+        return 1
 
     target = BRAIN_DIR / hit["file"]
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1788,6 +2066,8 @@ def cmd_status(args) -> int:
     versions = sorted(ARCHIVE_DIR.glob("brain_v*.whale")) if ARCHIVE_DIR.exists() else []
     conflicts = load_json(MERGE_CONFLICT_FILE, {})
     open_conflicts = len(conflicts.get("conflicts", [])) if conflicts else 0
+    sm = load_json(BRAIN_DIR / "self_model.json", {})
+    open_decs = sum(1 for d in list_decisions(limit=500) if d.get("status") == "open")
 
     print("=== 鲸语大脑 · 状态 ===")
     print(f"  大脑ID   : {m['brain_id']}")
@@ -1796,11 +2076,14 @@ def cmd_status(args) -> int:
     print(f"  密钥     : {'✓ 免密已启用（' + str(m.get('pubkey_fingerprint', '?')) + '）' if _keyring_ready() else '未启用（keyring-setup）'}")
     print(f"  记忆条目 : {mem_count} 份（memories/）")
     print(f"  思考日志 : {think_files} 天（thinking_log/）")
+    print(f"  自我模型 : {sm.get('source') or 'template'} 源（校准于 {str(sm.get('calibrated_at') or '—')[:16]}）")
     print(f"  心跳     : 上次挂载 {hb.get('last_mount') or '从未'}")
     print(f"            上次卸载 {hb.get('last_unmount') or '从未'}")
     print(f"  断点     : {hb.get('resume_hint') or '无'}")
     if open_conflicts:
         print(f"  待裁决   : {open_conflicts} 条冲突（merge-resolve）")
+    if open_decs:
+        print(f"  待回执   : {open_decs} 条决策（decision resolve）")
     lineage = load_json(LINEAGE_FILE, {})
     if lineage:
         print(f"  血缘     : {lineage}")
@@ -1903,6 +2186,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--outcome", help="resolve: 实际结果")
     sp.add_argument("--status", choices=["kept", "reversed"], default="kept", help="resolve: 维持/反转")
     sp.set_defaults(func=cmd_decision)
+
+    sp = sub.add_parser("evolution", help="演化账本：add / list（大脑自身能力演进史；与运行时 self_evolve 双轨）")
+    sp.add_argument("evo_cmd", choices=["add", "list"])
+    sp.add_argument("title", nargs="?", help="add: 提案/变更标题")
+    sp.add_argument("--kind", choices=["adopted", "proposed"], default="adopted", help="add: adopted=已采纳（默认）/ proposed=提议中")
+    sp.add_argument("--note", help="add: 实现说明（adopted 时）")
+    sp.set_defaults(func=cmd_evolution)
 
     sp = sub.add_parser("archive", help="生成快照 brain_v{n}.whale（默认免密加密）")
     sp.add_argument("--passphrase", help="额外附上口令包裹（fallback 解密路径）")
