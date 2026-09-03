@@ -214,10 +214,15 @@ def test_all_split_tools_in_all_six_layers():
 
 
 def test_fetch_blocked_alias_impl():
+    """P2-4：schema 名访问路径 dc.fetch_blocked 与 CALL_MAP 实现同一对象；
+    _run_fetch_blocked 旧路径保留。"""
     assert "fetch_blocked" in dc.TOOL_CALL_MAP
     impl = dc.TOOL_CALL_MAP["fetch_blocked"]
     assert impl.__module__ == "agent_tools.tool_web"
     assert hasattr(dc, "_run_fetch_blocked"), "旧路径 dc._run_fetch_blocked 必须保留"
+    assert hasattr(dc, "fetch_blocked"), "P2-4: 工具名路径 dc.fetch_blocked 必须存在"
+    assert dc.fetch_blocked is impl, "dc.fetch_blocked 必须与 TOOL_CALL_MAP 实现同一对象"
+    assert dc.fetch_blocked is dc._run_fetch_blocked, "别名与实现须同一函数对象"
     out = impl("")
     assert "URL" in out and "http" in out
 

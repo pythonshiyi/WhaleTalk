@@ -1519,4 +1519,10 @@ def _run_fetch_blocked(url, proxy=None, **kwargs):
     return _fetch_blocked_impl(url, proxy)
 
 
-__all__ = ['_run_fetch_blocked', 'fetch_url', 'download_file', 'search_web', 'search_github', 'search_realtime', 'browser_navigate', 'web_screenshot', 'net_diagnose', 'fetch_url_smart', 'rss_fetch', 'webdav', 'call_api', 'track_web']
+# P2-4：schema 名别名 —— fetch_blocked 与模块名保留字冲突，实现函数用 _run_fetch_blocked；
+# 显式别名让「按工具名访问」路径（dc.fetch_blocked / agent_tools.fetch_blocked）恢复成立，
+# 与其余 134 个工具 dc.<tool_name> 形态一致；TOOL_CALL_MAP 仍指向同一函数对象。
+fetch_blocked = _run_fetch_blocked
+
+
+__all__ = ['fetch_blocked', '_run_fetch_blocked', 'fetch_url', 'download_file', 'search_web', 'search_github', 'search_realtime', 'browser_navigate', 'web_screenshot', 'net_diagnose', 'fetch_url_smart', 'rss_fetch', 'webdav', 'call_api', 'track_web']
