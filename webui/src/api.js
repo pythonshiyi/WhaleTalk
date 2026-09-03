@@ -108,6 +108,67 @@ const REQUEST_TIMEOUT = 15000;
 
 import { silentWarn } from "./quiet.js";
 
+// ── SSR/测试安全层（P2-3）─────────────────────────────
+// api.js 被组件 import，node/SSR 环境没有 localStorage/location/history：
+// 一切浏览器全局访问收敛到下方 helper，模块 import 零副作用、函数级降级。
+// localStorage 不可用时退化为内存 Map——token 仍在请求期有效，仅不跨刷新持久化。
+const _memStore = new Map();
+
+/** @param {string} k @returns {string} */
+function _lsGet(k) {
+  try {
+    if (typeof localStorage === "undefined") return _memStore.get(k) || "";
+    return localStorage.getItem(k) || "";
+  } catch {
+    return _memStore.get(k) || "";
+  }
+}
+
+/** @param {string} k @param {string} v */
+function _lsSet(k, v) {
+  try {
+    if (typeof localStorage === "undefined") {
+      _memStore.set(k, v);
+      return;
+    }
+    localStorage.setItem(k, v);
+  } catch {
+    _memStore.set(k, v);
+  }
+}
+
+/** @param {string} k */
+function _lsDel(k) {
+  try {
+    if (typeof localStorage === "undefined") {
+      _memStore.delete(k);
+      return;
+    }
+    localStorage.removeItem(k);
+  } catch {
+    _memStore.delete(k);
+  }
+}
+
+/** @returns {{search:string, pathname:string}|null} 非浏览器环境返回 null */
+function _winLoc() {
+  try {
+    if (typeof location === "undefined") return null;
+    return { search: location.search, pathname: location.pathname };
+  } catch {
+    return null;
+  }
+}
+
+/** @param {string} url 静默 replaceState（SSR/隐私模式下 noop） */
+function _histReplace(url) {
+  try {
+    if (typeof history !== "undefined") history.replaceState(null, "", url);
+  } catch {
+    /* noop */
+  }
+}
+
 function getBase() {
   // 生产（api_server 同源）与开发（vite proxy → 8745）统一相对路径（P2-2），
   // 无端口硬编码：dev/prod 拓扑一致。
@@ -118,13 +179,14 @@ function getBase() {
 function getToken() {
   let t = "";
   try {
-    t = localStorage.getItem(TOKEN_KEY) || "";
+    t = _lsGet(TOKEN_KEY);
     if (!t) {
-      const m = location.search.match(/[?&]token=([^&]+)/);
+      const loc = _winLoc();
+      const m = loc && loc.search.match(/[?&]token=([^&]+)/);
       if (m) {
         t = decodeURIComponent(m[1]);
-        localStorage.setItem(TOKEN_KEY, t);
-        history.replaceState(null, "", location.pathname);
+        _lsSet(TOKEN_KEY, t);
+        if (loc) _histReplace(loc.pathname);
       }
     }
   } catch (e) { silentWarn(e, "api"); }
@@ -141,7 +203,7 @@ async function _selfFetchToken() {
       const tj = await tr.json();
       if (tj.token) {
         try {
-          localStorage.setItem(TOKEN_KEY, tj.token);
+          _lsSet(TOKEN_KEY, tj.token);
         } catch (e) { silentWarn(e, "api"); }
         return tj.token;
       }
@@ -166,7 +228,7 @@ export async function checkBackend() {
     if (r.status === 401) {
       // token 缺失或失效：自取新 token 重试
       try {
-        localStorage.removeItem(TOKEN_KEY);
+        _lsDel(TOKEN_KEY);
       } catch (e) { silentWarn(e, "api"); }
       token = await _selfFetchToken();
       r = await tryHealth(token);
@@ -191,7 +253,7 @@ export async function probeBackendHealth() {
     let token = getToken();
     let r = await tryHealth(token);
     if (r.status === 401) {
-      try { localStorage.removeItem(TOKEN_KEY); } catch (e) { silentWarn(e, "api"); }
+      try { _lsDel(TOKEN_KEY); } catch (e) { silentWarn(e, "api"); }
       token = await _selfFetchToken();
       r = await tryHealth(token);
     }
@@ -270,7 +332,7 @@ async function api(path, opts = {}) {
   if (r.status === 401) {
     // token 缺失/失效（如启动时预取早于 checkBackend 拿到 token）：自取后重试一次
     try {
-      localStorage.removeItem(TOKEN_KEY);
+      _lsDel(TOKEN_KEY);
     } catch (e) { silentWarn(e, "api"); }
     const token = await _selfFetchToken();
     if (token) r = await attempt(token);
@@ -485,6 +547,47 @@ export async function getPluginSkills() {
   return d.skills || [];
 }
 
+// ── 插件中心（画廊 / 市场 / 工坊）─────────────────────
+
+/** @returns {Promise<{installed?:Array<Object>, gallery?:Array<Object>}>} 已装插件与画廊 */
+export async function getPlugins() {
+  return api("/v1/plugins");
+}
+
+/** @param {string} name @returns {Promise<Object>} 插件详情 */
+export async function getPluginDetail(name) {
+  return api(`/v1/plugins/${encodeURIComponent(name)}`);
+}
+
+/** @param {string} name @param {"install"|"uninstall"|"enable"|"disable"} action
+ * @returns {Promise<{ok?:boolean, error?:string}>} */
+export async function pluginAction(name, action) {
+  return api("/v1/plugins", { method: "POST", body: JSON.stringify({ name, action }) });
+}
+
+/** @returns {Promise<{plugins?:Array<Object>, source?:string, error?:string}>} 在线市场索引 */
+export async function getPluginMarket() {
+  return api("/v1/plugin_market");
+}
+
+/** @param {string} name @returns {Promise<{ok?:boolean, error?:string}>} 校验并安装市场插件 */
+export async function installMarketPlugin(name) {
+  return api("/v1/plugin_market/install", { method: "POST", body: JSON.stringify({ name }) });
+}
+
+/** AI 插件设计工坊：生成插件。
+ * @param {{description:string, name?:string, type?:string}} spec
+ * @returns {Promise<{plugin?:Object, error?:string}>} */
+export async function pluginStudioGenerate(spec) {
+  return api("/v1/plugin_studio/generate", { method: "POST", body: JSON.stringify(spec) });
+}
+
+/** AI 插件设计工坊：校验并安装。
+ * @param {Object} plugin @returns {Promise<{ok?:boolean, error?:string}>} */
+export async function pluginStudioInstall(plugin) {
+  return api("/v1/plugin_studio/install", { method: "POST", body: JSON.stringify({ plugin }) });
+}
+
 // ── 目录与文件 ───────────────────────────────────────
 
 /** @returns {Promise<{path:string, entries?:Array<{name:string, type:string, size?:number}>}>} 当前工作目录 */
@@ -546,6 +649,10 @@ export async function applyEvolution(name) {
 export async function ignoreEvolution(name) {
   return api("/v1/evolutions/ignore", { method: "POST", body: JSON.stringify({ name }) });
 }
+/** @param {string} name @returns {Promise<Object>} 单个进化提案详情（差异预览） */
+export async function getEvolutionDetail(name) {
+  return api(`/v1/evolutions/${encodeURIComponent(name)}`);
+}
 /** @returns {Promise<Object>} 审批历史 */
 export async function getApprovals() {
   return api("/v1/approvals");
@@ -597,6 +704,48 @@ export async function getBrain() {
 export async function brainAction(payload) {
   return api("/v1/brain", { method: "POST", body: JSON.stringify(payload) });
 }
+
+/** @param {string} [query] @param {number} [limit] @returns {Promise<{items:Array<any>}>} 大脑记忆列表（支持本地检索） */
+export async function listBrainMemories(query = "", limit = 100) {
+  const q = query ? `&query=${encodeURIComponent(query)}` : "";
+  return api(`/v1/brain/memories?limit=${limit}${q}`);
+}
+
+/** 大脑记忆增删改（action: add/update/delete）。
+ * @param {{action:"add"|"update"|"delete", id?:string, [k:string]:any}} payload
+ * @returns {Promise<{ok?:boolean}>} */
+export async function brainMemoryAction(payload) {
+  return api("/v1/brain/memory", { method: "POST", body: JSON.stringify(payload) });
+}
+
+/** @returns {Promise<{facts?:Array<any>}>} 通用长期记忆（大脑未初始化时的回退源） */
+export async function getMemory() {
+  return api("/v1/memory");
+}
+
+// ── 权限 / 任务 / 态势 ───────────────────────────────
+
+/** @returns {Promise<Object>} 权限与黑名单配置 */
+export async function getPermissions() {
+  return api("/v1/permissions");
+}
+
+/** @param {Object} patch 权限增量（blocked_dirs/shell_blocklist/network_blocklist/approval_actions/blocklist_enabled）
+ * @returns {Promise<{ok?:boolean}>} */
+export async function savePermissions(patch) {
+  return api("/v1/permissions", { method: "POST", body: JSON.stringify(patch) });
+}
+
+/** @returns {Promise<{templates?:Array<Object>, playground?:Array<Object>}>} 任务模板与试玩 */
+export async function getTasks() {
+  return api("/v1/tasks");
+}
+
+/** @returns {Promise<Object>} 工作台态势（单一事实源：usage/system/recent/processes/health） */
+export async function getSituation() {
+  return api("/v1/situation");
+}
+
 /** @returns {Promise<Object>} 依赖安装状态（软核心静默安装进度） */
 export async function getDeps() {
   return api("/v1/deps");
@@ -667,6 +816,180 @@ export async function installMany(keys, handlers) {
       else if (ev.type === "error") handlers.onError?.(ev.message);
     }
   }
+}
+
+// ── 文件系统（树/产物操作）────────────────────────────
+
+/** @param {string} [dir] 指定目录时列子目录，缺省返回根/最近产物
+ * @returns {Promise<any>} 后端文件树原始结构 */
+export async function listFiles(dir) {
+  return api(dir ? `/v1/files?dir=${encodeURIComponent(dir)}` : "/v1/files");
+}
+
+/** @param {string} path @returns {Promise<any>} 用系统程序打开 */
+export async function openFile(path) {
+  return api("/v1/files/open", { method: "POST", body: JSON.stringify({ path }) });
+}
+
+/** @param {string} path @returns {Promise<any>} 打开所在文件夹 */
+export async function openDir(path) {
+  return api("/v1/files/opendir", { method: "POST", body: JSON.stringify({ path }) });
+}
+
+/** @param {string} path @returns {Promise<{content?:string, truncated?:boolean, error?:string}>} 读文件正文 */
+export async function readFile(path) {
+  return api("/v1/files/read", { method: "POST", body: JSON.stringify({ path }) });
+}
+
+// ── 进程管理 ─────────────────────────────────────────
+
+/** @returns {Promise<Array<any>>} 进程列表 */
+export async function listProcesses() {
+  return api("/v1/processes");
+}
+
+/** @param {string} command @returns {Promise<any>} 启动进程 */
+export async function startProcess(command) {
+  return api("/v1/processes/start", { method: "POST", body: JSON.stringify({ command }) });
+}
+
+/** @param {string} name @returns {Promise<any>} 停止进程 */
+export async function stopProcess(name) {
+  return api("/v1/processes/stop", { method: "POST", body: JSON.stringify({ name }) });
+}
+
+// ── 工具 schema / 调试调用 ───────────────────────────
+
+/** @param {string} name @returns {Promise<any>} 工具 schema（含 parameters） */
+export async function getToolSchema(name) {
+  return api(`/v1/tools/${encodeURIComponent(name)}`);
+}
+
+/** @param {string} name @param {Object} [args] @returns {Promise<{result?:any, error?:string}>} 直接调用工具 */
+export async function invokeTool(name, args = {}) {
+  return api(`/v1/tools/${encodeURIComponent(name)}/invoke`, { method: "POST", body: JSON.stringify({ args }) });
+}
+
+// ── 配置 ─────────────────────────────────────────────
+
+/** @param {Object} patch 配置增量（与 GET /v1/config 同字段集）
+ * @returns {Promise<{ok:boolean, error?:string}>} */
+export async function saveConfig(patch) {
+  return api("/v1/config", { method: "POST", body: JSON.stringify(patch) });
+}
+
+/** @returns {Promise<any>} 恢复默认配置（带副作用，仅 POST） */
+export async function resetConfig() {
+  return api("/v1/config/reset", { method: "POST", body: JSON.stringify({}) });
+}
+
+// ── 方案 / 角色 / 模型 ───────────────────────────────
+
+/** @returns {Promise<Object>} 保存的方案列表 */
+export async function getProfiles() {
+  return api("/v1/profiles");
+}
+
+/** @param {string} action save | apply | delete @param {string} name @returns {Promise<any>} */
+export async function profileAction(action, name) {
+  return api("/v1/profiles", { method: "POST", body: JSON.stringify({ action, name }) });
+}
+
+/** @returns {Promise<Object>} 角色定义 */
+export async function getRoles() {
+  return api("/v1/roles");
+}
+
+/** @param {Object} roles @returns {Promise<any>} */
+export async function saveRoles(roles) {
+  return api("/v1/roles", { method: "POST", body: JSON.stringify({ roles }) });
+}
+
+/** @returns {Promise<Array<string>>} 可用模型名 */
+export async function getModels() {
+  return api("/v1/models");
+}
+
+// ── TTS / 声音 ───────────────────────────────────────
+
+/** @returns {Promise<Object>} 可用声音列表 */
+export async function getTtsVoices() {
+  return api("/v1/tts/voices");
+}
+
+/** @param {string} voice @returns {Promise<{ok?:boolean, message?:string}>} 下载 Piper 语音模型 */
+export async function downloadPiperVoice(voice) {
+  return api("/v1/tts/download_piper", { method: "POST", body: JSON.stringify({ voice }) });
+}
+
+// ── 外部服务 / 备份 / 清理 ───────────────────────────
+
+/** @returns {Promise<Object>} 外部服务配置（敏感字段后端加密） */
+export async function getServices() {
+  return api("/v1/services");
+}
+
+/** @param {Object} svc webhooks/im/db/email/agent_mail/image/inbound 分组
+ * @returns {Promise<{ok?:boolean}>} */
+export async function saveServices(svc) {
+  return api("/v1/services", { method: "POST", body: JSON.stringify(svc) });
+}
+
+/** @returns {Promise<{backups:Array<any>}>} 备份列表 */
+export async function listBackups() {
+  return api("/v1/backup");
+}
+
+/** @returns {Promise<{ok?:boolean}>} 立即备份 */
+export async function createBackup() {
+  return api("/v1/backup", { method: "POST", body: JSON.stringify({ action: "create" }) });
+}
+
+/** @param {string} name @returns {Promise<{ok?:boolean}>} 删除备份 */
+export async function deleteBackup(name) {
+  return api("/v1/backup", { method: "POST", body: JSON.stringify({ action: "delete", name }) });
+}
+
+/** @returns {Promise<{update?:boolean, latest?:string}>} 版本更新检查 */
+export async function getUpdateCheck() {
+  return api("/v1/update/check");
+}
+
+/** @param {Array<string>} items @returns {Promise<{ok?:boolean, removed?:Array<string>}>} 清理数据 */
+export async function cleanupItems(items) {
+  return api("/v1/cleanup", { method: "POST", body: JSON.stringify({ items }) });
+}
+
+// ── 流程 / 检查点 / 知识 ─────────────────────────────
+
+/** @returns {Promise<{workflows?:Object}>} 流程定义 */
+export async function getWorkflows() {
+  return api("/v1/workflows");
+}
+
+/** @param {Object} workflows @returns {Promise<{ok?:boolean}>} */
+export async function saveWorkflows(workflows) {
+  return api("/v1/workflows", { method: "POST", body: JSON.stringify({ workflows }) });
+}
+
+/** @returns {Promise<Object>} 检查点状态 */
+export async function getCheckpoint() {
+  return api("/v1/checkpoint");
+}
+
+/** @returns {Promise<{ok?:boolean}>} 保存检查点 */
+export async function saveCheckpoint() {
+  return api("/v1/checkpoint", { method: "POST", body: JSON.stringify({}) });
+}
+
+/** @returns {Promise<Object>} 知识库列表 */
+export async function getKnowledge() {
+  return api("/v1/knowledge");
+}
+
+/** @param {string} query @param {number} [top_k] @returns {Promise<{hits?:Array<any>}>} 知识库语义检索（带引用源） */
+export async function searchKnowledge(query, top_k = 5) {
+  return api("/v1/knowledge/search", { method: "POST", body: JSON.stringify({ query, top_k }) });
 }
 
 export { getToken, getBase, api };

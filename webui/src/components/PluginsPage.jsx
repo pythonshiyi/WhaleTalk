@@ -1,21 +1,6 @@
 import React from "react";
 import * as api from "../api.js";
 
-const apiGet = async (path) => {
-  try {
-    return await api.api(path);
-  } catch {
-    return null;
-  }
-};
-const apiPost = async (path, body) => {
-  try {
-    return await api.api(path, { method: "POST", body: JSON.stringify(body) });
-  } catch {
-    return null;
-  }
-};
-
 // ── AI 插件设计工坊 ────────────────────────────────
 function StudioModal({ onClose, onInstalled }) {
   const [desc, setDesc] = React.useState("");
@@ -33,7 +18,7 @@ function StudioModal({ onClose, onInstalled }) {
     setOkMsg("");
     setPluginJson("");
     try {
-      const d = await apiPost("/v1/plugin_studio/generate", { description: desc, name, type: ptype });
+      const d = await api.pluginStudioGenerate({ description: desc, name, type: ptype }).catch(() => null);
       if (d && d.plugin) {
         setPluginJson(JSON.stringify(d.plugin, null, 2));
         setOkMsg("✅ AI 已生成，可编辑后安装");
@@ -59,7 +44,7 @@ function StudioModal({ onClose, onInstalled }) {
         setBusy(false);
         return;
       }
-      const d = await apiPost("/v1/plugin_studio/install", { plugin });
+      const d = await api.pluginStudioInstall(plugin).catch(() => null);
       if (d && d.ok) {
         setOkMsg(`✅ 已安装「${d.name}」`);
         onInstalled && onInstalled();
@@ -142,7 +127,7 @@ function DetailOverlay({ name, onClose }) {
   const [d, setD] = React.useState(null);
   React.useEffect(() => {
     let alive = true;
-    apiGet(`/v1/plugins/${encodeURIComponent(name)}`).then((x) => alive && x && setD(x));
+    api.getPluginDetail(name).then((x) => alive && x && setD(x)).catch(() => {});
     return () => {
       alive = false;
     };
@@ -224,7 +209,7 @@ export default function PluginsPage({ onApply }) {
   const [err, setErr] = React.useState("");
 
   const load = async () => {
-    const d = await apiGet("/v1/plugins");
+    const d = await api.getPlugins().catch(() => null);
     if (d) {
       setInstalled(d.installed || []);
       setGallery(d.gallery || []);
@@ -232,7 +217,7 @@ export default function PluginsPage({ onApply }) {
     } else {
       setErr("插件列表加载失败：后端未连接，请启动服务后刷新");
     }
-    const m = await apiGet("/v1/plugin_market");
+    const m = await api.getPluginMarket().catch(() => null);
     if (m && Array.isArray(m.plugins)) {
       setMarket(m.plugins);
       setMarketInfo({ source: m.source, error: m.error, signature_enforced: m.signature_enforced, count: m.count });
@@ -248,7 +233,7 @@ export default function PluginsPage({ onApply }) {
   const marketInstall = async (name) => {
     setBusy(name);
     try {
-      const d = await apiPost("/v1/plugin_market/install", { name });
+      const d = await api.installMarketPlugin(name).catch(() => null);
       if (d && d.ok) {
         setTip(`✅ 已安装「${d.name}」（校验：${d.verified || "sha256"}${d.tier ? " · " + (TIER_META[d.tier]?.label || d.tier) : ""}）`);
         setTimeout(() => setTip(""), 2600);
@@ -265,7 +250,7 @@ export default function PluginsPage({ onApply }) {
   const act = async (name, action) => {
     setBusy(name);
     try {
-      const d = await apiPost("/v1/plugins", { name, action });
+      const d = await api.pluginAction(name, action).catch(() => null);
       if (d && d.ok) {
         setTip(`${action === "install" ? "已安装" : action === "uninstall" ? "已卸载" : action === "enable" ? "已启用" : "已停用"}「${name}」`);
         setTimeout(() => setTip(""), 2000);

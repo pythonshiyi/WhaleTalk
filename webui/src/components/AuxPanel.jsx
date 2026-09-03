@@ -68,7 +68,7 @@ function FilesTab({ onInject }) {
   const [busyPath, setBusyPath] = React.useState(null);
 
   React.useEffect(() => {
-    api.api("/v1/files").then((d) => {
+    api.listFiles().then((d) => {
       if (d) setRoots(d);
       else setErr("文件列表加载失败：后端未连接");
     }).catch(() => setErr("文件列表加载失败：后端未连接"));
@@ -78,7 +78,7 @@ function FilesTab({ onInject }) {
     if (!path || busyPath) return;
     setBusyPath(path);
     try {
-      await api.api("/v1/files/open", { method: "POST", body: JSON.stringify({ path }) });
+      await api.openFile(path);
     } catch (e) {
       setErr(e.message || "打开失败");
       setTimeout(() => setErr(""), 3000);
@@ -91,7 +91,7 @@ function FilesTab({ onInject }) {
     if (!path || busyPath) return;
     setBusyPath(path);
     try {
-      await api.api("/v1/files/opendir", { method: "POST", body: JSON.stringify({ path }) });
+      await api.openDir(path);
     } catch (e) {
       setErr(e.message || "打开文件夹失败");
       setTimeout(() => setErr(""), 3000);
@@ -106,7 +106,7 @@ function FilesTab({ onInject }) {
     if (next[path] && !children[path]) {
       setLoading((l) => ({ ...l, [path]: true }));
       try {
-        const d = await api.api(`/v1/files?dir=${encodeURIComponent(path)}`);
+        const d = await api.listFiles(path);
         if (d && d.entries) setChildren((c) => ({ ...c, [path]: d.entries }));
       } catch (e) { silentWarn(e, "AuxPanel"); }
       setLoading((l) => ({ ...l, [path]: false }));
@@ -192,7 +192,7 @@ function ProcessesTab({ onInject }) {
     let alive = true;
     const load = async () => {
       try {
-        const d = await api.api("/v1/processes");
+        const d = await api.listProcesses();
         if (!alive) return;
         setProcs(d.processes || {});
         setCurrent((c) => (c && d.processes[c] ? c : Object.keys(d.processes)[0] || null));
@@ -212,14 +212,14 @@ function ProcessesTab({ onInject }) {
   const stop = async () => {
     if (!current) return;
     try {
-      await api.api("/v1/processes/stop", { method: "POST", body: JSON.stringify({ name: current }) });
+      await api.stopProcess(current);
     } catch (e) { silentWarn(e, "AuxPanel"); }
   };
 
   const start = async () => {
     if (!cmd.trim()) return;
     try {
-      const r = await api.api("/v1/processes/start", { method: "POST", body: JSON.stringify({ command: cmd.trim() }) });
+      const r = await api.startProcess(cmd.trim());
       setCmd("");
     } catch (e) { silentWarn(e, "AuxPanel"); }
   };
@@ -309,7 +309,7 @@ function ParamsTab() {
     if (!draft || saving) return;
     setSaving(true);
     try {
-      const d = await api.api("/v1/config", { method: "POST", body: JSON.stringify(draft) });
+      const d = await api.saveConfig(draft);
       if (d && d.ok) {
         setCfg((c) => ({ ...c, ...draft }));
         if ("model" in draft) setCustomModel(!modelOptions.includes(draft.model));

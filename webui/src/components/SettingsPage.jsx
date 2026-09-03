@@ -4,20 +4,6 @@ import * as api from "../api.js";
 import { enqueueSpeak, invalidateVoiceConfig, playTestTone, enableVoiceInterrupt, disableVoiceInterrupt } from "../ttsUtil.js";
 
 import { silentWarn } from "../quiet.js";
-const apiGet = async (path) => {
-  try {
-    return await api.api(path);
-  } catch {
-    return null;
-  }
-};
-const apiPost = async (path, body) => {
-  try {
-    return await api.api(path, { method: "POST", body: JSON.stringify(body) });
-  } catch {
-    return null;
-  }
-};
 
 // ── 设置搜索：搜索词通过 Context 下发，Row / 大块按需过滤 ────────────
 const SearchCtx = React.createContext("");
@@ -88,11 +74,11 @@ function NumInput({ value, onChange, min, max, step }) {
 function ProfilesBlock({ onTip }) {
   const [data, setData] = React.useState(null);
   const [nameDraft, setNameDraft] = React.useState("");
-  const load = () => apiGet("/v1/profiles").then((d) => d && setData(d));
+  const load = () => api.getProfiles().catch(() => null).then((d) => d && setData(d));
   React.useEffect(() => { load(); }, []);
   if (!data) return null;
   const act = async (action, name) => {
-    const d = await apiPost("/v1/profiles", { action, name });
+    const d = await api.profileAction(action, name).catch(() => null);
     if (d && d.ok) {
       onTip(action === "apply" ? `✅ 已应用方案「${name}」` : action === "save" ? `✅ 已保存方案「${name}」` : `已删除方案「${name}」`);
       load();
@@ -127,7 +113,7 @@ function ProfilesBlock({ onTip }) {
 // ── 语音朗读设置（模式/语速/音量/音色/引擎/试听）──────
 function VoiceSettingsBlock({ cfg, saveField, onTip }) {
   const [voices, setVoices] = React.useState(null);
-  React.useEffect(() => { apiGet("/v1/tts/voices").then((d) => d && setVoices(d)); }, []);
+  React.useEffect(() => { api.getTtsVoices().catch(() => null).then((d) => d && setVoices(d)); }, []);
   const vc = { auto_mode: "off", rate: 0, volume: 100, voice: "", ...(cfg?.voice_config || {}) };
   const setV = (patch) => {
     invalidateVoiceConfig();
@@ -170,9 +156,9 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
               onClick={async () => {
                 setPiperBusy(true);
                 try {
-                  const d = await apiPost("/v1/tts/download_piper", { voice: vc.piper_voice || "zh_CN-chaowen-medium" });
+                  const d = await api.downloadPiperVoice(vc.piper_voice || "zh_CN-chaowen-medium").catch(() => null);
                   onTip((d && d.ok ? "✅ " : "❌ ") + (d?.message || "下载失败"));
-                  setTimeout(() => { onTip(""); apiGet("/v1/tts/voices").then((x) => x && setVoices(x)); }, 3200);
+                  setTimeout(() => { onTip(""); api.getTtsVoices().catch(() => null).then((x) => x && setVoices(x)); }, 3200);
                 } catch (e) { onTip("❌ 下载失败：" + e.message); setTimeout(() => onTip(""), 3000); }
                 setPiperBusy(false);
               }}
@@ -235,7 +221,7 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
 function ServicesTab({ cfg, onTip }) {
   const [svc, setSvc] = React.useState(null);
   React.useEffect(() => {
-    apiGet("/v1/services").then((d) => d && setSvc(d));
+    api.getServices().catch(() => null).then((d) => d && setSvc(d));
   }, []);
   if (!svc) return <div className="empty-tip">加载外部服务配置…</div>;
 
@@ -244,7 +230,7 @@ function ServicesTab({ cfg, onTip }) {
     setSvc((s) => ({ ...s, [group]: { ...(s[group] || {}), [key]: val } }));
 
   const save = async () => {
-    const r = await apiPost("/v1/services", {
+    const r = await api.saveServices({
       webhooks: svc.webhooks || {},
       im: svc.im || {},
       db: svc.db || {},
@@ -252,7 +238,7 @@ function ServicesTab({ cfg, onTip }) {
       agent_mail: svc.agent_mail || {},
       image: svc.image || {},
       inbound: svc.inbound || {},
-    });
+    }).catch(() => null);
     if (r && r.ok) onTip("外部服务已保存（敏感字段加密存储）");
   };
 
@@ -419,12 +405,12 @@ function BackupBlock() {
   const [list, setList] = React.useState(null);
   const [tip, setTip] = React.useState("");
   const load = async () => {
-    const d = await apiGet("/v1/backup");
+    const d = await api.listBackups().catch(() => null);
     if (d) setList(d.backups || []);
   };
   React.useEffect(() => { load(); }, []);
   const create = async () => {
-    const d = await apiPost("/v1/backup", { action: "create" });
+    const d = await api.createBackup().catch(() => null);
     if (d && d.ok) {
       setTip("备份完成");
       setTimeout(() => setTip(""), 2000);
@@ -433,7 +419,7 @@ function BackupBlock() {
   };
   const del = async (name) => {
     if (!window.confirm(`删除备份 ${name}？`)) return;
-    const d = await apiPost("/v1/backup", { action: "delete", name });
+    const d = await api.deleteBackup(name).catch(() => null);
     if (d && d.ok) { load(); }
   };
   return (
@@ -457,7 +443,7 @@ function BackupBlock() {
 function UpdateBlock() {
   const [info, setInfo] = React.useState(null);
   const check = async () => {
-    const d = await apiGet("/v1/update/check");
+    const d = await api.getUpdateCheck().catch(() => null);
     if (d) setInfo(d);
   };
   React.useEffect(() => { check(); }, []);
@@ -482,7 +468,7 @@ function CleanupBlock() {
   const doClean = async () => {
     if (!items.length) return;
     if (!window.confirm(`确认清理以下数据（不可恢复）？\n${items.join("、")}`)) return;
-    const d = await apiPost("/v1/cleanup", { items });
+    const d = await api.cleanupItems(items).catch(() => null);
     if (d && d.ok) {
       setTip(`已清理：${d.removed.join("、")}`);
       setTimeout(() => setTip(""), 2000);
@@ -533,7 +519,7 @@ function DepsBlock() {
   const [logs, setLogs] = React.useState({});
   const [showCoreOk, setShowCoreOk] = React.useState(false);
   const [msg, setMsg] = React.useState("");
-  const load = () => apiGet("/v1/deps").then((d) => { if (d) { setCore(d.core || []); setHeavy(d.heavy || []); } });
+  const load = () => api.getDeps().catch(() => null).then((d) => { if (d) { setCore(d.core || []); setHeavy(d.heavy || []); } });
   React.useEffect(() => { load(); }, []);
   if (!showBlock) return null;
 
@@ -694,12 +680,12 @@ function WorkflowsBlock() {
   const [name, setName] = React.useState("");
   const [steps, setSteps] = React.useState("");
   React.useEffect(() => {
-    apiGet("/v1/workflows").then((d) => d && setWfs(d.workflows || {}));
+    api.getWorkflows().catch(() => null).then((d) => d && setWfs(d.workflows || {}));
   }, []);
   if (!wfs) return <div className="empty-tip">加载流程…</div>;
 
   const save = async (data) => {
-    const d = await apiPost("/v1/workflows", { workflows: data });
+    const d = await api.saveWorkflows(data).catch(() => null);
     if (d && d.ok) setWfs(data);
   };
 
@@ -713,7 +699,7 @@ function WorkflowsBlock() {
 
   const run = async (n) => {
     try {
-      await api.api("/v1/tools/run_workflow/invoke", { method: "POST", body: JSON.stringify({ args: { name: n } }) });
+      await api.invokeTool("run_workflow", { name: n });
       alert("已触发流程执行（后台运行）");
     } catch (e) {
       alert(`执行失败：${e.message}`);
@@ -746,7 +732,7 @@ function WorkflowsBlock() {
 function CheckpointBlock() {
   const [cp, setCp] = React.useState(null);
   React.useEffect(() => {
-    apiGet("/v1/checkpoint").then((d) => d && setCp(d));
+    api.getCheckpoint().catch(() => null).then((d) => d && setCp(d));
   }, []);
   if (!cp) return <div className="empty-tip">加载检查点…</div>;
   const has = cp && (cp.name || cp.status || cp.pending);
@@ -757,7 +743,7 @@ function CheckpointBlock() {
           <div className="sched-line1"><b>📌 {cp.name}</b></div>
           <div className="sched-text">状态：{cp.status || ""} · 进度：{String(cp.pending || []).length} 条待办 · {cp.saved_at || ""}</div>
           <button className="msg-op" onClick={async () => {
-            const d = await apiPost("/v1/checkpoint", {});
+            const d = await api.saveCheckpoint().catch(() => null);
             if (d && d.ok) setCp({});
           }}>清除</button>
         </div>
@@ -772,7 +758,7 @@ function CheckpointBlock() {
 function KnowledgeBlock() {
   const [kb, setKb] = React.useState(null);
   React.useEffect(() => {
-    apiGet("/v1/knowledge").then((d) => d && setKb(d));
+    api.getKnowledge().catch(() => null).then((d) => d && setKb(d));
   }, []);
   if (!kb) return null;
   return (
@@ -790,7 +776,7 @@ function KnowledgeBlock() {
 function AuditBlock() {
   const [entries, setEntries] = React.useState([]);
   React.useEffect(() => {
-    apiGet("/v1/audit").then((d) => d && setEntries(d.entries || []));
+    api.getAudit().catch(() => null).then((d) => d && setEntries(d.entries || []));
   }, []);
   return (
     <div className="svc-actions" style={{ display: "block" }}>
@@ -831,10 +817,10 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
     let alive = true;
     (async () => {
       try {
-        const d = await apiGet("/v1/config");
-        const s = await apiGet("/v1/status");
-        const r = await apiGet("/v1/roles");
-        const m = await apiGet("/v1/models");
+        const d = await api.getConfig().catch(() => null);
+        const s = await api.getStatus().catch(() => null);
+        const r = await api.getRoles().catch(() => null);
+        const m = await api.getModels().catch(() => null);
         if (alive && d) {
           setCfg({ ...d, privacy_mode: s?.privacy ?? false });
           if (r?.roles) setRoles(r.roles);
@@ -907,7 +893,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
   const saveField = async (patch, silent = false) => {
     setCfg((c) => ({ ...c, ...patch }));
     try {
-      const d = await apiPost("/v1/config", patch);
+      const d = await api.saveConfig(patch).catch(() => null);
       if (d && d.ok && !silent) {
         setTip("已保存");
         setTimeout(() => setTip(""), 1500);
@@ -919,7 +905,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
   };
 
   const applyPreset = async (preset) => {
-    const d = await apiPost("/v1/config", preset.cfg);
+    const d = await api.saveConfig(preset.cfg).catch(() => null);
     if (d && d.ok) {
       setCfg((c) => ({ ...c, ...preset.cfg }));
       setTip(`已应用预设「${preset.name}」`);
@@ -929,7 +915,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
 
   const resetAll = async () => {
     if (!window.confirm("恢复全部默认配置？（API Key 会保留）")) return;
-    const d = await apiPost("/v1/config/reset", {});
+    const d = await api.resetConfig().catch(() => null);
     if (d && d.ok) {
       window.location.reload();
     }
@@ -1131,7 +1117,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                       <button className="msg-op" onClick={async () => {
                         const next = roles.filter((_, j) => j !== roles.indexOf(r));
                         setRoles(next);
-                        await apiPost("/v1/roles", { roles: next });
+                        await api.saveRoles(next).catch(() => null);
                       }}>✕</button>
                     </div>
                   ))}
@@ -1141,7 +1127,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                     </button>
                     <button className="confirm-btn confirm-primary" onClick={async () => {
                       const clean = roles.filter((r) => !["通用角色", "智能体", "翻译官", "代码评审专家", "面试官", "写作润色师", "心理咨询伙伴", "周报助手"].includes(r.name));
-                      const d = await apiPost("/v1/roles", { roles: clean });
+                      const d = await api.saveRoles(clean).catch(() => null);
                       if (d && d.ok) setTip("角色已保存");
                     }}>
                       💾 保存角色

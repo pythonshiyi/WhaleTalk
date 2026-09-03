@@ -5,21 +5,6 @@ import ToolTest from "./ToolTest.jsx";
 import EmptyState from "./EmptyState.jsx";
 
 import { silentWarn } from "../quiet.js";
-const apiGet = async (path) => {
-  try {
-    return await api.api(path);
-  } catch {
-    return null;
-  }
-};
-
-const apiPost = async (path, body) => {
-  try {
-    return await api.api(path, { method: "POST", body: JSON.stringify(body) });
-  } catch {
-    return null;
-  }
-};
 
 const DOMAINS = []; // 能力域以后端 /v1/abilities 为准（未加载时无数据，明确提示错误）
 
@@ -34,7 +19,7 @@ export function AbilitiesPage() {
   React.useEffect(() => {
     let alive = true;
     (async () => {
-      const d = await apiGet("/v1/abilities");
+      const d = await api.listAbilities().catch(() => null);
       if (!alive) return;
       if (d && d.domains) {
         setDomains(d.domains);
@@ -121,12 +106,12 @@ function KnowledgeBaseBlock() {
   const [kquery, setKquery] = React.useState("");
   const [khits, setKhits] = React.useState(null);
   const [kerr, setKerr] = React.useState("");
-  React.useEffect(() => { apiGet("/v1/knowledge").then((d) => d && setKb(d)).catch(() => {}); }, []);
+  React.useEffect(() => { api.getKnowledge().then((d) => d && setKb(d)).catch(() => {}); }, []);
   const doSearch = async () => {
     if (!kquery.trim()) return;
     setKerr("");
     try {
-      const d = await apiPost("/v1/knowledge/search", { query: kquery, top_k: 5 });
+      const d = await api.searchKnowledge(kquery, 5).catch(() => null);
       setKhits(d.hits || []);
       if (!d.hits || d.hits.length === 0) setKerr("知识库未命中相关内容（可先建立索引）");
     } catch (e) {
@@ -180,7 +165,7 @@ export function MemoryPage({ embedded }) {
 
   const load = React.useCallback(async (query) => {
     try {
-      const d = await apiGet(`/v1/brain/memories?limit=100${query ? "&query=" + encodeURIComponent(query) : ""}`);
+      const d = await api.listBrainMemories(query).catch(() => null);
       if (d && Array.isArray(d.items)) {
         setMemories(d.items);
         setErr("");
@@ -190,7 +175,7 @@ export function MemoryPage({ embedded }) {
     } catch (e) {
       // 大脑未初始化时回退到通用长期记忆
       try {
-        const d2 = await apiGet("/v1/memory");
+        const d2 = await api.getMemory().catch(() => null);
         if (d2 && d2.facts) {
           setMemories(
             d2.facts.map((f) => ({
@@ -220,7 +205,7 @@ export function MemoryPage({ embedded }) {
   const doUpdate = async (id, patch) => {
     setBusy(true);
     try {
-      await apiPost("/v1/brain/memory", { action: "update", id, ...patch });
+      await api.brainMemoryAction({ action: "update", id, ...patch }).catch(() => null);
       setEditingId(null);
       load(q);
     } catch (e) {
@@ -233,7 +218,7 @@ export function MemoryPage({ embedded }) {
     if (!window.confirm("删除这条记忆？")) return;
     setBusy(true);
     try {
-      await apiPost("/v1/brain/memory", { action: "delete", id });
+      await api.brainMemoryAction({ action: "delete", id }).catch(() => null);
       load(q);
     } catch (e) {
       setErr(e.message);
@@ -245,7 +230,7 @@ export function MemoryPage({ embedded }) {
     if (!addText.trim()) return;
     setBusy(true);
     try {
-      await apiPost("/v1/brain/memory", { action: "add", text: addText.trim(), type: "备忘", importance: 3 });
+      await api.brainMemoryAction({ action: "add", text: addText.trim(), type: "备忘", importance: 3 }).catch(() => null);
       setAddText("");
       setAdding(false);
       load(q);
@@ -311,7 +296,7 @@ export function MemoryPage({ embedded }) {
           onClick={async () => {
             setBusy(true);
             try {
-              const r = await apiPost("/v1/brain", { action: "consolidate" });
+              const r = await api.brainAction({ action: "consolidate" }).catch(() => null);
               alert(r?.message || "巩固完成");
               load(q);
             } catch (e) {
@@ -385,7 +370,7 @@ function BrainGoals() {
 
   const load = React.useCallback(async () => {
     try {
-      const d = await apiPost("/v1/brain", { action: "goals-list" });
+      const d = await api.brainAction({ action: "goals-list" }).catch(() => null);
       if (d && d.ok) setGoals((d.data?.goals || []).filter((g) => g.status === "active"));
     } catch (e) { silentWarn(e, "Pages"); }
   }, []);
@@ -393,7 +378,7 @@ function BrainGoals() {
 
   const act = async (action, payload) => {
     try {
-      await apiPost("/v1/brain", { action, ...payload });
+      await api.brainAction({ action, ...payload }).catch(() => null);
       load();
     } catch (e) { silentWarn(e, "Pages"); }
   };
@@ -513,7 +498,7 @@ export function PermissionsPage() {
   React.useEffect(() => {
     let alive = true;
     (async () => {
-      const d = await apiGet("/v1/permissions");
+      const d = await api.getPermissions().catch(() => null);
       if (alive && d) setPerms(d);
     })();
     return () => {
@@ -532,7 +517,7 @@ export function PermissionsPage() {
   const update = async (key, items) => {
     setBusy(true);
     try {
-      const d = await apiPost("/v1/permissions", { [key]: items });
+      const d = await api.savePermissions({ [key]: items }).catch(() => null);
       if (d && d.ok) {
         setPerms({ ...perms, [key]: items });
         setSavedTip("已保存到 permissions.json");
@@ -595,7 +580,7 @@ export function PermissionsPage() {
           onClick={async () => {
             setBusy(true);
             try {
-              const d = await apiPost("/v1/permissions", { blocklist_enabled: !perms.blocklist_enabled });
+              const d = await api.savePermissions({ blocklist_enabled: !perms.blocklist_enabled }).catch(() => null);
               if (d && d.ok) {
                 setPerms({ ...perms, blocklist_enabled: !perms.blocklist_enabled });
                 setSavedTip("已保存到 permissions.json");
@@ -635,7 +620,7 @@ export function TasksPage() {
   React.useEffect(() => {
     let alive = true;
     (async () => {
-      const d = await apiGet("/v1/tasks");
+      const d = await api.getTasks().catch(() => null);
       if (alive && d) setTasks(d);
     })();
     return () => {
@@ -688,7 +673,7 @@ export function FilesPage() {
   React.useEffect(() => {
     let alive = true;
     (async () => {
-      const d = await apiGet("/v1/files");
+      const d = await api.listFiles().catch(() => null);
       if (!alive) return;
       if (d) {
         setFiles(d);
@@ -737,7 +722,7 @@ export function EvolutionPage() {
   const [busy, setBusy] = React.useState(false);
 
   const load = React.useCallback(async () => {
-    const d = await apiGet("/v1/evolutions");
+    const d = await api.getEvolutions().catch(() => null);
     if (d) setEvos(d.evolutions);
   }, []);
 
@@ -748,7 +733,7 @@ export function EvolutionPage() {
   const apply = async (name) => {
     if (!window.confirm(`采纳提案「${name}」？原文件将备份为 .evobak`)) return;
     setBusy(true);
-    const r = await apiPost("/v1/evolutions/apply", { name });
+    const r = await api.applyEvolution(name).catch(() => null);
     setBusy(false);
     if (r && r.ok) {
       alert(`已采纳：${r.applied.length} 个文件（原文件备份 .evobak，重启后生效）`);
@@ -762,7 +747,7 @@ export function EvolutionPage() {
   const ignore = async (name) => {
     if (!window.confirm(`忽略并删除提案「${name}」？`)) return;
     setBusy(true);
-    const r = await apiPost("/v1/evolutions/ignore", { name });
+    const r = await api.ignoreEvolution(name).catch(() => null);
     setBusy(false);
     if (r && r.ok) {
       setDetail(null);
@@ -773,7 +758,7 @@ export function EvolutionPage() {
   };
 
   const showDetail = async (name) => {
-    const d = await apiGet(`/v1/evolutions/${encodeURIComponent(name)}`);
+    const d = await api.getEvolutionDetail(name).catch(() => null);
     if (d && d.files) setDetail(d);
   };
 
@@ -831,7 +816,7 @@ export function SystemPage() {
   React.useEffect(() => {
     let alive = true;
     (async () => {
-      const s = await apiGet("/v1/status");
+      const s = await api.getStatus().catch(() => null);
       if (alive && s) setStatus(s);
     })();
     return () => {
@@ -980,9 +965,8 @@ export function WorkbenchPage({ onApply, onPickSession }) {
 
   // 全量刷新：态势走 /v1/situation 单一事实源（人+AI 同源），快捷行动资产单独拉，30s 轮询
   const refresh = React.useCallback(async () => {
-    const g = (p) => apiGet(p).catch(() => null);
     const [sit, pm, tk] = await Promise.all([
-      g("/v1/situation"), g("/v1/prompts"), g("/v1/tasks"),
+      api.getSituation().catch(() => null), api.getPrompts().catch(() => null), api.getTasks().catch(() => null),
     ]);
     if (sit) {
       setStatus({
@@ -1002,7 +986,7 @@ export function WorkbenchPage({ onApply, onPickSession }) {
       setDeps(((sit.health && sit.health.missing_deps) || []).map((n) => ({ name: n, ok: false })));
       setBackups(sit.health && sit.health.last_backup ? [{ mtime: sit.health.last_backup }] : []);
     }
-    if (pm && pm.prompts) setPrompts(pm.prompts);
+    if (pm) setPrompts(pm);
     if (tk && tk.templates) setTemplates(tk.templates);
     setUpdatedAt(new Date().toTimeString().slice(0, 5));
   }, []);
@@ -1027,13 +1011,13 @@ export function WorkbenchPage({ onApply, onPickSession }) {
 
   const stopProc = async (name) => {
     try {
-      await apiPost("/v1/processes/stop", { name });
+      await api.stopProcess(name).catch(() => null);
       refresh();
     } catch (e) { silentWarn(e, "Pages"); }
   };
   const openFile = async (path, dir = false) => {
     try {
-      await apiPost(dir ? "/v1/files/opendir" : "/v1/files/open", { path });
+      await (dir ? api.openDir(path) : api.openFile(path)).catch(() => null);
     } catch (e) { silentWarn(e, "Pages"); }
   };
   const resumeCheckpoint = () => {

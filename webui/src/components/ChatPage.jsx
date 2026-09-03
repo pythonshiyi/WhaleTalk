@@ -803,7 +803,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
 
   const onInjectFile = async (path) => {
     try {
-      const d = await api.api("/v1/files/read", { method: "POST", body: JSON.stringify({ path }) });
+      const d = await api.readFile(path);
       if (d && d.content) {
         const note = d.truncated ? `\n[文件较大，已截断前 ${d.content.length} 字符]` : "";
         composerRef.current?.insertText(`[文件] ${String(path).split(/[\\/]/).pop()}:\n${d.content}${note}`);

@@ -1,5 +1,5 @@
 // ── 语音朗读工具：文本清洗 / 分句 / 合成 / 播放队列 / 停止 ──
-import { api, getToken, getBase } from "./api.js";
+import { getToken, getBase, getConfig } from "./api.js";
 
 import { silentWarn } from "./quiet.js";
 // Markdown 清洗：代码块整段跳过、链接只读文字、去强调与表格符号
@@ -376,7 +376,7 @@ export async function getVoiceConfig(force = false) {
   if (voiceCfg && !force) return voiceCfg;
   const fallback = { auto_mode: "off", rate: 0, volume: 100, voice: "" };
   try {
-    const d = await api.api("/v1/config");
+    const d = await getConfig();
     voiceCfg = d.voice_config ? { ...fallback, ...d.voice_config } : fallback;
   } catch {
     return fallback;

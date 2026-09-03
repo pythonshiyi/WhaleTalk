@@ -88,7 +88,7 @@ export default function ToolTest({ name, onClose }) {
     let alive = true;
     (async () => {
       try {
-        const s = await api.api(`/v1/tools/${encodeURIComponent(name)}`);
+        const s = await api.getToolSchema(name);
         if (alive && s) setSchema(s);
       } catch (e) { silentWarn(e, "ToolTest"); }
     })();
@@ -113,10 +113,7 @@ export default function ToolTest({ name, onClose }) {
     setRunning(true);
     setResult("");
     try {
-      const r = await api.api(`/v1/tools/${encodeURIComponent(name)}/invoke`, {
-        method: "POST",
-        body: JSON.stringify({ args: values }),
-      });
+      const r = await api.invokeTool(name, values);
       setResult(String(r.result || "（空结果）"));
     } catch (e) {
       setResult(`⚠️ 调用失败：${e.message}`);

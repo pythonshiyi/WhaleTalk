@@ -1,21 +1,6 @@
 import React from "react";
 import * as api from "../api.js";
 
-const apiGet = async (path) => {
-  try {
-    return await api.api(path);
-  } catch {
-    return null;
-  }
-};
-const apiPost = async (path, body) => {
-  try {
-    return await api.api(path, { method: "POST", body: JSON.stringify(body) });
-  } catch {
-    return null;
-  }
-};
-
 // ── 鲸语大脑（指挥舱：身份 / 心跳 / 时光备份 / 生命延续 / 对话自我）────────
 function BrainBlock() {
   const [brain, setBrain] = React.useState(null);
@@ -43,14 +28,14 @@ function BrainBlock() {
   const createBrain = async () => {
     setBusy(true);
     setMsg("");
-    const d = await apiPost("/v1/brain", { action: "init", genesis, enable_keyring: createWithKeyring });
+    const d = await api.brainAction({ action: "init", genesis, enable_keyring: createWithKeyring }).catch(() => null);
     setMsg(d?.message || "创建失败：请确认鲸语后端已重启（旧版后端不认识大脑接口）");
     setBusy(false);
     load(true);
   };
 
   const load = async (quiet) => {
-    const d = await apiGet("/v1/brain");
+    const d = await api.getBrain().catch(() => null);
     if (d && d.ok) { setBrain(d.brain); setConnErr(""); }
     else {
       const why = "后端未运行或版本过旧（还没有大脑接口）。请重启鲸语：托盘「✕ 退出」后重新运行 web_app.py（或双击桌面快捷方式），再回到本页。";
@@ -65,7 +50,7 @@ function BrainBlock() {
     setBusy(true);
     setMsg("");
     try {
-      const d = await apiPost("/v1/brain", { action, ...extra });
+      const d = await api.brainAction({ action, ...extra }).catch(() => null);
       if (d) {
         setMsg(d.message || (d.ok ? "完成" : "失败"));
         if (d.data?.auto_passphrase) setMsg(`⚠️ 一次性口令（仅显示一次）：${d.data.auto_passphrase}\n${d.message || ""}`);
@@ -103,7 +88,7 @@ function BrainBlock() {
   const enableKeyring = async () => {
     if (!window.confirm("为大脑生成加密密钥（RSA-2048），之后所有时光备份自动加密、本机免密解锁？")) return;
     setBusy(true);
-    const d = await apiPost("/v1/brain", { action: "keyring-setup" });
+    const d = await api.brainAction({ action: "keyring-setup" }).catch(() => null);
     setMsg(d?.message || "请求失败");
     setBusy(false);
     load(true);
@@ -116,7 +101,7 @@ function BrainBlock() {
     setMsg("");
     setMergeOut(null);
     try {
-      const d = await apiPost("/v1/brain", { action: "merge", snap_a: mergeA, snap_b: mergeB, strategy });
+      const d = await api.brainAction({ action: "merge", snap_a: mergeA, snap_b: mergeB, strategy }).catch(() => null);
       if (d) {
         setMergeOut({ dir: d.data?.dir || "", conflicts: d.data?.conflicts || [], message: d.message || "" });
         setMsg(d.message || (d.ok ? "融合完成" : "融合失败"));
@@ -129,7 +114,7 @@ function BrainBlock() {
   const resolveOne = async (cid, keep) => {
     if (!mergeOut) return;
     setResolving(true);
-    const d = await apiPost("/v1/brain", { action: "merge-resolve", id: cid, keep, dir: mergeOut.dir });
+    const d = await api.brainAction({ action: "merge-resolve", id: cid, keep, dir: mergeOut.dir }).catch(() => null);
     if (d && d.data) setMergeOut({ ...mergeOut, conflicts: d.data.conflicts || [] });
     setMsg(d?.message || "裁决请求失败");
     setResolving(false);
@@ -140,7 +125,7 @@ function BrainBlock() {
     if (!mergeOut?.dir) return;
     if (!window.confirm("把融合结果应用为当前大脑？（旧大脑自动备份到 brain.bak-*）")) return;
     setBusy(true);
-    const d = await apiPost("/v1/brain", { action: "adopt-merge", dir: mergeOut.dir });
+    const d = await api.brainAction({ action: "adopt-merge", dir: mergeOut.dir }).catch(() => null);
     setMsg(d?.message || "请求失败");
     setBusy(false);
     setMergeOut(null);
@@ -151,7 +136,7 @@ function BrainBlock() {
     if (!diffA || !diffB || diffA === diffB) return;
     setBusy(true);
     setMsg("");
-    const d = await apiPost("/v1/brain", { action: "diff", snap_a: diffA, snap_b: diffB });
+    const d = await api.brainAction({ action: "diff", snap_a: diffA, snap_b: diffB }).catch(() => null);
     setMsg(d?.message || "对比失败");
     setBusy(false);
   };
@@ -165,7 +150,7 @@ function BrainBlock() {
     });
 
   const loadDirs = async () => {
-    const d = await apiPost("/v1/brain", { action: "brain-dirs" });
+    const d = await api.brainAction({ action: "brain-dirs" }).catch(() => null);
     if (d && d.ok) {
       setBrainDirs(d.data.dirs || []);
       const cur = d.data.dirs?.find((x) => x.current);

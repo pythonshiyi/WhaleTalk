@@ -183,7 +183,8 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
 
   const prodAct = async (path, act) => {
     try {
-      await api.api(`/v1/files/${act}`, { method: "POST", body: JSON.stringify({ path }) });
+      if (act === "opendir") await api.openDir(path);
+      else await api.openFile(path);
     } catch (e) { silentWarn(e, "Message"); }
   };
 
