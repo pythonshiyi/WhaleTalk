@@ -5070,9 +5070,6 @@ class _Handler(BaseHTTPRequestHandler):
                         "usage": {"prompt": prompt_n, "completion": completion_n,
                                   "cached": cached, "cost": costv},
                     })
-                elif self.path == "/v1/config/reset":
-                    # 带副作用的操作只允许 POST（GET 可能被预加载/误触）
-                    self._json(200, _config_reset())
                 elif self.path == "/v1/config":
                     import config_utils
                     import deepseek_client as dc
@@ -5889,6 +5886,16 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.exception("POST /v1/config 失败")
             self._json(500, {"error": str(e)})
+
+
+    @_post_route("/v1/config/reset")
+    def _p_v1_config_reset(self):
+        """恢复默认配置（带副作用：重置 config.json + 权限模块）。
+
+        P1-5：仅接受 POST——GET 可能被预加载/误触，且与前端 apiPost 调用对齐
+        （SettingsPage「恢复默认」此前 POST 404，功能实际是坏的）。
+        """
+        self._json(200, _config_reset())
 
 
     @_post_route("/v1/prompts")

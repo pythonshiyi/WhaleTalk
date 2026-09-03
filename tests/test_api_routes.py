@@ -2,7 +2,7 @@
 """P2-8 路由表行为契约：do_POST 轻量路由表（装饰器注册）的回归测试。
 
 覆盖：
-- 路由表完整性（51 条 POST 端点，含 pre/set 两种 matcher）
+- 路由表完整性（52 条 POST 端点，含 pre/set 两种 matcher）
 - 查表函数 _match_post_route 对各形态路径的分发正确性
 - do_POST 兜底（未匹配 → None → 404）与鉴权前置不变
 """
@@ -21,14 +21,14 @@ import api_server  # noqa: E402  （模块加载时会执行装饰器注册，_P
 
 
 def test_route_table_size():
-    """POST 端点数 = 51（49 精确 + 1 pre + 1 set），且与 do_POST 分支时代一致。"""
+    """POST 端点数 = 52（50 精确 + 1 pre + 1 set），且与 do_POST 分支时代一致。"""
     routes = api_server._POST_ROUTES
-    assert len(routes) == 51, f"路由表应有 51 条，实际 {len(routes)}"
+    assert len(routes) == 52, f"路由表应有 52 条，实际 {len(routes)}"
     kinds = {}
     for matcher, _ in routes:
         k = matcher[0] if isinstance(matcher, tuple) else "exact"
         kinds[k] = kinds.get(k, 0) + 1
-    assert kinds == {"exact": 49, "pre": 1, "set": 1}, f"matcher 类型分布异常: {kinds}"
+    assert kinds == {"exact": 50, "pre": 1, "set": 1}, f"matcher 类型分布异常: {kinds}"
 
 
 def test_route_order_priority():
@@ -47,6 +47,7 @@ def test_exact_match():
         "/v1/chat/stream": "_p_v1_chat_stream",
         "/v1/brain/memory": "_p_v1_brain_memory",
         "/v1/config": "_p_v1_config",
+        "/v1/config/reset": "_p_v1_config_reset",  # P1-5：带副作用 reset 仅 POST（GET 分支已移除）
         "/v1/upload": "_p_v1_upload",
         "/v1/mode": "_p_v1_mode",
         "/v1/respond": "_p_v1_respond",
