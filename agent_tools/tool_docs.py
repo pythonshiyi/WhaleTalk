@@ -248,7 +248,7 @@ def read_excel(path, sheet=0, max_rows=100):
             "type": "function",
             "function": {
                 "name": "epub_read",
-                "description": "读取 EPUB 电子书正文为纯文本（ebooklib 可选依赖，未安装时提示）",
+                "description": "读取 EPUB 电子书正文为纯文本（依赖 ebooklib，缺失时返回安装指引）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -264,7 +264,7 @@ def read_excel(path, sheet=0, max_rows=100):
     preactivate=(('电子书', 'epub', 'mobi', 'kindle'),),
 )
 def epub_read(path, max_chars=20000):
-    """读取 EPUB 电子书正文为纯文本（ebooklib 可选依赖，未安装时提示）。"""
+    """读取 EPUB 电子书正文为纯文本（依赖 ebooklib，缺失时返回安装指引）。"""
     p_or_err = _read_optional_text(path, max_chars)
     if p_or_err[0] is None:
         return p_or_err[1]
@@ -295,7 +295,7 @@ def epub_read(path, max_chars=20000):
             "type": "function",
             "function": {
                 "name": "mobi_read",
-                "description": "读取 MOBI 电子书正文为纯文本（mobi 可选依赖，未安装时提示）",
+                "description": "读取 MOBI 电子书正文为纯文本（依赖 mobi 库，缺失时返回安装指引）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -311,7 +311,7 @@ def epub_read(path, max_chars=20000):
     preactivate=(('电子书', 'epub', 'mobi', 'kindle'),),
 )
 def mobi_read(path, max_chars=20000):
-    """读取 MOBI 电子书正文为纯文本（mobi 可选依赖，未安装时提示）。"""
+    """读取 MOBI 电子书正文为纯文本（依赖 mobi 库，缺失时返回安装指引）。"""
     p_or_err = _read_optional_text(path, max_chars)
     if p_or_err[0] is None:
         return p_or_err[1]
@@ -338,7 +338,7 @@ def mobi_read(path, max_chars=20000):
             "type": "function",
             "function": {
                 "name": "doc_read",
-                "description": "读取旧版 .doc 二进制文档正文（antiword/catdoc 可选依赖）",
+                "description": "读取旧版 .doc 二进制文档正文（依赖本机 antiword/catdoc 命令行工具）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -382,7 +382,7 @@ def doc_read(path, max_chars=20000):
             "type": "function",
             "function": {
                 "name": "msg_read",
-                "description": "读取 .msg Outlook 邮件（主题/发件人/正文/附件清单，extract_msg 可选依赖）",
+                "description": "读取 .msg Outlook 邮件（主题/发件人/正文/附件清单；依赖 extract_msg，缺失时返回安装指引）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -398,7 +398,7 @@ def doc_read(path, max_chars=20000):
     preactivate=(('outlook', 'msg邮件', 'msg文件', '旧版doc', 'rtf'),),
 )
 def msg_read(path, max_chars=20000):
-    """读取 .msg Outlook 邮件（extract_msg 可选依赖），返回主题/发件人/正文/附件清单。"""
+    """读取 .msg Outlook 邮件（依赖 extract_msg，缺失时返回安装指引），返回主题/发件人/正文/附件清单。"""
     p_or_err = _read_optional_text(path, max_chars)
     if p_or_err[0] is None:
         return p_or_err[1]
@@ -434,7 +434,7 @@ def msg_read(path, max_chars=20000):
             "type": "function",
             "function": {
                 "name": "archive_list",
-                "description": "列出压缩包内容：.zip / .tar / .gz / .7z / .rar（7z/rar 需可选依赖）",
+                "description": "列出压缩包内容：.zip / .tar / .gz / .7z / .rar（7z/rar 依赖 py7zr/rarfile 库）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -449,7 +449,7 @@ def msg_read(path, max_chars=20000):
     preactivate=(('打包', '压缩成', '归档文件', '压缩包'), ('解压', '解包', '解压缩', '解压到')),
 )
 def archive_list(path):
-    """列出压缩包内容：.zip / .tar / .gz / .7z / .rar（可选依赖）。"""
+    """列出压缩包内容：.zip / .tar / .gz / .7z / .rar（7z/rar 依赖 py7zr/rarfile 库）。"""
     p = permissions.resolve(path)
     if not p or not os.path.isfile(p):
         return f"错误：压缩包不存在：{path}"
@@ -1531,7 +1531,7 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
             "type": "function",
             "function": {
                 "name": "create_doc",
-                "description": "创建文档（.md/.html 原生支持；.docx 需安装 python-docx），需 write 权限",
+                "description": "创建文档（.md/.html 原生支持；.docx 依赖 python-docx），需 write 权限",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1548,7 +1548,7 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
     preactivate=(('写', '保存', '创建', '生成'),),
 )
 def create_doc(path, content, doc_type=""):
-    """创建文档：.md/.html 原生；.docx 需 python-docx（可选）。"""
+    """创建文档：.md/.html 原生；.docx 依赖 python-docx（缺失时返回安装指引）。"""
     ok, reason = permissions.check_filesystem(path, write=True)
     if not ok:
         return reason

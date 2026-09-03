@@ -735,7 +735,7 @@ def browser_navigate(url="", action="open", selector="", text="", handle=""):
             "type": "function",
             "function": {
                 "name": "web_screenshot",
-                "description": "网页截图并保存到工作区，需安装 playwright（可选依赖）",
+                "description": "网页截图并保存到工作区（依赖 playwright，复用共享浏览器）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -752,7 +752,7 @@ def browser_navigate(url="", action="open", selector="", text="", handle=""):
     preactivate=(('网页', 'url', '抓取', '爬'),),
 )
 def web_screenshot(url, width=1280, height=800):
-    """网页截图并保存到工作区（Playwright 可选依赖，复用共享浏览器）。"""
+    """网页截图并保存到工作区（依赖 playwright，复用共享浏览器）。"""
     ok, hint = _playwright_ready()
     if not ok:
         return hint

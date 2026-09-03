@@ -16,8 +16,9 @@
 
 严重度分级（v3.8.3 起）：
   - **error（拦截）**：结构性断链——工具不可达、schema 与实现不匹配、参数/分组/审批清单缺口。
-    这类问题会让工具系统真的坏掉，`--strict` 必须拦截。
-  - **warn（仅提示）**：描述质量类（过长/过短/含依赖或审批提示语）与已知实现别名。
+    这类问题会让工具系统真的坏掉，`--strict` 必须拦截。schema 与实现名不一致且未登记
+    KNOWN_ALIASES 的，按 error「实现名不一致」处理。
+  - **warn（仅提示）**：描述质量类（过长/过短/含依赖门槛语）。
     这类需人工甄别是否为真问题，**不拦截 CI**——否则中文常用字
     （「默认」「当」「建议」「可能」）会触发大量误报，把门禁变成噪声。
 
@@ -87,11 +88,14 @@ ERROR_KINDS = {
     "不在任何分组", "短语表缺失", "高危未列入审批清单",
     "预激活未覆盖",
 }
-# warn：质量提示与已知无害的别名，需人工甄别，不拦截 CI
-WARN_KINDS = {"实现别名", "描述过短", "描述超长将截断", "可疑表述"}
+# warn：描述质量提示（描述过短/过长/含依赖门槛语），需人工甄别，不拦截 CI。
+# 实现别名不在此列：登记进 KNOWN_ALIASES 即豁免（有意为之，静默接受），
+# 未登记的 schema↔实现名差异一律按 error「实现名不一致」拦截（--strict 可挡）。
+WARN_KINDS = {"描述过短", "描述超长将截断", "可疑表述"}
 
 # 已知且无害的实现别名：schema 名与实现函数名不同，但函数确实存在（非缺陷）。
-# 新增别名时在此登记，避免每次审计都产生噪声。
+# 登记后审计静默接受（不再产生 warn）；新增别名时在此登记，避免每次审计都产生噪声。
+# 注意：未登记的差异会按 error「实现名不一致」拦截，故登记即代表"已人工确认有意"。
 KNOWN_ALIASES = {
     "fetch_blocked": "_run_fetch_blocked",   # fetch_blocked 是保留字冲突，实现另起名
     "git": "git_tool",                       # git 与内部变量名冲突
@@ -182,10 +186,10 @@ def main(argv=None):
         elif impl != name:
             if impl in func_params:
                 if KNOWN_ALIASES.get(name) == impl:
-                    flag(name, "实现别名", f"schema={name} 实现={impl}（已知别名，非缺陷）")
+                    pass    # 已登记别名：有意为之，静默接受（登记即豁免，见 KNOWN_ALIASES 注释）
                 else:
                     flag(name, "实现名不一致",
-                         f"schema={name} 实现={impl}（函数已定义但非已知别名，"
+                         f"schema={name} 实现={impl}（函数已定义但未登记 KNOWN_ALIASES，"
                          f"请确认是否有意，并登记到 KNOWN_ALIASES）")
             else:
                 flag(name, "实现名不一致", f"schema={name} 实现={impl}")

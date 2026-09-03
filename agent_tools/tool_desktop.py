@@ -647,7 +647,7 @@ def tts_save(text, path, rate=0):
             "type": "function",
             "function": {
                 "name": "speech_to_text",
-                "description": "本地语音转文字（faster-whisper 离线识别，未安装时提示安装；首次运行自动下载所选模型）",
+                "description": "本地语音转文字（依赖 faster-whisper，离线识别；首次运行自动下载所选模型）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -663,7 +663,7 @@ def tts_save(text, path, rate=0):
     preactivate=(('语音转文字', '语音识别', '听写'),),
 )
 def speech_to_text(path, model="base"):
-    """本地语音转文字（faster-whisper，未安装时提示先安装）。
+    """本地语音转文字（依赖 faster-whisper，离线识别）。
     model: tiny/base/small/medium/large-v3（首次运行需下载对应模型，tiny/base 较小）。"""
     if not str(path or "").strip():
         return "错误：path 必填"
