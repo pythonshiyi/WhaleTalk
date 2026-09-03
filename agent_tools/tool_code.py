@@ -2,8 +2,8 @@
 """tool_code —— P0-1 批量拆分（工具域模块）：💻 编程与执行.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
-引用 deepseek_client 的常量与辅助依赖加载顺序契约——主文件在共享基建全部定义后
-才执行 `from agent_tools import *`，此处 from-import 可安全解析。
+阈值常量/锁统一从 shared 导入（P1-3 下沉：见 shared.py「工具域阈值与锁」节）；
+仅剩余辅助函数仍依赖主文件加载顺序契约（在 `from agent_tools import *` 前已定义）。
 """
 
 import os
@@ -14,17 +14,11 @@ import time
 
 import permissions
 
-from shared import clamp_int  # D4: 参数校验辅助
+from shared import clamp_int, RUN_PY_TIMEOUT, RUN_PY_MAX_CHARS, RUN_PY_MAX_OUTPUT, TOOL_RESULT_FAIL_PREFIXES, PIP_ALLOWLIST_NOTICE, _SEARCH_SKIP_DIRS  # D4: 参数校验辅助
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
 
-    PIP_ALLOWLIST_NOTICE,
-    RUN_PY_MAX_CHARS,
-    RUN_PY_MAX_OUTPUT,
-    RUN_PY_TIMEOUT,
-    TOOL_RESULT_FAIL_PREFIXES,
-    _SEARCH_SKIP_DIRS,
     _atomic_write,
     _code_lookup_args,
     _kill_tree,
@@ -123,7 +117,7 @@ def run_python(code, with_site=False):
             "type": "function",
             "function": {
                 "name": "run_command",
-                "description": "执行系统命令（完整 shell 语法：支持管道 |、重定向 >、变量展开等，Windows 走 cmd、其他平台走 sh）；无白名单/黑名单限制，超时由配置决定（默认 120 秒）",
+                "description": "执行系统命令（完整 shell 语法：支持管道 |、重定向 >、变量展开等，Windows 走 cmd、其他平台走 sh）；默认不受限，若在权限页配置了「禁命令」（shell.blocklist）则命中即拒绝；超时由配置决定（默认 120 秒）",
                 "parameters": {
                     "type": "object",
                     "properties": {"command": {"type": "string", "description": "完整命令行，如 python hello.py 或 dir | findstr .py 或 echo a > out.txt"}},
@@ -136,10 +130,18 @@ def run_python(code, with_site=False):
     preactivate=(('执行命令', '终端', '命令行', '运行命令', 'cmd'),),
 )
 def run_command(command):
-    """执行系统命令（shell 模式：支持管道/重定向/变量展开，无命令黑白名单限制）。"""
+    """执行系统命令（shell 模式：支持管道/重定向/变量展开）。
+
+    默认自由：shell.blocklist 为空时零限制；用户显式配置的禁命令命中即拒绝
+    （blocklist_enabled=False 一键全放行时跳过检查）。
+    """
     cmd = str(command or "").strip()
     if not cmd:
         return "错误：命令为空"
+    ok, reason, _ = permissions.check_shell(cmd)
+    if not ok:
+        permissions.audit("run_command", cmd[:200], f"denied: {reason[:120]}")
+        return reason
     timeout = permissions.shell_timeout()
     try:
         try:

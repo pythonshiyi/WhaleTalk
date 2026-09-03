@@ -7,12 +7,15 @@ deepseek_client.py 在共享基建定义后执行 `from agent_tools import *`：
     dc.image_understand 等旧访问路径（外部代码经 deepseek_client 命名空间访问）
     保持不变。
 
-加载顺序契约：deepseek_client 必须先完成本包 from-import 的符号定义
-（如 tool_basic 用到的 WEATHER_TIMEOUT、tool_media 用到的 VISION_MODEL /
-_capture_screen_png 等），故导入语句位于主文件共享基建之后、
-六层构建之前（见 deepseek_client.py 对应注释）。
+加载顺序契约（P1-3 收窄）：工具域阈值常量/锁已下沉 shared（见 shared.py
+「工具域阈值与锁」节），域模块直接 from shared 导入、不再回指主文件；
+仍引用 deepseek_client 的仅是剩余辅助函数（_atomic_write / _capture_screen_png /
+get_active_client 等）与运行态配置（dc.WORKING_DIR / dc.*_FILE 注入项）——
+deepseek_client 必须在其 `from agent_tools import *`（共享基建全部定义后）之前
+完成这些符号的定义，故本包导入位于主文件共享基建之后、六层构建之前。
 
-新增工具域：新建 tool_*.py 并在下方 import；若含新工具名记得同步 __all__。
+新增工具域：新建 tool_*.py 并在下方 import；若含新工具名记得同步 __all__；
+新增阈值常量请放 shared.py 对应「工具域阈值与锁」分组，勿回写主文件。
 """
 
 from .tool_basic import *  # noqa: F401,F403  # get_date / get_weather

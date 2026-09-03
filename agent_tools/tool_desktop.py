@@ -2,8 +2,8 @@
 """tool_desktop —— P0-1 批量拆分（工具域模块）：🖱 桌面与视觉语音.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
-引用 deepseek_client 的常量与辅助依赖加载顺序契约——主文件在共享基建全部定义后
-才执行 `from agent_tools import *`，此处 from-import 可安全解析。
+阈值常量/锁统一从 shared 导入（P1-3 下沉：见 shared.py「工具域阈值与锁」节）；
+仅剩余辅助函数仍依赖主文件加载顺序契约（在 `from agent_tools import *` 前已定义）。
 """
 
 import json
@@ -17,18 +17,13 @@ import permissions
 
 from security import _safe_url
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
+from shared import RPA_FAILSAFE, MEDIA_MAX_INPUT, MEDIA_FORMATS, _VISION_LOOP_ACTIONS, _BYE_PAT, _TEAM_ROLE_PRESETS  # P1-3: 阈值常量下沉 shared
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
 
     DEFAULT_BASE_URL,
-    MEDIA_FORMATS,
-    MEDIA_MAX_INPUT,
-    RPA_FAILSAFE,
     _ACTIVE_SPEAK,
     _ACTIVE_SPEAK_LOCK,
-    _BYE_PAT,
-    _TEAM_ROLE_PRESETS,
-    _VISION_LOOP_ACTIONS,
     _WHISPER_CACHE,
     _WHISPER_CACHE_LOCK,
     _WHISPER_LOOP_LOCK,

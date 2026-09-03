@@ -29,6 +29,57 @@ from openai import (
 import permissions
 import crypto
 from shared import cron_field_ok, OCR_IMAGE_PS, is_peak_hour  # noqa: F401  # is_peak_hour 由 main.py 经本模块 re-export
+from shared import (  # P1-3 re-export：工具域阈值常量/锁已下沉 shared，保留 dc.X 旧路径
+    CALL_API_MAX_BYTES,
+    CALL_API_MAX_HEADERS,
+    CALL_API_METHODS,
+    DOCX_MAX_DEFAULT,
+    DOWNLOAD_MAX_BYTES,
+    EDIT_FILE_MAX_SIZE,
+    EDIT_FILE_REGEX_MAX,
+    EVO_WRITE_EXTS,
+    EXTRACT_MAX_ENTRIES,
+    EXTRACT_MAX_SINGLE_BYTES,
+    EXTRACT_MAX_TOTAL_BYTES,
+    KV_VALUE_MAX_BYTES,
+    MAX_PROCESSES,
+    MEDIA_FORMATS,
+    MEDIA_MAX_INPUT,
+    MEMORY_MAX_ITEMS,
+    MEMORY_MAX_TEXT,
+    PDF_EXTRACT_MAX_OUTPUT,
+    PIP_ALLOWLIST_NOTICE,
+    PROJECT_DIR,
+    PROJECT_READ_EXTS,
+    READ_FILE_MAX_BYTES,
+    RPA_FAILSAFE,
+    RSS_FETCH_TIMEOUT,
+    RSS_MAX_ITEMS,
+    RSS_PRESET_SOURCES,
+    RSS_SUMMARY_MAX,
+    RUN_PY_MAX_CHARS,
+    RUN_PY_MAX_OUTPUT,
+    RUN_PY_TIMEOUT,
+    SCHEDULES_LOCK,
+    SEARCH_MAX_RESULTS,
+    SELF_PROFILE_LOCK,
+    TOOL_RESULT_FAIL_PREFIXES,
+    WEATHER_TIMEOUT,
+    WEBDAV_MAX_SIZE,
+    _ARCHIVE_SKIP_DIRS,
+    _BYE_PAT,
+    _COMMON_PACKAGES,
+    _MEMORY_LOCK,
+    _NOTIFY_PS,
+    _READ_LINE_MAX,
+    _SEARCH_ENGINES,
+    _SEARCH_EXTS,
+    _SEARCH_SKIP_DIRS,
+    _SELF_PROFILE_LIST_FIELDS,
+    _TEAM_ROLE_PRESETS,
+    _VISION_LOOP_ACTIONS,
+    _WORKFLOW_LOCK,
+)  # noqa: F401
 from security import (  # noqa: F401  # 供 main/tests 继续经 deepseek_client 访问
     SSRF_TRUSTED,
     set_ssrf_trusted,
@@ -430,25 +481,8 @@ def _auto_effort(work):
     return "none"
 
 
-RUN_PY_TIMEOUT = 10
-RUN_PY_MAX_CHARS = 8000
-RUN_PY_MAX_OUTPUT = 20000
-READ_FILE_MAX_BYTES = 102400
-_READ_LINE_MAX = 102400  # 按行读取的每行上限（防单行数百 MB 撑爆内存）
 FETCH_URL_MAX_CHARS = 500000
-WEATHER_TIMEOUT = 5
-EDIT_FILE_MAX_SIZE = 20 * 1024 * 1024  # edit_file 全量读入上限（20MB）
-EDIT_FILE_REGEX_MAX = 1000  # 正则长度上限（防灾难性回溯挂死工具线程的粗略防线）
-EXTRACT_MAX_ENTRIES = 10000  # 解压条目数上限（防 zip 海量小文件 DoS）
-EXTRACT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 解压总字节上限（防磁盘写满）
-EXTRACT_MAX_SINGLE_BYTES = 2 * 1024 * 1024 * 1024  # 单文件解压大小上限
 
-# ===== run_python 执行模式 =====
-# 无限制模式（v3.9+）：run_python 与直接运行 python -c 等价——不隔离、不静态拦截，
-# 可加载全部已安装库、访问网络、调用系统能力。信任用户与模型，不再内置任何拦截。
-
-# 工具结果"失败"前缀统一判定（main/taskpanel 共享，防散落魔法字符串漂移）
-TOOL_RESULT_FAIL_PREFIXES = ("错误", "权限拒绝", "超时", "（用户停止")
 
 JSON_HINT_MESSAGE = (
     "[JSON 输出模式] 请严格输出合法的 JSON 对象（已启用 response_format），"
@@ -605,10 +639,6 @@ def _fetch_url_raw(url):
         return text
     except Exception as e:
         return f"错误：{e}"
-
-
-# ===== 二进制下载（P2）：图片/附件/安装包等任意文件 =====
-DOWNLOAD_MAX_BYTES = 200 * 1024 * 1024  # 单文件 200MB 上限（与 WebDAV 对齐）
 
 
 # ===== 推送通知（A6）：钉钉 / ServerChan / Slack / 通用 Webhook =====
@@ -921,14 +951,10 @@ MEMORY_ENABLED = True  # 长期记忆总开关（api_server 启动时按 config.
 BUILD_SITUATION = None  # 由 api_server 注入的态势快照函数（get_status 工具调用，人+AI 同源）
 SESSIONS_DIR = None  # 由 api_server 注入（会话库目录，recall_session 回溯历史用）
 WATCH_STATE_PATH = None  # 由 api_server 注入（watch_files/track_web 状态持久化）
-MEMORY_MAX_ITEMS = 2000  # v2.16.2 起扩容：伙伴需要记住的更多
-MEMORY_MAX_TEXT = 2000
-_MEMORY_LOCK = threading.Lock()  # 并行 write_memory 读-改-写串行化，防丢失更新
 
 # ===== 核心自我状态（跨会话连续自我：self_profile.json）=====
 # 与 memory（事实记录）不同：这里存「我」本身——身份/偏好/长期目标/演进历程/当前焦点/用户心智模型
 SELF_PROFILE_FILE = None  # 由 api_server 注入（DATA_DIR/self_profile.json）
-SELF_PROFILE_LOCK = threading.Lock()
 _SELF_PROFILE_EMPTY = {
     "identity": {},          # 身份（name/nature/vibe）
     "preferences": [],       # 偏好
@@ -940,7 +966,6 @@ _SELF_PROFILE_EMPTY = {
     "wishes": [],            # 未完成心愿
     "updated_at": "",
 }
-_SELF_PROFILE_LIST_FIELDS = ("preferences", "goals", "milestones", "user_model", "history", "wishes")
 
 
 def _load_memory():
@@ -1140,14 +1165,9 @@ EMAIL_CONFIG_FILE = None  # 由 main 注入（DATA_DIR/email_config.json）
 # ===== 受限 pip 安装 =====
 # 完全体模式：None = 全部放行（由用户授权决定）；如需恢复白名单，改为列表即可
 PIP_ALLOWLIST = None
-PIP_ALLOWLIST_NOTICE = (
-    "注意：run_python 沙箱默认隔离（不加载第三方库），"
-    "如需使用请调用 run_python 时设置 with_site=true。"
-)
 
 
 SEARCH_TIMEOUT = 8
-SEARCH_MAX_RESULTS = 5
 def _search_bing(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until=""):
     url = (
         f"https://www.bing.com/search?q={quote(query)}"
@@ -1230,16 +1250,6 @@ def _search_so360(query, num=SEARCH_MAX_RESULTS):
     return results
 
 
-# 搜索引擎注册表：(名称, 质量权重)。函数名为 "_search_<名称>"，调用时经
-# globals() 动态查找——测试可 mock.patch 模块属性替换实现。权重决定聚合
-# 输出顺序（数值大的优先展示）。实测结论：bing/so360 国内稳定；duckduckgo
-# 时好时坏（健康度机制自动跳过）；baidu/sogou/yandex 反爬；google 等不可达。
-_SEARCH_ENGINES = (
-    ("bing", 3),
-    ("so360", 2),
-    ("duckduckgo", 1),
-)
-
 # 引擎健康度：连续失败 3 次暂停 10 分钟，成功一次即恢复
 _SEARCH_HEALTH = {}  # name -> {"fails": int, "skip_until": float}
 _SEARCH_HEALTH_FAIL_LIMIT = 3
@@ -1273,9 +1283,6 @@ def _search_report(name, ok):
                                _SEARCH_HEALTH_FAIL_LIMIT, _SEARCH_HEALTH_COOLDOWN // 60)
 
 
-CALL_API_MAX_BYTES = 500 * 1024  # 响应体上限 500KB（与 fetch_url 输出对齐）
-CALL_API_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD")
-CALL_API_MAX_HEADERS = 16
 # 无限制模式（v3.9+）：call_api 不设主机白名单、不拦内网/回环，任何地址均可访问。
 CALL_API_ALLOWED_HOSTS = []
 
@@ -1417,7 +1424,6 @@ def _save_watch_state(state):
 
 
 # ===== 后台进程管理（服务器/长驻任务）=====
-MAX_PROCESSES = 8
 WORKING_DIR = None  # 由 main 注入（工作目录：run_command/start_process 的 cwd）
 PROCESSES = {}  # name -> {"proc", "pid", "name", "started", "exited", "code", "lines": deque}
 _PROCESSES_LOCK = threading.Lock()
@@ -1539,18 +1545,8 @@ def stop_all_processes():
             pass
 
 
-_COMMON_PACKAGES = (
-    "flask", "django", "fastapi", "uvicorn", "requests", "bs4", "pandas",
-    "numpy", "matplotlib", "playwright", "docx", "pytest", "httpx",
-    "openai", "tiktoken", "pillow", "tqdm", "yaml", "jinja2",
-)
-
-
 # ===== 自我进化（感知自身代码 → 分支提案）=====
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 EVOLUTIONS_DIR = os.path.join(PROJECT_DIR, "evolutions")
-PROJECT_READ_EXTS = (".py", ".md", ".json", ".txt", ".bat", ".html")
-EVO_WRITE_EXTS = (".py", ".md", ".json", ".txt", ".html")
 
 
 def _current_version():
@@ -1759,13 +1755,6 @@ def _evolve_tests(base, rels):
         return f"错误：运行测试失败: {e}"
 
 
-_SEARCH_EXTS = (
-    ".py", ".md", ".txt", ".json", ".html", ".css", ".js", ".ts",
-    ".yaml", ".yml", ".csv", ".log", ".ini", ".cfg", ".toml",
-)
-_SEARCH_SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "build"}
-
-
 def _search_local_result(hits, scanned, limit, query):
     """search_local 结果格式化（命中已满/扫描预算耗尽/正常结束共用出口）。"""
     if not hits:
@@ -1800,7 +1789,6 @@ def _playwright_ready():
 
 
 # ===== 桌面 RPA（P0）：pyautogui 鼠标键盘，操作任意桌面软件 =====
-RPA_FAILSAFE = True  # 鼠标移到屏幕左上角时立即中断 RPA（pyautogui failsafe）
 
 
 def _rpa_ready():
@@ -1999,7 +1987,6 @@ KV_CACHE_DIR = None          # DATA_DIR/kv_cache（diskcache 存储目录）
 WEBDAV_CONFIG_FILE = None    # DATA_DIR/webdav_config.json（WebDAV 连接）
 PLUGIN_PATHS = None          # 插件体系路径（plugins_dir/user_tools/prompts/workflows，main 注入）
 
-SCHEDULES_LOCK = threading.Lock()  # 与 main 的定时任务面板共享（防并发覆盖）
 _SEND_CALLBACK = None              # run_workflow：向主线程投递要发送的消息
 _BUSY_PROVIDER = None              # run_workflow：查询是否正在生成
 
@@ -2058,36 +2045,6 @@ def _save_schedules_plain_impl(schedules):
     except Exception:
         logging.exception("保存定时任务失败")
         return False
-
-
-# ---------- 桌面通知（Windows Toast，零依赖） ----------
-# 占位符用 @TITLE@/@BODY@ 而非 $title/$body：用户内容若含字面 "$body" 会被
-# 顺序 replace 二次替换污染脚本（$title 先替换成含 "$body" 的内容时同样被污染）。
-# C8: @DURATION@（short/long）与 @SILENT@（true/false）由 notify_desktop 注入。
-_NOTIFY_PS = r"""
-$ErrorActionPreference='Stop'
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
-function Await($WinRtTask, $ResultType) {
-    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
-    $netTask = $asTask.Invoke($null, @($WinRtTask))
-    $netTask.Wait(-1) | Out-Null
-    $netTask.Result
-}
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null
-[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null
-[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime] | Out-Null
-$template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
-$textNodes = $template.GetElementsByTagName("text")
-$textNodes.Item(0).AppendChild($template.CreateTextNode('@TITLE@')) | Out-Null
-$textNodes.Item(1).AppendChild($template.CreateTextNode('@BODY@')) | Out-Null
-$template.DocumentElement.SetAttribute('duration', '@DURATION@') | Out-Null
-$audio = $template.CreateElement('audio')
-$audio.SetAttribute('silent', '@SILENT@')
-$template.DocumentElement.AppendChild($audio) | Out-Null
-$toast = New-Object Windows.UI.Notifications.ToastNotification $template
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("鲸语 WhaleTalk").Show($toast)
-"""
 
 
 # ---------- 剪贴板读写（Win32，可在任意线程调用） ----------
@@ -2278,7 +2235,6 @@ _KNOWLEDGE_EXTS = (
     ".yml", ".yaml", ".ini", ".toml", ".xml", ".log",
 )
 _KNOWLEDGE_SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "build", "backups"}
-_ARCHIVE_SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "build"}
 
 
 def _knowledge_walk(root):
@@ -2533,7 +2489,6 @@ def task_checkpoint_clear():
 
 # ---------- 流程编排（workflows.json：步骤 = 依次发送的指令） ----------
 _WORKFLOW_RUNNING = False  # 流程防重：同一时刻只允许一个流程运行
-_WORKFLOW_LOCK = threading.Lock()  # 检查-置位原子化：并行工具调用下防双流程同时启动
 
 
 def _recipe_chain(name):
@@ -2603,21 +2558,8 @@ def _persist_long_result(name, text):
 
 
 # ============================================================================
-# 文档处理：PDF 提取 / PDF 生成 / Word 读取 / PPT 读取（可选依赖模式）
-# ============================================================================
-PDF_EXTRACT_MAX_OUTPUT = 60000   # pdf_extract 单次输出上限（防撑爆上下文）
-DOCX_MAX_DEFAULT = 50000         # docx_read 默认输出上限
-
-
-# ---------- PDF 生成（reportlab，中文字体自动嵌入） ----------
-# _find_cjk_font / _register_cjk_font 已移至 pdf_utils.py
-
-# ============================================================================
 # 资讯聚合：RSS 订阅管理 + 抓取（feedparser 可选依赖）
 # ============================================================================
-RSS_FETCH_TIMEOUT = 10
-RSS_MAX_ITEMS = 20
-RSS_SUMMARY_MAX = 300
 
 
 def _load_rss_sources():
@@ -2645,17 +2587,6 @@ def _save_rss_sources(sources):
     except Exception:
         logging.exception("保存 RSS 订阅失败")
         return False
-
-
-# 精选 RSS 预置源（action=preset 一键添加）：中文 AI/科技/开发者为主
-RSS_PRESET_SOURCES = [
-    {"name": "机器之心", "url": "https://www.jiqizhixin.com/rss"},
-    {"name": "量子位", "url": "https://www.qbitai.com/feed"},
-    {"name": "少数派", "url": "https://sspai.com/feed"},
-    {"name": "IT之家", "url": "https://www.ithome.com/rss/"},
-    {"name": "开源中国", "url": "https://www.oschina.net/news/rss"},
-    {"name": "Hacker News", "url": "https://news.ycombinator.com/rss"},
-]
 
 
 # ============================================================================
@@ -2704,17 +2635,9 @@ def _save_secrets(data):
 
 
 # ============================================================================
-# 嵌入式 KV 存储（diskcache 可选依赖；支持 TTL 与模糊检索）
-# ============================================================================
-KV_VALUE_MAX_BYTES = 1024 * 1024  # value 上限 1MB
-
-
-# ============================================================================
 # 音视频处理（imageio-ffmpeg 自带 ffmpeg 二进制；参数白名单 + 超时/大小限制）
 # ============================================================================
-MEDIA_MAX_INPUT = 2 * 1024 * 1024 * 1024   # 输入 2GB 上限
 MEDIA_TIMEOUT = 300                        # 单次转码/提取最长 300s
-MEDIA_FORMATS = {"mp4", "mp3", "webm", "mkv", "avi", "mov", "ogg", "flac", "wav", "gif", "png", "jpg"}
 _FFMPEG_BIN = None
 
 
@@ -2752,7 +2675,6 @@ def _ffmpeg_run(args, timeout=MEDIA_TIMEOUT):
 # ============================================================================
 # WebDAV 云盘同步（httpx 原生 PROPFIND/GET/PUT/DELETE；凭据可 DPAPI 加密）
 # ============================================================================
-WEBDAV_MAX_SIZE = 200 * 1024 * 1024  # 单文件 200MB 上限（防全量进内存）
 
 
 def _load_webdav_config():
@@ -2920,9 +2842,6 @@ def _extract_json_obj(text, must_keys=("left",)):
     return None
 
 
-_VISION_LOOP_ACTIONS = ("done", "click", "type", "scroll", "describe")
-
-
 def _parse_scroll(target):
     """解析滚动目标：'向上3' / '向下 5' / '3' → pyautogui 正负次数。"""
     t = str(target or "").strip()
@@ -3067,18 +2986,6 @@ def _speak_aloud(text, rate=0, volume=None, voice="", label=""):
         return ""  # 无声环境：静默跳过，调用方对话循环继续
 
 
-_BYE_PAT = ("再见", "拜拜", "停止对话", "结束对话", "退下吧", "goodbye", "bye-bye")
-
-
-_TEAM_ROLE_PRESETS = {
-    "研究员": "资料搜集与事实核查专家：给出结论时尽量带依据与出处线索。",
-    "工程师": "资深工程师：给出可直接落地的方案、代码或命令，注重边界情况。",
-    "评审": "苛刻的技术评审：找漏洞、提风险、给改进清单。",
-    "设计师": "体验设计师：关注交互、可用性与呈现结构，给出具体设计建议。",
-    "分析师": "数据/商业分析师：拆解量化指标，给出决策建议。",
-}
-
-
 _NET_PROBE_REFS = ("https://www.msftconnecttest.com/connecttest.txt", "https://www.baidu.com")
 
 
@@ -3126,9 +3033,10 @@ register_tool(
 )
 
 # ===== P0-1 巨石拆分：工具域模块（agent_tools/）=====
-# 共享基建（WEATHER_TIMEOUT 等常量、net_utils/db_utils 等 import 别名）已全部
-# 定义完毕，此时导入 agent_tools 才能安全解析域模块顶层的
-# `from deepseek_client import ...`；域模块顶层执行 @tool() 注册，
+# 共享基建已定义完毕：工具域阈值常量/锁在顶部经 shared re-export（P1-3 下沉，
+# 域模块直接 from shared 导入）；此处剩余的是供域模块 from-import 的辅助函数
+# 与 net_utils/db_utils 等 import 别名。此时导入 agent_tools 才能安全解析
+# 域模块顶层的 `from deepseek_client import ...`；域模块顶层执行 @tool() 注册，
 # `import *` 同时按 __all__ re-export 工具名（dc.get_date 等旧访问路径不变）。
 from agent_tools import *  # noqa: F401,F403
 

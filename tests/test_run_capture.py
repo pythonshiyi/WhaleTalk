@@ -121,16 +121,30 @@ def test_run_command_error_exit_code():
     assert "ZeroDivisionError" in r
 
 
-def test_run_command_ignores_blocklist():
-    # 无限制模式（v3.9+）：run_command 不再做命令黑白名单拦截——即使配置了
-    # shell.blocklist，命令也照常执行（注入后恢复）
-    old = list(permissions._data["shell"].get("blocklist") or [])
+def test_run_command_respects_configured_blocklist():
+    # P1-1：权限页显式配置的 shell.blocklist 必须真正生效（此前空转）。
+    # 默认空黑名单 = 零限制；命中禁命令 → 拒绝；blocklist_enabled=False（一键全放行）仍优先。
+    old_bl = list(permissions._data["shell"].get("blocklist") or [])
+    old_enabled = permissions._data.get("blocklist_enabled", True)
     try:
-        permissions._data["shell"]["blocklist"] = ["powershell"]
+        # ① 默认空黑名单：照常执行（默认自由）
+        permissions._data["shell"]["blocklist"] = []
+        r = run_command("python --version")
+        assert "Python" in r, r[:200]
+        # ② 配置黑名单后命中即拒绝
+        permissions._data["shell"]["blocklist"] = ["python", "powershell"]
+        r = run_command("python --version")
+        assert "权限拒绝" in r and "黑名单" in r, r[:200]
+        # ③ 管道后命令同样被拦（防 `echo x | 禁命令` 绕过）
+        r = run_command('echo 42 | powershell -Command "Get-Date"')
+        assert "权限拒绝" in r, r[:200]
+        # ④ 一键全放行开关关闭：连黑名单也不拦
+        permissions._data["blocklist_enabled"] = False
         r = run_command("python --version")
         assert "Python" in r, r[:200]
     finally:
-        permissions._data["shell"]["blocklist"] = old
+        permissions._data["shell"]["blocklist"] = old_bl
+        permissions._data["blocklist_enabled"] = old_enabled
 
 
 def test_run_command_supports_pipe():

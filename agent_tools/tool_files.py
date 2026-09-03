@@ -2,8 +2,8 @@
 """tool_files —— P0-1 批量拆分（工具域模块）：📁 文件与进程.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
-引用 deepseek_client 的常量与辅助依赖加载顺序契约——主文件在共享基建全部定义后
-才执行 `from agent_tools import *`，此处 from-import 可安全解析。
+阈值常量/锁统一从 shared 导入（P1-3 下沉：见 shared.py「工具域阈值与锁」节）；
+仅剩余辅助函数仍依赖主文件加载顺序契约（在 `from agent_tools import *` 前已定义）。
 """
 
 import json
@@ -20,7 +20,7 @@ from collections import deque
 import permissions
 import snapshot as snapshot_mod
 
-from shared import clamp_int  # D4: 参数校验辅助
+from shared import clamp_int, READ_FILE_MAX_BYTES, _READ_LINE_MAX, EDIT_FILE_MAX_SIZE, EDIT_FILE_REGEX_MAX, EXTRACT_MAX_ENTRIES, EXTRACT_MAX_TOTAL_BYTES, EXTRACT_MAX_SINGLE_BYTES, MAX_PROCESSES, _COMMON_PACKAGES, _ARCHIVE_SKIP_DIRS, _SEARCH_EXTS, _SEARCH_SKIP_DIRS  # D4: 参数校验辅助
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 
@@ -37,20 +37,8 @@ _SEARCH_MAX_FILES = 3000         # 单 root 索引条目上限（防内存膨胀
 _SEARCH_SKIP_BIG = 512 * 1024    # 超过该字节的文件不索引（与原实现一致）
 from deepseek_client import (
 
-    EDIT_FILE_MAX_SIZE,
-    EDIT_FILE_REGEX_MAX,
-    EXTRACT_MAX_ENTRIES,
-    EXTRACT_MAX_SINGLE_BYTES,
-    EXTRACT_MAX_TOTAL_BYTES,
-    MAX_PROCESSES,
     PROCESSES,
-    READ_FILE_MAX_BYTES,
-    _ARCHIVE_SKIP_DIRS,
-    _COMMON_PACKAGES,
     _PROCESSES_LOCK,
-    _READ_LINE_MAX,
-    _SEARCH_EXTS,
-    _SEARCH_SKIP_DIRS,
     _atomic_write,
     _emit_process,
     _kill_tree,
@@ -980,11 +968,16 @@ def batch_rename(directory, pattern, replacement, dry_run=False):
 def start_process(command, name=""):
     """后台启动长驻进程（服务器等），输出实时推送终端面板。
 
-    无限制模式：支持完整 shell 语法（管道/重定向/变量），不做命令黑白名单拦截。
+    无限制模式：支持完整 shell 语法（管道/重定向/变量）；若在权限页配置了
+    「禁命令」（shell.blocklist），命中同样拒绝（与 run_command 同一入口）。
     """
     cmd = str(command or "").strip()
     if not cmd:
         return "错误：命令为空"
+    ok, reason, _ = permissions.check_shell(cmd)
+    if not ok:
+        permissions.audit("start_process", cmd[:200], f"denied: {reason[:120]}")
+        return reason
     with _PROCESSES_LOCK:
         for k in [k for k, v in PROCESSES.items() if v.get("exited")]:
             PROCESSES.pop(k, None)

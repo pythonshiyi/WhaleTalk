@@ -6,7 +6,9 @@
 - 本地绝对路径正则 PATH_RE
 - Windows OCR PowerShell 脚本（占位符统一 @PATH@，避免与 $ 变量名冲突）
 """
+import os
 import re
+import threading
 from datetime import datetime, timedelta
 
 # ============================ 峰谷定价 ============================
@@ -310,3 +312,211 @@ if (-not $engine) { '当前系统语言不支持 OCR' } else {
     $result.Text
 }
 """.lstrip()
+
+# ============================ 工具域阈值与锁（基础工具域（日期/天气）） ============================
+# P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
+# 新增工具域阈值常量请添加在此处，勿回写主文件。
+
+WEATHER_TIMEOUT = 5
+
+
+# ============================ 工具域阈值与锁（编程与执行域） ============================
+# P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
+# 新增工具域阈值常量请添加在此处，勿回写主文件。
+
+# ===== run_python 执行模式（v3.9+ 无限制）=====
+# run_python 与直接运行 python -c 等价——不隔离、不静态拦截，可加载全部
+# 已安装库、访问网络、调用系统能力。信任用户与模型，不再内置任何拦截。
+
+RUN_PY_TIMEOUT = 10
+
+RUN_PY_MAX_CHARS = 8000
+
+RUN_PY_MAX_OUTPUT = 20000
+
+# 工具结果"失败"前缀统一判定（main/taskpanel 共享，防散落魔法字符串漂移）
+
+TOOL_RESULT_FAIL_PREFIXES = ("错误", "权限拒绝", "超时", "（用户停止")
+
+PIP_ALLOWLIST_NOTICE = (
+    "注意：run_python 沙箱默认隔离（不加载第三方库），"
+    "如需使用请调用 run_python 时设置 with_site=true。"
+)
+
+
+# ============================ 工具域阈值与锁（文件与进程域） ============================
+# P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
+# 新增工具域阈值常量请添加在此处，勿回写主文件。
+
+READ_FILE_MAX_BYTES = 102400
+
+_READ_LINE_MAX = 102400  # 按行读取的每行上限（防单行数百 MB 撑爆内存）
+
+EDIT_FILE_MAX_SIZE = 20 * 1024 * 1024  # edit_file 全量读入上限（20MB）
+
+EDIT_FILE_REGEX_MAX = 1000  # 正则长度上限（防灾难性回溯挂死工具线程的粗略防线）
+
+EXTRACT_MAX_ENTRIES = 10000  # 解压条目数上限（防 zip 海量小文件 DoS）
+
+EXTRACT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 解压总字节上限（防磁盘写满）
+
+EXTRACT_MAX_SINGLE_BYTES = 2 * 1024 * 1024 * 1024  # 单文件解压大小上限
+
+MAX_PROCESSES = 8
+
+_COMMON_PACKAGES = (
+    "flask", "django", "fastapi", "uvicorn", "requests", "bs4", "pandas",
+    "numpy", "matplotlib", "playwright", "docx", "pytest", "httpx",
+    "openai", "tiktoken", "pillow", "tqdm", "yaml", "jinja2",
+)
+
+_ARCHIVE_SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "build"}
+
+_SEARCH_EXTS = (
+    ".py", ".md", ".txt", ".json", ".html", ".css", ".js", ".ts",
+    ".yaml", ".yml", ".csv", ".log", ".ini", ".cfg", ".toml",
+)
+
+_SEARCH_SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "build"}
+
+
+# ============================ 工具域阈值与锁（记忆与定时任务域） ============================
+# P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
+# 新增工具域阈值常量请添加在此处，勿回写主文件。
+
+MEMORY_MAX_ITEMS = 2000  # v2.16.2 起扩容：伙伴需要记住的更多
+
+MEMORY_MAX_TEXT = 2000
+
+_MEMORY_LOCK = threading.Lock()  # 并行 write_memory 读-改-写串行化，防丢失更新
+
+SELF_PROFILE_LOCK = threading.Lock()
+
+_SELF_PROFILE_LIST_FIELDS = ("preferences", "goals", "milestones", "user_model", "history", "wishes")
+
+SCHEDULES_LOCK = threading.Lock()  # 与 main 的定时任务面板共享（防并发覆盖）
+
+_WORKFLOW_LOCK = threading.Lock()  # 检查-置位原子化：并行工具调用下防双流程同时启动
+
+
+# ============================ 工具域阈值与锁（浏览器与网页域） ============================
+# P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
+# 新增工具域阈值常量请添加在此处，勿回写主文件。
+
+# ===== 二进制下载（P2）：图片/附件/安装包等任意文件 =====（单文件上限，防全量进内存）
+
+DOWNLOAD_MAX_BYTES = 200 * 1024 * 1024  # 单文件 200MB 上限（与 WebDAV 对齐）
+
+SEARCH_MAX_RESULTS = 5
+
+# 搜索引擎注册表：(名称, 质量权重)。调用方经 globals() 动态查找 _search_<名称>；
+# 权重决定聚合输出顺序（数值大的优先展示）。bing/so360 国内稳定；duckduckgo
+# 时好时坏（健康度机制自动跳过）；baidu/sogou/yandex 反爬；google 不可达。
+
+_SEARCH_ENGINES = (
+    ("bing", 3),
+    ("so360", 2),
+    ("duckduckgo", 1),
+)
+
+CALL_API_MAX_BYTES = 500 * 1024  # 响应体上限 500KB（与 fetch_url 输出对齐）
+
+CALL_API_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD")
+
+CALL_API_MAX_HEADERS = 16
+
+RSS_FETCH_TIMEOUT = 10
+
+RSS_MAX_ITEMS = 20
+
+RSS_SUMMARY_MAX = 300
+
+# 精选 RSS 预置源（action=preset 一键添加）：中文 AI/科技/开发者为主
+
+RSS_PRESET_SOURCES = [
+    {"name": "机器之心", "url": "https://www.jiqizhixin.com/rss"},
+    {"name": "量子位", "url": "https://www.qbitai.com/feed"},
+    {"name": "少数派", "url": "https://sspai.com/feed"},
+    {"name": "IT之家", "url": "https://www.ithome.com/rss/"},
+    {"name": "开源中国", "url": "https://www.oschina.net/news/rss"},
+    {"name": "Hacker News", "url": "https://news.ycombinator.com/rss"},
+]
+
+WEBDAV_MAX_SIZE = 200 * 1024 * 1024  # 单文件 200MB 上限（防全量进内存）
+
+
+# ============================ 工具域阈值与锁（桌面与视觉语音域） ============================
+# P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
+# 新增工具域阈值常量请添加在此处，勿回写主文件。
+
+RPA_FAILSAFE = True  # 鼠标移到屏幕左上角时立即中断 RPA（pyautogui failsafe）
+
+MEDIA_MAX_INPUT = 2 * 1024 * 1024 * 1024   # 输入 2GB 上限
+
+MEDIA_FORMATS = {"mp4", "mp3", "webm", "mkv", "avi", "mov", "ogg", "flac", "wav", "gif", "png", "jpg"}
+
+_VISION_LOOP_ACTIONS = ("done", "click", "type", "scroll", "describe")
+
+_BYE_PAT = ("再见", "拜拜", "停止对话", "结束对话", "退下吧", "goodbye", "bye-bye")
+
+_TEAM_ROLE_PRESETS = {
+    "研究员": "资料搜集与事实核查专家：给出结论时尽量带依据与出处线索。",
+    "工程师": "资深工程师：给出可直接落地的方案、代码或命令，注重边界情况。",
+    "评审": "苛刻的技术评审：找漏洞、提风险、给改进清单。",
+    "设计师": "体验设计师：关注交互、可用性与呈现结构，给出具体设计建议。",
+    "分析师": "数据/商业分析师：拆解量化指标，给出决策建议。",
+}
+
+
+# ============================ 工具域阈值与锁（系统与项目域） ============================
+# P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
+# 新增工具域阈值常量请添加在此处，勿回写主文件。
+
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+PROJECT_READ_EXTS = (".py", ".md", ".json", ".txt", ".bat", ".html")
+
+EVO_WRITE_EXTS = (".py", ".md", ".json", ".txt", ".html")
+
+# Windows Toast 脚本：占位符 @TITLE@/@BODY@（非 $title/$body，防用户内容含字面
+# "$body" 被顺序 replace 二次污染）；@DURATION@/@SILENT@ 由 notify_desktop 注入。
+
+_NOTIFY_PS = r"""
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+function Await($WinRtTask, $ResultType) {
+    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+    $netTask = $asTask.Invoke($null, @($WinRtTask))
+    $netTask.Wait(-1) | Out-Null
+    $netTask.Result
+}
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null
+[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime] | Out-Null
+$template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$textNodes = $template.GetElementsByTagName("text")
+$textNodes.Item(0).AppendChild($template.CreateTextNode('@TITLE@')) | Out-Null
+$textNodes.Item(1).AppendChild($template.CreateTextNode('@BODY@')) | Out-Null
+$template.DocumentElement.SetAttribute('duration', '@DURATION@') | Out-Null
+$audio = $template.CreateElement('audio')
+$audio.SetAttribute('silent', '@SILENT@')
+$template.DocumentElement.AppendChild($audio) | Out-Null
+$toast = New-Object Windows.UI.Notifications.ToastNotification $template
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("鲸语 WhaleTalk").Show($toast)
+"""
+
+
+# ============================ 工具域阈值与锁（数据与文档域） ============================
+# P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
+# 新增工具域阈值常量请添加在此处，勿回写主文件。
+
+# ===== 文档处理域：PDF 提取 / PDF 生成 / Word 读取 / PPT 读取（可选依赖模式）=====
+
+PDF_EXTRACT_MAX_OUTPUT = 60000   # pdf_extract 单次输出上限（防撑爆上下文）
+
+DOCX_MAX_DEFAULT = 50000         # docx_read 默认输出上限
+
+# ===== 嵌入式 KV 存储（diskcache 可选依赖；支持 TTL 与模糊检索）=====
+
+KV_VALUE_MAX_BYTES = 1024 * 1024  # value 上限 1MB

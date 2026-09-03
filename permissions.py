@@ -44,7 +44,10 @@ DEFAULT_PERMISSIONS = {
         "timeout": 120,
     },
     "network": {
-        "blocklist": [],           # 黑名单生效时命中的主机/网段拒绝（默认空 = 不限制）
+        # 出厂默认仅预置云元数据地址（169.254.169.254）：它是唯一几乎所有
+        # 合法场景都不会访问的内网地址，作为默认自由下的单点底线；其余内网/回环
+        # 一律放行。用户可自行增删（blocklist_enabled=False 一键全放行时整体跳过）。
+        "blocklist": ["169.254.169.254"],
     },
     # 审批清单（额外限制，默认空 = 零审批、法无禁止皆可为）。
     # 与黑名单同属「可一键启用的限制」：需要时由用户在权限页/配置中自行添加，
@@ -292,24 +295,65 @@ def max_write_size():
         return 50 * 1024 * 1024
 
 
+def _cmd_key(name):
+    """命令名规范化键：取 basename、小写、去 Windows 可执行扩展名。
+
+    使黑名单/白名单条目「powershell」能命中实际命令「powershell.exe」，
+    反之亦然（Windows 用户常混写带不带 .exe）。
+    """
+    n = os.path.basename(str(name or "")).strip().lower()
+    for ext in (".exe", ".com", ".bat", ".cmd"):
+        if n.endswith(ext):
+            return n[: -len(ext)]
+    return n
+
+
+_SHELL_SEPARATORS = ("|", "||", "&&", "&", ";")
+
+
+def _shell_command_tokens(argv):
+    """从 token 流提取「命令位置」token：首 token + 紧随 shell 连接符的 token。
+
+    使 `a | b`、`a && b` 中后续命令同样接受黑名单检查（blacklist 模式用），
+    避免黑名单被管道/链式写法绕过；引号内连接符不会被 shlex 拆成独立 token，
+    不会误判。
+    """
+    cmds = []
+    expect_cmd = True
+    for tok in argv:
+        if expect_cmd:
+            cmds.append(tok)
+            expect_cmd = False
+        elif tok in _SHELL_SEPARATORS:
+            expect_cmd = True
+    return cmds
+
+
 def check_shell(command):
     """命令判定：解析 argv，按模式执行黑名单或白名单。返回 (allowed, reason, argv)。
 
-    blocklist_enabled=False（一键全放行）时跳过命令黑名单检查。
+    blacklist 模式（默认自由）：仅当用户显式配置了 shell.blocklist 且命中时拒绝；
+    默认空黑名单 = 零限制；blocklist_enabled=False（一键全放行）跳过黑名单检查。
+    解析失败（如未闭合引号）在 blacklist 模式放行——自由优先，由 shell 自行报错；
+    旧 whitelist 模式（默认拒绝）则仍拒绝。
     """
     if not _data:
         return False, "权限模块未初始化", None
     try:
         argv = shlex.split(str(command or ""), posix=(os.name != "nt"))
     except ValueError as e:
+        if security_mode() == "blacklist":
+            return True, "", None  # 默认自由：无法解析即无法证明命中黑名单，放行
         return False, f"命令解析失败：{e}", None
     if not argv:
         return False, "命令为空", None
-    base = os.path.basename(argv[0]).lower()
     if bool(_data.get("blocklist_enabled", True)):
-        blocklist = [str(b).strip().lower() for b in _data["shell"].get("blocklist", []) if str(b).strip()]
-        if base in blocklist:
-            return False, f"权限拒绝：命令在黑名单：{argv[0]}", None
+        blocklist = [_cmd_key(b) for b in _data["shell"].get("blocklist", []) if str(b).strip()]
+        # blacklist 模式检查每个「命令位置」（含管道/链式后命令），防 `a | 禁命令` 绕过；
+        # whitelist 旧模式保持首命令语义（下方单独判定）
+        for tok in _shell_command_tokens(argv) if security_mode() == "blacklist" else argv[:1]:
+            if _cmd_key(tok) in blocklist:
+                return False, f"权限拒绝：命令在黑名单：{tok}", None
     if security_mode() == "blacklist":
         return True, "", argv
     # ---- 旧 whitelist 模式 ----
@@ -320,11 +364,8 @@ def check_shell(command):
             "如需授权，可调用 request_permission(action_type='command') 请求开启",
             None,
         )
-    whitelist = [
-        os.path.basename(str(w)).lower()
-        for w in _data["shell"].get("whitelist", [])
-    ]
-    if base not in whitelist:
+    whitelist = [_cmd_key(w) for w in _data["shell"].get("whitelist", [])]
+    if _cmd_key(argv[0]) not in whitelist:
         return (
             False,
             f"权限拒绝：命令不在白名单：{argv[0]}（白名单：{_data['shell'].get('whitelist')}）。"

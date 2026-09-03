@@ -2,8 +2,8 @@
 """tool_brain —— P0-1 批量拆分（工具域模块）：🧠 记忆与定时任务.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
-引用 deepseek_client 的常量与辅助依赖加载顺序契约——主文件在共享基建全部定义后
-才执行 `from agent_tools import *`，此处 from-import 可安全解析。
+阈值常量/锁统一从 shared 导入（P1-3 下沉：见 shared.py「工具域阈值与锁」节）；
+仅剩余辅助函数仍依赖主文件加载顺序契约（在 `from agent_tools import *` 前已定义）。
 """
 
 import difflib
@@ -17,18 +17,11 @@ from datetime import datetime
 
 import permissions
 
-from shared import clamp_int, cron_field_ok
+from shared import clamp_int, cron_field_ok, MEMORY_MAX_ITEMS, MEMORY_MAX_TEXT, _MEMORY_LOCK, SELF_PROFILE_LOCK, _SELF_PROFILE_LIST_FIELDS, SCHEDULES_LOCK, _WORKFLOW_LOCK
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
 
-    MEMORY_MAX_ITEMS,
-    MEMORY_MAX_TEXT,
-    SCHEDULES_LOCK,
-    SELF_PROFILE_LOCK,
-    _MEMORY_LOCK,
-    _SELF_PROFILE_LIST_FIELDS,
-    _WORKFLOW_LOCK,
     _brain_sync_delete,
     _brain_sync_memory,
     _brain_sync_update,

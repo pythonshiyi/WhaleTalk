@@ -2,12 +2,11 @@
 """🔧 系统与基础 —— 首批拆分工具域（P0-1 巨石拆分）。
 
 从 deepseek_client.py 原样迁出的工具（装饰器 + 函数体），注册进 toolkit
-模块级注册表（跨模块共享单例）。共享符号策略（加载顺序契约见
-deepseek_client.py 中 `from agent_tools import *` 处的注释）：
+模块级注册表（跨模块共享单例）。共享符号策略：
 
-  - 无循环的独立模块（net_utils）顶层直接 import；
-  - deepseek_client 内部常量（WEATHER_TIMEOUT）在 deepseek_client 执行到
-    `from agent_tools import *` 时已定义，可安全 from-import。
+  - 无循环的独立模块（net_utils / shared）顶层直接 import；
+  - 本模块已无任何 deepseek_client 回指（P1-3：阈值常量下沉 shared 后
+    最后一个 dc 依赖被消除），可独立导入。
 """
 
 import logging
@@ -15,8 +14,8 @@ from datetime import datetime
 from urllib.parse import quote
 
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
+from shared import WEATHER_TIMEOUT  # 天气请求超时（工具域阈值，见 shared.py）
 from net_utils import _http_client
-from deepseek_client import WEATHER_TIMEOUT  # 契约：主文件共享基建先于本包导入完成
 
 
 @tool(
