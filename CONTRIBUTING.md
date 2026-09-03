@@ -32,6 +32,7 @@ npm run build    # 产物输出 webui/dist（由 api_server 同源服务）
 - 所有用户可见输入（路径 / 命令 / SQL/工具参数）必须经校验：路径走 `permissions.resolve()`；命令走 `permissions.check_shell()`；网络请求走 `permissions.check_network_host()`（blacklist 模式只拦用户黑名单；旧 whitelist 模式回退 `security._safe_url` 严格 SSRF 判断）；路径越界 / 注入防护不得绕过
 - 写文件类工具必须返回真实结果（字节数 / 行数 / 差异），禁止用"假成功"占位
 - 错误处理遵循"显式失败"原则：缺依赖/不可用时必须向用户明确报错与安装指引，禁止静默吞错后假装成功
+- 工具返回约定（历史沉淀，全仓 500+ 处内联统一）：错误一律以「错误：」开头（全角冒号）；成功态用结构化 Markdown（标题 + 明细行）；纯数据才返回 JSON 字符串（以 `{` 开头）——返回契约不需要额外包装函数
 - 日志用 `logging`；异常不要吞掉——`except Exception` 至少要 `logging.exception`
 - 中文注释为主 + 必要英文注释；注释解释「为什么」，而不是「是什么」
 
