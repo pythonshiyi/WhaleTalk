@@ -2,6 +2,20 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.4（2026-09-03）—— 🏷 正式固化「未发版追加」系列：版本号 3.8.3 → 3.8.4
+
+**正式发版**：`config_defaults.VERSION` 3.8.3 → **3.8.4**。v3.8.3（2026-08-31）以来代码审查驱动的全部「未发版追加」提交首次固化并打 tag（下方各「v3.8.3（未发版追加）」段 + 本节 P1/P2 收尾即为本版本内容明细）；「默认自由，法无禁止皆可为」安全模型随 README / SECURITY.md / CHANGELOG 最终对齐。**本版本不引入任何默认限制回退**——只让用户可控机制（黑名单/审批清单，均默认 off）真正生效。
+
+### 新增收尾：审查报告风险清单 P1/P2 全量闭环（代码此前已随提交落地，此处留档）
+- **P1-1**：禁命令黑名单激活——`run_command`/`start_process` 接入 `permissions.check_shell`（此前黑名单空转）；**P1-2**：出厂 `network.blocklist` 预置云元数据 `169.254.169.254` 单点底线（`blocklist_enabled=False` 一键全放行时整体跳过）；**P1-3**：49 个工具域阈值常量/锁下沉 `shared.py`，域包半循环静态导入面 174 → 123；**P1-4**：文档与安全现实统一（README/SECURITY/CONTRIBUTING/TECH_NOTES/MODULES 三层表述 + `check_docs` 12 条 STALE_TEXT 防回潮门禁）；**P1-5**：`/v1/config/reset` GET 副作用分支删除，恢复默认只经 POST
+- **P2-1**：零调用返回契约 helper `fmt_err/fmt_ok/fmt_json` 移除；**P2-2**：`do_GET` 46 分支 if/elif 路由表化（`@_get_route` + qpath matcher，端点口径 79 → 85）；**P2-3**：前端 API 收编——`api.js` 全量 JSDoc 类型化命名导出、组件零裸路径（新门禁 `noBareApiCalls.test.mjs` 递归断言 `api.api(` 不存在）、`localStorage/location/history` 收敛 SSR 安全层；**P2-4**：`fetch_blocked` 工具名别名接线入迁移/审计门禁；**P2-6**：`run_python` 移除 `with_site` 死参数 + `PIP_ALLOWLIST_NOTICE` 幽灵文案清理；**P2-8**：`/v1/token` 端点加固——有 Origin 须匹配白名单、无 Origin 校验 Host 回环（防 DNS rebinding，判定矩阵 7 用例）；**P2-9**：工具系统审计 **warn 13 → 0**——8 工具 schema 描述去除「需安装/可选依赖/未安装时提示」门槛措辞（改为点名依赖库的陈述式，依赖缺失返回安装指引的真实行为不变），`KNOWN_ALIASES` 登记即豁免（未登记差异仍按 error 拦截）
+
+### 固化内容（下方「v3.8.3（未发版追加）」各段，明细见各段不再重复）
+P0-1 巨石拆分三批收官（117 工具迁入 `agent_tools/`，主文件 13,115 → 4,484 行）、D/L/C 三层优化 16 项、A1/A6 返回契约统一与执行链路测试固化、前端全量审查修复（2 P0 + 6 P1 + 12 P2）、audit_preactivate_hints 六层审计补全、恢复默认自由（任务模式无限权限 + 黑名单主导一键开关）、app_manage 跨平台包管理器自动探测、browser_navigate 多窗口/多页签句柄管理。
+
+### 回归
+- pytest **131 passed**；四门禁全绿（audit `--strict` error 0 · warn 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 85 路由 · 3.8.4）；前端 `npm test` / `typecheck` / `build` 全绿
+
 ## v3.8.3（未发版追加）—— 🧹 修复批次：权限默认值纠偏 + 工具域常量下沉 + 安全文档统一（P1-1 → P1-4）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。代码审查报告 P1 级四条与配套文档债务一次性收口；语义全部保持「默认自由，法无禁止皆可为」——本批次**不引入任何默认限制**，只让已有用户可控机制真正生效、让文档与代码现实一致。
