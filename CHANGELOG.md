@@ -2,6 +2,26 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.3（未发版追加）—— 🧹 修复批次：权限默认值纠偏 + 工具域常量下沉 + 安全文档统一（P1-1 → P1-4）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。代码审查报告 P1 级四条与配套文档债务一次性收口；语义全部保持「默认自由，法无禁止皆可为」——本批次**不引入任何默认限制**，只让已有用户可控机制真正生效、让文档与代码现实一致。
+
+### 代码修复（此前已随提交落地，此处留档）
+- **P1-1 禁命令黑名单激活**：`run_command`/`start_process` 此前绕过 `permissions.check_shell`（黑名单空转）；接入后用户配置的 shell 黑名单真正生效
+- **P1-2 默认网络底线**：出厂 `network.blocklist` 预置云元数据地址 `169.254.169.254`（唯一几乎所有合法场景都不会访问的内网地址）；`blocklist_enabled=False` 一键全放行时整体跳过——底线可被用户主动解除
+- **P1-3 工具域常量下沉 `shared.py`**：49 个工具域阈值常量/锁从 `deepseek_client.py` 迁移归口（按 8 个语义组），dc 顶部 re-export 保旧路径（对象身份一致）；`agent_tools/*` 不再回指 dc 顶层常量，`tool_basic` 归零 dc 依赖，消除域包半循环依赖的静态导入面（174 → 123）
+
+### P1-4 文档与安全现实统一（本提交）
+- **README**：「安全与隐私」重写为「默认自由 + 黑名单 + 硬限额」三层表述；删除幽灵声明（sandbox Python 禁用危险模块 / zip 炸弹防护 / 可执行文件拒绝直接打开——均无对应代码）；架构图补 `agent_tools/`、`toolkit.py`、`shared.py` 层
+- **SECURITY.md**：支持版本表 3.5.x → 3.8.x；「run_python 静态 AST + `-I -S` 沙箱」改为无沙箱直通语义；SSRF 表述改为双模式（blacklist 只拦用户黑名单 / 旧 whitelist 才严格判断）；删「新增工具接入审批流」旧要求
+- **CONTRIBUTING.md**：审批语义改为「默认零审批，确需加严才登记 `approval_actions`」；修正 `permissions.py` 职责行（移除无来源的「双工作线程池」）；提交示例更新
+- **TECH_NOTES.md / MODULES.md**：权限与安全章节、`security.py`/`permissions.py` 模块描述同步双模式语义
+- **`tools/check_docs.py`**：`STALE_TEXT` 新增 12 条安全表述门禁——上述过时片段一旦回潮即被 CI 拦截（D6 元债务闭环）
+- `security.py` 内部 docstring 版本错标（v3.9+ → v3.8.3+）修正
+
+### 回归
+- pytest **116 passed**；`check_docs` 实测 135 工具 · 79 路由 · 3.8.3 全绿（含新增 STALE_TEXT 门禁）
+
 ## v3.8.3（未发版追加）—— 📦 app_manage 跨平台包管理器自动探测（修复"无管理器不可用"）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.3）。此前 app_manage 仅支持 winget/choco，本机无任一管理器时（managers 全 ❌）完全不可用；改造为按平台自动探测完整工具链，并支持一条命令引导安装 Scoop（免管理员）——"装软件"在任何机器上都能闭环。
@@ -44,12 +64,14 @@
 - **杂项**：`SettingsPage`「工具库与权限」入口描述 115 → 135 工具（过时文案修正）
 
 ### 保留的安全底线（非"限制"，是"保护"）
-- SSRF 防护（`security._safe_url` 的 `_is_private_host` 硬拦 169.254.169.254/内网）独立于权限层黑名单，**不受一键全放行影响**——无限权限不等于裸奔，恶意/危险 URL 在请求层永远被拦
-- `run_python` 静态危险检查在任务模式（full_auto）下按设计放行（用户显式授权的无限权限）
+> ⚠️ 本段原稿（SSRF 请求层硬拦内网/元数据、run_python 静态危险检查"按设计放行"）已被后续提交推翻，以下为对齐现实后的表述：
+> - `222beec` 移除所有内置限制（run_python 去 `-S` 与静态拦截、网络放开内网/回环）；`29f063e` 清理 image_generate 残留的 `allow_loopback=False`。
+> - 现网语义：默认 `blacklist` 模式下 `security._safe_url` **只拦用户 `network.blocklist`**（无独立请求层 SSRF 硬拦），出厂默认仅预置 `169.254.169.254` 一项（P1-2 迁移为初始网络黑名单），受 `blocklist_enabled` 总开关控制；旧 `whitelist` 模式才保留严格 SSRF 判断（内网/回环/链路本地阻止、云元数据不可豁免）。
+> - `run_python` 现等同本机 `python -c` 直通（无静态危险检查、无 `-I -S`）——"无限制模式"即设计本身，由用户显式授权的无限权限承担风险。
 
 ### 回归
 - 新增/重写 `tests/test_safety_defaults.py`（13 用例）：默认自由断言（full_auto=True / approval_actions=[] / blocklist_enabled=True）、审批机制保留（用户配置清单后仍走回调/拒绝拦截/FULL_AUTO 跳过）、**黑名单开关三域验证**（shell/filesystem/network 关闭即全放行）、`_config_reset` 回默认任务模式、前端初始 mode 与向导文案静态检查
-- 后端冒烟：全新安装加载链确认默认 `full_auto=True / approval_actions=[] / blocklist_enabled=True`，`check_shell`/`check_filesystem`/`request_approval(delete_file)` 全部默认放行，SSRF 层仍拦云元数据
+- 后端冒烟：全新安装加载链确认默认 `full_auto=True / approval_actions=[] / blocklist_enabled=True`，`check_shell`/`check_filesystem`/`request_approval(delete_file)` 全部默认放行，网络黑名单出厂仅预置云元数据地址 `169.254.169.254`（blacklist 模式唯一默认底线，可增删/一键全放行整体跳过；旧 whitelist 模式才恢复严格 SSRF 判断）
 - 全量 pytest **105 passed**；四门禁全绿（audit `--strict` error 0 / validate 135 全链路 / island 135×9 层无孤岛 / check_docs 135 工具 · 79 路由 · 3.8.3）；前端 `npm run typecheck` + 三套件全绿
 
 ## v3.8.3（未发版追加）—— 🤖 AI 自我进化提案实现：audit_preactivate_hints（六层审计补全）

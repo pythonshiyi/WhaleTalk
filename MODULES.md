@@ -42,8 +42,8 @@ deepseek_client.py（能力引擎：DeepSeekClient + 135 工具 + smart_tools）
 
 | 模块 | 职责 |
 |---|---|
-| `permissions.py` | 权限模型 v2：blacklist（默认放行+黑名单）/ whitelist（可回退）/ FULL_AUTO 完全智能；路径/命令/网络判定；审计日志（只记不拦） |
-| `security.py` | SSRF 防护：内网/回环/保留段判定、云元数据永远拦截、DNS 重绑定防护、信任白名单（CIDR/域后缀） |
+| `permissions.py` | 权限模型（默认自由）：blacklist（默认放行 + 用户黑名单，`blocklist_enabled` 一键开关，出厂仅预置 169.254.169.254）/ whitelist（旧模式可回退）；路径/命令/网络判定；审计日志（只记不拦） |
+| `security.py` | 网络主机判定/`_safe_url`：blacklist 模式只拦用户 `network.blocklist`（内网/回环默认放行）；旧 whitelist 模式恢复严格 SSRF 判断（内网/回环/保留段、云元数据不可豁免、DNS 重绑定）；信任白名单（CIDR/域后缀） |
 | `crypto.py` | API Key DPAPI 加密（`dpapi:` 前缀 + base64），fail-closed（加密失败绝不写明文） |
 | `stores.py` | 本地 JSON 存取：最近产物/成功模式/失败模式/任务日志/长期记忆/定时任务（统一原子写） |
 | `stats.py` | 用量统计（按天×模型累计）+ 官方峰谷定价费用估算 |

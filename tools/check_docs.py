@@ -18,6 +18,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEEPSEEK = REPO_ROOT / "deepseek_client.py"
 API = REPO_ROOT / "api_server.py"
 CFG = REPO_ROOT / "config_defaults.py"
+SECURITY = REPO_ROOT / "SECURITY.md"
+CONTRIB = REPO_ROOT / "CONTRIBUTING.md"
 README = REPO_ROOT / "README.md"
 TECH = REPO_ROOT / "TECH_NOTES.md"
 MODULES = REPO_ROOT / "MODULES.md"
@@ -116,11 +118,24 @@ CLAIMS = [
 ]
 
 # ── 文本断言：文档不应再包含的过期表述 ──
+# 安全语义（P1-4 统一为「默认自由 + 黑名单 + 硬限额」；run_python 无沙箱）：
 STALE_TEXT = [
     (TECH, "暂无 tests/ 目录",       "tests/ 已存在（28 个 pytest 用例）"),
     (TECH, "当前不跑 pytest",        "CI 已接入 pytest tests/"),
     (TECH, "118 项 Agent 工具",      "实际 135 个工具"),
     (README, "120 项 Agent 工具",    "实际 135 个工具"),
+    # ── P1-4 文档统一门禁：以下片段一旦回潮即说明安全文档又漂移 ──
+    (README, "sandbox Python 禁用危险模块", "run_python 已无沙箱/静态拦截（等同本机 python -c）"),
+    (README, "文件权限白名单",         "白名单 UI 已移除（黑名单主导；旧 whitelist 仅回退路径）"),
+    (README, "工具权限黑白名单",       "已无黑白名单双轨表述（黑名单为唯一限制来源）"),
+    (README, "zip 炸弹防护",          "无对应代码，属白名单时代的幽灵声明"),
+    (README, "沙箱 Python、",         "run_python 已直通本机解释器（无沙箱）"),
+    (SECURITY, "3.5.x（main 分支）",  "当前支持版本为 3.8.x"),
+    (SECURITY, "静态 AST 检查 + `-I -S` 隔离执行", "run_python 无沙箱（等同本机 python -c）"),
+    (SECURITY, "要求新增行动工具接入审批流", "默认零审批（approval_actions 空）；确需加严才登记"),
+    (CONTRIB, "沙箱补 ast 校验",      "run_python 无沙箱；示例提交信息已过时"),
+    (TECH, "沙箱 Python：AST 静态检查", "run_python 无沙箱（等同本机 python -c）"),
+    (TECH, "zip 炸弹防护",            "无对应代码（已随白名单时代移除）"),
 ]
 
 

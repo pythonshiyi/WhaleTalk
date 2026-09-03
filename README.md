@@ -51,7 +51,7 @@
 - **说得出**：💬 对话/思考模式/语音合成（TTS：Piper 本地离线 / Edge 在线 / SAPI，**自动朗读可逐句流式跟读**）/朗读
 
 > 🎙 **Piper 本地语音**：设置 → 🔌 可选能力 →「Piper 本地语音」一键安装——自动装齐依赖并下载中文语音模型（官方源超时自动回退国内镜像），完成后**断网也能本地离线朗读**，全程无需手工配置。
-- **做得了**：⚡ 135 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理/快照恢复），权限模型分层
+- **做得了**：⚡ 135 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理/快照恢复），默认自由权限模型（黑名单为唯一限制来源）
 - **会进化**：🧬 自我进化（提案分支、失败模式库、成功模式复用）
 - **自疗**：🔁 失败模式沉淀 + 已知坑注入，AI 越用越聪明
 
@@ -82,7 +82,7 @@
 ### ⚡ Agent 工具链（135 项）
 
 - **信息**：搜索（多引擎/分页/过滤/健康降级）、GitHub、实时热点（Hacker News）、网页抓取（含被墙站点代理通道）、RSS
-- **执行**：沙箱 Python、终端/进程、pip 安装、浏览器自动化
+- **执行**：Python（`run_python` 直通本机解释器）、终端/进程、pip 安装、浏览器自动化
 - **数据**：SQLite/MySQL/PostgreSQL、CSV/Excel、图表、KV 存储（diskcache）、WebDAV
 - **文档**：PDF 提取/生成、Word/PPT、二维码、音视频（ffmpeg）、Markdown
 - **媒体**：图像生成/处理、语音转文字（whisper）、TTS
@@ -164,8 +164,12 @@ python brainkit.py import-key seed.whale                # 迁移仪式（导入�
 │                api_server.py （本地 API）             │
 │  会话/配置/上下文/工具调用/记忆/文件/进程/状态/etc     │
 ├──────────────────────────────────────────────────────┤
-│                  deepseek_client.py                  │
-│  DeepSeek V4 客户端（thinking/多模态/tool/压缩/缓存） │
+│                  deepseek_client.py                   │
+│  DeepSeek V4 客户端（thinking/多模态/tool/压缩/缓存）  │
+│  + 工具域常量 re-export（shared.py 保留旧路径）       │
+├──────────────────────────────────────────────────────┤
+│  agent_tools/（12 个工具域模块 · @tool() 声明）        │
+│  toolkit.py（六层注册表构建）· shared.py（域阈值/锁） │
 ├──────────────────────────────────────────────────────┤
 │  backend：permissions · stores · stats · crypto ·    │
 │  plugins · wechat_writer · sprint · config_utils ... │
@@ -174,7 +178,7 @@ python brainkit.py import-key seed.whale                # 迁移仪式（导入�
 
 - **入口**：`web_app.py`（唯一入口）：启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API；`--no-tray`/`--no-browser` 可选
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置/会话/记忆/统计；API Key 加密存储）
-- **安全**：仅 127.0.0.1 监听 + Bearer token；工具权限黑白名单；SSRF 防护
+- **安全**：仅 127.0.0.1 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源，带一键全放行开关）
 
 ## 🔧 安装与启动
 
@@ -227,9 +231,12 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 
 ## 🔒 安全与隐私
 
-- **数据不出本机**：默认仅 127.0.0.1 监听；API Key 加密存储；隐私模式可关快照/会话/记忆/统计
-- **工具控制**：文件权限白名单（`permissions.json`）、SSRF 防护（内网/元数据拦截）、审批闸门（高危工具）
-- **安全承诺**：可执行文件拒绝直接打开；sandbox Python 禁用危险模块；上传/下载限额；zip 炸弹防护
+安全模型分层——**默认自由**，限制全部来自用户配置而非程序默认强加：
+
+- **默认自由**：默认任务模式（`full_auto`）零审批、零白名单——AI 可调用全部 135 项工具；`run_python`/`run_command` 等同本机直接执行（无沙箱/无静态拦截）
+- **黑名单（唯一限制来源）**：用户在权限页添加 shell 命令 / 文件路径 / 网络主机黑名单；出厂默认仅预置云元数据地址 `169.254.169.254` 一项；`blocklist_enabled` 一键全放行开关（关闭连黑名单也不拦）；旧 `whitelist` 严格模式与高危审批清单（`approval_actions`）保留为可选回退/加严路径，均非默认
+- **硬限额（防误伤兜底）**：读取/下载/响应体大小与工具超时上限（如单文件下载 ≤200MB、API 响应 ≤500KB、`run_python` ≤10s）；写操作自动快照可恢复；删除默认进回收站
+- **数据不出本机**：仅 127.0.0.1 监听 + Bearer token；API Key DPAPI 加密存储；隐私模式可关快照/会话/记忆/统计
 - 详见 [SECURITY.md](SECURITY.md)
 
 ## 📄 文档

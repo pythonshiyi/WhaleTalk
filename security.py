@@ -149,7 +149,7 @@ def _is_private_host(host, allow_loopback=True):
 def _safe_url(url, allow_loopback=True):
     """URL 安全校验。
 
-    无限制模式（v3.9+，blacklist 默认）：只按用户配置的 network.blocklist 拦截，
+    无限制模式（v3.8.3+ 起默认，blacklist）：只按用户配置的 network.blocklist 拦截，
     内网/回环/云元数据等一律放行——信任用户与模型，不内置 SSRF 硬判。
     - permissions.security_mode() == "blacklist"（默认）：只拦 network.blocklist。
     - permissions.security_mode() == "whitelist"（旧模式）：保持旧 SSRF 严格判断。

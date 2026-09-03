@@ -149,19 +149,19 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 
 ## 11. 权限与安全
 
-**权限模型 v2**（permissions.py）：
-- `security_mode = "blacklist"`（默认）：AI 默认拥有全部行动能力，黑名单明确禁止
-- `whitelist`（旧模式可回退）：默认拒绝，白名单放行（dir/command/write）
-- `FULL_AUTO` 完全智能：零审批零开关，黑名单仍生效
-- 审计日志只记录不拦截（隐私模式关闭）；路径 `resolve()` 规范化防穿越；网络黑名单支持 IP/CIDR/`*.domain`
+**权限模型（默认自由）**（permissions.py）：
+- `security_mode = "blacklist"`（默认）：AI 默认拥有全部行动能力；限制只来自用户黑名单（shell 命令 / 文件路径 / 网络主机三域，支持 IP/CIDR/`*.domain`），出厂默认仅预置云元数据地址 `169.254.169.254` 一项
+- `blocklist_enabled`（默认 `True`）：黑名单总开关；`False` = 一键全放行（连黑名单也不拦）
+- 默认任务模式 `full_auto=True`：零审批（`approval_actions` 默认空）；高危审批清单与旧 `whitelist` 严格模式（默认拒绝 + 白名单放行 dir/command/write）保留为可选加严路径，非默认
+- 审计日志只记录不拦截（隐私模式关闭）；路径 `resolve()` 规范化防穿越
 
 **安全纵深**：
 - API Key DPAPI 加密（`crypto.py`）：加密失败 fail-closed（磁盘保留原密文，绝不写明文）
-- SSRF（`security.py`）：内网/回环/保留段默认阻止（回环可配放行用于本地开发验证）；**云元数据 169.254.0.0/16 永远拦截（白名单不可豁免）**；DNS 重绑定防护（任一解析落内网即拦截）；搜索链接过滤保持严格（外部来源是注入源，回环不放行）
+- 网络请求（`security._safe_url`）：默认 `blacklist` 模式只拦用户 `network.blocklist`（内网/回环默认放行——信任用户与模型）；仅旧 `whitelist` 模式恢复严格 SSRF 判断（内网/回环/保留段阻止、**云元数据 169.254.0.0/16 永远拦截、白名单不可豁免**、DNS 重绑定防护）
 - CORS 白名单 + Bearer token + 仅 127.0.0.1 监听 + 请求体上限
-- 沙箱 Python：AST 静态检查 + `-I -S` 隔离执行
+- `run_python` 等同本机 `python -c` 直通解释器（无 `-I -S` 隔离、无静态 AST 危险检查）——能力与风险均由用户显式授权承担
 - 进程：`kill_tree`（taskkill /T）防孙进程残留；服务停止清理全部子进程
-- 文件：zip 炸弹防护、上传/下载限额、可执行文件拒绝直接打开
+- 文件：写操作自动快照可恢复（`snapshot.py`）；删除默认进回收站；各工具带大小/超时上限兜底
 
 ## 12. 数据与存储
 
