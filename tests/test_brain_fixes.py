@@ -187,7 +187,8 @@ def test_brain_context_injects_self_model_and_decisions(brain_tmp):
     bk.record_decision("采用镜像源", "直连超时", "提速稳定")
     bk.remember_structured("用户偏好表格化输出", type="偏好", importance=4, source="测试")
     ctx = __import__("brain_api").brain_context()
-    assert "自我认知 · 我知道" in ctx and "我不确定" in ctx and "我的局限" in ctx
+    # 段模型输出：内容在「自我认知/未决决策/近期记忆」段标题下
+    assert "自我认知" in ctx and "我知道" in ctx and "我不确定" in ctx and "我的局限" in ctx
     assert "未决决策" in ctx and "采用镜像源" in ctx
     assert "近期记忆" in ctx and "表格化输出" in ctx
 
