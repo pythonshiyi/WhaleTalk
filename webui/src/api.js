@@ -271,18 +271,26 @@ export async function probeBackendHealth() {
  */
 export function watchBackend(interval = 5000, onChange) {
   let alive = true;
-  /** @type {boolean | null} */
-  let last = null;
+  /** @type {boolean|null} */
+  let reported = null;   // 最近一次回调给 onChange 的状态(null=未定)
+  let fails = 0;         // 连续失败数
+  /** @param {boolean} ok */
+  const set = (ok) => {
+    if (reported === ok) return;
+    reported = ok;
+    try { onChange(ok); } catch (e) { silentWarn(e, "api"); }
+    if (ok) backendOk = null;  // 恢复连接时重置缓存
+  };
   const tick = async () => {
     if (!alive) return;
     let ok = false;
     try { ok = await probeBackendHealth(); } catch { ok = false; }
-    if (alive && ok !== last) {
-      last = ok;
-      try { onChange(ok); } catch (e) { silentWarn(e, "api"); }
-      // 恢复连接时重置缓存，让各页面重新拉取真实数据
-      if (ok) backendOk = null;
-    }
+    if (ok) { fails = 0; }
+    else { fails++; }
+    // 在线基线：首次即定。
+    if (reported === null) { set(ok); return; }
+    if (ok && reported === false) { set(true); return; }         // 恢复：1 次成功即翻回
+    if (!ok && reported !== false && fails >= 2) { set(false); } // 断开：需连续 2 次失败(防瞬断误报)
   };
   tick();
   const iv = setInterval(tick, interval);

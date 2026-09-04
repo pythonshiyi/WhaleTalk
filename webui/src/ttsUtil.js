@@ -454,36 +454,13 @@ export function stopSpeak() {
   return had;
 }
 
-/** 从已合成 url 直接播放一段音频（不经 synthesize，speakText 预合成用）。 */
-function playUrlRaw(url, volumePct) {
-  return new Promise((resolve, reject) => {
-    const audio = new Audio(url);
-    audio.volume = Math.max(0, Math.min(1, (volumePct ?? 100) / 100));
-    let settled = false;
-    let watchdog = null;
-    const clearWatch = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null; } };
-    const done = () => {
-      if (settled) return; settled = true; clearWatch();
-      if (currentAudio === audio) currentAudio = null;
-      if (currentResolve === done) currentResolve = null;
-      resolve();
-    };
-    audio.onloadedmetadata = () => {
-      if (settled) return;
-      const d = audio.duration;
-      if (d && isFinite(d) && d > 0) watchdog = setTimeout(done, d * 1000 + 4000);
-    };
-    audio.onended = done;
-    audio.onerror = () => {
-      if (settled) return; settled = true; clearWatch();
-      if (currentAudio === audio) currentAudio = null;
-      if (currentResolve === done) currentResolve = null;
-      reject(new Error("音频解码/播放失败"));
-    };
-    currentAudio = audio;
-    currentResolve = done;
-    audio.play().catch(() => { if (!settled) { settled = true; clearWatch(); currentAudio = null; currentResolve = null; reject(new Error("播放被拦截")); } });
-  });
+/**
+ * 从「后端相对 urlPath」直接播放一段音频（不经本模块 synthesize）。
+ * 关键：后端音频端点需要 Bearer 鉴权 → 不能 `new Audio(urlPath)`(浏览器带不上头)，
+ * 必须像 playUrl 一样先 fetchAudio(带 Authorization) 拿 blob 再播。speakText/流式朗读器预合成用它。
+ */
+function playUrlRaw(urlPath, volumePct) {
+  return playUrl(urlPath, volumePct);
 }
 
 // ═══════════ 流式句子自动朗读器（sentence auto）：边说边读、后台预合成、句间无缝 ═══════════

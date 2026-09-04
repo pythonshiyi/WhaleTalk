@@ -2,6 +2,21 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.5（未发版追加·语音修复）—— 🔊 修"合成中但没声音/手动失败" + 误报"后端未连接"
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.5）。上一版引入流式朗读器后出现两个问题：
+
+### ① 合成中但无声音、手动朗读感叹号（根因）
+新 `playUrlRaw` 用 `new Audio(后端相对urlPath)` 直接播——但后端 `/v1/tts/audio/*` 需 **Bearer 鉴权**，`new Audio()` 带不上请求头 → 401 → 无声音；"试听"用 data: 提示音(不经后端)所以有声。
+- **修复**：`playUrlRaw` 委托 `playUrl`（`fetchAudio` 带 Authorization → blob → 播放）；`speakText`/`createStreamSpeaker` 预合成路径一并走对
+
+### ② AI 回复后误报"后端服务未连接"横幅
+服务端 TTS 为同步合成，流式多句并行合成会占住本地 server 线程 → `/health` 单次超时 → 旧 `watchBackend` 单次失败即翻转成"已断" → 假警报。
+- **修复**：`watchBackend` 加**连续失败防抖**——需连续 ≥2 次 /health 失败才判定"已断"；1 次成功立即恢复在线
+
+### 回归
+前端 tsc typecheck + vite build + npm test 全绿
+
 ## v3.8.5（未发版追加·语音修复）—— 🔊 修 sentence 自动朗读"句句停顿（停一下再播）"
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.5）。上一版基础自然化后，用户反馈 **sentence 自动朗读每句之间明显停顿**（"停顿生成一会再播放、每一句都停顿"）。根因：sentence 模式走 `feedAuto → enqueueSpeak` 逐句**串行"合成→等→播"**——每句都要等自己合成完才开播，句间必然卡一段合成时间（预合成只作用于手动/full 的 speakText，没作用到 sentence 自动朗读）。
