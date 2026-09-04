@@ -1,6 +1,7 @@
 import React from "react";
 import * as api from "../api.js";
 import BrainHealth from "./BrainHealth.jsx";
+import BrainTimeline from "./BrainTimeline.jsx";
 
 // ── 鲸语大脑（指挥舱：身份 / 心跳 / 时光备份 / 生命延续 / 对话自我）────────
 function BrainBlock() {
@@ -26,6 +27,7 @@ function BrainBlock() {
   const [connErr, setConnErr] = React.useState("");
   const [acc, setAcc] = React.useState(""); // merge | migrate | cleanup
   const [mirrorDir, setMirrorDir] = React.useState(""); // B5 异地备份目录
+  const [tlOpen, setTlOpen] = React.useState(false); // U1 认知时间轴（懒加载，默认折叠）
 
   const createBrain = async () => {
     setBusy(true);
@@ -286,6 +288,18 @@ function BrainBlock() {
           <i>重复率 / 陈旧记忆 / 未回执决策 / 快照新鲜度 —— 一键体检与修复</i>
         </div>
         <BrainHealth />
+      </div>
+
+      {/* ── U1 认知时间轴（记忆/决策/时光备份 → 一条可筛选叙事线；懒加载折叠）── */}
+      <div className="brain-card">
+        <div className="brain-card-title">
+          <span>🗓 认知时间轴</span>
+          <i>把记忆、决策、时光备份按时间铺成一条线——回看大脑一路怎么长</i>
+          <button className="msg-op" style={{ marginLeft: "auto" }} onClick={() => setTlOpen(!tlOpen)}>
+            {tlOpen ? "收起" : "展开"}
+          </button>
+        </div>
+        {tlOpen && <BrainTimeline snapshots={b.snapshots || []} />}
       </div>
 
       {/* ── 意识状态（心跳）── */}

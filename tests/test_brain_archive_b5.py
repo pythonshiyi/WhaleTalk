@@ -102,6 +102,18 @@ def test_doctor_action_structured(brain_b5):
     assert "memories" in r and "snapshots" in r
 
 
+def test_decisions_list_action(brain_b5):
+    """brain_api brain_action('decisions-list')（U1 时间轴数据源）返回决策数组。"""
+    import brain_api
+    bk.record_decision("采用镜像源", "直连超时", "提速稳定")
+    bk.record_decision("改用实时备份", "防丢", "更稳")
+    r = brain_api.brain_action("decisions-list", {})
+    assert r.get("ok") is True
+    decs = r["data"]["decisions"]
+    assert any("采用镜像源" in str(d.get("decision")) for d in decs)
+    assert len(decs) >= 2
+
+
 def test_mirror_action_via_brain_api(brain_b5):
     """brain_api brain_action('mirror') 触发快照外置镜像。"""
     import brain_api

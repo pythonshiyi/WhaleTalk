@@ -231,6 +231,13 @@ def brain_action(action, payload=None):
     if action == "mirror":
         code, out = _run(bk.cmd_mirror, dir=str(payload.get("dir") or ""))
         return {"ok": code == 0, "message": out, "data": {"dir": str(payload.get("dir") or "")}}
+    if action == "decisions-list":
+        # U1 时间轴数据源之一：全部决策（含状态），供前端决策看板/时间轴
+        try:
+            decs = bk.list_decisions(limit=int(payload.get("limit") or 200))
+            return {"ok": True, "data": {"decisions": decs}}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "message": str(e)}
     if action == "export-key":
         pw = str(payload.get("passphrase") or "").strip()
         auto_pw = ""
