@@ -11,7 +11,7 @@ import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
-import { cleanForSpeech, splitSentences, speakText, getVoiceConfig, onSpeechState, stopSpeak, pauseSpeak, resumeSpeak, createStreamSpeaker } from "../ttsUtil.js";
+import { speakText, getVoiceConfig, onSpeechState, stopSpeak, resumeSpeak } from "../ttsUtil.js";
 
 import { silentWarn } from "../quiet.js";
 // 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
@@ -183,25 +183,17 @@ function useBackendChat({
       }
     };
 
-    // ── 自动朗读（跟随设置 voice_config.auto_mode：off/sentence/full）──
+    // ── 自动朗读（跟随设置 voice_config.auto_mode：off/on）──
     let voiceSettings = null;
     getVoiceConfig().then((v) => { voiceSettings = v; });
     let acc = "";              // 本轮流式全文累加
-    const spokenSet = new Set();  // 已入队句子（内容去重：流式边界漂移时防重复）
-    let streamSpeaker = null;     // sentence 模式的连续说话器（createStreamSpeaker，懒建）
-    // 逐句对话式朗读：把「已定型句」喂给连续说话器 → 后台预合成、句间无缝、边说边读
-    const feedAuto = () => {
-      if (!voiceSettings || voiceSettings.auto_mode !== "sentence") return;
-      const all = splitSentences(cleanForSpeech(acc));
-      for (let i = 0; i < all.length; i++) {
-        const s = all[i].trim();
-        if (!s || spokenSet.has(s)) continue;
-        // 只读「已用分隔符收尾」的稳定片段（句末标点或逗号/顿号）；未完尾段交给 finish 补读
-        if (!/[。！？；!?，、\n]$/.test(s)) continue;
-        spokenSet.add(s);
-        if (!streamSpeaker) streamSpeaker = createStreamSpeaker(voiceSettings, () => {});
-        streamSpeaker.feed(s);
-      }
+    // 关键：自动朗读不在流式过程中逐句读（那会因流式重切分/缓冲累积导致同段被读多次）。
+    // 统一改为「本条回复生成完成时，把最终稳定文本整段读一次」→ 每条消息恰好朗读一次，绝不重复。
+    const feedAuto = () => { /* 流式过程不朗读：避免增量竞态导致重复 */ };
+    const maybeAutoReadOnce = () => {
+      if (!voiceSettings || voiceSettings.auto_mode === "off" || !acc.trim()) return;
+      stopSpeak();
+      speakText(acc, voiceSettings, {}).catch(() => {});
     };
 
     (async () => {
@@ -213,26 +205,9 @@ function useBackendChat({
         updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, streaming: false } : x)));
         setBusy(false);
         setGenState({ on: false, text: "" });
-        // 自动朗读收尾：full 一次性读整段；sentence 补读最后半截句
+        // 自动朗读收尾：本条回复完成后，整段恰好朗读一次（sentence/full 均整段读，杜绝重复）
         try {
-          if (ok && voiceSettings && voiceSettings.auto_mode !== "off" && acc.trim()) {
-            if (voiceSettings.auto_mode === "full") {
-              // 整段读完：整段一次性合成朗读（V4，非逐句）
-              stopSpeak();
-              speakText(acc, voiceSettings, {}).catch(() => {});
-            } else {
-              // sentence 收尾：把流式期间被跳过的「未完尾段」喂给连续说话器补读，然后结束
-              const all = splitSentences(cleanForSpeech(acc));
-              for (let i = 0; i < all.length; i++) {
-                const s = all[i].trim();
-                if (!s || spokenSet.has(s)) continue;
-                spokenSet.add(s);
-                if (!streamSpeaker) streamSpeaker = createStreamSpeaker(voiceSettings, () => {});
-                streamSpeaker.feed(s);
-              }
-              if (streamSpeaker) streamSpeaker.finish();
-            }
-          }
+          maybeAutoReadOnce();
         } catch (e) { silentWarn(e, "ChatPage"); }
         onFinished && onFinished({ userText, msg, ok, isContinue });
       };
