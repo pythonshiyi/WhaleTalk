@@ -232,10 +232,22 @@ def brain_action(action, payload=None):
         code, out = _run(bk.cmd_mirror, dir=str(payload.get("dir") or ""))
         return {"ok": code == 0, "message": out, "data": {"dir": str(payload.get("dir") or "")}}
     if action == "decisions-list":
-        # U1 时间轴数据源之一：全部决策（含状态），供前端决策看板/时间轴
+        # U1/U5 数据源：全部决策（含状态）
         try:
             decs = bk.list_decisions(limit=int(payload.get("limit") or 200))
             return {"ok": True, "data": {"decisions": decs}}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "message": str(e)}
+    if action == "decision-resolve":
+        # U5 决策回执：记实际结果并标记 kept/reversed
+        ok = bk.resolve_decision(str(payload.get("id") or ""),
+                                 outcome=str(payload.get("outcome") or ""),
+                                 status=str(payload.get("status") or "kept"))
+        return {"ok": ok, "message": "已回执" if ok else "未找到该决策"}
+    if action == "graph-data":
+        # U3 实体图谱数据源：跨记忆聚合实体与关系（节点/边）
+        try:
+            return {"ok": True, "data": _graph_entities()}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "message": str(e)}
     if action == "export-key":
@@ -459,6 +471,46 @@ def brain_action(action, payload=None):
         return {"ok": bool(rec), "message": f"演化账本已记录 {rec['id']}" if rec else "标题为空",
                 "data": {"record": rec}}
     return {"ok": False, "message": f"未知动作: {action}"}
+
+
+def _graph_entities():
+    """U3 实体图谱聚合：跨全部活跃记忆收集实体(节点)与关系(边)。
+
+    返回 {entities:[{id,name,count,types}], relations:[{rel,from,to}]}。
+    无任何实体的记忆不构成节点；同名字不同记忆出现即合并计数。
+    """
+    items = bk.load_memories()
+    ent_map, edge_map = {}, {}
+    ent_types = {}
+    for e in items:
+        if e.get("archived"):
+            continue
+        typ = str(e.get("type") or "记忆")
+        for name in (e.get("entities") or []):
+            name = str(name).strip()
+            if not name:
+                continue
+            key = name.lower()
+            ent_map.setdefault(key, name)
+            ent_types.setdefault(key, set())
+            ent_types[key].add(typ)
+        for r in (e.get("relations") or []):
+            if not isinstance(r, dict):
+                continue
+            rel = str(r.get("rel") or "").strip()
+            to = str(r.get("to") or "").strip()
+            from_name = None
+            # 关系通常挂在含该实体的记忆上：from = 本记忆的第一个实体
+            ents = [str(x) for x in (e.get("entities") or []) if str(x).strip()]
+            if ents:
+                from_name = ents[0]
+            if from_name and to:
+                ek = (from_name.lower(), rel, to.lower())
+                edge_map[ek] = {"rel": rel, "from": ent_map.get(from_name.lower(), from_name),
+                                "to": ent_map.get(to.lower(), to)}
+    entities = [{"id": k, "name": v, "count": 0, "types": sorted(ent_types.get(k, set()))[:6]}
+                for k, v in ent_map.items()]
+    return {"entities": entities, "relations": list(edge_map.values())}
 
 
 def _load_conflicts(d):

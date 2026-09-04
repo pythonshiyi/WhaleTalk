@@ -2,6 +2,21 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.5（未发版追加·增强七批）—— 🧠 决策看板（U5）+ 实体图谱（U3）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。前端大脑 UI 增强第三批：落地 U5 决策看板（决策从"只写不读"变验证闭环）与 U3 实体图谱（记忆实体可视化）。
+
+### 前端（U5 / U3）
+- 新增 `BrainKanban.jsx`：**决策三列看板**（⏳待回执 / ✓已采纳 / ↺已反转），卡片含理由/预期/实际/时间；待回执卡片内嵌独立回执表单（记实际结果 + 采纳/反转），每卡互不干扰；懒加载点选展开
+- 新增 `BrainGraph.jsx`：**SVG 实体图谱**——零依赖稳定圆形布局，节点尺寸随连接度、悬停提示(类型/关联数)；懒加载
+- `BrainBlock.jsx` 新增「🧩 认知洞察」卡（决策看板 / 实体图谱 二选一展开）
+
+### 后端（数据动作）
+- `brain_action` 新增 `decision-resolve`（回执决策→kept/reversed）、`graph-data`（`_graph_entities` 跨记忆聚合实体节点 + 关系边）
+
+### 回归
+- 新增 decision-resolve / graph-data action 测试 2 例；pytest **175 passed**；四门禁全绿；前端 `npm test` + tsc + `vite build` 全绿；ruff 新代码零错误
+
 ## v3.8.5（未发版追加·增强六批）—— 🧠 认知时间轴（U1）+ 决策数据动作
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。前端大脑 UI 增强第二批：落地 U1 认知时间轴——把记忆/决策/时光备份铺成一条可筛选、按时间回溯的叙事线；U2 记忆卡片就地编辑已由既有 记忆库(MemoryPage) 承担。

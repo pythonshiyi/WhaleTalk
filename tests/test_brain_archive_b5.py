@@ -114,6 +114,34 @@ def test_decisions_list_action(brain_b5):
     assert len(decs) >= 2
 
 
+def test_decision_resolve_action(brain_b5):
+    """brain_action('decision-resolve') 回执决策：open → kept。"""
+    import brain_api
+    bk.record_decision("待回执的决策", "验证", "成功")
+    decs = bk.list_decisions(limit=50)
+    did = next(d["id"] for d in decs if "待回执" in str(d.get("decision")))
+    r = brain_api.brain_action("decision-resolve", {"id": did, "outcome": "确实提速了", "status": "kept"})
+    assert r.get("ok") is True
+    after = bk.list_decisions(limit=50)
+    target = next(d for d in after if d["id"] == did)
+    assert target["status"] == "kept" and "提速" in str(target.get("outcome"))
+
+
+def test_graph_data_action(brain_b5):
+    """brain_action('graph-data')（U3 图谱数据源）聚现实体与关系。"""
+    import brain_api
+    bk.remember_structured("张三负责项目A联调", type="项目", importance=4,
+                           entities=["张三", "项目A"], source="测试")
+    bk.remember_structured("李四在项目A做测试", type="项目", importance=3,
+                           entities=["李四", "项目A"], relations=[{"rel": "同事于", "to": "张三"}],
+                           source="测试")
+    r = brain_api.brain_action("graph-data", {})
+    assert r.get("ok") is True
+    names = {e["name"] for e in r["data"]["entities"]}
+    assert {"张三", "项目A", "李四"} <= names
+    assert any(rel["rel"] == "同事于" and rel["to"] == "张三" for rel in r["data"]["relations"])
+
+
 def test_mirror_action_via_brain_api(brain_b5):
     """brain_api brain_action('mirror') 触发快照外置镜像。"""
     import brain_api

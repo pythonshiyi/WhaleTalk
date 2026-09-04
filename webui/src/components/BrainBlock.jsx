@@ -2,6 +2,8 @@ import React from "react";
 import * as api from "../api.js";
 import BrainHealth from "./BrainHealth.jsx";
 import BrainTimeline from "./BrainTimeline.jsx";
+import BrainKanban from "./BrainKanban.jsx";
+import BrainGraph from "./BrainGraph.jsx";
 
 // ── 鲸语大脑（指挥舱：身份 / 心跳 / 时光备份 / 生命延续 / 对话自我）────────
 function BrainBlock() {
@@ -28,6 +30,7 @@ function BrainBlock() {
   const [acc, setAcc] = React.useState(""); // merge | migrate | cleanup
   const [mirrorDir, setMirrorDir] = React.useState(""); // B5 异地备份目录
   const [tlOpen, setTlOpen] = React.useState(false); // U1 认知时间轴（懒加载，默认折叠）
+  const [insight, setInsight] = React.useState(""); // U5 决策看板 | U3 实体图谱（默认收起）
 
   const createBrain = async () => {
     setBusy(true);
@@ -300,6 +303,24 @@ function BrainBlock() {
           </button>
         </div>
         {tlOpen && <BrainTimeline snapshots={b.snapshots || []} />}
+      </div>
+
+      {/* ── 认知洞察：U5 决策看板 / U3 实体图谱（默认收起，点选展开）── */}
+      <div className="brain-card">
+        <div className="brain-card-title">
+          <span>🧩 认知洞察</span>
+          <i>决策的验证闭环 · 记忆实体的知识图谱</i>
+        </div>
+        <div className="brain-actions" style={{ gap: 6, marginBottom: 6 }}>
+          <button className={`msg-op ${insight === "kanban" ? "on" : ""}`} onClick={() => setInsight(insight === "kanban" ? "" : "kanban")}>
+            🎯 决策看板
+          </button>
+          <button className={`msg-op ${insight === "graph" ? "on" : ""}`} onClick={() => setInsight(insight === "graph" ? "" : "graph")}>
+            🕸 实体图谱
+          </button>
+        </div>
+        {insight === "kanban" && <BrainKanban />}
+        {insight === "graph" && <BrainGraph />}
       </div>
 
       {/* ── 意识状态（心跳）── */}
