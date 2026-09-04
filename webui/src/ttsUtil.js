@@ -24,46 +24,36 @@ export function cleanForSpeech(md) {
 // 避免短句碎片化；单句上限 limit（默认 200）无标点硬切。
 export function splitSentences(text, limit = 200) {
   const SOFT = 40;
+  // 按句末标点/换行切成"段"（每个边界段 = 一个完整句 或 句首未完部分）
   const raw = String(text || "").split(/(?<=[。！？；!?\n])\s*/);
   const out = [];
-  let buf = "";
-  const flush = () => {
-    if (buf.trim()) out.push(buf.trim());
-    buf = "";
+  const emit = (s) => { s = s.trim(); if (s) out.push(s); };
+  const pushPart = (part) => {
+    // 把一个"段"按 ≤limit 切进 out（优先按逗号软切、否则硬切）
+    let p = part;
+    while (p.length > limit) {
+      let c = p.lastIndexOf("，", limit);
+      c = c > 20 ? c + 1 : limit;
+      emit(p.slice(0, c));
+      p = p.slice(c);
+    }
+    emit(p);
   };
   for (let seg of raw) {
     seg = seg.trim();
     if (!seg) continue;
-    // 段内软切：长句（>SOFT）按逗号/顿号切开，让流式朗读尽快开播
+    // 段内软切：超 SOFT 的整句按逗号/顿号切开成 ≤limit 的碎片，让流式尽快开播
+    const pieces = [];
     let part = seg;
     while (part.length > SOFT) {
       const cut = Math.max(part.lastIndexOf("，", SOFT), part.lastIndexOf(",", SOFT), part.lastIndexOf("、", SOFT));
       if (cut <= 0) break;
-      const piece = part.slice(0, cut + 1);
-      if ((buf + piece).length <= limit) {
-        buf += piece;
-        flush();
-      } else {
-        flush();
-        buf = piece;
-      }
+      pieces.push(part.slice(0, cut + 1));
       part = part.slice(cut + 1);
     }
-    const cand = buf + part;
-    if (cand.length <= limit) {
-      buf = cand;
-      continue;
-    }
-    flush();
-    while (part.length > limit) {
-      let c = part.lastIndexOf("，", limit);
-      c = c > 20 ? c + 1 : limit;
-      out.push(part.slice(0, c).trim());
-      part = part.slice(c);
-    }
-    buf = part.trim();
+    if (part) pieces.push(part);
+    for (const pc of pieces) pushPart(pc);
   }
-  flush();
   return out.filter(Boolean);
 }
 

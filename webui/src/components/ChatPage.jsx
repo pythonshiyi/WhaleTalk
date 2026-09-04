@@ -183,16 +183,19 @@ function useBackendChat({
     getVoiceConfig().then((v) => { voiceSettings = v; });
     let acc = "";              // 本轮流式全文累加
     const spokenSet = new Set();  // 已入队句子（内容去重：流式边界漂移时防重复）
-    // 逐句对话式朗读（P3 优化）：句末标点优先、长句按逗号软切尽快开播；
-    // 尾段足够长（≥80 字）也直接播，避免无标点长句一直等句号造成延迟。
+    // 逐句对话式朗读（P3 优化）：句末标点优先、长句按逗号软切尽快开播。
+    // 修复：只入队「已以句末标点(。！？；!?…)定型」的稳定句——流式尾段仍在增长时
+    // 文本会不断变化，若按「≥80 就播」会把不断变长的同一段反复重播（首段循环、后段不播）。
+    // 尾段(无论多长)统一交给 finish 收尾补读一次，避免重复。
     const feedAuto = () => {
       if (!voiceSettings || voiceSettings.auto_mode !== "sentence") return;
       const all = splitSentences(cleanForSpeech(acc));
-      const end = all.length - 1;
-      const playable = end >= 0 && all[end].length >= 80 ? all.length : end;  // 长尾段也播
-      for (let i = 0; i < playable; i++) {
+      for (let i = 0; i < all.length; i++) {
         const s = all[i].trim();
         if (!s || spokenSet.has(s)) continue;
+        // 只读「已用分隔符收尾」的稳定片段：句末标点或逗号/顿号结尾的都定型不会再增长，
+        // 可安全入队；唯一会持续增长的是「末尾无任何分隔符」的未完片段 → 跳过，finish 补读一次。
+        if (!/[。！？；!?，、\n]$/.test(s)) continue;
         spokenSet.add(s);
         enqueueSpeak(s, voiceSettings).catch(() => {});
       }
