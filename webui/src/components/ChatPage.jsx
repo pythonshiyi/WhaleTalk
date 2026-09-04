@@ -11,7 +11,7 @@ import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
-import { cleanForSpeech, splitSentences, enqueueSpeak, speakText, getVoiceConfig, onSpeechState, stopSpeak, pauseSpeak, resumeSpeak } from "../ttsUtil.js";
+import { cleanForSpeech, splitSentences, speakText, getVoiceConfig, onSpeechState, stopSpeak, pauseSpeak, resumeSpeak, createStreamSpeaker } from "../ttsUtil.js";
 
 import { silentWarn } from "../quiet.js";
 // 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
@@ -188,21 +188,19 @@ function useBackendChat({
     getVoiceConfig().then((v) => { voiceSettings = v; });
     let acc = "";              // 本轮流式全文累加
     const spokenSet = new Set();  // 已入队句子（内容去重：流式边界漂移时防重复）
-    // 逐句对话式朗读（P3 优化）：句末标点优先、长句按逗号软切尽快开播。
-    // 修复：只入队「已以句末标点(。！？；!?…)定型」的稳定句——流式尾段仍在增长时
-    // 文本会不断变化，若按「≥80 就播」会把不断变长的同一段反复重播（首段循环、后段不播）。
-    // 尾段(无论多长)统一交给 finish 收尾补读一次，避免重复。
+    let streamSpeaker = null;     // sentence 模式的连续说话器（createStreamSpeaker，懒建）
+    // 逐句对话式朗读：把「已定型句」喂给连续说话器 → 后台预合成、句间无缝、边说边读
     const feedAuto = () => {
       if (!voiceSettings || voiceSettings.auto_mode !== "sentence") return;
       const all = splitSentences(cleanForSpeech(acc));
       for (let i = 0; i < all.length; i++) {
         const s = all[i].trim();
         if (!s || spokenSet.has(s)) continue;
-        // 只读「已用分隔符收尾」的稳定片段：句末标点或逗号/顿号结尾的都定型不会再增长，
-        // 可安全入队；唯一会持续增长的是「末尾无任何分隔符」的未完片段 → 跳过，finish 补读一次。
+        // 只读「已用分隔符收尾」的稳定片段（句末标点或逗号/顿号）；未完尾段交给 finish 补读
         if (!/[。！？；!?，、\n]$/.test(s)) continue;
         spokenSet.add(s);
-        enqueueSpeak(s, voiceSettings).catch(() => {});
+        if (!streamSpeaker) streamSpeaker = createStreamSpeaker(voiceSettings, () => {});
+        streamSpeaker.feed(s);
       }
     };
 
@@ -222,14 +220,16 @@ function useBackendChat({
               // 整段读完：用 speakText 分句流式播（长文不卡、可随时停止）
               speakText(acc, voiceSettings, {}).catch(() => {});
             } else {
-              // sentence 收尾：补读尚未入队的句子（含最后的半截长尾）
+              // sentence 收尾：把流式期间被跳过的「未完尾段」喂给连续说话器补读，然后结束
               const all = splitSentences(cleanForSpeech(acc));
               for (let i = 0; i < all.length; i++) {
                 const s = all[i].trim();
                 if (!s || spokenSet.has(s)) continue;
                 spokenSet.add(s);
-                enqueueSpeak(s, voiceSettings).catch(() => {});
+                if (!streamSpeaker) streamSpeaker = createStreamSpeaker(voiceSettings, () => {});
+                streamSpeaker.feed(s);
               }
+              if (streamSpeaker) streamSpeaker.finish();
             }
           }
         } catch (e) { silentWarn(e, "ChatPage"); }

@@ -407,6 +407,8 @@ export async function speakText(text, opts = {}, cb = {}) {
 
 // 暂停等待集合（speakText 内部控制，暴露 pause/resume 接口）
 let pauseWaitResolvers = new Set();
+// 流式朗读器的唤醒回调（createStreamSpeaker 注册；resumeSpeak 唤醒它们续读）
+const streamWakers = new Set();
 
 /** 环境打断「暂停」：停住当前音频，下次在句边界续读（不重读本句）。 */
 export function pauseSpeak() {
@@ -429,6 +431,10 @@ export function resumeSpeak() {
   const wakes = [...pauseWaitResolvers];
   pauseWaitResolvers.clear();
   wakes.forEach((res) => res());
+  // 唤醒被暂停的流式朗读器（createStreamSpeaker 注册的 wakePlay）
+  const ws = [...streamWakers];
+  streamWakers.clear();
+  ws.forEach((w) => w());
 }
 
 /** 停止当前朗读并清空队列（新消息/手动明确打断 → 永久停）；返回是否有播放被打断 */
@@ -479,6 +485,115 @@ function playUrlRaw(url, volumePct) {
     audio.play().catch(() => { if (!settled) { settled = true; clearWatch(); currentAudio = null; currentResolve = null; reject(new Error("播放被拦截")); } });
   });
 }
+
+// ═══════════ 流式句子自动朗读器（sentence auto）：边说边读、后台预合成、句间无缝 ═══════════
+// 解决旧 feedAuto「每句 enqueueSpeak 串行合成→等→播」造成的句句停顿。
+// 机制：句子随流式到达 feed() 进队 → 播放器提前把后续句合成好(url) → 轮到即 playUrlRaw 无缝续播，
+// 合成延迟被前一句的播放时间掩盖，句间只剩自然呼吸间隙。
+function createStreamSpeaker(opts, onSpeak) {
+  const gen = ++generation;          // 独占；stopSpeak(++) 即作废本会话
+  const items = [];                  // 到达顺序的句子文本
+  const urls = new Map();            // index -> 已合成的 url 或 null(失败)
+  let head = 0;                      // 已消费(播放或已跳过)的下标
+  let synthPos = 0;                  // 已提交合成的下标(不含)
+  let playing = false;
+  let finished = false;              // feed 不再有新句(finish() 已调)
+  let ended = false;                 // 全部播完/被停
+  const active = () => gen === generation;
+  let wake = null;                   // 播放推进器的唤醒句柄
+
+  const pumpPlay = () => {
+    // 环境暂停：停在句边界，待 resume（由 resumeSpeak 触发 wake；不自旋）
+    if (pausedGen === gen) { _setPhase("paused"); return; }
+    if (playing || ended || !active()) return;
+    while (head < items.length) {
+      if (urls.has(head)) {
+        const u = urls.get(head); head++;
+        if (!u) continue;  // 该句合成失败，跳过继续下一句
+        playing = true; _setPhase("speak");
+        const part = items[head - 1];
+        onSpeak && onSpeak(part);
+        playUrlRaw(u, opts.volume)
+          .then(() => {
+            playing = false;
+            if (!active()) { ended = true; return; }
+            // 环境暂停 → 停在句边界，待 resume 续读
+            if (pausedGen === gen) { _setPhase("paused"); wakePlay(); return; }
+            if (head < items.length) {
+              // 还有下一句 → 句间自然呼吸后无缝续播
+              _setPhase("breath");
+              delay(breathMs(part)).then(() => {
+                if (active()) {
+                  if (pausedGen === gen) { _setPhase("paused"); }
+                  else { _setPhase("idle"); wakePlay(); }
+                }
+              });
+            } else {
+              _setPhase("idle");
+              wakePlay();  // 触发 pumpPlay 判断是否 finish
+            }
+          })
+          .catch(() => { playing = false; if (active()) { _setPhase("idle"); wakePlay(); } });
+        pumpSynth();  // 播当前句时，把已入队的后续句也预合成（无缝续播的关键）
+        return;  // 等当前句播完再由 wakePlay 续
+      }
+      break;  // 该下标还没合成好，等合成
+    }
+    if (finished && head >= items.length && !playing && pausedGen !== gen) { _finishSession(); }
+  };
+
+  const pumpSynth = () => {
+    // 提前合成：一次最多发起 2 个在飞合成，其余等前面完成（防并发过多排队）
+    // 保证轮到某句时其 url 通常已就绪 → 无缝续播，不再句句等合成。
+    let inflight = 0;
+    while (active() && synthPos < items.length && inflight < 2) {
+      const i = synthPos;
+      if (urls.has(i)) { synthPos++; continue; }  // 已有结果，跳过
+      synthPos++;
+      inflight++;
+      synthesize(items[i].slice(0, 4000), opts)
+        .then((r) => { if (active()) { urls.set(i, r.url); wakePlay(); } })
+        .catch(() => { if (active()) { urls.set(i, null); wakePlay(); } });
+    }
+  };
+
+  const wakePlay = () => {
+    if (!active()) { streamWakers.delete(wakePlay); return; }  // 已被新朗读作废 → 自清
+    if (wake) return; wake = true;
+    Promise.resolve().then(() => { wake = false; pumpPlay(); pumpSynth(); });
+  };
+  streamWakers.add(wakePlay);  // 供 resumeSpeak 唤醒本流式朗读器
+
+  const _finishSession = () => {
+    if (ended) return;
+    ended = true;
+    streamWakers.delete(wakePlay);
+    _setPhase("idle");
+    if (pausedGen === gen) pausedGen = -1;
+    emit();
+  };
+
+  return {
+    /** 流式到达一个「已定型」句子：立即排入并触发后台合成+播放推进 */
+    feed(sentence) {
+      if (ended || finished || !active()) return;
+      const s = String(sentence || "").trim();
+      if (!s) return;
+      items.push(s);
+      wakePlay();
+    },
+    /** 流式结束：标记无更多句；把最后已入队但未合成的句子也合完并播完 */
+    finish() {
+      finished = true;
+      wakePlay();
+    },
+    /** 手动/新消息停止 */
+    cancel() { stopSpeak(); },
+    gen,
+  };
+}
+
+export { createStreamSpeaker };
 
 // ── 语音设置（服务端 voice_config 的前端缓存）──
 let voiceCfg = null;

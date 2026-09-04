@@ -2,6 +2,19 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.5（未发版追加·语音修复）—— 🔊 修 sentence 自动朗读"句句停顿（停一下再播）"
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.5）。上一版基础自然化后，用户反馈 **sentence 自动朗读每句之间明显停顿**（"停顿生成一会再播放、每一句都停顿"）。根因：sentence 模式走 `feedAuto → enqueueSpeak` 逐句**串行"合成→等→播"**——每句都要等自己合成完才开播，句间必然卡一段合成时间（预合成只作用于手动/full 的 speakText，没作用到 sentence 自动朗读）。
+
+### 修复：新增流式句子自动朗读器 `createStreamSpeaker`（ttsUtil）
+- **边说边读 + 后台预合成**：句子随流式 `feed()` 进队 → 播放器**提前把后续句合成好**(url) → 轮到即 `playUrlRaw` 无缝续播，合成延迟被前一句播放时间掩盖，句间只剩自然呼吸间隙（`breathMs`）
+- 播当前句时后台继续预合成下一句；合成失败跳过该句继续；句末呼吸停顿、末句不拖尾
+- 集成分层打断：环境声 pauseSpeak → 停在句边界(注册进 `streamWakers`，resumeSpeak 唤醒续读)；新消息/手动 stopSpeak(++generation) → 作废本会话自清
+- `feedAuto`(ChatPage sentence 模式) 从逐句 `enqueueSpeak` 改为喂给 `createStreamSpeaker`；收尾 `finish()` 补读未完尾段后自然结束
+
+### 回归
+- createStreamSpeaker 失败路径冒烟(不挂起、能 finish)；前端 npm test + tsc + vite build 全绿
+
 ## v3.8.5（未发版追加·语音）—— 🗣 语音"基础自然化"：边说边读 / 自然停顿 / 舒适停播 / 分层打断
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.5）。把语音从"事后朗读"朝"真人说话感"推进第一版（范围锁定、改动可控）：合成源在线/本地都适配。
