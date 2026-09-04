@@ -151,7 +151,7 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
   };
 
   // 朗读/停止切换：点击立即 ⏳（合成中）→ 播放 ⏹ → 失败 ⚠ 并提示原因。
-  // 用 speakText 分句逐句合成播放：长回复不超时、更快出第一句，也便于随时停止。
+  // 用 speakText 整段合成朗读：V4 一次性合成(或≤3900字分大块)连续播放，无逐句间隙、可随时停止。
   const toggleSpeak = () => {
     if (speaking || loading) {
       stopSpeak();
@@ -161,6 +161,7 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
     }
     primeAudio();  // 借本次点击手势解锁音频管线（防自动播放拦截）
     if (!cleanForSpeech(unwrapLongText(msg.text))) return;
+    stopSpeak();   // 手动朗读接管：先停掉任何正在的自动/别条朗读，避免两路同时播
     setErr("");
     setLoading(true);
     speakText(msg.text, {}, {

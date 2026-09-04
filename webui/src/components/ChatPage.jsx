@@ -217,7 +217,8 @@ function useBackendChat({
         try {
           if (ok && voiceSettings && voiceSettings.auto_mode !== "off" && acc.trim()) {
             if (voiceSettings.auto_mode === "full") {
-              // 整段读完：用 speakText 分句流式播（长文不卡、可随时停止）
+              // 整段读完：整段一次性合成朗读（V4，非逐句）
+              stopSpeak();
               speakText(acc, voiceSettings, {}).catch(() => {});
             } else {
               // sentence 收尾：把流式期间被跳过的「未完尾段」喂给连续说话器补读，然后结束

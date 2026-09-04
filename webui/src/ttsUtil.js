@@ -287,132 +287,142 @@ function _speakFail(e) {
   else lastError = raw || "朗读失败";
 }
 
-// ═══════════════ 单一顺序播放引擎（V3 · 确定性、绝不重复、绝不乱序）═══════════════
-// 设计铁律：同一时刻只有一条"说话任务"在推进；每条待读文本进 FIFO 后由唯一消费者
-// 按序取出——取出即移出队列，绝不回头重读 → 不可能"重复上一句"。
-// 停止/暂停是简单标志，只在句子边界检查；不搞并发泵、不搞多套播放器互相抢。
+// ═══════════════ 整段音频引擎（V4 · 不再"一句一读"，一次合成一大段连续播放）═══════════════
+// 之前的错误：按 ≤200 字逐句合成→逐句播放，句间永远有合成间隙 + 竞态 → 卡顿/重复/卡死。
+// V4 正解：一次性把整段(≤3900字)合成成一条长音频，用 Audio 从头放到尾(浏览器原生连续)，
+// 超过后端 4000 上限才切成少数几大块顺序续播——绝无"每句一停"。
+// 用"作废代 stopSeq"控制停止：新朗读/手动停止一律作废当前播放。
 // ---------------------------------------------------------------------------
-let speaking = false;          // 是否正有一条任务在推进
-let stopSeq = 0;               // 单调递增的"作废代"：stopSpeak 时 +1，旧消费者据此立即退出
-let currentSeq = 0;            // 当前消费循环所属代
-const idleWaiters = new Set(); // 等当前任务结束的 resolve（speakText 的 promise）
-const queued = [];             // 待读队列 [{ text, opts }]
+let stopSeq = 0;                 // 停止作废代
+const MAX = 3900;                // 单次合成字符上限(后端上限 4000，留余量)
 
-function _pump() {
-  if (speaking) return;        // 已有消费循环在跑 → 由它继续；新入队项会被它按序消费
-  if (!queued.length) return;
-  speaking = true;
-  const seq = ++currentSeq;    // 本代
-  // 延迟到微任务启动消费者：杜绝任何同步重入 / 栈溢出
-  queueMicrotask(async () => {
-    try {
-      while (queued.length && seq === stopSeq) {
-        const item = queued.shift();               // 取出即移出
-        if (!item || !item.text) continue;
-        _setPhase("synth");
-        let url;
-        try {
-          const r = await synthesize(item.text.slice(0, 4000), item.opts || {});
-          url = r && r.url;
-        } catch (e) { _speakFail(e); emit(); url = null; }
-        if (seq !== stopSeq) break;
-        if (!url) continue;                          // 本句合成失败 → 跳过下一句
-        if (item.onStart) item.onStart();
-        _setPhase("speak");
-        try { await playUrl(url, item.opts ? item.opts.volume : 100); }
-        catch (e) { _speakFail(e); emit(); }
-        if (seq !== stopSeq) break;
-        // 若后面还有句 → 极短的自然呼吸，绝不回头
-        if (queued.length) {
-          _setPhase("breath");
-          await delay(90);
-        }
-      }
-    } finally {
-      if (seq === currentSeq) speaking = false;   // 仅当代仍是当前代时才复位占用
-      _setPhase("idle");
-      const ws = [...idleWaiters]; idleWaiters.clear();
-      ws.forEach((res) => res());
-      emit();
-      // 若期间又有新入队（stop 后紧跟 enqueue）→ 延迟由新消费者接管，避免新文本被晾着
-      if (queued.length && !speaking) queueMicrotask(_pump);
+// 把清洗后的整段切成 ≤MAX 的大块（优先在句末/标点切，尽量少切块）
+function chunkWhole(cleanText) {
+  const t = String(cleanText || "").trim();
+  if (!t) return [];
+  if (t.length <= MAX) return [t];
+  const out = [];
+  let buf = "";
+  for (const seg of t.split(/(?<=[。！？；!?\n])/)) {
+    if ((buf + seg).length > MAX && buf) { out.push(buf.trim()); buf = ""; }
+    buf += seg;
+    if (buf.length > MAX * 1.5) {  // 防单段超长硬切兜底
+      out.push(buf.slice(0, MAX).trim());
+      buf = buf.slice(MAX);
     }
-  });
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out.filter(Boolean);
 }
 
-function _enqueueOne(item) {
-  queued.push(item);
-  // 若当前没有活跃消费者在跑 → 起一个接管这批
-  if (!speaking) _pump();
+/** 一次性朗读整段文本（手动/全文）：整段合成(或少数大块)顺序播放，绝无逐句间隙。
+ *  返回在整段播完时 resolve 的 Promise。cb:{onStart,onSpeak(块),onDone,onError} */
+export async function speakText(text, opts = {}, cb = {}) {
+  const pieces = chunkWhole(cleanForSpeech(String(text || "")));
+  if (!pieces.length) {
+    const e = new Error("没有可朗读的内容");
+    lastError = e.message; _setPhase("idle"); emit();
+    if (cb.onError) cb.onError(e);
+    throw e;
+  }
+  const seq = stopSeq;            // 记录当前代；stopSpeak(++) 后即失效
+  const myStop = () => seq !== stopSeq;
+  cb.onStart && cb.onStart();
+  try {
+    for (let i = 0; i < pieces.length; i++) {
+      if (myStop()) break;                        // 被停止
+      const part = pieces[i];
+      _setPhase("synth");
+      let url;
+      try {
+        const r = await synthesize(part, opts || {});
+        url = r && r.url;
+      } catch (e) { _speakFail(e); emit(); url = null; }
+      if (myStop()) break;
+      if (!url) continue;
+      cb.onSpeak && cb.onSpeak(part);
+      _setPhase("speak");
+      try { await playUrl(url, opts ? opts.volume : 100); }
+      catch (e) { _speakFail(e); emit(); }
+      if (myStop()) break;
+      if (i < pieces.length - 1) { _setPhase("breath"); await delay(120); }  // 大块间极短间隔
+    }
+    _setPhase("idle");
+    if (!myStop()) cb.onDone && cb.onDone();
+  } catch (e) {
+    _setPhase("idle");
+    if (!myStop()) { _speakFail(e); emit(); cb.onError && cb.onError(new Error(lastError)); }
+  }
 }
 
-/** 朗读一段文本（单句，进全局顺序队列；用于逐句/自动喂入）。不阻塞调用方。 */
-export function enqueueSpeak(text, opts = {}, onStart) {
-  if (!String(text || "").trim()) return;
-  _enqueueOne({ text: String(text).trim(), opts: opts || {}, onStart });
-}
-
-/** 返回一个随流式喂入的说话器：feed(定型句)/finish()/cancel()——都走同一顺序队列。 */
-export function createStreamSpeaker(opts) {
+/**
+ * 自动朗读（sentence 随流式）：不再逐句合成，而是把已定型文本**缓冲累积**，
+ * 积到足够长度(≥MAX 或一句话较长)或 finish() 时，作为整块交给 speakText 连续读。
+ * feed(部分文本累积) / flush()(把缓冲整块读掉) / finish()(缓冲读完并结束)。
+ */
+export function createStreamSpeaker(opts, onSpeak) {
+  let buf = "";
+  let sessionStart = stopSeq;   // 会话从该代起；外部 stopSpeak(++) 后本会话即失效
+  const alive = () => sessionStart === stopSeq;
+  let idle = true;              // 无整块朗读进行中
+  let doneToken = 0;
+  const speakBuf = async () => {
+    const text = buf.trim();
+    buf = "";
+    if (!text || !alive()) return;
+    idle = false;
+    try {
+      // 复用整段朗读：合成+播放；失败不打断整条会话
+      await speakText(text, opts, { onSpeak });
+    } catch (e) { silentWarn(e, "ttsUtil"); }
+    idle = true;
+    // 若 flush 期间又有缓冲累积 → 继续读
+    if (buf.trim() && alive() && idle) queueMicrotask(flush);
+  };
+  const flush = () => { if (buf.trim() && idle && alive()) speakBuf(); };
   return {
-    feed(sentence) {
-      const s = String(sentence || "").trim();
-      if (s) _enqueueOne({ text: s, opts: opts || {} });
+    /** 喂入一段流式文本：累积到"足够读的整块"就整块连续朗读(低频次、无逐句间隙) */
+    feed(text) {
+      if (!alive()) return;
+      buf += String(text || "");
+      const b = buf.trim();
+      // 有可读整句(以句末/段落标点结尾)且块不算太碎 → 立即读这块；块够长也强读
+      const hasSentenceEnd = /[。！？；!?\n]$/.test(b);
+      const longEnough = b.length >= 40;
+      const tooLong = b.length >= MAX;
+      if ((hasSentenceEnd && longEnough) || tooLong) flush();
     },
-    finish() { /* 顺序队列天然等队空即结束；无需额外动作 */ },
+    /** 触发把当前缓冲整块读掉 */
+    flush() { if (alive()) flush(); },
+    /** 流式结束：把残留缓冲整块读完 */
+    finish() { if (alive()) flush(); },
     cancel() { stopSpeak(); },
   };
 }
 
-/**
- * 分句朗读一段文本（手动/全文）：拆成句后按序进队列，返回在整段读完时 resolve 的 Promise。
- * cb: {onStart,onSpeak,onDone,onError}
- */
-export function speakText(text, opts = {}, cb = {}) {
-  const chunks = splitSentences(cleanForSpeech(String(text || "")), 200);
-  if (!chunks.length) {
-    const e = new Error("没有可朗读的内容");
-    lastError = e.message; _setPhase("idle"); emit();
-    if (cb.onError) cb.onError(e);
-    return Promise.reject(e);
-  }
-  // 手动朗读排队到末尾（不抢占正在的自动朗读，避免清队竞态吞掉本条）
-  const donePromise = new Promise((resolve) => { idleWaiters.add(resolve); });
-  cb.onStart && cb.onStart();
-  for (let i = 0; i < chunks.length; i++) {
-    _enqueueOne({
-      text: chunks[i], opts: opts || {},
-      onStart: () => { if (cb.onSpeak) cb.onSpeak(chunks[i]); },
-    });
-  }
-  // 结束回调挂在 idleWaiters 的同一批 resolve 上（顺序队列队空统一触发）
-  donePromise.then(() => { if (cb.onDone) cb.onDone(); });
-  return donePromise;
+/** 朗读一段文本（单句/小段；兼容旧调用）。 */
+export function enqueueSpeak(text, opts = {}, onStart) {
+  const s = String(text || "").trim();
+  if (!s) return;
+  // 丢进一次性整段朗读(不阻塞调用方)
+  speakText(s, opts, { onSpeak: () => onStart && onStart() }).catch(() => {});
 }
 
-/**
- * 环境打断「暂停」：简化为一键停止当前朗读并清队（真人对话：我一开口 AI 即静音）。
- * （不再做"暂停可续"，因其异步 park 是此前卡死/栈溢出的根源；续读由用户再触发即可。）
- */
-export function pauseSpeak() { stopSpeak(); }
-
-/** 兼容旧 API：环境"暂停"后没有续读语义，resume 为空操作（要重读请用户再点/再发）。 */
-export function resumeSpeak() { /* no-op */ }
-
-/** 停止当前朗读并清空队列（新消息/手动明确打断 → 永久停）。同步生效，后续 enqueue 不受影响。 */
+/** 停止当前朗读（新消息/手动明确/环境声 → 立即作废并静音）。 */
 export function stopSpeak() {
-  stopSeq += 1;                     // 作废当前消费者（旧循环下次检查即退出，不读残留）
-  queued.length = 0;                // 立即清队：旧句一个不剩
+  stopSeq += 1;
   if (currentAudio) {
     try { currentAudio.pause(); } catch (e) { silentWarn(e, "ttsUtil"); }
   }
-  // 解除正在播放/合成的 await，让旧消费者尽快退出
   if (currentResolve) { const r = currentResolve; currentResolve = null; r(); }
   _setPhase("idle");
   emit();
 }
 
-
+/** 环境打断：即停（真人对话：我一开口 AI 就静音）。 */
+export function pauseSpeak() { stopSpeak(); }
+/** 兼容：环境"暂停"无续读，resume 为空操作。 */
+export function resumeSpeak() { /* no-op */ }
 
 // ── 语音设置（服务端 voice_config 的前端缓存）──
 let voiceCfg = null;
