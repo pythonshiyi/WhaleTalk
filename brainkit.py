@@ -927,12 +927,24 @@ def remember_structured(text, type="", importance=3, tags=None, entities=None, r
         "supersedes": "", "version_id": vid,
     }
     with _MEM_LOCK:
-        items = load_memories(include_archived=True)
-        for it in items:
-            if it.get("text") == entry["text"] and not it.get("archived"):
-                return it
-        MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
-        append_line(MEMORY_JSONL, json.dumps(entry, ensure_ascii=False))
+        # 跨进程防重：CLI 与常驻 API(harvest 后台线程)不同进程并发写时，
+        # 仅进程内锁无法互斥去重 → 用 .lock 文件跨进程串行（拿不到则退化为进程内）。
+        got_cp = False
+        try:
+            MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
+            got_cp = cross_process_lock(MEMORY_JSONL, timeout=3.0)
+        except Exception:
+            got_cp = False
+        try:
+            items = load_memories(include_archived=True)
+            for it in items:
+                if it.get("text") == entry["text"] and not it.get("archived"):
+                    return it
+            MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
+            append_line(MEMORY_JSONL, json.dumps(entry, ensure_ascii=False))
+        finally:
+            if got_cp:
+                release_lock(MEMORY_JSONL)
     return entry
 
 
@@ -1407,6 +1419,15 @@ def cmd_import_memory(args) -> int:
     return 0
 
 
+def _archived_versions():
+    """归档快照，按**版本号数字序**升序（修复字典序：v10 会被排到 v2 前，导致
+    prune/status 误判最新版）。返回 [] 或 [Path,...]。"""
+    if not ARCHIVE_DIR.exists():
+        return []
+    snaps = list(ARCHIVE_DIR.glob("brain_v*.whale"))
+    return sorted(snaps, key=lambda v: int(v.stem.rsplit("_v", 1)[-1]) if v.stem.rsplit("_v", 1)[-1].isdigit() else 10**9)
+
+
 def _protected_snapshot_versions() -> set:
     """血缘引用的版本号集合：prune 不得删除（否则 merge 的 LCA/双亲会消失）。
 
@@ -1552,7 +1573,7 @@ def cmd_mirror(args) -> int:
     if not mirror:
         print("[错误] 需要镜像目录（brainkit.py mirror <目录>）", file=sys.stderr)
         return 1
-    versions = sorted(ARCHIVE_DIR.glob("brain_v*.whale")) if ARCHIVE_DIR.exists() else []
+    versions = _archived_versions()
     if not versions:
         print("[空] 没有可镜像的快照。")
         return 0
@@ -1582,7 +1603,7 @@ def _archive_unlocked(args) -> int:
     if not verify_fingerprint(m):
         print("!! 警告：指纹校验未通过，快照仍将生成（内容可能被改动过）。", file=sys.stderr)
 
-    versions = sorted(ARCHIVE_DIR.glob("brain_v*.whale")) if ARCHIVE_DIR.exists() else []
+    versions = _archived_versions()
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     n = 1 + max((int(v.stem.rsplit("_v", 1)[-1]) for v in versions), default=0)
     target = ARCHIVE_DIR / f"brain_v{n}.whale"
@@ -1943,9 +1964,12 @@ def _row_merge(b, o, t, rel, key):
         if bv is not None and tv == bv:
             continue
         if f == "text":
-            merged = t if _ts_epoch(t.get("ts")) > _ts_epoch(o.get("ts")) else o
+            # 只覆盖 text 字段并继续处理其余字段（tags/entities/relations/ts 的并集/取新）；
+            # 旧实现 `merged = t/o` 整行覆盖，且 `break` 提前退出会让 text 之后/之前的
+            # 字段级合并被跳过（set 迭代无序 → 结果不确定）。continue 保证所有字段都合。
+            merged["text"] = t.get("text") if _ts_epoch(t.get("ts")) > _ts_epoch(o.get("ts")) else o.get("text")
             auto = f
-            break
+            continue
         if f in ("tags", "entities", "relations") and isinstance(ov, list) and isinstance(tv, list):
             merged[f] = list(dict.fromkeys(list(ov) + list(tv)))  # 元数据并集
             continue
@@ -2373,7 +2397,7 @@ def cmd_status(args) -> int:
     mem_items = load_memories()
     mem_count = len(mem_items)
     think_files = sum(1 for _ in THINKING_DIR.glob("*.md")) if THINKING_DIR.exists() else 0
-    versions = sorted(ARCHIVE_DIR.glob("brain_v*.whale")) if ARCHIVE_DIR.exists() else []
+    versions = _archived_versions()
     conflicts = load_json(MERGE_CONFLICT_FILE, {})
     open_conflicts = len(conflicts.get("conflicts", [])) if conflicts else 0
     sm = load_json(BRAIN_DIR / "self_model.json", {})
@@ -2406,7 +2430,7 @@ def cmd_status(args) -> int:
 
 def cmd_list(args) -> int:
     load_manifest()
-    versions = sorted(ARCHIVE_DIR.glob("brain_v*.whale")) if ARCHIVE_DIR.exists() else []
+    versions = _archived_versions()
     if not versions:
         print("[空] 还没有快照。运行 python brainkit.py archive 生成第一份。")
         return 0
@@ -2451,7 +2475,7 @@ def _brain_health_dict():
     stale_decs = [d for d in open_decs if (now_epoch - _ts_epoch(d.get("ts"))) / 86400.0 > 7]
     conflicts = load_json(MERGE_CONFLICT_FILE, {})
     open_conflicts = len(conflicts.get("conflicts", [])) if conflicts else 0
-    versions = sorted(ARCHIVE_DIR.glob("brain_v*.whale")) if ARCHIVE_DIR.exists() else []
+    versions = _archived_versions()
     snap_days = None
     if versions:
         snap_days = (now_epoch - versions[-1].stat().st_mtime) / 86400.0

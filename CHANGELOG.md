@@ -2,6 +2,25 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.5（未发版追加·复查修复）—— 🧐 独立代码审查发现的 P0/P1/P2 bug 批量修复
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.5）。对 v3.8.5 全批次做独立代码审查，批量修复 6 个确定问题：
+
+### P0（数据损坏）
+- **快照 prune/状态字典序排序误删最新版**（brainkit）：`sorted(glob("brain_v*.whale"))` 是字典序，v10 会排到 v2 前 → 版本≥10 时 `prune`/`status` 误判最新版，`doomed` 会删最新高版本。新增 `_archived_versions()` 按版本号数字序排序，替换全部 5 处调用点（prune/archive/status/list/doctor）
+
+### P1（错误行为）
+- **`_row_merge` text 冲突丢元数据**（brainkit）：text 分支原用 `merged = t/o` 整行覆盖 + `break` 提前退出 → set 迭代无序时，tags/entities/relations/ts 的字段级合并被跳过（不确定丢失）。改为只覆盖 `merged["text"]` 并 `continue` 处理完所有字段
+- **`consolidate_with_llm` 摘要累积**（brain_api）：重复巩固会为同类型不断新增 importance=5 的 LLM 摘要。改为写新摘要前先归档同类型旧「巩固」摘要，只保留最新一份
+- **memory_store 缓存只跟 memory.json 失效**（B2 缺陷）：大脑 memory.jsonl 追加新记忆不刷新缓存 → unified-memories/search 返回陈旧大脑记忆。改为失效签名同时跟踪 memory.json + 大脑 memory.jsonl 的 mtime
+
+### P2（边界瑕疵）
+- **实体图谱 count 恒 0 / 关系节点悬空**（brain_api `_graph_entities`）：count 从未累加；仅经关系 to 引用、未在 entities 列出的实体不成为节点。修复：count=出现记忆数、关系 to 自动补节点
+- **BrainTimeline 静默空白**（前端）：两个请求各自 `.catch(()=>null)` 使 Promise.all 永不 reject → 双失败不置 err。改为全失败时显式报错
+
+### 回归
+- 新增 `tests/test_brain_regressions.py` **4 用例**（prune v10+ 保最新 / 数字序 / row_merge 保元数据 / graph count+关系节点）；pytest **183 passed**；四门禁全绿；前端 tsc + vite build 全绿；ruff 新增代码零错误
+
 ## v3.8.5（未发版追加·修复）—— 🐛 记忆写入风暴：harvest 低价值过滤 + consolidate 防递归拼接
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.5）。修复用户报告的"几乎每分钟产生一条重复且无信息量的『自动记忆 对话/新版本结论』记忆"。

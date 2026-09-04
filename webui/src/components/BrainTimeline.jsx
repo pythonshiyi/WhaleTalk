@@ -33,12 +33,15 @@ function BrainTimeline({ snapshots = [] }) {
   React.useEffect(() => {
     (async () => {
       try {
+        // 各自 catch 置 null 以便部分失败仍展示；但全失败要置 err，避免静默空白
         const [m, d] = await Promise.all([
           api.listBrainMemories("", 400).catch(() => null),
           api.brainAction({ action: "decisions-list", limit: 200 }).catch(() => null),
         ]);
         if (m && Array.isArray(m.items)) setMemories(m.items);
         if (d && d.data?.decisions) setDecisions(d.data.decisions);
+        const bothFailed = !(m && Array.isArray(m.items)) && !(d && d.data?.decisions);
+        if (bothFailed) setErr("加载失败（后端未连接或版本过旧？）");
       } catch (e) {
         setErr("加载失败：" + String(e));
       }

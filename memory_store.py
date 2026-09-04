@@ -126,21 +126,32 @@ def _load_brain_memories():
             bk.set_brain_dir(prev)
 
 
+def _cache_sig():
+    """缓存失效签名：同时跟踪 memory.json 与大脑 memory.jsonl 的 mtime_ns。
+
+    修复：只按 memory.json mtime 失效时，大脑追加新记忆不会让 /v1/brain/unified-memories
+    返回新内容（陈旧缓存）。任一侧文件变化都使签名变化 → 缓存失效。
+    """
+    sigs = []
+    p, _, brain = _auto_paths()
+    for f in (p, (Path(brain) / "memories" / "memory.jsonl") if brain else None):
+        if f and os.path.exists(f):
+            try:
+                sigs.append(os.stat(f).st_mtime_ns)
+            except OSError:
+                pass
+    return tuple(sigs)
+
+
 def unified_entries(include_archived=False, use_cache=True):
     """B1：把 memory.json 与大脑 memory.jsonl 归一为 canonical 条目列表。
 
-    B2：use_cache=True 时按 memory.json 的 mtime 做失效缓存，避免重复读盘。
+    B2：use_cache=True 时按 memory.json + brain jsonl 的 mtime 签名做失效缓存。
     """
-    p, _, _ = _auto_paths()
-    mtime = None
-    if p and os.path.exists(p):
-        try:
-            mtime = os.stat(p).st_mtime_ns
-        except OSError:
-            mtime = None
+    sig = _cache_sig()
     if use_cache:
         with _INDEX_LOCK:
-            if _cache.get("mtime") == mtime:
+            if _cache.get("mtime") == sig:
                 cached = _cache.get("entries") or []
                 return [e for e in cached if include_archived or not e.get("archived")]
     entries = _load_memory_json() + _load_brain_memories()
@@ -154,7 +165,7 @@ def unified_entries(include_archived=False, use_cache=True):
         dedup.append(e)
     if use_cache:
         with _INDEX_LOCK:
-            _cache["mtime"] = mtime
+            _cache["mtime"] = sig
             _cache["entries"] = dedup
     return [e for e in dedup if include_archived or not e.get("archived")]
 

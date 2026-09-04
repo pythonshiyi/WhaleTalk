@@ -134,6 +134,12 @@ def consolidate_with_llm():
                 summary = c.chat([{"role": "user", "content": prompt}], max_tokens=120, thinking="low")
                 summary = str(summary or "").strip()
                 if len(summary) > 10:
+                    # 防累积：同类型已存在的旧"巩固"摘要先归档，只保留最新一份该类型摘要
+                    for old_sum in bk.load_memories(include_archived=True):
+                        if (not old_sum.get("archived")
+                                and old_sum.get("source") == "巩固"
+                                and str(old_sum.get("type")) == str(gtype)):
+                            bk.update_memory(old_sum["id"], archived=True)
                     e = bk.remember_structured(summary, type=gtype, importance=5,
                                                tags=[gtype], source="巩固")
                     if e:
@@ -501,21 +507,23 @@ def _graph_entities():
     """U3 实体图谱聚合：跨全部活跃记忆收集实体(节点)与关系(边)。
 
     返回 {entities:[{id,name,count,types}], relations:[{rel,from,to}]}。
-    无任何实体的记忆不构成节点；同名字不同记忆出现即合并计数。
+    count = 该实体出现在多少条记忆里；经关系引用但未在 entities 列出的实体也补为节点。
     """
     items = bk.load_memories()
-    ent_map, edge_map = {}, {}
-    ent_types = {}
+    ent_map, edge_map, ent_count, ent_types = {}, {}, {}, {}
     for e in items:
         if e.get("archived"):
             continue
         typ = str(e.get("type") or "记忆")
+        seen_in_this = set()
         for name in (e.get("entities") or []):
             name = str(name).strip()
-            if not name:
+            if not name or name.lower() in seen_in_this:
                 continue
+            seen_in_this.add(name.lower())
             key = name.lower()
             ent_map.setdefault(key, name)
+            ent_count[key] = ent_count.get(key, 0) + 1
             ent_types.setdefault(key, set())
             ent_types[key].add(typ)
         for r in (e.get("relations") or []):
@@ -523,16 +531,20 @@ def _graph_entities():
                 continue
             rel = str(r.get("rel") or "").strip()
             to = str(r.get("to") or "").strip()
-            from_name = None
-            # 关系通常挂在含该实体的记忆上：from = 本记忆的第一个实体
             ents = [str(x) for x in (e.get("entities") or []) if str(x).strip()]
-            if ents:
-                from_name = ents[0]
+            from_name = ents[0] if ents else None
+            # 关系引用的 to 若未在 entities 列出，也补成图谱节点（否则边悬空）
+            if to:
+                tok = to.lower()
+                ent_map.setdefault(tok, to)
+                ent_count.setdefault(tok, 0)
+                ent_types.setdefault(tok, set())
             if from_name and to:
                 ek = (from_name.lower(), rel, to.lower())
                 edge_map[ek] = {"rel": rel, "from": ent_map.get(from_name.lower(), from_name),
                                 "to": ent_map.get(to.lower(), to)}
-    entities = [{"id": k, "name": v, "count": 0, "types": sorted(ent_types.get(k, set()))[:6]}
+    entities = [{"id": k, "name": v, "count": ent_count.get(k, 0),
+                 "types": sorted(ent_types.get(k, set()))[:6]}
                 for k, v in ent_map.items()]
     return {"entities": entities, "relations": list(edge_map.values())}
 
