@@ -2,6 +2,19 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.5（未发版追加·语音修复）—— 🔊 修"每一句重复播放"：播放严格独占
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.5）。用户反馈"每一句都会重复播放"。定位：V4 早期版本 `speakText`/`createStreamSpeaker` **不再互斥**——新朗读启动时未作废旧朗读，导致两条播放路径同时推进同段文本 → 音频重叠/回声，听感即"每句重复/叠读"。
+
+### 修复（ttsUtil）
+- 引入全局**朗读作废代 `speakSeq`**：任何一次新朗读（手动 speakText / 自动 createStreamSpeaker）启动时先 `stopSpeak()` 再 `++speakSeq`，**旧朗读一律作废并静音**。
+- 唯一真正播音频的 `playPieces(seq,…)`：每合成/播放一步前检查 `seq===speakSeq`，一旦被新朗读作废立即停止——**同一时刻只有最新一次朗读在播**，结构上杜绝叠读/回声/重复。
+- 自动朗读会话(createStreamSpeaker)内部多块在同代内串行播放，绝不重入 speakText（避免同文二次叠播）。
+
+### 回归
+前端 tsc typecheck + vite build + npm test 全绿。
+**注**：音频真机听感需浏览器强刷实测确认（本环境无法 headless 听音）。
+
 ## v3.8.5（未发版追加·语音重构）—— 🔊 放弃"逐句读"，改为整段一次合成连续播放（V4）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.5）。用户明确反馈：逐句朗读"一句一读根本供应不起流畅朗读"，且手动朗读卡死——判定"按 ≤200 字逐句合成→逐句播"方案**根本错误**。

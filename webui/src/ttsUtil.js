@@ -291,10 +291,11 @@ function _speakFail(e) {
 // 之前的错误：按 ≤200 字逐句合成→逐句播放，句间永远有合成间隙 + 竞态 → 卡顿/重复/卡死。
 // V4 正解：一次性把整段(≤3900字)合成成一条长音频，用 Audio 从头放到尾(浏览器原生连续)，
 // 超过后端 4000 上限才切成少数几大块顺序续播——绝无"每句一停"。
-// 用"作废代 stopSeq"控制停止：新朗读/手动停止一律作废当前播放。
+// 用"朗读作废代 speakSeq"保证严格独占：任何时刻只有最新一次朗读在播，其它一律被作废。
 // ---------------------------------------------------------------------------
-let stopSeq = 0;                 // 停止作废代
+let speakSeq = 0;                 // 全局"朗读作废代"：每开始一段新朗读 +1；旧朗读据此立即停止
 const MAX = 3900;                // 单次合成字符上限(后端上限 4000，留余量)
+const alive = (seq) => seq === speakSeq;   // 该朗读是否仍是最新(未被新朗读作废)
 
 // 把清洗后的整段切成 ≤MAX 的大块（优先在句末/标点切，尽量少切块）
 function chunkWhole(cleanText) {
@@ -306,7 +307,7 @@ function chunkWhole(cleanText) {
   for (const seg of t.split(/(?<=[。！？；!?\n])/)) {
     if ((buf + seg).length > MAX && buf) { out.push(buf.trim()); buf = ""; }
     buf += seg;
-    if (buf.length > MAX * 1.5) {  // 防单段超长硬切兜底
+    if (buf.length > MAX * 1.5) {
       out.push(buf.slice(0, MAX).trim());
       buf = buf.slice(MAX);
     }
@@ -315,8 +316,30 @@ function chunkWhole(cleanText) {
   return out.filter(Boolean);
 }
 
-/** 一次性朗读整段文本（手动/全文）：整段合成(或少数大块)顺序播放，绝无逐句间隙。
- *  返回在整段播完时 resolve 的 Promise。cb:{onStart,onSpeak(块),onDone,onError} */
+// 在"只属于代 seq"的前提下按序合成并播放大块；一旦 seq 被新朗读作废立即静音退出。
+// 这是唯一真正播音频的地方——同一时刻只会有一条在跑(因为只有持有当前 seq 的能播)。
+async function playPieces(seq, pieces, opts, onSpeak) {
+  for (let i = 0; i < pieces.length; i++) {
+    if (!alive(seq)) return;
+    _setPhase("synth");
+    let url = null;
+    try {
+      const r = await synthesize(pieces[i], opts || {});
+      url = r && r.url;
+    } catch (e) { _speakFail(e); emit(); }
+    if (!alive(seq)) return;
+    if (!url) continue;
+    onSpeak && onSpeak(pieces[i]);
+    _setPhase("speak");
+    try { await playUrl(url, opts ? opts.volume : 100); }
+    catch (e) { _speakFail(e); emit(); }
+    if (!alive(seq)) return;
+    if (i < pieces.length - 1) { _setPhase("breath"); await delay(110); }  // 大块间极短
+  }
+}
+
+/** 一次性朗读整段（手动/全文）：独占作废其它朗读，整段(或大块)连续播放，绝不并发叠读。
+ *  返回整段播完时 resolve。cb:{onStart,onSpeak,onDone,onError} */
 export async function speakText(text, opts = {}, cb = {}) {
   const pieces = chunkWhole(cleanForSpeech(String(text || "")));
   if (!pieces.length) {
@@ -325,77 +348,49 @@ export async function speakText(text, opts = {}, cb = {}) {
     if (cb.onError) cb.onError(e);
     throw e;
   }
-  const seq = stopSeq;            // 记录当前代；stopSpeak(++) 后即失效
-  const myStop = () => seq !== stopSeq;
+  stopSpeak();                    // 先停掉任何在播/排队 → 使本段成为唯一新朗读
+  const seq = ++speakSeq;
   cb.onStart && cb.onStart();
   try {
-    for (let i = 0; i < pieces.length; i++) {
-      if (myStop()) break;                        // 被停止
-      const part = pieces[i];
-      _setPhase("synth");
-      let url;
-      try {
-        const r = await synthesize(part, opts || {});
-        url = r && r.url;
-      } catch (e) { _speakFail(e); emit(); url = null; }
-      if (myStop()) break;
-      if (!url) continue;
-      cb.onSpeak && cb.onSpeak(part);
-      _setPhase("speak");
-      try { await playUrl(url, opts ? opts.volume : 100); }
-      catch (e) { _speakFail(e); emit(); }
-      if (myStop()) break;
-      if (i < pieces.length - 1) { _setPhase("breath"); await delay(120); }  // 大块间极短间隔
-    }
+    await playPieces(seq, pieces, opts, (t) => cb.onSpeak && cb.onSpeak(t));
     _setPhase("idle");
-    if (!myStop()) cb.onDone && cb.onDone();
+    if (alive(seq)) cb.onDone && cb.onDone();
   } catch (e) {
     _setPhase("idle");
-    if (!myStop()) { _speakFail(e); emit(); cb.onError && cb.onError(new Error(lastError)); }
+    if (alive(seq)) { _speakFail(e); emit(); cb.onError && cb.onError(new Error(lastError)); }
   }
 }
 
 /**
- * 自动朗读（sentence 随流式）：不再逐句合成，而是把已定型文本**缓冲累积**，
- * 积到足够长度(≥MAX 或一句话较长)或 finish() 时，作为整块交给 speakText 连续读。
- * feed(部分文本累积) / flush()(把缓冲整块读掉) / finish()(缓冲读完并结束)。
+ * 自动朗读（sentence 随流式）：一个会话 = 一条独占朗读。流式文本缓冲累积，
+ * 积成整块后按序连续播放(同代内多块串行，绝不重入 speakText 造成叠读)。
+ * feed(累积)/flush()(立即读缓冲)/finish()(读残尾并结束)。
  */
 export function createStreamSpeaker(opts, onSpeak) {
+  stopSpeak();                    // 新建自动朗读会话 → 作废旧朗读，独占
+  const seq = ++speakSeq;
   let buf = "";
-  let sessionStart = stopSeq;   // 会话从该代起；外部 stopSpeak(++) 后本会话即失效
-  const alive = () => sessionStart === stopSeq;
-  let idle = true;              // 无整块朗读进行中
-  let doneToken = 0;
-  const speakBuf = async () => {
-    const text = buf.trim();
-    buf = "";
-    if (!text || !alive()) return;
+  let idle = true;
+  const playWhole = async (text) => {
+    const pieces = chunkWhole(cleanForSpeech(String(text || "")));
+    if (!pieces.length || !alive(seq)) return;
     idle = false;
-    try {
-      // 复用整段朗读：合成+播放；失败不打断整条会话
-      await speakText(text, opts, { onSpeak });
-    } catch (e) { silentWarn(e, "ttsUtil"); }
+    try { await playPieces(seq, pieces, opts, onSpeak); }
+    catch (e) { silentWarn(e, "ttsUtil"); }
     idle = true;
-    // 若 flush 期间又有缓冲累积 → 继续读
-    if (buf.trim() && alive() && idle) queueMicrotask(flush);
+    if (buf.trim() && alive(seq)) queueMicrotask(drain);   // 读块期间又有累积 → 继续
   };
-  const flush = () => { if (buf.trim() && idle && alive()) speakBuf(); };
+  const drain = () => { if (buf.trim() && idle && alive(seq)) { const t = buf.trim(); buf = ""; playWhole(t); } };
   return {
-    /** 喂入一段流式文本：累积到"足够读的整块"就整块连续朗读(低频次、无逐句间隙) */
     feed(text) {
-      if (!alive()) return;
+      if (!alive(seq)) return;
       buf += String(text || "");
       const b = buf.trim();
-      // 有可读整句(以句末/段落标点结尾)且块不算太碎 → 立即读这块；块够长也强读
-      const hasSentenceEnd = /[。！？；!?\n]$/.test(b);
-      const longEnough = b.length >= 40;
-      const tooLong = b.length >= MAX;
-      if ((hasSentenceEnd && longEnough) || tooLong) flush();
+      const sentenceEnd = /[。！？；!?\n]$/.test(b);
+      if ((sentenceEnd && b.length >= 40) || b.length >= MAX) drain();
     },
-    /** 触发把当前缓冲整块读掉 */
-    flush() { if (alive()) flush(); },
-    /** 流式结束：把残留缓冲整块读完 */
-    finish() { if (alive()) flush(); },
+    flush() { if (alive(seq)) drain(); },
+    finish() { if (alive(seq)) drain(); },
     cancel() { stopSpeak(); },
   };
 }
@@ -408,9 +403,9 @@ export function enqueueSpeak(text, opts = {}, onStart) {
   speakText(s, opts, { onSpeak: () => onStart && onStart() }).catch(() => {});
 }
 
-/** 停止当前朗读（新消息/手动明确/环境声 → 立即作废并静音）。 */
+/** 停止当前朗读（新消息/手动明确/环境声 → 作废并静音；下一段新朗读将独占）。 */
 export function stopSpeak() {
-  stopSeq += 1;
+  speakSeq += 1;                  // 作废所有在播/在合成的朗读代
   if (currentAudio) {
     try { currentAudio.pause(); } catch (e) { silentWarn(e, "ttsUtil"); }
   }
