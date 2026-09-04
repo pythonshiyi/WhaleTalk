@@ -4583,6 +4583,27 @@ _session_dir_mtime = 0
 
 
 # ── 对话回写（大脑学习闭环）：每次对话后提炼值得记住的 → 长期记忆 → 自动同步大脑 ──
+def _harvest_is_low_value(line: str) -> bool:
+    """判定自动提炼出的行是否为"无信息量的标签/占位"（修复：每分钟写入"新版本结论"风暴的根因）。
+
+    规则：一行要成为有效记忆，须是"含动作/事实谓词的一句话"，而非对话里冒出的孤立名词标题。
+    ① 过短（<6）或超长拼接（>120）→ 低价值；
+    ② 含实质谓词(负责/决定/偏好/采用/约定/使用/改…)+上下文才视为有效；
+    ③ 无谓词 → 只要不是 8 字以上的完整事实句就拦截（纯名词/版本标签：新版本结论=5字 → 拦）。
+    """
+    s = str(line or "").strip()
+    if len(s) < 6 or len(s) > 120:
+        return True
+    verby = any(k in s for k in (
+        "负责", "决定", "记住", "记得", "偏好", "采用", "约定", "使用", "改为",
+        "设定", "计划", "任务", "是", "会", "已", "改"))
+    if verby:
+        # 有谓词还要有对象/上下文，否则"决定""任务"这种裸词仍是标签
+        return len(s) <= 4
+    # 无谓词：8 字及以下多为纯名词标签 → 低价值；更长但纯描述性名词也难成"可记忆事实"，拦
+    return len(s) <= 10
+
+
 def _chat_harvest(reply: str, user_text: str, cfg: dict):
     """后台线程：从本次对话提炼 0-3 条值得长期记住的信息写入记忆（自动入脑）。
 
@@ -4602,13 +4623,14 @@ def _chat_harvest(reply: str, user_text: str, cfg: dict):
                 return
             prompt = (
                 "从这段对话中提炼 0-3 条值得长期记住的信息（用户偏好、决定、重要事实、任务进展）。"
-                "没有实质内容就只输出「无」。每条一行，不要序号，不要引号，不要前缀。\n"
+                "必须是有实质内容的一句话；如果只是结论的标题/标签或没有可长期记住的内容，就只输出「无」。"
+                "每条一行，不要序号，不要引号，不要前缀，不要只写标题。\n"
                 f"用户：{str(user_text)[:500]}\nAI：{str(reply)[:500]}"
             )
             out = c.chat([{"role": "user", "content": prompt}], max_tokens=200, thinking="low")
             for line in str(out or "").splitlines():
                 s = line.strip().strip("-•*").strip()
-                if len(s) >= 8 and "无" not in s[:6]:
+                if len(s) >= 8 and "无" not in s[:6] and not _harvest_is_low_value(s):
                     dc.write_memory(s, tags="自动", type="对话")
         except Exception:
             pass

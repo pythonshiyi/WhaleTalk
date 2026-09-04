@@ -1133,8 +1133,15 @@ def consolidate_memories(min_importance=2, days=30):
                 ka = (int(a.get("importance") or 3), str(a.get("ts") or ""))
                 kb = (int(b.get("importance") or 3), str(b.get("ts") or ""))
                 keep, drop = (a, b) if ka >= kb else (b, a)
-                if len(keep["text"]) < 160:
-                    keep["text"] = keep["text"] + "（并入:" + drop["text"][:36] + "…）"
+                # 修复：近重复记忆的 text 融合只在确有互补信息时进行，且只拼接"对方独有的部分"，
+                # 避免把本就相似的标签/结论无限累加成 "X（并入:X…）（并入:X…）" 的递归垃圾。
+                keep_txt = str(keep.get("text") or "")
+                drop_txt = str(drop.get("text") or "")
+                # 对方 text 与 keep 高度重合（Jaccard>0.85）→ 视为同义噪音，只归档不拼接
+                dt, kt = set(_mem_tokens(drop_txt)), set(_mem_tokens(keep_txt))
+                nearly_same = bool(dt and kt and len(dt & kt) / len(dt | kt) > 0.85)
+                if not nearly_same and len(keep_txt) < 160:
+                    keep["text"] = keep_txt + "（并入:" + drop_txt[:36] + "…）"
                 drop["archived"] = True
                 merged += 1
     save_memories(items)
