@@ -1448,6 +1448,116 @@ def _prune_snapshots(versions: list, keep: int, protected=None):
     return pruned, skipped
 
 
+# ---------------------------------------------------------------- B5 快照外置备份
+# 让快照脱离大脑目录独立留存：`archive` 后镜像到外部备份目录并维护 inventory；
+# 恢复端已天然支持从任意路径读取（cmd_restore src=Path）。异地多一份，历史不断链。
+
+
+def _snapshot_mirror_dir() -> str:
+    """读取默认镜像目录：manifest 里若配置了 archive_mirror 用之，否则空（不镜像）。
+
+    也可经 manifest 顶层 'archive_mirror' 持久化，用户无需每次传 --mirror。
+    """
+    try:
+        m = load_json(BRAIN_DIR / "manifest.json", {})
+        val = str(m.get("archive_mirror") or "").strip()
+        return val if val else ""
+    except Exception:
+        return ""
+
+
+def _mirror_manifest_path(brain_id: str, mirror_dir) -> Path:
+    safe_id = str(brain_id or "unknown")[:64]
+    return Path(mirror_dir) / safe_id / "snapshot_manifest.json"
+
+
+def _mirror_snapshot_file(snap_path: Path, mirror_dir, brain_id, data: bytes = None):
+    """把单个快照 .whale 复制到 mirror_dir/<brain_id>/ 并刷新 snapshot_manifest.json 清单。
+
+    返回镜像后的完整路径；失败返回 None（不影响本机归档成功）。
+    """
+    try:
+        safe_id = str(brain_id or "unknown")[:64]
+        dst_dir = Path(mirror_dir) / safe_id
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / snap_path.name
+        # 用已加密+签名的 data 直接写（若未提供则从源读）
+        if data is not None:
+            dst.write_bytes(data)
+        else:
+            shutil.copyfile(snap_path, dst)
+        # 维护清单（inventory）：brain_id 下所有镜像快照
+        man = _mirror_manifest_path(brain_id, mirror_dir)
+        inv = load_json(man, {"brain_id": safe_id, "snapshots": []})
+        snap_list = inv.get("snapshots") or []
+        if not any(s.get("file") == snap_path.name for s in snap_list):
+            snap_list.append({
+                "file": snap_path.name, "archived_at": now_iso(),
+                "size_bytes": dst.stat().st_size,
+                "version": snap_path.stem.rsplit("_v", 1)[-1] if "_v" in snap_path.stem else "",
+            })
+            snap_list.sort(key=lambda s: str(s.get("version") or "0"))
+            inv["snapshots"] = snap_list
+            save_json(man, inv)
+        return str(dst)
+    except OSError:
+        return None
+    except Exception:
+        return None
+
+
+def _record_snapshot_index(version: int, data: bytes) -> None:
+    """B4 内容寻址清单：记录每份快照的 sha256/体积/记忆数/相对上一份增量。
+
+    写入 `snapshot_index.json`（大脑内）；不改变 .whale 格式（保持单份可独立恢复）。
+    """
+    import hashlib as _h
+    try:
+        idx_path = BRAIN_DIR / "snapshot_index.json"
+        idx = load_json(idx_path, {"brain_id": load_manifest().get("brain_id"), "snapshots": []})
+        snaps = idx.get("snapshots") or []
+        digest = _h.sha256(data).hexdigest()
+        # 覆盖/去重同名版本（重复归档同 n 时刷新）
+        snaps = [s for s in snaps if str(s.get("version")) != str(version)]
+        n_mem = len(load_memories())
+        prev = snaps[-1] if snaps else None  # 已按 version 升序
+        delta_bytes = 0
+        if prev is not None and prev.get("size_bytes") is not None:
+            delta_bytes = len(data) - int(prev["size_bytes"])
+        snaps.append({
+            "version": version, "sha256": digest, "size_bytes": len(data),
+            "memories": n_mem, "delta_from_prev_bytes": delta_bytes, "at": now_iso(),
+        })
+        snaps.sort(key=lambda s: int(s.get("version") or 0))
+        idx["snapshots"] = snaps
+        save_json(idx_path, idx)
+    except Exception:
+        pass
+
+
+def cmd_mirror(args) -> int:
+    """把 brain/archive/ 下全部快照镜像到外部目录（B5 补录已存在的快照）。
+
+    usage: mirror <dir>  把现有快照复制到 <dir>/<brain_id>/ 并生成清单。
+    """
+    load_manifest()
+    mirror = getattr(args, "dir", None)
+    if not mirror:
+        print("[错误] 需要镜像目录（brainkit.py mirror <目录>）", file=sys.stderr)
+        return 1
+    versions = sorted(ARCHIVE_DIR.glob("brain_v*.whale")) if ARCHIVE_DIR.exists() else []
+    if not versions:
+        print("[空] 没有可镜像的快照。")
+        return 0
+    m = load_manifest()
+    mirrored = 0
+    for v in versions:
+        if _mirror_snapshot_file(v, mirror, m.get("brain_id")):
+            mirrored += 1
+    print(f"[镜像完成] 已镜像 {mirrored}/{len(versions)} 份快照到 {Path(mirror) / (m.get('brain_id') or 'unknown')[:64]}")
+    return 0
+
+
 def cmd_archive(args) -> int:
     """L5：快照归档跨进程串行化（防版本号竞态），内层完成实际打包。"""
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1501,6 +1611,19 @@ def _archive_unlocked(args) -> int:
     sig_mode = _write_snapshot_with_sig(target, data)
     if sig_mode == "signed":
         mode += "（已签名）"
+
+    # B5 异地备份钩子：把本次快照镜像到外部目录（快照脱离大脑目录独立留存）。
+    mirror = _snapshot_mirror_dir() if not getattr(args, "mirror", None) else str(args.mirror)
+    if mirror:
+        mirrored = _mirror_snapshot_file(target, mirror, m.get("brain_id"), data)
+        if mirrored:
+            print(f"  已镜像到外部备份: {mirrored}")
+
+    # B4（安全子集）：内容寻址 + 快照增量清单。快照仍为自包含全量 .whale
+    # （每份可独立恢复，不因依赖基快照而牺牲可靠性）；这里在 `snapshot_index.json`
+    # 记录每份的 sha256 / 体积 / 记忆条目数 / 相对上一份的增量，让 N 份快照的
+    # 成长与去重潜质可见。真正的分块存储会破坏"单份可独立恢复"，故不在此改格式。
+    _record_snapshot_index(n, data)
 
     lineage = load_json(LINEAGE_FILE, {})
     # P2-3：维护完整血缘链——新版本 n 的祖先 = 旧祖先链 + 旧 last_archived
@@ -2605,10 +2728,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--keyword", help="要借贷的记忆关键词")
     sp.set_defaults(func=cmd_borrow)
 
-    sp = sub.add_parser("archive", help="生成快照 brain_v{n}.whale（默认免密加密）")
+    sp = sub.add_parser("archive", help="生成快照 brain_v{n}.whale（默认免密加密）；--mirror 外置镜像")
     sp.add_argument("--passphrase", help="额外附上口令包裹（fallback 解密路径）")
     sp.add_argument("--keep", type=int, default=DEFAULT_KEEP, help="保留最近 N 份快照")
+    sp.add_argument("--mirror", help="B5：把新快照镜像到外部备份目录（也写 snapshot_manifest.json）")
     sp.set_defaults(func=cmd_archive)
+
+    sp = sub.add_parser("mirror", help="B5：把 brain/archive/ 下全部快照镜像到外部目录 <dir>")
+    sp.add_argument("dir", help="外部备份目录")
+    sp.set_defaults(func=cmd_mirror)
 
     sp = sub.add_parser("restore", help="从 .whale 快照恢复大脑（本机免密/口令）")
     sp.add_argument("whale", help="快照文件路径")

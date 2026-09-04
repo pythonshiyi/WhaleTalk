@@ -2,6 +2,24 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.5（未发版追加·增强四批）—— 🧠 快照外置备份（B5）+ 内容寻址清单（B4）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。落地快照可靠性的两端增量——B5 让快照脱离大脑目录独立留存（异地多一份、历史不断链）；B4 以内容寻址清单追踪每份快照成长，不牺牲"单份可独立恢复"的格式可靠性。
+
+### B5 快照外置备份
+- `archive --mirror <dir>`：归档后把新快照镜像到 `<dir>/<brain_id>/brain_v{n}.whale`，并刷新该大脑目录下的 `snapshot_manifest.json` 清单（脑 ID 下全部镜像快照的 version/size/归档时间）
+- 支持持久化：manifest 顶层配 `archive_mirror` 后，归档自动镜像（无需每次传参）；未配置则不镜像（零侵入）
+- 新命令 `mirror <dir>`：把 `brain/archive/` 已存在的快照一次性补录到外部目录
+- 恢复端天然支持异地：`restore` 从任意路径读 `.whale`（含外部备份），不依赖本机 archive/
+
+### B4 内容寻址清单（安全子集）
+- 每次归档写 `snapshot_index.json`：记录每份快照的 **sha256 / 体积 / 记忆条目数 / 相对上一份增量字节 / 归档时间**，让 N 份快照的成长与去重潜质可见
+- **有意不改 .whale 格式**：保持每份快照自包含、单份可独立恢复；真正的分块增量会引入"依赖基快照"而牺牲可靠性，故不在此处改（同 L2 取舍哲学）
+
+### 回归
+- 新增 `tests/test_brain_archive_b5.py` **4 用例**（归档镜像写外部+清单、mirror 补录、从外部镜像恢复且指纹自洽、snapshot_index 两版追踪）
+- pytest **170 passed**；四门禁全绿（audit 0/0、validate 135、island 135×9、check_docs 135 工具 · 86 路由 · 3.8.4）；ruff 新增代码零错误
+
 ## v3.8.5（未发版追加·增强三批）—— 🧠 记忆统一读取层（B1/B2）+ 统一记忆检索端点
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。落地 B1/B2 架构增强——不重写任一活存储落盘格式（零数据风险），新增只读统一层把三套记忆源归一为同一 canonical schema。
