@@ -5,7 +5,7 @@
 """
 
 # 应用版本号（统一来源：deepseek_client / backup 引用此处）
-VERSION = "3.8.4"
+VERSION = "3.8.5"
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个强大的AI助手，具备以下核心能力：\n"
