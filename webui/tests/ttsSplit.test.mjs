@@ -2,7 +2,7 @@
 // 修复：sentence 自动朗读首段反复、后段不播 —— splitSentences 会把"已完句"与后续段
 // 粘进同一 buf，导致流式里首句不断随后续内容增长 → 每次增长都是新文本 → 被反复重播。
 import assert from "node:assert";
-import { splitSentences } from "../src/ttsUtil.js";
+import { splitSentences, breathMs } from "../src/ttsUtil.js";
 
 // 完整文本两句分离
 {
@@ -44,3 +44,11 @@ import { splitSentences } from "../src/ttsUtil.js";
 }
 
 console.log("✅ ttsSplit 语音分句回归全部通过");
+
+// ── 自然呼吸停顿：不同标点给不同停顿（句号>分号>逗号，无标点未完句最短）──
+{
+  assert.ok(breathMs("句号结尾。") > breathMs("逗号，"), "句号停顿应大于逗号");
+  assert.ok(breathMs("疑问？") > breathMs("句号。"), "问号停顿应大于句号");
+  assert.ok(breathMs("未完") > 0, "未完片段也应有最小停顿");
+}
+console.log("✅ ttsSplit 自然停顿(breathMs) 回归通过");

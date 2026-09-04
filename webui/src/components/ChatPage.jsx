@@ -11,7 +11,7 @@ import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
-import { cleanForSpeech, splitSentences, enqueueSpeak, speakText, getVoiceConfig, onSpeechState, stopSpeak } from "../ttsUtil.js";
+import { cleanForSpeech, splitSentences, enqueueSpeak, speakText, getVoiceConfig, onSpeechState, stopSpeak, pauseSpeak, resumeSpeak } from "../ttsUtil.js";
 
 import { silentWarn } from "../quiet.js";
 // 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
@@ -53,24 +53,29 @@ export function BackendBanner() {
   );
 }
 
-// 全局朗读状态浮标：合成中/播放中均有可见反馈，点击可停
+// 全局朗读状态浮标：合成中/开口中/句间呼吸/环境暂停——均有可见反馈，点击可停/续
 function SpeakingPill() {
-  const [st, setSt] = React.useState({ speaking: false, loading: false });
+  const [st, setSt] = React.useState({ speaking: false, loading: false, phase: "idle" });
   React.useEffect(() => onSpeechState(setSt), []);
-  if (!st.speaking && !st.loading) return null;
+  if (!st.speaking && !st.loading && st.phase !== "paused") return null;
+  const paused = st.phase === "paused";
+  const breathing = st.phase === "breath";
+  const label = paused
+    ? "⏸ 已暂停（环境声）· 点击继续"
+    : breathing ? "🔊 朗读中…" : (st.speaking ? "🔊 正在朗读 · 点击停止" : "⏳ 正在合成语音…");
   return (
     <div
-      onClick={() => st.speaking && stopSpeak()}
-      title={st.speaking ? "点击停止朗读" : "正在合成语音…"}
+      onClick={() => (paused ? resumeSpeak() : stopSpeak())}
+      title={paused ? "点击继续朗读" : "点击停止朗读"}
       style={{
         position: "fixed", right: 18, bottom: 84, zIndex: 60,
-        padding: "7px 14px", borderRadius: 999, cursor: st.speaking ? "pointer" : "default",
+        padding: "7px 14px", borderRadius: 999, cursor: "pointer",
         fontSize: 12.5, fontWeight: 600, color: "var(--text, #eee)",
-        background: st.speaking ? "linear-gradient(135deg,#0ea5e9,#2563eb)" : "rgba(120,130,150,.85)",
+        background: paused ? "rgba(180,140,20,.92)" : "linear-gradient(135deg,#0ea5e9,#2563eb)",
         boxShadow: "0 4px 14px rgba(0,0,0,.35)", userSelect: "none",
       }}
     >
-      {st.speaking ? "🔊 正在朗读 · 点击停止" : "⏳ 正在合成语音…"}
+      {label}
     </div>
   );
 }
@@ -771,6 +776,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     // busy 一律拦截：busy 期间即使带 resendIdxRef 也会覆盖 pendingRef 且 effect 不重跑（新流不会启动），
     // 导致当前流结束后保存时 userText 错乱。编辑重发需等当前生成结束后再操作。
     if (busy) return;
+    // 新消息 → 永久停止正在进行的朗读/自动朗读（真人对话：我开口，AI 就不该继续念）
+    stopSpeak();
     // 高峰提示（每天首次发送；受「高峰提醒」开关与后端实时峰值判定控制）
     try {
       const today = new Date().toISOString().slice(0, 10);

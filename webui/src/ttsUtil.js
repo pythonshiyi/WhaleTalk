@@ -69,10 +69,19 @@ let queueChain = Promise.resolve();
 let generation = 0;           // stopSpeak 时 +1，令旧队列任务作废
 let loadingCount = 0;         // 合成中的任务数（点击后立即有反馈）
 let lastError = "";           // 最近一次朗读失败原因
-const listeners = new Set();  // 状态变化回调 ({speaking,loading,error})
+let phase = "idle";           // idle|synth|speak|breath|paused —— 供 UI 呈现自然说话态
+let pausedGen = -1;           // 环境打断「暂停」时的 generation（resume 用；>0 表示可续）
+let pauseResumeHooks = null;  // 环境暂停/继续的钩子（由 speakText 循环注册）
+const listeners = new Set();  // 状态变化回调 ({speaking,loading,error,phase})
+
+function _setPhase(p) {
+  if (phase === p) return;
+  phase = p;
+  emit();
+}
 
 function emit() {
-  const st = { speaking: !!currentAudio, loading: loadingCount > 0, error: lastError };
+  const st = { speaking: !!currentAudio || phase === "speak", loading: loadingCount > 0, error: lastError, phase };
   listeners.forEach((fn) => { try { fn(st); } catch (e) { silentWarn(e, "ttsUtil"); } });
 }
 
@@ -82,8 +91,23 @@ export function onSpeechState(fn) {
 }
 
 export function isSpeaking() {
-  return !!currentAudio;
+  return !!currentAudio || phase === "speak";
 }
+
+// 句间自然呼吸停顿（毫秒）：根据前一句结尾的标点给不同停顿，营造真人说话节奏。
+// 。和段落 → 稍长；，/、 → 极短；？！…… → 思考感略长；结尾无标点(未完) → 短。
+export function breathMs(prevPart) {
+  const s = String(prevPart || "");
+  const last = s.slice(-1);
+  if (!last) return 120;
+  if (last === "。" || last === "\n") return 240;
+  if (last === "？" || last === "！" || last === "…") return 320;
+  if (last === "，" || last === "、") return 90;
+  if (last === "；" || last === ";") return 180;
+  return 160; // 无标点结尾的未完片段
+}
+
+const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
 // ── 「说话即打断」barge-in：朗读时监听麦克风，检测到用户说话即停止朗读 ──
 // 权限门控 + 默认关闭；需用户在设置开启并授予麦克风权限。纯前端、无 whisper 依赖，
@@ -113,8 +137,8 @@ async function _startBargeIn() {
       const n = Math.floor(buf.length * 0.6);  // 只取中低频（人声区）
       for (let i = 0; i < n; i++) sum += buf[i];
       const avg = sum / (n || 1) / 255;
-      if (avg > 0.3) {  // 用户开口（中低频能量明显）→ 打断朗读
-        stopSpeak();
+      if (avg > 0.3) {  // 用户开口（中低频能量明显）→ 暂停朗读（环境打断；可续）
+        pauseSpeak();
       }
     }, 200);
     return true;
@@ -268,17 +292,16 @@ function _speakFail(e) {
 }
 
 /**
- * 朗读一段文本（进入全局串行队列）。返回本条任务专属 Promise：
- * 开始播放时回调 onStart()；失败时 reject（message 已转为人话）。
- * opts: {rate,volume,voice,engine}
+ * 朗读一段文本（单句，串行；供 speakText 内部与单句手动用）。
+ * opts: {rate,volume,voice,engine}；phase 驱动到 "synth"(合成) / "speak"(开口)。
  */
 export function enqueueSpeak(text, opts = {}, onStart) {
   const gen = generation;
   const run = queueChain.then(async () => {
     if (gen !== generation || !text) return;
-    loadingCount++; lastError = ""; emit();
+    loadingCount++; lastError = ""; _setPhase("synth"); emit();
     let done = false;
-    const dec = () => { if (!done) { done = true; loadingCount--; emit(); } };
+    const dec = () => { if (!done) { done = true; loadingCount--; if (!currentAudio) _setPhase("idle"); emit(); } };
     let r;
     try {
       r = await synthesize(text.slice(0, 4000), opts);
@@ -288,17 +311,19 @@ export function enqueueSpeak(text, opts = {}, onStart) {
     } catch (e) {
       dec();
       _speakFail(e);
+      _setPhase("idle");
       emit();
       throw new Error(lastError);
     }
     try {
+      _setPhase("speak");
       await playUrl(r.url, opts.volume);
+      if (gen === generation) _setPhase("idle");
     } catch (e) {
+      _setPhase("idle");
       _speakFail(e);
       emit();
       throw new Error(lastError);
-    } finally {
-      if (gen === generation && !currentAudio) emit();
     }
   });
   queueChain = run.catch(() => {});
@@ -306,53 +331,153 @@ export function enqueueSpeak(text, opts = {}, onStart) {
 }
 
 /**
- * 分句朗读一段文本（逐句合成播放，进全局串行队列）。
- * 手动朗读长回复时使用：按 ≤200 字分句，避免单次超长合成（也为解决服务端超时误判）；
- * 边读边播，取消只需 stopSpeak()（全局 generation 递增即作废后续句）。
+ * 分句朗读一段文本（自然朗读引擎）：边说边读、句间自然呼吸停顿、可环境暂停可续。
+ *
+ * 比旧版增强：
+ * ① 预合成：当前句在播时提前合成下一句（隐藏合成延迟 → 句间不再卡顿）；
+ * ② 句间呼吸：按上一句结尾标点给 90-320ms 自然停顿（真人节奏），末句不拖尾；
+ * ③ 分层打断：环境声 → pauseSpeak（暂停可续）；新消息/手动 → stopSpeak（永久停）。
  * cb: {onStart(), onSpeak(part), onDone(), onError(err)}
  */
-export function speakText(text, opts = {}, cb = {}) {
-  const chunks = splitSentences(cleanForSpeech(String(text || "")), 200);
+export async function speakText(text, opts = {}, cb = {}) {
+  const raw = cleanForSpeech(String(text || ""));
+  const chunks = splitSentences(raw, 200);
   if (!chunks.length) {
     const e = new Error("没有可朗读的内容");
-    lastError = e.message; emit();
+    lastError = e.message; _setPhase("idle"); emit();
     cb.onError && cb.onError(e);
-    return Promise.reject(e);
+    throw e;
   }
   cb.onStart && cb.onStart();
-  const gen = generation;
-  let i = 0;
-  return new Promise((resolve, reject) => {
-    const step = () => {
-      // 数量枚举完，或已调用 stopSpeak（generation 递增）→ 结束本轮
-      if (gen !== generation || i >= chunks.length) { cb.onDone && cb.onDone(); resolve(); return; }
-      const part = chunks[i++];
-      enqueueSpeak(part, opts, () => cb.onSpeak && cb.onSpeak(part))
-        .then(step)
-        .catch((e) => {
-          if (gen !== generation) { cb.onDone && cb.onDone(); resolve(); return; }
-          cb.onError && cb.onError(e);
-          reject(e);
-        });
-    };
-    step();
-  });
+  const gen = ++generation;   // 使旧朗读作废，本轮独占
+  const isPaused = () => pausedGen === gen;
+  const cache = new Map();    // 本轮预合成缓存（局部，互不干扰）
+
+  // 预合成索引 i 的 url（合成本身不播放），供轮到即播
+  const prefetch = (i) => {
+    if (i < 0 || i >= chunks.length) return Promise.resolve(null);
+    if (!cache.has(i)) {
+      cache.set(i,
+        synthesize(chunks[i].slice(0, 4000), opts).then((r) => r.url).catch(() => null));
+    }
+    return cache.get(i);
+  };
+
+  try {
+    let i = 0;
+    await prefetch(0); // 预合成第 0 句，尽早开口
+    if (gen !== generation) return;
+    while (i < chunks.length) {
+      // 环境暂停检查：停在句边界，待 resume 续读（不吞句、不重读）
+      if (isPaused()) {
+        _setPhase("paused");
+        await new Promise((res) => { pauseWaitResolvers.add(res); });
+        if (gen !== generation) return;  // 暂停期间被 stop
+        _setPhase("synth");
+        continue;
+      }
+      const part = chunks[i];
+      // 播当前句时后台预合成下一句 → 隐藏合成延迟，句间不卡顿
+      if (i + 1 < chunks.length) prefetch(i + 1);
+      const url = cache.get(i) || (await synthesize(part.slice(0, 4000), opts).then((x) => x.url));
+      if (gen !== generation) return;
+      _setPhase("speak");
+      cb.onSpeak && cb.onSpeak(part);
+      await playUrlRaw(url, opts.volume);
+      if (gen !== generation) return;
+      // 句间自然呼吸（末句不拖尾）
+      if (i < chunks.length - 1 && !isPaused()) {
+        _setPhase("breath");
+        await delay(breathMs(part));
+        if (gen !== generation) return;
+      }
+      i++;
+    }
+    _setPhase("idle");
+    cb.onDone && cb.onDone();
+  } catch (e) {
+    _setPhase("idle");
+    if (gen === generation) { _speakFail(e); emit(); cb.onError && cb.onError(new Error(lastError)); }
+  } finally {
+    cache.clear();
+    if (gen === generation) _setPhase("idle");
+    if (pausedGen === gen) pausedGen = -1;
+  }
 }
 
-/** 停止当前朗读并清空队列；返回是否真的有播放被打断 */
+// 暂停等待集合（speakText 内部控制，暴露 pause/resume 接口）
+let pauseWaitResolvers = new Set();
+
+/** 环境打断「暂停」：停住当前音频，下次在句边界续读（不重读本句）。 */
+export function pauseSpeak() {
+  if (phase !== "speak" && phase !== "breath" && phase !== "synth") return;
+  if (currentAudio) {
+    try { currentAudio.pause(); } catch (e) { silentWarn(e, "ttsUtil"); }
+    const r = currentResolve; currentResolve = null;
+    // 不立即置空 currentAudio，让 playUrl 的 done 自然结算
+    if (r) setTimeout(r, 0);
+  }
+  pausedGen = pausedGen >= 0 ? pausedGen : generation;
+  _setPhase("paused");
+}
+
+/** 从环境暂停中恢复：继续朗读（从下一个未读句开始）。 */
+export function resumeSpeak() {
+  if (phase !== "paused") return;
+  pausedGen = -1;
+  _setPhase("synth");
+  const wakes = [...pauseWaitResolvers];
+  pauseWaitResolvers.clear();
+  wakes.forEach((res) => res());
+}
+
+/** 停止当前朗读并清空队列（新消息/手动明确打断 → 永久停）；返回是否有播放被打断 */
 export function stopSpeak() {
-  const had = !!currentAudio;
+  const had = !!currentAudio || phase !== "idle";
   generation += 1;
+  pausedGen = -1;
   if (currentAudio) {
     try { currentAudio.pause(); } catch (e) { silentWarn(e, "ttsUtil"); }
     currentAudio = null;
-    // 解除当前挂起的 playUrl，避免队列因 onended 不触发而永久卡死
     const r = currentResolve;
     currentResolve = null;
     if (r) r();
   }
+  _setPhase("idle");
   emit();
   return had;
+}
+
+/** 从已合成 url 直接播放一段音频（不经 synthesize，speakText 预合成用）。 */
+function playUrlRaw(url, volumePct) {
+  return new Promise((resolve, reject) => {
+    const audio = new Audio(url);
+    audio.volume = Math.max(0, Math.min(1, (volumePct ?? 100) / 100));
+    let settled = false;
+    let watchdog = null;
+    const clearWatch = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null; } };
+    const done = () => {
+      if (settled) return; settled = true; clearWatch();
+      if (currentAudio === audio) currentAudio = null;
+      if (currentResolve === done) currentResolve = null;
+      resolve();
+    };
+    audio.onloadedmetadata = () => {
+      if (settled) return;
+      const d = audio.duration;
+      if (d && isFinite(d) && d > 0) watchdog = setTimeout(done, d * 1000 + 4000);
+    };
+    audio.onended = done;
+    audio.onerror = () => {
+      if (settled) return; settled = true; clearWatch();
+      if (currentAudio === audio) currentAudio = null;
+      if (currentResolve === done) currentResolve = null;
+      reject(new Error("音频解码/播放失败"));
+    };
+    currentAudio = audio;
+    currentResolve = done;
+    audio.play().catch(() => { if (!settled) { settled = true; clearWatch(); currentAudio = null; currentResolve = null; reject(new Error("播放被拦截")); } });
+  });
 }
 
 // ── 语音设置（服务端 voice_config 的前端缓存）──
