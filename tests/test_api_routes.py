@@ -3,7 +3,7 @@
 
 覆盖：
 - POST 路由表完整性（52 条，exact/pre/set 三种 matcher）
-- GET 路由表完整性（46 条，exact/pre/qpath 三种 matcher；由原 do_GET 46 分支迁移）
+- GET 路由表完整性（47 条，exact/pre/qpath 三种 matcher；由原 do_GET 46 分支迁移 + 统一记忆端点）
 - 查表函数 _match_post_route / _match_get_route 对各形态路径的分发正确性
 - do_POST / do_GET 兜底（未匹配 → None → 404）与鉴权前置不变
 """
@@ -131,14 +131,14 @@ def test_do_post_sources_decorated_methods():
 # ── P2-2：GET 路由表（do_GET 46 分支 if/elif 迁移而来）────────────────────
 
 def test_get_route_table_size():
-    """GET 端点数 = 46（39 精确 + 5 pre + 2 qpath），与迁移前的 do_GET 分支数一致。"""
+    """GET 端点数 = 47（39 精确 + 5 pre + 3 qpath），与迁移前的 do_GET 分支数一致。"""
     routes = api_server._GET_ROUTES
-    assert len(routes) == 46, f"GET 路由表应有 46 条，实际 {len(routes)}"
+    assert len(routes) == 47, f"GET 路由表应有 47 条，实际 {len(routes)}"
     kinds = {}
     for matcher, _ in routes:
         k = matcher[0] if isinstance(matcher, tuple) else "exact"
         kinds[k] = kinds.get(k, 0) + 1
-    assert kinds == {"exact": 39, "pre": 5, "qpath": 2}, f"matcher 类型分布异常: {kinds}"
+    assert kinds == {"exact": 39, "pre": 5, "qpath": 3}, f"matcher 类型分布异常: {kinds}"
 
 
 def test_get_exact_match():
@@ -178,9 +178,10 @@ def test_get_pre_matcher():
 def test_get_qpath_matcher():
     """qpath 型：去查询串后精确匹配（带不带 ?query 都命中同一端点）。"""
     for p in ("/v1/files", "/v1/files?dir=/tmp",
-              "/v1/brain/memories", "/v1/brain/memories?query=hi&limit=3"):
+              "/v1/brain/memories", "/v1/brain/memories?query=hi&limit=3",
+              "/v1/brain/unified-memories", "/v1/brain/unified-memories?query=项目&sources=brain"):
         got = api_server._match_get_route(p)
-        assert got in ("_g_v1_files", "_g_v1_brain_memories"), p
+        assert got in ("_g_v1_files", "_g_v1_brain_memories", "_g_v1_brain_unified_memories"), p
 
 
 def test_get_no_match_returns_none():

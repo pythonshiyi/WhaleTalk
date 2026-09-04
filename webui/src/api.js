@@ -723,6 +723,20 @@ export async function getMemory() {
   return api("/v1/memory");
 }
 
+/**
+ * 统一记忆检索（B1/B2）：跨 memory.json + 大脑 jsonl + knowledge 文档。
+ * @param {string} [query] 关键词
+ * @param {"all"|"memory.json"|"brain"} [sources] 来源过滤，默认 all
+ * @param {number} [limit]
+ * @returns {Promise<{ok?:boolean, query?:string, items?:Array<any>, count?:number}>}
+ */
+export async function searchUnifiedMemories(query = "", sources = "all", limit = 8) {
+  const p = new URLSearchParams({ limit: String(limit) });
+  if (query) p.set("query", query);
+  if (sources !== "all") p.set("sources", sources);
+  return api(`/v1/brain/unified-memories?${p.toString()}`);
+}
+
 // ── 权限 / 任务 / 态势 ───────────────────────────────
 
 /** @returns {Promise<Object>} 权限与黑名单配置 */

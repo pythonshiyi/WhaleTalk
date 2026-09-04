@@ -1852,6 +1852,20 @@ def _init_dc_paths():
             dc.WORKING_DIR = active_dir
     except Exception:
         logger.exception("_init_dc_paths 配置同步部分失败（不影响启动）")
+    # B1/B2：给 memory_store 注入统一读取层所需路径（memory.json / knowledge_index / 大脑目录）
+    try:
+        import memory_store as ms
+        try:
+            import brainkit as _bkit
+            _brain_dir = str(_bkit.BRAIN_DIR)
+        except Exception:
+            _brain_dir = None
+        ms.configure(memory_json=MEMORY_PATH,
+                     knowledge_index=os.path.join(DATA_DIR, "knowledge_index.json"),
+                     brain_dir=_brain_dir)
+        ms.invalidate_cache()
+    except Exception:
+        logger.exception("memory_store 路径注入失败（不影响启动）")
 
 
 def _record_failure(name, result):
@@ -5258,6 +5272,32 @@ class _Handler(BaseHTTPRequestHandler):
             items = bk.search_memories(q, limit) if q else bk.load_memories()
             items.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
             self._json(200, {"ok": True, "items": items[:limit], "total": len(bk.load_memories())})
+        except Exception as e:  # noqa: BLE001
+            self._json(200, {"ok": False, "error": str(e)})
+
+    @_get_route(("qpath", "/v1/brain/unified-memories"))
+    def _g_v1_brain_unified_memories(self):
+        """B1/B2 统一记忆检索：跨 memory.json + 大脑 jsonl + knowledge 文档。
+        ?query=关键词&limit=N&sources=all|memory.json|brain
+        """
+        try:
+            import memory_store as ms
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            q = (qs.get("query") or [""])[0]
+            try:
+                limit = int((qs.get("limit") or ["8"])[0])
+            except (TypeError, ValueError):
+                limit = 8
+            limit = max(1, min(100, limit))
+            src = (qs.get("sources") or ["all"])[0]
+            if src == "memory.json":
+                items = ms.search(q, limit, sources=("memory.json",))
+            elif src == "brain":
+                items = ms.search(q, limit, sources=("brain",))
+            else:
+                items = ms.search_all(q, limit) if q else ms.unified_entries()[:limit]
+            self._json(200, {"ok": True, "query": q, "items": items, "count": len(items)})
         except Exception as e:  # noqa: BLE001
             self._json(200, {"ok": False, "error": str(e)})
 

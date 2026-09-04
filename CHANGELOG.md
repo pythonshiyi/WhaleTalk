@@ -2,9 +2,27 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
-## v3.8.5（未发版追加·增强二批）—— 🧠 大脑增强：反馈回路 + 检索增强 + 记忆版本链 + 新命令
+## v3.8.5（未发版追加·增强三批）—— 🧠 记忆统一读取层（B1/B2）+ 统一记忆检索端点
 
-**版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。据《大脑增强建议路线图（2026-09-04）》，除"明确不建议做"项外，落地第一批核心增强：让记忆"被写后会被用、被用后有回执、会自我修正"。
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。落地 B1/B2 架构增强——不重写任一活存储落盘格式（零数据风险），新增只读统一层把三套记忆源归一为同一 canonical schema。
+
+### B1 统一记忆读取层（新增 `memory_store.py`）
+- **统一 canonical 条目 schema**：`{id,text,type,importance,tags,entities,relations,source,ts,sensitivity,…}`——把 `memory.json`（对话事实）、大脑 `memory.jsonl`、`knowledge_index.json`（文档库）三源归一；跨源去重
+- **惰性适配**：经 api_server `_init_dc_paths` 注入真实路径；未配置时函数级兜底探测；对大脑目录的临时切换带恢复（不改变调用方大脑上下文）
+- **统一检索**：`search`（memory.json + brain 语义检索，可 sources 过滤）/ `search_all`（三源）/ `knowledge_docs`（文档库子串）
+
+### B2 缓存与检索服务化
+- **mtime 失效内存缓存**：`unified_entries(use_cache=True)` 按 memory.json 的 mtime_ns 失效，避免每次全量读盘解析；`invalidate_cache()` 供写入后主动失效
+
+### 接入
+- **新端点 `GET /v1/brain/unified-memories`**：`?query=&limit=&sources=all|memory.json|brain`，前端 `api.js` 新增类型化导出 `searchUnifiedMemories`（通过 noBareApiCalls 门禁）
+- GET 路由表 46 → **47**（qpath 2→3）；/v1 端点 85 → **86**；对应文档（MODULES/TECH_NOTES）与 `test_api_routes` 表大小/匹配用例同步更新
+
+### 回归
+- 新增 `tests/test_memory_store.py` **6 用例**（跨源归一/去重/canonical 字段/缓存失效/跨源检索/文档库/三源 search_all）
+- pytest **166 passed**；四门禁全绿（audit 0/0、validate 135、island 135×9、check_docs 135 工具 · **86 路由** · 3.8.4）；前端 noBareApiCalls + tsc typecheck 通过
+
+
 
 ### 记忆生命周期闭环（brainkit / brain_api）
 - **F2 事实版本链**：`version_replace_memory` 替换记忆时新建 supersedes=旧id 的新条目、旧条目标记归档不删、共享 version_id 溯源——`update_memory` 不再永久覆盖丢旧值
