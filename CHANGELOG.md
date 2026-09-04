@@ -2,6 +2,24 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.5（未发版追加·增强五批）—— 🧠 大脑健康盘（U7）+ doctor/mirror 结构化动作
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。前端大脑 UI 增强第一批：落地 U7 健康盘 + B5 镜像入口，并把体检从"打印文本"升级为"结构化数据"供 UI 消费。
+
+### 后端结构化动作（brain_api / brainkit）
+- `cmd_doctor` 重构：体检逻辑提取为 `_brain_health_dict()` 返回结构化 dict（score/problems/memories/stale/dups/open_decisions/stale_decisions/open_conflicts/snapshots/snapshot_days/keyring）
+- `brain_action` 新增 `doctor`（返回结构化健康数据，供健康盘）与 `doctor-fix`（自动归档陈旧低价值记忆）、`mirror`（外置镜像，B5）
+- 修复 cmd_doctor `--fix` 逻辑（对 include_archived 全量改写，原对活跃副本改无效）
+
+### 前端（U7 大脑健康盘）
+- 新增 `BrainHealth.jsx`：SVG 健康分环 + 关键计数 + 问题清单 + 「复查 / 一键修复」；点按加载调 `brainAction(doctor)`（避免把 O(n²) 体检塞进每次 status 轮询）
+- `BrainBlock.jsx` 顶部新增「🏥 健康盘」卡（U6「对话中的我/注入预览」已由 context_preview 面板承担，U6 复用不改）
+- 生命延续 → 维护清理 内新增「异地备份目录（B5）→ 镜像到异地」入口
+
+### 回归
+- 新增 doctor/mirror action 测试 2 例（增强五批并入 test_brain_archive_b5）
+- pytest **172 passed**；四门禁全绿；前端 `npm test` + tsc typecheck + `vite build`（54 模块）全绿；ruff 新增代码零错误
+
 ## v3.8.5（未发版追加·增强四批）—— 🧠 快照外置备份（B5）+ 内容寻址清单（B4）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。落地快照可靠性的两端增量——B5 让快照脱离大脑目录独立留存（异地多一份、历史不断链）；B4 以内容寻址清单追踪每份快照成长，不牺牲"单份可独立恢复"的格式可靠性。

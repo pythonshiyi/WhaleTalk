@@ -216,6 +216,21 @@ def brain_action(action, payload=None):
     if action == "archive":
         code, out = _run(bk.cmd_archive, passphrase=str(payload.get("passphrase") or ""), keep=bk.DEFAULT_KEEP)
         return {"ok": code == 0, "message": out}
+    if action == "doctor":
+        # F6 大脑体检：返回结构化健康数据（前端健康盘 U7）
+        try:
+            h = bk._brain_health_dict()
+            h["ok"] = True
+            return h
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "message": f"体检失败: {e}"}
+    if action == "doctor-fix":
+        # 自动修复陈旧低价值记忆（--fix 同口径）
+        code, out = _run(bk.cmd_doctor, fix=True)
+        return {"ok": code == 0, "message": out}
+    if action == "mirror":
+        code, out = _run(bk.cmd_mirror, dir=str(payload.get("dir") or ""))
+        return {"ok": code == 0, "message": out, "data": {"dir": str(payload.get("dir") or "")}}
     if action == "export-key":
         pw = str(payload.get("passphrase") or "").strip()
         auto_pw = ""

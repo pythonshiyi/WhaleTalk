@@ -1,5 +1,6 @@
 import React from "react";
 import * as api from "../api.js";
+import BrainHealth from "./BrainHealth.jsx";
 
 // ── 鲸语大脑（指挥舱：身份 / 心跳 / 时光备份 / 生命延续 / 对话自我）────────
 function BrainBlock() {
@@ -24,6 +25,7 @@ function BrainBlock() {
   const [createWithKeyring, setCreateWithKeyring] = React.useState(true);
   const [connErr, setConnErr] = React.useState("");
   const [acc, setAcc] = React.useState(""); // merge | migrate | cleanup
+  const [mirrorDir, setMirrorDir] = React.useState(""); // B5 异地备份目录
 
   const createBrain = async () => {
     setBusy(true);
@@ -277,6 +279,15 @@ function BrainBlock() {
         </div>
       </div>
 
+      {/* ── U7 健康盘（F6 doctor：体检分 + 问题清单 + 一键修复）── */}
+      <div className="brain-card">
+        <div className="brain-card-title">
+          <span>🏥 健康盘</span>
+          <i>重复率 / 陈旧记忆 / 未回执决策 / 快照新鲜度 —— 一键体检与修复</i>
+        </div>
+        <BrainHealth />
+      </div>
+
       {/* ── 意识状态（心跳）── */}
       <div className="brain-card">
         <div className="brain-card-title">
@@ -486,6 +497,17 @@ function BrainBlock() {
                 <button className="msg-op" disabled={busy} onClick={() => act("cleanup", { keep_bak: 2 }, "清理融合残留目录与过期大脑备份（保留最近 2 份）？")}>🧹 立即清理</button>
                 <span className="sched-text" style={{ fontSize: 12, opacity: 0.7 }}>合并临时目录 / 过期大脑备份</span>
               </div>
+              <div className="sched-line1" style={{ marginTop: 8 }}>
+                <input
+                  className="set-select set-combo"
+                  placeholder="异地备份目录（B5，快照外置留存）"
+                  value={mirrorDir}
+                  onChange={(e) => setMirrorDir(e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <button className="confirm-btn" disabled={busy || !mirrorDir} onClick={() => act("mirror", { dir: mirrorDir })}>⧉ 镜像到异地</button>
+              </div>
+              <div className="brain-acc-hint">把 brain/archive/ 下全部快照镜像到外部目录并生成清单——快照脱离大脑目录独立留存，历史不断链。</div>
             </div>
           )}
         </div>

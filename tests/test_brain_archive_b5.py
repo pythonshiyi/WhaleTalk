@@ -89,6 +89,30 @@ def test_snapshot_index_content_addressed(brain_b5):
     assert "delta_from_prev_bytes" in snaps[1]
 
 
+# ---- U7 健康盘数据契约（doctor action 返回结构化 dict；mirror action）----
+
+def test_doctor_action_structured(brain_b5):
+    """brain_api brain_action('doctor') 返回含 score/problems 的结构化健康数据。"""
+    import brain_api
+    bk.remember_structured("健康盘测试", type="测试", source="测试")
+    r = brain_api.brain_action("doctor", {})
+    assert r.get("ok") is True
+    assert isinstance(r.get("score"), int) and 0 <= r["score"] <= 100
+    assert isinstance(r.get("problems"), list)
+    assert "memories" in r and "snapshots" in r
+
+
+def test_mirror_action_via_brain_api(brain_b5):
+    """brain_api brain_action('mirror') 触发快照外置镜像。"""
+    import brain_api
+    td, mirror = brain_b5
+    bk.remember_structured("镜像action测试", type="测试", source="测试")
+    assert bk.cmd_archive(_archive_args(mirror=None)) == 0  # 本机归档
+    r = brain_api.brain_action("mirror", {"dir": str(mirror)})
+    assert r.get("ok") is True
+    assert (mirror / "whale-b5" / "brain_v1.whale").exists()
+
+
 
 def test_restore_from_external_mirror(brain_b5):
     td, mirror = brain_b5

@@ -2423,20 +2423,14 @@ def audit_op(op: str, detail: str = ""):
         pass
 
 
-def cmd_doctor(args) -> int:
-    """F6 大脑体检：检查重复率/陈旧率/未回执决策/冲突/快照新鲜度/密钥与依赖，给体检分 + 修复建议。
-
-    输出「健康度 0-100」及问题清单；--fix 自动执行安全修复（归档超期低价值记忆、清理已裁决冲突文件）。
-    """
+def _brain_health_dict():
+    """F6 体检计算（结构化）→ dict：score/问题清单/各项计数，供 CLI 与 API 复用。"""
     load_manifest()
     problems, score = [], 100
     now_epoch = _dt.datetime.now().timestamp()
     items = load_memories()
-    total = max(1, len(items))
-    # 陈旧度：>120 天且 importance<=2
     stale = [e for e in items if (now_epoch - _ts_epoch(e.get("ts"))) / 86400.0 > 120
              and int(e.get("importance") or 3) <= 2]
-    # 重复：同 type + token Jaccard>0.7
     dups = 0
     active = [e for e in items if not e.get("archived")]
     for i in range(len(active)):
@@ -2446,22 +2440,18 @@ def cmd_doctor(args) -> int:
             ta, tb = set(_mem_tokens(active[i]["text"])), set(_mem_tokens(active[j]["text"]))
             if ta and tb and len(ta & tb) / len(ta | tb) > 0.7:
                 dups += 1
-    # 未回执决策
     open_decs = [d for d in list_decisions(limit=500) if d.get("status") == "open"]
     stale_decs = [d for d in open_decs if (now_epoch - _ts_epoch(d.get("ts"))) / 86400.0 > 7]
     conflicts = load_json(MERGE_CONFLICT_FILE, {})
     open_conflicts = len(conflicts.get("conflicts", [])) if conflicts else 0
-    # 快照新鲜度
     versions = sorted(ARCHIVE_DIR.glob("brain_v*.whale")) if ARCHIVE_DIR.exists() else []
     snap_days = None
     if versions:
         snap_days = (now_epoch - versions[-1].stat().st_mtime) / 86400.0
-    # 密钥
     keyring = _keyring_ready()
-    # 计分
     if stale:
         score -= min(15, len(stale) * 3)
-        problems.append(f"陈旧低价值记忆 {len(stale)} 条（>120 天且重要度≤2）")
+        problems.append(f"陈旧低价值记忆 {len(stale)} 条（>120 天且重要度<=2）")
     if dups:
         score -= min(10, dups)
         problems.append(f"疑似重复记忆 {dups} 组")
@@ -2481,34 +2471,45 @@ def cmd_doctor(args) -> int:
         score -= 5
         problems.append("未启用免密密钥（keyring-setup）")
     score = max(0, score)
+    return {"score": score, "problems": problems,
+            "memories": len(items), "stale": len(stale), "dups": dups,
+            "open_decisions": len(open_decs), "stale_decisions": len(stale_decs),
+            "open_conflicts": open_conflicts, "snapshots": len(versions),
+            "snapshot_days": snap_days, "keyring": keyring}
+
+
+def cmd_doctor(args) -> int:
+    """F6 大脑体检：健康度 + 问题清单；--fix 自动归档陈旧低价值记忆。"""
+    h = _brain_health_dict()
     print("=== 大脑体检 ===")
-    print(f"  健康度: {score}/100")
-    print(f"  记忆 {total} · 陈旧 {len(stale)} · 疑似重复 {dups} · 未回执决策 {len(open_decs)} · 快照 {len(versions)}")
-    if problems:
+    print(f"  健康度: {h['score']}/100")
+    print(f"  记忆 {h['memories']} · 陈旧 {h['stale']} · 疑似重复 {h['dups']} · 未回执决策 {h['open_decisions']} · 快照 {h['snapshots']}")
+    if h["problems"]:
         print("  问题清单:")
-        for p in problems:
-            print(f"    - {p}")
+        for pr in h["problems"]:
+            print("    - " + pr)
     else:
         print("  状态良好，无需处理。")
-    if args.fix:
-        fixed = []
-        if stale:
-            # 需对 include_archived 的全量做归档（stale 是活跃列表的副本，不能只改副本）
-            all_items = load_memories(include_archived=True)
-            stale_ids = {e["id"] for e in stale}
-            archived_n = 0
-            for it in all_items:
-                if it["id"] in stale_ids and not it.get("archived"):
-                    it["archived"] = True
-                    archived_n += 1
-            if archived_n:
-                save_memories(all_items)
-                fixed.append(f"归档陈旧记忆 {archived_n} 条")
-        if fixed:
-            audit_op("doctor-fix", "；".join(fixed))
-            print("  已修复: " + "；".join(fixed))
+    if args.fix and h["stale"]:
+        all_items = load_memories(include_archived=True)
+        # 精确取陈旧记忆 id（与 _brain_health_dict 同口径）
+        _now_epoch = _dt.datetime.now().timestamp()
+        _si = {e["id"] for e in load_memories()
+               if (_now_epoch - _ts_epoch(e.get("ts"))) / 86400.0 > 120
+               and int(e.get("importance") or 3) <= 2}
+        archived_n = 0
+        for it in all_items:
+            if it["id"] in _si and not it.get("archived"):
+                it["archived"] = True
+                archived_n += 1
+        if archived_n:
+            save_memories(all_items)
+            audit_op("doctor-fix", f"归档陈旧记忆 {archived_n} 条")
+            print(f"  已修复: 归档陈旧记忆 {archived_n} 条")
         else:
             print("  无自动可修复项。")
+    elif args.fix:
+        print("  无自动可修复项。")
     return 0
 
 
