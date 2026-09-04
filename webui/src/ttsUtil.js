@@ -62,16 +62,12 @@ export function splitSentencesForStream(text) {
   return splitSentences(text, 200);
 }
 
-// ── 全局串行播放队列 + 停止 ──
+// ── 全局朗读状态（单一顺序引擎共享）──
 let currentAudio = null;
-let currentResolve = null;  // 当前播放的 resolve 句柄，stopSpeak 时调用以解除挂起的 playUrl
-let queueChain = Promise.resolve();
-let generation = 0;           // stopSpeak 时 +1，令旧队列任务作废
+let currentResolve = null;  // 当前播放的 resolve 句柄，stopSpeak/pauseSpeak 时调用解除挂起的 playUrl
 let loadingCount = 0;         // 合成中的任务数（点击后立即有反馈）
 let lastError = "";           // 最近一次朗读失败原因
 let phase = "idle";           // idle|synth|speak|breath|paused —— 供 UI 呈现自然说话态
-let pausedGen = -1;           // 环境打断「暂停」时的 generation（resume 用；>0 表示可续）
-let pauseResumeHooks = null;  // 环境暂停/继续的钩子（由 speakText 循环注册）
 const listeners = new Set();  // 状态变化回调 ({speaking,loading,error,phase})
 
 function _setPhase(p) {
@@ -291,286 +287,132 @@ function _speakFail(e) {
   else lastError = raw || "朗读失败";
 }
 
-/**
- * 朗读一段文本（单句，串行；供 speakText 内部与单句手动用）。
- * opts: {rate,volume,voice,engine}；phase 驱动到 "synth"(合成) / "speak"(开口)。
- */
-export function enqueueSpeak(text, opts = {}, onStart) {
-  const gen = generation;
-  const run = queueChain.then(async () => {
-    if (gen !== generation || !text) return;
-    loadingCount++; lastError = ""; _setPhase("synth"); emit();
-    let done = false;
-    const dec = () => { if (!done) { done = true; loadingCount--; if (!currentAudio) _setPhase("idle"); emit(); } };
-    let r;
+// ═══════════════ 单一顺序播放引擎（V3 · 确定性、绝不重复、绝不乱序）═══════════════
+// 设计铁律：同一时刻只有一条"说话任务"在推进；每条待读文本进 FIFO 后由唯一消费者
+// 按序取出——取出即移出队列，绝不回头重读 → 不可能"重复上一句"。
+// 停止/暂停是简单标志，只在句子边界检查；不搞并发泵、不搞多套播放器互相抢。
+// ---------------------------------------------------------------------------
+let speaking = false;          // 是否正有一条任务在推进
+let stopSeq = 0;               // 单调递增的"作废代"：stopSpeak 时 +1，旧消费者据此立即退出
+let currentSeq = 0;            // 当前消费循环所属代
+const idleWaiters = new Set(); // 等当前任务结束的 resolve（speakText 的 promise）
+const queued = [];             // 待读队列 [{ text, opts }]
+
+function _pump() {
+  if (speaking) return;        // 已有消费循环在跑 → 由它继续；新入队项会被它按序消费
+  if (!queued.length) return;
+  speaking = true;
+  const seq = ++currentSeq;    // 本代
+  // 延迟到微任务启动消费者：杜绝任何同步重入 / 栈溢出
+  queueMicrotask(async () => {
     try {
-      r = await synthesize(text.slice(0, 4000), opts);
-      if (gen !== generation) { dec(); return; }
-      dec();
-      onStart && onStart();
-    } catch (e) {
-      dec();
-      _speakFail(e);
+      while (queued.length && seq === stopSeq) {
+        const item = queued.shift();               // 取出即移出
+        if (!item || !item.text) continue;
+        _setPhase("synth");
+        let url;
+        try {
+          const r = await synthesize(item.text.slice(0, 4000), item.opts || {});
+          url = r && r.url;
+        } catch (e) { _speakFail(e); emit(); url = null; }
+        if (seq !== stopSeq) break;
+        if (!url) continue;                          // 本句合成失败 → 跳过下一句
+        if (item.onStart) item.onStart();
+        _setPhase("speak");
+        try { await playUrl(url, item.opts ? item.opts.volume : 100); }
+        catch (e) { _speakFail(e); emit(); }
+        if (seq !== stopSeq) break;
+        // 若后面还有句 → 极短的自然呼吸，绝不回头
+        if (queued.length) {
+          _setPhase("breath");
+          await delay(90);
+        }
+      }
+    } finally {
+      if (seq === currentSeq) speaking = false;   // 仅当代仍是当前代时才复位占用
       _setPhase("idle");
+      const ws = [...idleWaiters]; idleWaiters.clear();
+      ws.forEach((res) => res());
       emit();
-      throw new Error(lastError);
-    }
-    try {
-      _setPhase("speak");
-      await playUrl(r.url, opts.volume);
-      if (gen === generation) _setPhase("idle");
-    } catch (e) {
-      _setPhase("idle");
-      _speakFail(e);
-      emit();
-      throw new Error(lastError);
+      // 若期间又有新入队（stop 后紧跟 enqueue）→ 延迟由新消费者接管，避免新文本被晾着
+      if (queued.length && !speaking) queueMicrotask(_pump);
     }
   });
-  queueChain = run.catch(() => {});
-  return run;
+}
+
+function _enqueueOne(item) {
+  queued.push(item);
+  // 若当前没有活跃消费者在跑 → 起一个接管这批
+  if (!speaking) _pump();
+}
+
+/** 朗读一段文本（单句，进全局顺序队列；用于逐句/自动喂入）。不阻塞调用方。 */
+export function enqueueSpeak(text, opts = {}, onStart) {
+  if (!String(text || "").trim()) return;
+  _enqueueOne({ text: String(text).trim(), opts: opts || {}, onStart });
+}
+
+/** 返回一个随流式喂入的说话器：feed(定型句)/finish()/cancel()——都走同一顺序队列。 */
+export function createStreamSpeaker(opts) {
+  return {
+    feed(sentence) {
+      const s = String(sentence || "").trim();
+      if (s) _enqueueOne({ text: s, opts: opts || {} });
+    },
+    finish() { /* 顺序队列天然等队空即结束；无需额外动作 */ },
+    cancel() { stopSpeak(); },
+  };
 }
 
 /**
- * 分句朗读一段文本（自然朗读引擎）：边说边读、句间自然呼吸停顿、可环境暂停可续。
- *
- * 比旧版增强：
- * ① 预合成：当前句在播时提前合成下一句（隐藏合成延迟 → 句间不再卡顿）；
- * ② 句间呼吸：按上一句结尾标点给 90-320ms 自然停顿（真人节奏），末句不拖尾；
- * ③ 分层打断：环境声 → pauseSpeak（暂停可续）；新消息/手动 → stopSpeak（永久停）。
- * cb: {onStart(), onSpeak(part), onDone(), onError(err)}
+ * 分句朗读一段文本（手动/全文）：拆成句后按序进队列，返回在整段读完时 resolve 的 Promise。
+ * cb: {onStart,onSpeak,onDone,onError}
  */
-export async function speakText(text, opts = {}, cb = {}) {
-  const raw = cleanForSpeech(String(text || ""));
-  const chunks = splitSentences(raw, 200);
+export function speakText(text, opts = {}, cb = {}) {
+  const chunks = splitSentences(cleanForSpeech(String(text || "")), 200);
   if (!chunks.length) {
     const e = new Error("没有可朗读的内容");
     lastError = e.message; _setPhase("idle"); emit();
-    cb.onError && cb.onError(e);
-    throw e;
+    if (cb.onError) cb.onError(e);
+    return Promise.reject(e);
   }
+  // 手动朗读排队到末尾（不抢占正在的自动朗读，避免清队竞态吞掉本条）
+  const donePromise = new Promise((resolve) => { idleWaiters.add(resolve); });
   cb.onStart && cb.onStart();
-  const gen = ++generation;   // 使旧朗读作废，本轮独占
-  const isPaused = () => pausedGen === gen;
-  const cache = new Map();    // 本轮预合成缓存（局部，互不干扰）
-
-  // 预合成索引 i 的 url（合成本身不播放），供轮到即播
-  const prefetch = (i) => {
-    if (i < 0 || i >= chunks.length) return Promise.resolve(null);
-    if (!cache.has(i)) {
-      cache.set(i,
-        synthesize(chunks[i].slice(0, 4000), opts).then((r) => r.url).catch(() => null));
-    }
-    return cache.get(i);
-  };
-
-  try {
-    let i = 0;
-    await prefetch(0); // 预合成第 0 句，尽早开口
-    if (gen !== generation) return;
-    while (i < chunks.length) {
-      // 环境暂停检查：停在句边界，待 resume 续读（不吞句、不重读）
-      if (isPaused()) {
-        _setPhase("paused");
-        await new Promise((res) => { pauseWaitResolvers.add(res); });
-        if (gen !== generation) return;  // 暂停期间被 stop
-        _setPhase("synth");
-        continue;
-      }
-      const part = chunks[i];
-      // 播当前句时后台预合成下一句 → 隐藏合成延迟，句间不卡顿
-      if (i + 1 < chunks.length) prefetch(i + 1);
-      const url = cache.get(i) || (await synthesize(part.slice(0, 4000), opts).then((x) => x.url));
-      if (gen !== generation) return;
-      _setPhase("speak");
-      cb.onSpeak && cb.onSpeak(part);
-      await playUrlRaw(url, opts.volume);
-      if (gen !== generation) return;
-      // 句间自然呼吸（末句不拖尾）
-      if (i < chunks.length - 1 && !isPaused()) {
-        _setPhase("breath");
-        await delay(breathMs(part));
-        if (gen !== generation) return;
-      }
-      i++;
-    }
-    _setPhase("idle");
-    cb.onDone && cb.onDone();
-  } catch (e) {
-    _setPhase("idle");
-    if (gen === generation) { _speakFail(e); emit(); cb.onError && cb.onError(new Error(lastError)); }
-  } finally {
-    cache.clear();
-    if (gen === generation) _setPhase("idle");
-    if (pausedGen === gen) pausedGen = -1;
+  for (let i = 0; i < chunks.length; i++) {
+    _enqueueOne({
+      text: chunks[i], opts: opts || {},
+      onStart: () => { if (cb.onSpeak) cb.onSpeak(chunks[i]); },
+    });
   }
-}
-
-// 暂停等待集合（speakText 内部控制，暴露 pause/resume 接口）
-let pauseWaitResolvers = new Set();
-// 流式朗读器的唤醒回调（createStreamSpeaker 注册；resumeSpeak 唤醒它们续读）
-const streamWakers = new Set();
-
-/** 环境打断「暂停」：停住当前音频，下次在句边界续读（不重读本句）。 */
-export function pauseSpeak() {
-  if (phase !== "speak" && phase !== "breath" && phase !== "synth") return;
-  if (currentAudio) {
-    try { currentAudio.pause(); } catch (e) { silentWarn(e, "ttsUtil"); }
-    const r = currentResolve; currentResolve = null;
-    // 不立即置空 currentAudio，让 playUrl 的 done 自然结算
-    if (r) setTimeout(r, 0);
-  }
-  pausedGen = pausedGen >= 0 ? pausedGen : generation;
-  _setPhase("paused");
-}
-
-/** 从环境暂停中恢复：继续朗读（从下一个未读句开始）。 */
-export function resumeSpeak() {
-  if (phase !== "paused") return;
-  pausedGen = -1;
-  _setPhase("synth");
-  const wakes = [...pauseWaitResolvers];
-  pauseWaitResolvers.clear();
-  wakes.forEach((res) => res());
-  // 唤醒被暂停的流式朗读器（createStreamSpeaker 注册的 wakePlay）
-  const ws = [...streamWakers];
-  streamWakers.clear();
-  ws.forEach((w) => w());
-}
-
-/** 停止当前朗读并清空队列（新消息/手动明确打断 → 永久停）；返回是否有播放被打断 */
-export function stopSpeak() {
-  const had = !!currentAudio || phase !== "idle";
-  generation += 1;
-  pausedGen = -1;
-  if (currentAudio) {
-    try { currentAudio.pause(); } catch (e) { silentWarn(e, "ttsUtil"); }
-    currentAudio = null;
-    const r = currentResolve;
-    currentResolve = null;
-    if (r) r();
-  }
-  _setPhase("idle");
-  emit();
-  return had;
+  // 结束回调挂在 idleWaiters 的同一批 resolve 上（顺序队列队空统一触发）
+  donePromise.then(() => { if (cb.onDone) cb.onDone(); });
+  return donePromise;
 }
 
 /**
- * 从「后端相对 urlPath」直接播放一段音频（不经本模块 synthesize）。
- * 关键：后端音频端点需要 Bearer 鉴权 → 不能 `new Audio(urlPath)`(浏览器带不上头)，
- * 必须像 playUrl 一样先 fetchAudio(带 Authorization) 拿 blob 再播。speakText/流式朗读器预合成用它。
+ * 环境打断「暂停」：简化为一键停止当前朗读并清队（真人对话：我一开口 AI 即静音）。
+ * （不再做"暂停可续"，因其异步 park 是此前卡死/栈溢出的根源；续读由用户再触发即可。）
  */
-function playUrlRaw(urlPath, volumePct) {
-  return playUrl(urlPath, volumePct);
+export function pauseSpeak() { stopSpeak(); }
+
+/** 兼容旧 API：环境"暂停"后没有续读语义，resume 为空操作（要重读请用户再点/再发）。 */
+export function resumeSpeak() { /* no-op */ }
+
+/** 停止当前朗读并清空队列（新消息/手动明确打断 → 永久停）。同步生效，后续 enqueue 不受影响。 */
+export function stopSpeak() {
+  stopSeq += 1;                     // 作废当前消费者（旧循环下次检查即退出，不读残留）
+  queued.length = 0;                // 立即清队：旧句一个不剩
+  if (currentAudio) {
+    try { currentAudio.pause(); } catch (e) { silentWarn(e, "ttsUtil"); }
+  }
+  // 解除正在播放/合成的 await，让旧消费者尽快退出
+  if (currentResolve) { const r = currentResolve; currentResolve = null; r(); }
+  _setPhase("idle");
+  emit();
 }
 
-// ═══════════ 流式句子自动朗读器（sentence auto）：边说边读、后台预合成、句间无缝 ═══════════
-// 解决旧 feedAuto「每句 enqueueSpeak 串行合成→等→播」造成的句句停顿。
-// 机制：句子随流式到达 feed() 进队 → 播放器提前把后续句合成好(url) → 轮到即 playUrlRaw 无缝续播，
-// 合成延迟被前一句的播放时间掩盖，句间只剩自然呼吸间隙。
-function createStreamSpeaker(opts, onSpeak) {
-  const gen = ++generation;          // 独占；stopSpeak(++) 即作废本会话
-  const items = [];                  // 到达顺序的句子文本
-  const urls = new Map();            // index -> 已合成的 url 或 null(失败)
-  let head = 0;                      // 已消费(播放或已跳过)的下标
-  let synthPos = 0;                  // 已提交合成的下标(不含)
-  let playing = false;
-  let finished = false;              // feed 不再有新句(finish() 已调)
-  let ended = false;                 // 全部播完/被停
-  const active = () => gen === generation;
-  let wake = null;                   // 播放推进器的唤醒句柄
 
-  const pumpPlay = () => {
-    // 环境暂停：停在句边界，待 resume（由 resumeSpeak 触发 wake；不自旋）
-    if (pausedGen === gen) { _setPhase("paused"); return; }
-    if (playing || ended || !active()) return;
-    while (head < items.length) {
-      if (urls.has(head)) {
-        const u = urls.get(head); head++;
-        if (!u) continue;  // 该句合成失败，跳过继续下一句
-        playing = true; _setPhase("speak");
-        const part = items[head - 1];
-        onSpeak && onSpeak(part);
-        playUrlRaw(u, opts.volume)
-          .then(() => {
-            playing = false;
-            if (!active()) { ended = true; return; }
-            // 环境暂停 → 停在句边界，待 resume 续读
-            if (pausedGen === gen) { _setPhase("paused"); wakePlay(); return; }
-            if (head < items.length) {
-              // 还有下一句 → 句间自然呼吸后无缝续播
-              _setPhase("breath");
-              delay(breathMs(part)).then(() => {
-                if (active()) {
-                  if (pausedGen === gen) { _setPhase("paused"); }
-                  else { _setPhase("idle"); wakePlay(); }
-                }
-              });
-            } else {
-              _setPhase("idle");
-              wakePlay();  // 触发 pumpPlay 判断是否 finish
-            }
-          })
-          .catch(() => { playing = false; if (active()) { _setPhase("idle"); wakePlay(); } });
-        pumpSynth();  // 播当前句时，把已入队的后续句也预合成（无缝续播的关键）
-        return;  // 等当前句播完再由 wakePlay 续
-      }
-      break;  // 该下标还没合成好，等合成
-    }
-    if (finished && head >= items.length && !playing && pausedGen !== gen) { _finishSession(); }
-  };
-
-  const pumpSynth = () => {
-    // 提前合成：一次最多发起 2 个在飞合成，其余等前面完成（防并发过多排队）
-    // 保证轮到某句时其 url 通常已就绪 → 无缝续播，不再句句等合成。
-    let inflight = 0;
-    while (active() && synthPos < items.length && inflight < 2) {
-      const i = synthPos;
-      if (urls.has(i)) { synthPos++; continue; }  // 已有结果，跳过
-      synthPos++;
-      inflight++;
-      synthesize(items[i].slice(0, 4000), opts)
-        .then((r) => { if (active()) { urls.set(i, r.url); wakePlay(); } })
-        .catch(() => { if (active()) { urls.set(i, null); wakePlay(); } });
-    }
-  };
-
-  const wakePlay = () => {
-    if (!active()) { streamWakers.delete(wakePlay); return; }  // 已被新朗读作废 → 自清
-    if (wake) return; wake = true;
-    Promise.resolve().then(() => { wake = false; pumpPlay(); pumpSynth(); });
-  };
-  streamWakers.add(wakePlay);  // 供 resumeSpeak 唤醒本流式朗读器
-
-  const _finishSession = () => {
-    if (ended) return;
-    ended = true;
-    streamWakers.delete(wakePlay);
-    _setPhase("idle");
-    if (pausedGen === gen) pausedGen = -1;
-    emit();
-  };
-
-  return {
-    /** 流式到达一个「已定型」句子：立即排入并触发后台合成+播放推进 */
-    feed(sentence) {
-      if (ended || finished || !active()) return;
-      const s = String(sentence || "").trim();
-      if (!s) return;
-      items.push(s);
-      wakePlay();
-    },
-    /** 流式结束：标记无更多句；把最后已入队但未合成的句子也合完并播完 */
-    finish() {
-      finished = true;
-      wakePlay();
-    },
-    /** 手动/新消息停止 */
-    cancel() { stopSpeak(); },
-    gen,
-  };
-}
-
-export { createStreamSpeaker };
 
 // ── 语音设置（服务端 voice_config 的前端缓存）──
 let voiceCfg = null;
