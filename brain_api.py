@@ -323,6 +323,30 @@ def brain_action(action, payload=None):
             "message": out,
             "data": {"dir": str(out_dir), "conflicts": _load_conflicts(out_dir)},
         }
+    if action == "merge-preview":
+        # U4 合并向导·预演：只跑 dry-run 计算冲突，不产出合并目录（无副作用）。
+        a = _snapshot_path(payload.get("snap_a"))
+        b = _snapshot_path(payload.get("snap_b"))
+        if not a or not b:
+            return {"ok": False, "message": "请选择两个快照（主干 A 与分支 B）"}
+        code, out = _run(bk.cmd_merge,
+                         snap_a=a, snap_b=b,
+                         strategy=str(payload.get("strategy") or "auto"),
+                         dir=None, passphrase=str(payload.get("passphrase") or ""),
+                         dry_run=True)
+        # 从 stdout 提取分支/祖先/冲突摘要
+        lca_hit = "未找到（历史快照缺失）" not in out and "共同祖先" in out
+        import re as _re
+        conflicts = _re.findall(r"冲突 (\w+): (\S+)", out)
+        return {
+            "ok": code == 0,
+            "message": out,
+            "data": {
+                "dry_run": True, "lca_found": lca_hit,
+                "conflict_count": len(conflicts),
+                "conflicts_preview": [{"id": c[0], "file": c[1]} for c in conflicts],
+            },
+        }
     if action == "merge-conflicts":
         d = Path(str(payload.get("dir") or bk.BRAIN_DIR))
         return {"ok": True, "data": {"conflicts": _load_conflicts(d), "dir": str(d)}}

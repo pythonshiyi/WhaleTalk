@@ -142,6 +142,17 @@ def test_graph_data_action(brain_b5):
     assert any(rel["rel"] == "同事于" and rel["to"] == "张三" for rel in r["data"]["relations"])
 
 
+def test_merge_preview_action_contract(brain_b5):
+    """U4 合并向导·预演：action 存在且对非法选择优雅失败（dry-run 契约由 cmd_merge 测试覆盖）。"""
+    import brain_api
+    # 未提供快照 → ok False 且不抛
+    r = brain_api.brain_action("merge-preview", {})
+    assert r.get("ok") is False and "快照" in r.get("message", "")
+    # 提供不存在的快照路径 → ok False（_snapshot_path 返回空）
+    r2 = brain_api.brain_action("merge-preview", {"snap_a": "not_exist.whale", "snap_b": "nope2.whale"})
+    assert r2.get("ok") is False
+
+
 def test_mirror_action_via_brain_api(brain_b5):
     """brain_api brain_action('mirror') 触发快照外置镜像。"""
     import brain_api

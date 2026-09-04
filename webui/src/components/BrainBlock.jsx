@@ -19,6 +19,8 @@ function BrainBlock() {
   const [mergeB, setMergeB] = React.useState("");
   const [strategy, setStrategy] = React.useState("auto");
   const [mergeOut, setMergeOut] = React.useState(null);
+  const [preview, setPreview] = React.useState(null); // U4 合并向导·预演结果
+  const [previewing, setPreviewing] = React.useState(false);
   const [resolving, setResolving] = React.useState(false);
   const [diffA, setDiffA] = React.useState("");
   const [diffB, setDiffB] = React.useState("");
@@ -107,6 +109,7 @@ function BrainBlock() {
     setBusy(true);
     setMsg("");
     setMergeOut(null);
+    setPreview(null);
     try {
       const d = await api.brainAction({ action: "merge", snap_a: mergeA, snap_b: mergeB, strategy }).catch(() => null);
       if (d) {
@@ -116,6 +119,28 @@ function BrainBlock() {
     } catch (e) { setMsg("融合异常：" + String(e)); }
     setBusy(false);
     load(true);
+  };
+
+  // U4 合并向导第一步：dry-run 预演（无副作用），预览冲突与分支结构
+  const doPreview = async () => {
+    if (!mergeA || !mergeB) { setMsg("请先选择两段要融合的记忆快照"); return; }
+    if (mergeA === mergeB) { setMsg("两段记忆不能来自同一个快照"); return; }
+    setPreviewing(true);
+    setMsg("");
+    setPreview(null);
+    try {
+      const d = await api.brainAction({ action: "merge-preview", snap_a: mergeA, snap_b: mergeB, strategy }).catch(() => null);
+      if (d) {
+        setPreview({
+          ok: d.ok,
+          lca_found: !!d.data?.lca_found,
+          conflict_count: d.data?.conflict_count ?? 0,
+          conflicts_preview: d.data?.conflicts_preview || [],
+          message: d.message || "",
+        });
+      } else setPreview({ ok: false, conflict_count: -1, conflicts_preview: [], message: "预演请求失败（后端未连接？）" });
+    } catch (e) { setPreview({ ok: false, conflict_count: -1, conflicts_preview: [], message: "预演异常：" + String(e) }); }
+    setPreviewing(false);
   };
 
   const resolveOne = async (cid, keep) => {
@@ -434,9 +459,38 @@ function BrainBlock() {
                   <option value="ours">冲突取 A</option>
                   <option value="theirs">冲突取 B</option>
                 </select>
+                <button className="msg-op" disabled={busy || previewing || snapCount < 2} onClick={doPreview}>
+                  {previewing ? "预演中…" : "⧩ 预演"}
+                </button>
                 <button className="confirm-btn" disabled={busy || snapCount < 2} onClick={doMerge}>融合</button>
               </div>
-              <div className="brain-acc-hint">两段记忆相悖时如何取舍？「留待裁决」会列出冲突让你逐条决定，「取 A/B」自动偏向前者/后者。</div>
+              <div className="brain-acc-hint">「预演」先跑 dry-run，只告诉你会撞出多少冲突（不真合并）；确认后再点「融合」。两段记忆相悖时「留待裁决」逐条定 /「取 A/B」自动偏向前者/后者。</div>
+
+              {/* U4 分支结构 + 冲突预演 */}
+              {preview && (
+                <div style={{ margin: "10px 0 0", padding: 8, border: "1px solid var(--border-strong)", borderRadius: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12 }}>
+                    <span className="tl-dot" style={{ background: "var(--accent)" }} /> 主干 v{mergeA}
+                    <span className="tl-dot" style={{ background: "var(--warn)" }} /> 分支 v{mergeB}
+                    {preview.lca_found
+                      ? <span style={{ opacity: 0.8 }}>→ 找到共同祖先，可做三路合并（更安全）</span>
+                      : <span style={{ color: "var(--warn)" }}>→ 未找到共同祖先（历史快照缺失），将做双路合并</span>}
+                  </div>
+                  {preview.conflict_count >= 0 && (
+                    <div style={{ marginTop: 6, fontSize: 12 }}>
+                      {preview.conflict_count === 0
+                        ? <span style={{ color: "var(--ok)" }}>✓ 预演无冲突，可直接融合</span>
+                        : <span style={{ color: "var(--warn)" }}>⚠ 预演将产生 {preview.conflict_count} 条待裁决冲突：</span>}
+                      {(preview.conflicts_preview || []).length > 0 && (
+                        <div style={{ marginTop: 4, paddingLeft: 10, opacity: 0.85 }}>
+                          {preview.conflicts_preview.map((c) => <div key={c.id}>• {c.file}</div>)}
+                        </div>
+                      )}
+                      {preview.message && <div style={{ marginTop: 4, opacity: 0.7, whiteSpace: "pre-wrap" }}>{preview.message}</div>}
+                    </div>
+                  )}
+                </div>
+              )}
               {mergeOut && (
                 <div className="sched-text" style={{ marginTop: 8 }}>
                   <div>• 结果目录：{mergeOut.dir}</div>

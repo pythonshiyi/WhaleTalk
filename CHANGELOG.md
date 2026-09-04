@@ -2,6 +2,20 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.8.5（未发版追加·增强八批）—— 🧠 合并向导·预演（U4 收尾）
+
+**版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。前端大脑 UI 收尾：落地 U4 合并向导的预演能力——合并前先 dry-run，看清分支结构（共同祖先 LCA）与将产生的冲突，再决定是否真合并。
+
+### 前端（BrainBlock 融合向导）
+- 「融合两段记忆」新增 **「⧩ 预演」** 按钮：先跑 dry-run（无副作用），面板显示 主干A / 分支B 与是否找到共同祖先（三路 vs 双路），并预览将产生的冲突文件清单
+- 确认预演后再点「融合」真合并（保留原有逐条裁决 + 采纳流程）
+
+### 后端
+- `brain_action` 新增 `merge-preview`：调 `cmd_merge --dry-run`，返回 dry_run/lca_found/conflict_count/conflicts_preview（从输出解析，不产出合并目录）
+
+### 回归
+- 新增 merge-preview action 契约测试 1 例（cmd 级 dry-run 无副作用已由既有 F8 测试覆盖）；pytest **176 passed**；四门禁全绿；前端 `npm test` + tsc + `vite build` 全绿
+
 ## v3.8.5（未发版追加·增强七批）—— 🧠 决策看板（U5）+ 实体图谱（U3）
 
 **版本号不变**（`config_defaults.VERSION` 仍为 3.8.4）。前端大脑 UI 增强第三批：落地 U5 决策看板（决策从"只写不读"变验证闭环）与 U3 实体图谱（记忆实体可视化）。
