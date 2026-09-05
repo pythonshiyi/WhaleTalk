@@ -569,8 +569,10 @@ def _can_show_tk():
 
 def _ensure_webui_build():
     """确保 WebUI 构建产物就绪（开箱即用）：
-    - 已构建（dist/index.html 存在且源码未更新）→ 跳过；
-    - 未构建或源码有更新 → 自动 npm run build（缺依赖先 npm ci/install）。
+    - 依赖过期（package.json 顶层依赖缺失，如新增了渲染库）→ 无论 dist 新旧都
+      强制 npm ci/install + 重建（mtime 会被 git/部署重置，不能作为唯一依据）；
+    - 已构建且源码未更新 → 跳过；
+    - 未构建或源码有更新 → 自动 npm run build。
     桌面环境（tkinter 可真正驱动）弹友好进度窗实时展示安装/构建；无 GUI 环境退回
     控制台打印。打包 exe 与 WHALETALK_NO_WEBUI_BUILD=1 时跳过。
     返回 (ok, 说明)。"""
@@ -578,7 +580,9 @@ def _ensure_webui_build():
         return _webui_built(), "打包模式：前端产物随程序分发，跳过构建"
     if os.environ.get("WHALETALK_NO_WEBUI_BUILD") == "1":
         return _webui_built(), "WHALETALK_NO_WEBUI_BUILD=1：已跳过自动构建"
-    if not _webui_needs_build():
+    # 依赖过期是独立于 mtime 的强信号：缺顶层包 ⇒ 现 dist 必非最新 ⇒ 强制重装重建，
+    # 否则用户增量拉代码后若 dist 时间戳看似够新会误跳、界面缺新功能。
+    if not _webui_deps_stale() and not _webui_needs_build():
         return True, "WebUI 已构建，跳过构建步骤"
     # 桌面环境优先用友好进度窗（服务未起、浏览器不可用，需要给用户实时反馈）
     window_ok = None

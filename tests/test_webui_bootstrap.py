@@ -126,3 +126,27 @@ def test_window_raise_falls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(web_app, "_setup_progress_window", _boom)
     ok, note = web_app._ensure_webui_build()
     assert ok is True, note  # 回退 console 成功
+
+
+def test_dist_fresh_but_deps_stale_forces_rebuild(tmp_path, monkeypatch, capsys):
+    """核心回归：dist 存在且 _webui_needs_build()=False（mtime 看似够新），
+    但 package.json 声明了新依赖、node_modules 缺它 → 必须强制重建，不得误跳。
+    覆盖"用户增量拉代码后 dist 时间戳巧合/被保留导致界面缺新功能"的体验断层。"""
+    wd = tmp_path / "webui"
+    (wd / "src").mkdir(parents=True)
+    (wd / "node_modules" / "react").mkdir(parents=True)
+    d = wd / "dist"; d.mkdir(exist_ok=True)
+    (d / "index.html").write_text("old", encoding="utf-8")
+    # package.json 声明了 docx-preview，但 node_modules 缺它 → stale=True
+    (wd / "package.json").write_text(
+        '{"name":"t","dependencies":{"react":"^19","docx-preview":"^0.4","pptx-preview":"^1"}}',
+        encoding="utf-8")
+    monkeypatch.setattr(web_app, "WEBUI_DIR", str(wd))
+    monkeypatch.setattr(web_app, "_webui_needs_build", lambda: False)  # mtime 看似已构建
+    monkeypatch.setattr(web_app, "_can_show_tk", lambda: False)        # headless 走 console
+    built = []
+    monkeypatch.setattr(web_app, "_run_npm",
+                        lambda args, **k: (built.append(" ".join(args)) or True, "ok"))
+    ok, note = web_app._ensure_webui_build()
+    assert ok is True, note
+    assert built and any("build" in b for b in built), "依赖过期时即使 mtime 够新也必须重建"
