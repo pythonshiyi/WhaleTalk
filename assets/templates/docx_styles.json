@@ -1,0 +1,22 @@
+{
+  "_comment": "WhaleTalk Word(.docx) 样式预设（可扩展）。create_doc 的 docx 分支用于设置标题配色与正文默认样式；key 为预设名，'default' 必选。字段：title_color=标题强调色(hex 无#)，body_font=正文字体，body_size=正文字号(pt)，heading_font=标题字体，heading_color_level=[H1..H4 各自色] 可选。",
+  "default": {
+    "title_color": "2B4C7E",
+    "body_font": "Microsoft YaHei",
+    "body_size": 11,
+    "heading_font": "Microsoft YaHei",
+    "heading_color_level": ["17365D", "2B4C7E", "3A6EA5", "5B7B9A"]
+  },
+  "formal": {
+    "title_color": "1F2430",
+    "body_font": "SimSun",
+    "body_size": 12,
+    "heading_font": "SimHei"
+  },
+  "blueprint": {
+    "title_color": "185FA5",
+    "body_font": "Microsoft YaHei",
+    "body_size": 11,
+    "heading_font": "Microsoft YaHei"
+  }
+}

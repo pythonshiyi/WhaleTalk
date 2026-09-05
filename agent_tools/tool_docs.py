@@ -1402,7 +1402,7 @@ def pdf_extract(path, pages="all", mode="text"):
     preactivate=(('pdf', '转pdf', 'pdf提取', 'pdf生成', '读pdf'),),
 )
 def pdf_create(content="", source_path="", output="", title=""):
-    """把文本/Markdown 内容生成 PDF（中文字体嵌入；支持标题/列表/代码块/表格）。"""
+    """把文本/Markdown 内容生成 PDF（中文字体嵌入；支持标题/列表/代码块/表格；可选封面/页码/目录）。"""
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle
@@ -1500,40 +1500,98 @@ def pdf_create(content="", source_path="", output="", title=""):
                 flow.append(Paragraph(_md_inline_html(body), styles["body"]))
         if not flow:
             return "错误：内容未能解析为可排版元素"
-        # S13：页眉（文档标题）+ 页脚（页码）回调用 canvas 绘制，中文字体取已注册名
+        # P1.2：封面页 + 页脚"第 N 页 / 共 M 页" + 可点目录（multiBuild）
         from reportlab.lib.pagesizes import A4 as _A4
-        from reportlab.lib.units import mm as _mm
+        from reportlab.pdfgen import canvas as _rcanvas
+        from reportlab.platypus import PageBreak as _PageBreak
+        from reportlab.platypus.tableofcontents import TableOfContents as _TOC
 
-        def _footer(canv, docobj):
-            canv.saveState()
-            try:
-                canv.setFont(font, 8)
-                canv.setFillColor(colors.Color(0.45, 0.45, 0.45))
-            except Exception:
-                pass
-            # 页码：右下
-            canv.drawRightString(_A4[0] - 30, 18, f"{docobj.page}")
-            # 页眉标题：右上（仅在非首页或总是——简单起见全部页都画标题小字到左上）
-            if doc_title and docobj.page > 1:
+        class _NumberedCanvas(_rcanvas.Canvas):
+            """两趟画布：末趟把「第 N 页 / 共 M 页」写进页脚，并画页眉标题/底线。"""
+            def __init__(self, *args, **kw):
+                super().__init__(*args, **kw)
+                self._saved = []
+
+            def showPage(self):
+                self._saved.append(dict(self.__dict__))
+                self._startPage()
+
+            def save(self):
+                total = len(self._saved)
+                for state in self._saved:
+                    self.__dict__.update(state)
+                    self._draw_footer(total)
+                    super().showPage()
+                super().save()
+
+            def _draw_footer(self, total):
                 try:
-                    canv.setFont(font, 8)
+                    self.saveState()
+                    self.setFont(font, 8)
+                    self.setFillColor(colors.Color(0.45, 0.45, 0.45))
+                    pageno = getattr(self, "_pageNumber", 1)
+                    self.drawRightString(_A4[0] - 30, 18, f"第 {pageno} 页 / 共 {total} 页")
+                    if doc_title and pageno > 1:
+                        self.drawString(30, _A4[1] - 24, str(doc_title)[:80])
+                    self.setStrokeColor(colors.Color(0.85, 0.85, 0.85))
+                    self.setLineWidth(0.5)
+                    self.line(30, 22, _A4[0] - 30, 22)
+                    self.restoreState()
                 except Exception:
                     pass
-                canv.drawString(30, _A4[1] - 24, str(doc_title)[:80])
-            # 底部分隔线
-            try:
-                canv.setStrokeColor(colors.Color(0.85, 0.85, 0.85))
-                canv.setLineWidth(0.5)
-                canv.line(30, 22, _A4[0] - 30, 22)
-            except Exception:
-                pass
-            canv.restoreState()
 
-        doc = SimpleDocTemplate(out, pagesize=A4,
-                                leftMargin=54, rightMargin=54, topMargin=54, bottomMargin=64,
-                                title=doc_title,
-                                author="WhaleTalk")
-        doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
+        class _TocDoc(SimpleDocTemplate):
+            """多趟 doc：拦截 H1/H2 段落写入目录，支持可点书签。"""
+            def afterFlowable(self, flowable):
+                try:
+                    if isinstance(flowable, Paragraph):
+                        sty = flowable.style.name if flowable.style else ""
+                        if sty.startswith("h") and len(sty) == 2 and sty[1].isdigit():
+                            lvl = int(sty[1])
+                            if lvl <= 2:
+                                txt = (flowable.getPlainText() or "").strip()
+                                if txt:
+                                    self.notify("TOCEntry", (lvl, txt, self.page))
+                except Exception:
+                    pass
+
+        body_flow = flow  # 纯正文（含已有的 title 段，若显式给了 title 且走封面则去掉重复）
+        _use_cover = bool(str(title or "").strip())
+        heading_blocks = [b for b in blocks if b[0] in ("h1", "h2")]
+        _use_toc = _use_cover and bool(heading_blocks)
+
+        # 组装最终流：封面(可选) → 目录(可选) → 正文
+        final_flow = []
+        if _use_cover:
+            final_flow.append(Spacer(1, _A4[1] * 0.26))
+            final_flow.append(Paragraph(_md_inline_html(str(title)), ParagraphStyle(
+                "cover", fontName=font, fontSize=26, leading=34, alignment=1, spaceAfter=14)))
+            final_flow.append(Paragraph("WhaleTalk 自动生成", ParagraphStyle(
+                "coverSub", fontName=font, fontSize=11, alignment=1,
+                textColor=colors.Color(0.5, 0.5, 0.5))))
+            final_flow.append(_PageBreak())
+            # 去掉正文里因显式 title 而插入的重复标题段（保留首个换行）
+            if body_flow and isinstance(body_flow[0], Paragraph):
+                body_flow = body_flow[1:]
+            if _use_toc:
+                toc = _TOC()
+                toc.levelStyles = [
+                    ParagraphStyle("toc1", fontName=font, fontSize=11, leftIndent=0, spaceAfter=2),
+                    ParagraphStyle("toc2", fontName=font, fontSize=10, leftIndent=14, spaceAfter=1),
+                ]
+                final_flow.append(Paragraph("目录", ParagraphStyle(
+                    "tocTitle", fontName=font, fontSize=16, spaceAfter=8)))
+                final_flow.append(toc)
+                final_flow.append(_PageBreak())
+        final_flow += body_flow
+
+        _doc = _TocDoc(out, pagesize=A4,
+                       leftMargin=54, rightMargin=54, topMargin=54, bottomMargin=64,
+                       title=doc_title, author="WhaleTalk")
+        if _use_toc:
+            _doc.multiBuild(final_flow, canvasmaker=_NumberedCanvas)
+        else:
+            _doc.build(final_flow, canvasmaker=_NumberedCanvas)
         size = os.path.getsize(out) if os.path.exists(out) else 0
         permissions.audit("pdf_create", out, f"{size} 字节")
         return f"已生成 PDF: {out}（{size / 1024:.1f} KB，中文字体 {'已嵌入' if font != 'Helvetica' else '未找到（可能乱码，请安装中文字体）'}）"
@@ -1844,12 +1902,35 @@ def pptx_read(path, include_notes=True):
 # 用 python-pptx 从结构化 slides 或 markdown 大纲生成 .pptx。
 # 主题 = 标题/正文配色预设；模板 = 复用已有 .pptx 的母版/版式（保留品牌）。
 # 中文字体：仅设 run.font.name 对中文无效，必须同时写 XML rPr 的 latin/ea 字体。
-_PPTX_THEMES = {
+# P1：PPT 主题默认内嵌兜底；运行时可被 assets/templates/ppt_themes.json 扩展/覆盖
+# （新增键即新增主题，无需改代码）。加载见 _load_ppt_themes()。
+_PPTX_THEMES_FALLBACK = {
     "default": {"accent": "2B4C7E", "body": "333333"},
     "ocean": {"accent": "155E95", "body": "1F3B4D"},
     "dark": {"accent": "1F2430", "body": "EDEDED", "invert": True},
     "forest": {"accent": "2F5233", "body": "2C3A2C"},
 }
+
+
+def _load_ppt_themes():
+    """合并 assets/templates/ppt_themes.json（可扩展）到内嵌兜底主题表。"""
+    merged = {k: dict(v) for k, v in _PPTX_THEMES_FALLBACK.items()}
+    try:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(base, "assets", "templates", "ppt_themes.json")
+        if os.path.isfile(path):
+            import json as _json
+            with open(path, "r", encoding="utf-8") as f:
+                ext = _json.load(f)
+            for k, v in (ext or {}).items():
+                if isinstance(v, dict) and not k.startswith("_"):
+                    merged[str(k)] = dict(v)
+    except Exception:
+        pass
+    return merged
+
+
+_PPTX_THEMES = _load_ppt_themes()
 
 
 def _pptx_cjk_run(run):
@@ -2359,13 +2440,14 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
             "type": "function",
             "function": {
                 "name": "create_doc",
-                "description": "创建文档。.md/.html 原生支持；.docx 由 python-docx 渲染 Markdown 富文本（标题层级/加粗/斜体/行内代码/链接/有序与无序列表/表格/代码块/引用/水平线），中文字体自动处理。注意：不支持 .pptx/.pdf——PPT 请用 pptx_create，PDF 请用 pdf_create",
+                "description": "创建文档。.md/.html 原生支持；.docx 由 python-docx 渲染 Markdown 富文本（标题层级/加粗/斜体/行内代码/链接/有序与无序列表/表格/代码块/引用/水平线），中文字体自动处理。docx 可选 style 预设（default/formal/blueprint，控制标题色/正文字体字号）。注意：不支持 .pptx/.pdf——PPT 请用 pptx_create，PDF 请用 pdf_create",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "文档绝对路径"},
                         "content": {"type": "string", "description": "文档内容（Markdown 或 HTML 文本）"},
                         "doc_type": {"type": "string", "description": "md / html / docx，默认按扩展名推断"},
+                        "style": {"type": "string", "description": "docx 可选：样式预设 default/formal/blueprint（默认 default）"},
                     },
                     "required": ["path", "content"],
                 },
@@ -2375,9 +2457,9 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
     phrases='创建文档（md/html/docx）',
     preactivate=(('写', '保存', '创建', '生成'),),
 )
-def create_doc(path, content, doc_type=""):
+def create_doc(path, content, doc_type="", style="default"):
     """创建文档：.md/.html 原生；.docx 用 markdown→Word 富文本（标题/加粗/列表/表格/代码/图片）。
-    扩展名白名单：md / html / docx，其余一律拒绝（防生成"扩展名 .pptx 内容却是 markdown"的坏文件）。"""
+    style 为 docx 样式预设名（default/formal/blueprint 等，可扩展 assets/templates/docx_styles.json）。"""
     if not str(path or "").strip():
         return "错误：path 必填"
     ok, reason = permissions.check_filesystem(path, write=True)
@@ -2401,7 +2483,7 @@ def create_doc(path, content, doc_type=""):
                     shutil.copy2(p, p + ".bak")
                 except Exception:
                     pass
-            _build_docx_markdown(p, content or "")
+            _build_docx_markdown(p, content or "", style_name=str(style or "default"))
         else:
             body = content or ""
             if ext == "html" and not body.lstrip().startswith("<"):
@@ -2546,8 +2628,28 @@ def _set_run_cjk(run):
         pass
 
 
-def _build_docx_markdown(out_path, content):
-    """把 Markdown 渲染为富 .docx（标题/加粗/列表/表格/代码/引用/图片）。"""
+def _load_docx_styles():
+    """加载 docx 样式预设（assets/templates/docx_styles.json，可扩展），缺省回退 default。"""
+    _fallback = {
+        "title_color": "2B4C7E", "body_font": "Microsoft YaHei", "body_size": 11,
+        "heading_font": "Microsoft YaHei",
+        "heading_color_level": ["17365D", "2B4C7E", "3A6EA5", "5B7B9A"],
+    }
+    try:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(base, "assets", "templates", "docx_styles.json")
+        if os.path.isfile(path):
+            import json as _json
+            with open(path, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            return dict(data)
+    except Exception:
+        pass
+    return {"default": _fallback}
+
+
+def _build_docx_markdown(out_path, content, style_name="default"):
+    """把 Markdown 渲染为富 .docx（标题/加粗/列表/表格/代码/引用/图片）。style_name 取自 docx_styles.json。"""
     from docx import Document
     from docx.shared import Pt, RGBColor
     try:
@@ -2555,13 +2657,20 @@ def _build_docx_markdown(out_path, content):
     except Exception:
         mdparse = None
     doc = Document()
-    # 全局中文字体
+    # P1：应用样式预设（正文字体/字号、标题色）
+    presets = _load_docx_styles()
+    preset = presets.get(str(style_name or "default")) or presets.get("default") or {}
+    body_font = str(preset.get("body_font") or "Microsoft YaHei")
+    body_size = float(preset.get("body_size") or 11)
+    title_color = str(preset.get("title_color") or "2B4C7E")
+    heading_font = str(preset.get("heading_font") or body_font)
+    hcolors = preset.get("heading_color_level") or []
     try:
         from docx.oxml.ns import qn
         style = doc.styles["Normal"]
         style.font.name = "Calibri"
-        style.font.size = Pt(11)
-        style.element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+        style.font.size = Pt(body_size)
+        style.element.rPr.rFonts.set(qn("w:eastAsia"), body_font)
     except Exception:
         pass
 
@@ -2637,6 +2746,20 @@ def _build_docx_markdown(out_path, content):
                 htext = str(body).strip()
                 p = doc.add_heading("", level=level)
                 _md_inline_to_runs(p, htext)
+                # P1：标题配色（取自样式预设 heading_color_level / title_color）
+                try:
+                    hc = None
+                    if hcolors and level <= len(hcolors):
+                        hc = str(hcolors[level - 1])
+                    if not hc:
+                        hc = title_color
+                    hc = hc.lstrip("#")
+                    for run in p.runs:
+                        run.font.color.rgb = RGBColor.from_string(hc)
+                        run.font.name = heading_font
+                        _set_run_cjk(run)
+                except Exception:
+                    pass
             elif kind == "quote":
                 for ln in str(body).split("\n"):
                     p = doc.add_paragraph()

@@ -1,0 +1,10 @@
+{
+  "_comment": "WhaleTalk PPT 主题资产（可扩展：新增键即新增主题）。pptx_create(theme='名') 使用。字段：accent=主强调色(hex 无#)，body=正文文字色，invert=深色背景主题(预留)。",
+  "default":   { "accent": "2B4C7E", "body": "333333" },
+  "ocean":     { "accent": "155E95", "body": "1F3B4D" },
+  "dark":      { "accent": "1F2430", "body": "EDEDED", "invert": true },
+  "forest":    { "accent": "2F5233", "body": "2C3A2C" },
+  "slate":     { "accent": "3A4A5A", "body": "2E3B46" },
+  "warm":      { "accent": "B0573A", "body": "4A3227" },
+  "grape":     { "accent": "5A3D7A", "body": "33243F" }
+}

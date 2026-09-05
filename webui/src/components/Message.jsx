@@ -1,6 +1,7 @@
 import React from "react";
 import Markdown from "./Markdown.jsx";
 import ToolCard from "./ToolCard.jsx";
+import { EditableTable, DocxEditable, TextDocPreview } from "./OfficePreview.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
@@ -278,7 +279,9 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
                 <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit", fontSize: 12.5 }}>{d.content}</pre>
               )}
               {d.kind === "table" && (
-                <TablePreview header={d.header} rows={d.rows} total={d.total_rows} name={d.name} />
+                (d.ext === ".xlsx")
+                  ? <EditableTable path={p} name={d.name} header={d.header} rows={d.rows} total={d.total_rows} />
+                  : <TablePreview header={d.header} rows={d.rows} total={d.total_rows} name={d.name} />
               )}
               {d.kind === "pdf" && (
                 <div style={{ marginTop: 4, fontSize: 12.5 }}>
@@ -294,10 +297,9 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
                 </div>
               )}
               {d.kind === "doc" && (
-                <div style={{ marginTop: 4, fontSize: 12.5 }}>
-                  <div style={{ opacity: .8 }}>📄 {d.name}（Office 文档）——用系统程序打开查看</div>
-                  <button className="msg-op" style={{ marginTop: 6 }} onClick={() => prodAct(p, "open")}>用系统程序打开</button>
-                </div>
+                d.docx && d.content
+                  ? <DocxEditable path={p} name={d.name} content={d.content} />
+                  : <TextDocPreview data={d} />
               )}
               {!d.previewable && <div style={{ opacity: .8 }}>{d.reason || "该格式不支持内嵌预览"}</div>}
             </div>

@@ -1696,11 +1696,32 @@ def _file_preview(path, max_chars=16000):
                 import openpyxl
                 wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
                 ws = wb.active
-                rows = [[str(c.value)[:120] if c.value is not None else "" for c in row] for row in ws.iter_rows(max_row=30, max_col=20)]
+                # 保留原生类型（数字仍为数字），供前端可编辑表格回写时维持类型；
+                # 仅超长字符串截断，避免 UI 卡顿。
+                def _norm(v):
+                    if v is None:
+                        return ""
+                    if isinstance(v, str) and len(v) > 120:
+                        return v[:120] + "…"
+                    return v
+                rows = [[_norm(c.value) for c in row] for row in ws.iter_rows(max_row=30, max_col=20)]
                 wb.close()
                 base.update({"previewable": True, "kind": "table", "header": rows[0] if rows else [], "rows": rows[1:30], "total_rows": 30, "truncated": True})
-            else:
-                base.update({"previewable": True, "kind": "doc", "content": "", "inline": False})
+            elif ext == ".docx":
+                # 复用 dc.docx_read 的 markdown 结构提取（标题/列表/表格保序），前端 Markdown 渲染
+                import deepseek_client as _dc
+                md = _dc.docx_read(path, max_chars=max_chars) if hasattr(_dc, "docx_read") else ""
+                if isinstance(md, str) and md and not md.startswith("错误") and not md.startswith("未安装"):
+                    base.update({"previewable": True, "kind": "doc", "content": md, "inline": False, "docx": True})
+                else:
+                    base.update({"previewable": True, "kind": "doc", "content": "", "inline": False, "docx": True, "reason": md if isinstance(md, str) and md.startswith("错误") else ""})
+            elif ext == ".pptx":
+                import deepseek_client as _dc
+                md = _dc.pptx_read(path) if hasattr(_dc, "pptx_read") else ""
+                if isinstance(md, str) and md and not md.startswith("错误") and not md.startswith("未安装"):
+                    base.update({"previewable": True, "kind": "doc", "content": md, "inline": False, "pptx": True})
+                else:
+                    base.update({"previewable": True, "kind": "doc", "content": "", "inline": False, "pptx": True, "reason": md if isinstance(md, str) and md.startswith("错误") else ""})
             return base, None
         except ImportError:
             base.update({"previewable": False, "reason": f"预览 {ext} 需要额外依赖（PyMuPDF/openpyxl），可先用系统程序打开"})
