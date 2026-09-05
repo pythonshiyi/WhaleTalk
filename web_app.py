@@ -311,7 +311,7 @@ def _webui_sources_mtime():
                     mtime = max(mtime, os.path.getmtime(os.path.join(dirpath, fn)))
                 except OSError:
                     pass
-    for fn in ("index.html", "vite.config.js", "package.json"):
+    for fn in ("index.html", "vite.config.js", "package.json", "package-lock.json"):
         p = os.path.join(WEBUI_DIR, fn)
         if os.path.isfile(p):
             try:
@@ -319,6 +319,36 @@ def _webui_sources_mtime():
             except OSError:
                 pass
     return mtime
+
+
+def _webui_deps_stale():
+    """依赖是否过期（决定要不要重跑 npm install/ci）。
+    判定：node_modules 缺失，或 package.json 顶层声明的新增依赖尚未安装。
+    不依赖 mtime 对比（git clone 会重置文件时间导致误判"每次都要重装"）。
+    """
+    nm = os.path.join(WEBUI_DIR, "node_modules")
+    if not os.path.isdir(nm):
+        return True
+    pkg_path = os.path.join(WEBUI_DIR, "package.json")
+    if not os.path.isfile(pkg_path):
+        return False
+    try:
+        import json as _json
+        with open(pkg_path, "r", encoding="utf-8") as f:
+            pkg = _json.load(f)
+        deps = dict(pkg.get("dependencies") or {})
+        # 顶层依赖存在性：npm 会把装好的包放在 node_modules/<name>（scoped 在 node_modules/@scope/name）
+        for name in deps:
+            seg = name.split("/")
+            if len(seg) == 2 and name.startswith("@"):
+                check = os.path.join(nm, seg[0], seg[1])
+            else:
+                check = os.path.join(nm, name)
+            if not os.path.isdir(check):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _webui_needs_build():
@@ -375,14 +405,24 @@ def _ensure_webui_build():
         return _webui_built(), "WHALETALK_NO_WEBUI_BUILD=1：已跳过自动构建"
     if not _webui_needs_build():
         return True, "WebUI 已构建，跳过构建步骤"
-    # 缺依赖先装（有 package-lock.json 用 npm ci 更快更可复现）
-    if not os.path.isdir(os.path.join(WEBUI_DIR, "node_modules")):
-        install = "ci" if os.path.isfile(os.path.join(WEBUI_DIR, "package-lock.json")) else "install"
-        print(f"⏳ WebUI 依赖缺失，正在自动安装（npm {install}）…")
-        ok, tail = _run_npm([install])
-        if not ok:
-            print(f"❌ WebUI 依赖安装失败：\n{tail}")
-            return False, "WebUI 依赖安装失败"
+    # 依赖过期或缺（node_modules 缺失，或 package-lock.json 声明了新依赖）→ 先装
+    if _webui_deps_stale():
+        if os.path.isfile(os.path.join(WEBUI_DIR, "package-lock.json")):
+            print("⏳ WebUI 依赖有更新，正在自动安装（npm ci）…")
+            ok, tail = _run_npm(["ci"])
+            if not ok:
+                # ci 对 lock/package.json 不一致会失败 → 回退 npm install
+                print("⏳ npm ci 失败，回退 npm install…")
+                ok, tail = _run_npm(["install"])
+            if not ok:
+                print(f"❌ WebUI 依赖安装失败：\n{tail}")
+                return False, "WebUI 依赖安装失败"
+        else:
+            print("⏳ WebUI 依赖缺失，正在自动安装（npm install）…")
+            ok, tail = _run_npm(["install"])
+            if not ok:
+                print(f"❌ WebUI 依赖安装失败：\n{tail}")
+                return False, "WebUI 依赖安装失败"
     print("⏳ WebUI 未构建，正在自动构建（npm run build）…")
     ok, tail = _run_npm(["run", "build"])
     if ok:
