@@ -3323,4 +3323,105 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
         return f"错误：PPT 生成失败: {e}"
 
 
-__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'html_to_ppt', 'secret_store', 'kv_store', 'create_doc']
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "ppt_layout_check",
+                "description": "对生成的 .pptx 做版面自检（美学自检回路·几何层）：逐页检查每个形状是否越出画布、元素是否相互重叠、文本框是否可能溢出。返回每页诊断（含元素 id/坐标/问题），供你据以修正后再生成。注意：这是几何/布局层面的定量自检；视觉观感(配色/留白节奏)建议另用 html_render 渲染成图 + image_understand 看图评估",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": ".pptx 文件绝对路径"},
+                        "margin": {"type": "number", "description": "可选：距画布边缘的安全边距(英寸，默认 0.05)，元素进入该范围视为贴边"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='PPT 排版自检',
+    preactivate=(('ppt', 'pptx', '演示文稿', '读ppt'),),
+)
+def ppt_layout_check(path, margin=0.05):
+    """版面几何自检：越界/重叠/贴边。返回逐页诊断，供 AI 迭代排版。"""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return "错误：需要 python-pptx"
+    if not str(path or "").strip():
+        return "错误：path 必填"
+    p = permissions.resolve(path)
+    if not p or not os.path.isfile(p):
+        return f"错误：文件不存在：{path}"
+    ok, reason = permissions.check_filesystem(p, write=False)
+    if not ok:
+        return reason
+    try:
+        m = float(margin or 0.05)
+        prs = Presentation(p)
+        SW = prs.slide_width.inches
+        SH = prs.slide_height.inches
+        out_lines = [f"画布 {SW:.2f}×{SH:.2f} in，{len(prs.slides._sldIdLst)} 页"]
+        issues_total = 0
+        for idx, slide in enumerate(prs.slides, 1):
+            shapes = list(slide.shapes)
+            seg = [f"--- 第{idx}页 ({len(shapes)} 形状) ---"]
+            issues = []
+            boxes = []
+            for shp in shapes:
+                try:
+                    L = shp.left.inches if shp.left is not None else None
+                    T = shp.top.inches if shp.top is not None else None
+                    W = shp.width.inches if shp.width is not None else None
+                    H = shp.height.inches if shp.height is not None else None
+                except Exception:
+                    continue
+                if L is None or T is None or W is None or H is None:
+                    continue
+                name = str(getattr(shp, "name", "") or "")
+                txt = ""
+                if shp.has_text_frame:
+                    try:
+                        txt = shp.text_frame.text.strip()[:24].replace("\n", " ")
+                    except Exception:
+                        pass
+                tag = name or (txt or f"shape")
+                R, B = L + W, T + H
+                # 越界
+                if L < -m or T < -m or R > SW + m or B > SH + m:
+                    issues.append(f"⚠ 越界 {tag}: L{L:.2f} T{T:.2f} R{R:.2f} B{B:.2f} (>画布{SW:.2f}x{SH:.2f})")
+                # 贴边(设计性贴边不算，仅当侵入过多)
+                if R > SW - 0.05 and R <= SW + m:
+                    pass
+                boxes.append((L, T, R, B, tag))
+            # 两两重叠（正文文本框与其它大元素，略去文字含空）
+            for i in range(len(boxes)):
+                for j in range(i + 1, len(boxes)):
+                    a, b = boxes[i], boxes[j]
+                    ox = min(a[2], b[2]) - max(a[0], b[0])
+                    oy = min(a[3], b[3]) - max(a[1], b[1])
+                    if ox > 0.08 and oy > 0.08:
+                        # 计算重叠面积占比（相对较小者）
+                        inter = ox * oy
+                        area_b = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+                        if area_b > 0 and inter / area_b > 0.2:
+                            issues.append(f"⚠ 重叠 {a[4]} 与 {b[4]}（交叠 {ox:.2f}x{oy:.2f} in）")
+            if issues:
+                issues_total += len(issues)
+                seg += issues[:8]
+                if len(issues) > 8:
+                    seg.append(f"  … 另 {len(issues)-8} 处")
+            else:
+                seg.append("  ✓ 无越界/重叠")
+            out_lines.append("\n".join(seg))
+        if issues_total == 0:
+            out_lines.append("✅ 几何自检通过：无越界、无元素重叠（建议仍用 image_understand 看渲染图复核视觉观感）")
+        else:
+            out_lines.append(f"共 {issues_total} 处问题：请据以上坐标修正后再重新生成。")
+        return "\n".join(out_lines)
+    except Exception as e:
+        return f"错误：版面检查失败: {e}"
+
+
+__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'html_to_ppt', 'ppt_layout_check', 'secret_store', 'kv_store', 'create_doc']

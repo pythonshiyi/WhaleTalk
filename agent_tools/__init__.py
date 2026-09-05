@@ -170,4 +170,5 @@ __all__ = [
     'create_doc',
     'html_render',
     'html_to_ppt',
+    'ppt_layout_check',
 ]

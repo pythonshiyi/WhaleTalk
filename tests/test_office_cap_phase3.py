@@ -152,3 +152,23 @@ def test_s14_pptx_read_global_cap(tmp_path):
     assert isinstance(out, str)
     assert len(out) <= PPTX_MAX_DEFAULT + 60, f"应截断: len={len(out)}"
     assert "[内容较长已截断" in out
+
+
+def test_ppt_layout_check_detects_oob_and_overlap(tmp_path):
+    """美学自检：ppt_layout_check 应报越界/重叠，干净文件应通过。"""
+    from pptx import Presentation
+    from pptx.util import Inches
+    from pptx.enum.shapes import MSO_SHAPE
+    bad = str(tmp_path / "bad.pptx")
+    prs = Presentation(); s = prs.slides.add_slide(prs.slide_layouts[6])
+    s.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(4), Inches(1)).text = "标题"
+    s.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(12), Inches(6.5), Inches(3), Inches(2))  # 越界
+    prs.save(bad)
+    r = dc.ppt_layout_check(bad)
+    assert "越界" in r, r
+    good = str(tmp_path / "ok.pptx")
+    prs = Presentation(); s2 = prs.slides.add_slide(prs.slide_layouts[6])
+    s2.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(5), Inches(1)).text = "OK"
+    prs.save(good)
+    r2 = dc.ppt_layout_check(good)
+    assert "几何自检通过" in r2, r2
