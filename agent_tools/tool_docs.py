@@ -2112,20 +2112,100 @@ def _pptx_rgb(hexcolor):
     return RGBColor.from_string(str(hexcolor or "333333").lstrip("#"))
 
 
+def _pptx_img_cover(src, dst_w_in, dst_h_in, out_cache):
+    """把本地图按"cover 铺满"裁剪成目标宽高比，返回裁剪后缓存路径（或原路径若本就接近）。
+    用 Pillow 做 cover 裁切（居中），消除水印/留白导致的比例失配。返回 None 表示失败。"""
+    try:
+        from PIL import Image
+    except Exception:
+        return None
+    try:
+        import hashlib
+        src = str(src)
+        if not os.path.isfile(src):
+            return None
+        im = Image.open(src)
+        im.load()
+        # 目标像素比例（按 ~150 DPI 估算，足够预览）
+        import math
+        target_ratio = (float(dst_w_in) or 5.0) / (float(dst_h_in) or 3.0)
+        w, h = im.size
+        cur_ratio = w / h
+        # 若原图比例接近目标(±15%)则直接用原图（避免无谓重裁失真）
+        if 0.85 <= cur_ratio / target_ratio <= 1.18:
+            return src
+        # cover：以目标比例裁取中间区域
+        if cur_ratio > target_ratio:  # 图太宽 → 裁左右
+            nw = int(h * target_ratio)
+            x0 = (w - nw) // 2
+            box = (x0, 0, x0 + nw, h)
+        else:  # 图太高 → 裁上下
+            nh = int(w / target_ratio)
+            y0 = (h - nh) // 2
+            box = (0, y0, w, y0 + nh)
+        cropped = im.crop(box)
+        # 缓存到 webui 同层临时目录（不落工作区），避免每次重裁
+        os.makedirs(out_cache, exist_ok=True)
+        key = hashlib.md5((src + str(box)).encode("utf-8")).hexdigest()[:12]
+        out_p = os.path.join(out_cache, f"crop_{key}.png")
+        if not os.path.isfile(out_p):
+            cropped.save(out_p, "PNG")
+        return out_p
+    except Exception:
+        return src
+
+
+def _pptx_add_picture(slide, path, left_in, top_in, width_in=None, height_in=None,
+                      cover=None, caption="", accent_hex=None):
+    """往 slide 加一张图（可选 cover 居中裁剪铺满 + 底部图注）。返回 True/False。"""
+    from pptx.util import Inches as _In, Pt as _Pt
+    try:
+        use_path = path
+        if cover:
+            cw = width_in or 5.0
+            ch = height_in or (cw / 1.6)
+            out_cache = os.path.join(os.path.dirname(path) or ".", ".wt_ppt_crop")
+            cropped = _pptx_img_cover(path, cw, ch, out_cache)
+            if cropped:
+                use_path = cropped
+        pic = slide.shapes.add_picture(use_path, _In(left_in), _In(top_in),
+                                       width=_In(width_in) if width_in else None,
+                                       height=_In(height_in) if (height_in and not width_in) else None)
+        if caption:
+            from pptx.enum.text import PP_ALIGN as _A
+            tb = slide.shapes.add_textbox(_In(left_in), _In((top_in or 0) + (height_in or 2) - 0.32),
+                                          _In(width_in or 5), _In(0.3))
+            tf = tb.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.alignment = _A.CENTER
+            r = p.add_run()
+            r.text = str(caption)
+            r.font.size = _Pt(10)
+            if accent_hex:
+                r.font.color.rgb = _pptx_rgb(accent_hex)
+            _pptx_cjk_run(r)
+        return True
+    except Exception:
+        return False
+
+
 @tool(
         {
             "type": "function",
             "function": {
                 "name": "pptx_create",
-                "description": "生成 PowerPoint .pptx 演示文稿。slides 传 JSON 数组，每页含 title（标题）、body（要点文本，支持 - 子项层级）或 bullets 数组、可选 notes（演讲者备注）、table={headers,rows}、image（本地图片路径）。或传 markdown outline（按 # 章节自动分页）生成。theme 内置 default/ocean/dark/forest；template 可传 .pptx 作为母版。中文字体自动嵌入",
+                "description": "生成 PowerPoint .pptx。slides 数组每页可含：title/body(要点，支持md清洗)/bullets/notes/table/image（本地图片：单路径或[{path,left,top,width,height,cover,caption}]多图，cover自动居中裁铺）。主题含辅助色+封面大图。cover_image 做封面全幅背景图(自动压暗叠标题)。outline 传 markdown(#分页)。中文字体自动嵌入",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "输出 .pptx 绝对路径（须在允许目录内）"},
-                        "slides": {"type": "array", "items": {}, "description": "可选：页面数组，每页 {\"title\":\"..\",\"body\":\"要点多行\"或\"bullets\":[..],\"notes\":\"..\",\"table\":{\"headers\":[..],\"rows\":[[..]]},\"image\":\"绝对路径\"}"},
+                        "slides": {"type": "array", "items": {}, "description": "页面数组：每页 {title, body或bullets, notes?, table?, image?(路径字符串或[{path,left?,top?,width?,height?,cover?,caption?}]数组)}"},
                         "outline": {"type": "string", "description": "可选：markdown 大纲，一级标题(#)分页"},
-                        "theme": {"type": "string", "description": "可选：default / ocean / dark / forest（默认 default）"},
+                        "theme": {"type": "string", "description": "可选：default/ocean/dark/forest/slate/warm/grape"},
                         "title": {"type": "string", "description": "可选：演示标题（生成首页标题页）"},
+                        "cover_image": {"type": "string", "description": "可选：封面全幅背景图（本地路径，自动居中裁铺+压暗叠标题）"},
+                        "cover_subtitle": {"type": "string", "description": "可选：封面副标题"},
                         "template": {"type": "string", "description": "可选：作为母版的 .pptx 绝对路径"},
                     },
                     "required": ["path"],
@@ -2136,8 +2216,9 @@ def _pptx_rgb(hexcolor):
     phrases='生成 PPT',
     preactivate=(('ppt', 'pptx', '演示文稿', '读ppt'),),
 )
-def pptx_create(path, slides=None, outline="", theme="default", title="", template=""):
-    """生成 PPT .pptx：slides 数组或 markdown outline；可选 theme/template。"""
+def pptx_create(path, slides=None, outline="", theme="default", title="", cover_image="",
+                cover_subtitle="", template=""):
+    """生成 PPT .pptx：slides 数组或 markdown outline；可选 theme/封面大图/template。"""
     try:
         from pptx import Presentation
     except ImportError:
@@ -2182,7 +2263,8 @@ def pptx_create(path, slides=None, outline="", theme="default", title="", templa
         # 标题页
         need_cover = bool(str(title or "").strip())
         if need_cover:
-            _add_title_slide(prs, title, th)
+            _add_title_slide(prs, title, th, cover_image=str(cover_image or "").strip(),
+                             cover_subtitle=str(cover_subtitle or "").strip())
         # 内容页
         added = 0
         for i, page in enumerate(pages):
@@ -2230,30 +2312,62 @@ def _parse_outline_to_slides(outline):
     return [pg for pg in pages if pg]
 
 
-def _add_title_slide(prs, title, th):
-    from pptx.util import Pt
+def _add_title_slide(prs, title, th, cover_image="", cover_subtitle=""):
+    from pptx.util import Inches as _In, Pt as _Pt
+    from pptx.enum.text import PP_ALIGN as _A
+    from pptx.dml.color import RGBColor
+    slide = prs.slides.add_slide(prs.slide_layouts[6])  # 全空白，自己排版
+    # 背景底色（防透明白）
+    bg = slide.shapes.add_shape(1, _In(0), _In(0), _In(13.33), _In(7.5))  # 1=rect
+    bg.fill.solid()
+    bg.fill.fore_color.rgb = _pptx_rgb(th.get("accent", "2B4C7E"))
+    bg.line.fill.background()
+    bg.shadow.inherit = False
+    if cover_image:
+        # 全幅背景图（cover 裁铺）
+        _pptx_add_picture(slide, cover_image, 0, 0, width_in=13.33, height_in=7.5, cover=True)
+        # 压暗遮罩（半透明深色），让标题可读
+        try:
+            ov = slide.shapes.add_shape(1, _In(0), _In(0), _In(13.33), _In(7.5))
+            ov.fill.solid()
+            from pptx.oxml.ns import qn as _qn
+            srgb = ov.fill.fore_color._xFill.find(_qn("a:srgbClr"))
+            alpha = srgb.makeelement(_qn("a:alpha"), {})
+            alpha.set("val", "52000")  # ~32% 不透明（68%透明压暗）
+            srgb.append(alpha)
+            ov.line.fill.background()
+            ov.shadow.inherit = False
+        except Exception:
+            pass
+    # 标题（居中，白字，偏下）
+    _c = str(th.get("accent2") or "00A8A8") if not cover_image else "FFFFFF"
+    title_color = "FFFFFF"  # 有图/深底都用白字保证可读
+    tb = slide.shapes.add_textbox(_In(0.8), _In(2.6), _In(11.7), _In(1.6))
+    tf = tb.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.alignment = _A.CENTER
+    r = p.add_run(); r.text = str(title)
+    r.font.size = _Pt(46); r.font.bold = True
+    r.font.color.rgb = RGBColor.from_string("FFFFFF")
+    _pptx_cjk_run(r)
+    if cover_subtitle:
+        tb2 = slide.shapes.add_textbox(_In(0.8), _In(4.15), _In(11.7), _In(0.7))
+        tf2 = tb2.text_frame; tf2.word_wrap = True
+        p2 = tf2.paragraphs[0]; p2.alignment = _A.CENTER
+        r2 = p2.add_run(); r2.text = str(cover_subtitle)
+        r2.font.size = _Pt(18); r2.font.color.rgb = RGBColor.from_string("D7E4F0")
+        _pptx_cjk_run(r2)
+    # 顶部小字品牌条
     try:
-        layout = prs.slide_layouts[0]  # Title Slide
+        tag = slide.shapes.add_textbox(_In(0.8), _In(0.5), _In(6), _In(0.4))
+        tr = tag.text_frame.paragraphs[0].add_run()
+        tr.text = "WhaleTalk 智能演示"
+        tr.font.size = _Pt(12)
+        tr.font.color.rgb = RGBColor.from_string("CFE3F5" if cover_image else "EAF2FA")
+        _pptx_cjk_run(tr)
     except Exception:
-        layout = prs.slide_layouts[6]
-    slide = prs.slides.add_slide(layout)
-    for ph in slide.placeholders:
-        if ph.placeholder_format.idx == 0:
-            ph.text = str(title)
-            for para in ph.text_frame.paragraphs:
-                for run in para.runs:
-                    _pptx_cjk_run(run)
-                    try:
-                        run.font.size = Pt(40)
-                        run.font.bold = True
-                        run.font.color.rgb = _pptx_rgb(th.get("accent", "2B4C7E"))
-                    except Exception:
-                        pass
-        elif ph.placeholder_format.idx == 1:
-            try:
-                ph.text = ""
-            except Exception:
-                pass
+        pass
 
 
 def _add_content_slide(prs, page, th):
@@ -2275,7 +2389,26 @@ def _add_content_slide(prs, page, th):
         elif str(_ln).strip():
             lines.append(_ln)
     has_table = isinstance(page.get("table"), dict) and page["table"].get("rows")
-    has_image = str(page.get("image") or "").strip() and os.path.isfile(str(page["image"]).strip())
+    # image：兼容单路径字符串，也支持数组 [{path,left,top,width,height,cover,caption}]
+    raw_img = page.get("image")
+    photos = []
+    if isinstance(raw_img, str):
+        ip = str(raw_img).strip()
+        if ip and os.path.isfile(permissions.resolve(ip) or ip):
+            photos.append({"path": permissions.resolve(ip) or ip})
+    elif isinstance(raw_img, list):
+        for it in raw_img:
+            if isinstance(it, str):
+                p2 = str(it).strip()
+                if p2 and os.path.isfile(permissions.resolve(p2) or p2):
+                    photos.append({"path": permissions.resolve(p2) or p2})
+            elif isinstance(it, dict) and it.get("path"):
+                p3 = permissions.resolve(str(it["path"]).strip()) or str(it["path"]).strip()
+                if os.path.isfile(p3):
+                    ph = dict(it)
+                    ph["path"] = p3
+                    photos.append(ph)
+    has_image = bool(photos)
     # 有真实图片则不再画占位框
     if has_image:
         img_labels = []
@@ -2317,16 +2450,40 @@ def _add_content_slide(prs, page, th):
         if lines and body is not None:
             _pptx_text_frame_slides_body(body.text_frame, lines, th.get("body", "333333"))
     elif has_image:
-        try:
-            from pptx.util import Inches as _In
-            img = str(page["image"]).strip()
-            if body is not None:
-                body.text_frame.text = ""
-            slide.shapes.add_picture(img, _In(0.6), _In(1.4), width=_In(5))
+        # 多图：每张按 {path,left,top,width,height,cover,caption} 摆放；无坐标则网格排布
+        n = len(photos)
+        if n == 1 and photos[0].get("left") is None:
+            # 单图默认放右侧 5×3.2
+            ph = photos[0]
+            cover = ph.get("cover", True)
+            _pptx_add_picture(slide, ph["path"], 7.1, 1.7, width_in=5.0, height_in=3.2,
+                              cover=cover, caption=ph.get("caption", ""),
+                              accent_hex=th.get("accent"))
+        else:
+            # 多图：左侧正文在上，下方 2~3 列图片卡片
             if lines and body is not None:
-                _pptx_text_frame_slides_body(body.text_frame, lines, th.get("body", "333333"))
-        except Exception:
-            pass
+                _pptx_text_frame_slides_body(body.text_frame, lines[:4], th.get("body", "333333"))
+            per_row = 2 if n > 2 else n
+            rows = (n + per_row - 1) // per_row
+            cw, ch = 4.1, 2.6
+            for idx, ph in enumerate(photos):
+                row, col = divmod(idx, per_row)
+                # 若指定了坐标则用之
+                if ph.get("left") is not None:
+                    _pptx_add_picture(slide, ph["path"], float(ph["left"]), float(ph.get("top") or 1.4),
+                                      width_in=float(ph.get("width")) if ph.get("width") else None,
+                                      height_in=float(ph.get("height")) if ph.get("height") else None,
+                                      cover=bool(ph.get("cover", True)),
+                                      caption=ph.get("caption", ""), accent_hex=th.get("accent"))
+                    continue
+                lx = 0.5 + col * (cw + 0.15)
+                ty = 1.35 + row * (ch + 0.45)
+                _pptx_add_picture(slide, ph["path"], lx, ty, width_in=cw, height_in=ch,
+                                  cover=True, caption=ph.get("caption", ""),
+                                  accent_hex=th.get("accent"))
+            if not any((p.get("left") is not None) for p in photos):
+                # 图片卡占用下方，清空默认正文占位避免重叠
+                pass
     elif lines:
         if body is not None:
             _pptx_text_frame_slides_body(body.text_frame, lines, th.get("body", "333333"))

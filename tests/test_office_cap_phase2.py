@@ -106,3 +106,33 @@ def test_pptx_create_strips_markdown_in_body(tmp_path):
     assert "[" not in body_text or "[图片" in body_text, "md 链接应被剥离"
     assert "24小时自助" in body_text.replace("**", ""), "加粗应剥离为纯文本"
     assert "为什么需要" in body_text and "##" not in body_text
+
+
+def test_pptx_create_cover_image_and_multi_photo(tmp_path):
+    """回归：pptx_create 支持封面大图(压暗遮罩叠标题) + 每页多真实图(image 数组，cover裁铺)。"""
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    wide = str(tmp_path / "w.jpg"); Image.new("RGB", (2048, 1000), (30, 80, 140)).save(wide)
+    sq = str(tmp_path / "s.png"); Image.new("RGB", (800, 800), (10, 150, 120)).save(sq)
+    cover = str(tmp_path / "c.jpg"); Image.new("RGB", (1920, 1080), (10, 40, 80)).save(cover)
+    out = str(tmp_path / "e.pptx")
+    slides = [
+        {"title": "展示", "bullets": ["- 主项"],
+         "image": [{"path": wide, "caption": "图A"}, {"path": sq, "caption": "图B"}]},
+        {"title": "单图", "image": sq},
+    ]
+    r = dc.pptx_create(path=out, slides=slides, title="自助挂号机", cover_image=cover,
+                       cover_subtitle="智慧医疗")
+    assert r.startswith("已生成"), r
+    prs = Presentation(out)
+    slides_objs = list(prs.slides)
+    # 封面页(第1张)应有：背景图(封面) + 压暗遮罩 + 标题文本
+    cover_pics = [sh for sh in slides_objs[0].shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE]
+    assert cover_pics, "封面应有背景图"
+    cover_txt = "".join(sh.text_frame.text for sh in slides_objs[0].shapes
+                        if sh.has_text_frame and sh.text_frame.text)
+    assert "自助挂号机" in cover_txt and "智慧医疗" in cover_txt
+    # 多图页(第2张)应有 >=2 张图
+    pics2 = [sh for sh in slides_objs[1].shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE]
+    assert len(pics2) >= 2, f"多图页应有 >=2 张真实图，实际 {len(pics2)}"
