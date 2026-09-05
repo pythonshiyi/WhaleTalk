@@ -162,6 +162,7 @@ __all__ = [
     'pdf_create',
     'docx_read',
     'pptx_read',
+    'pptx_create',
     'secret_store',
     'kv_store',
     'create_doc',

@@ -1401,6 +1401,355 @@ def pptx_read(path, include_notes=True):
         return f"错误：PPT 读取失败: {e}"
 
 
+# ── S6: PPT 生成（补齐"只能读、不能生成"的最大空白）──────────────────
+# 用 python-pptx 从结构化 slides 或 markdown 大纲生成 .pptx。
+# 主题 = 标题/正文配色预设；模板 = 复用已有 .pptx 的母版/版式（保留品牌）。
+# 中文字体：仅设 run.font.name 对中文无效，必须同时写 XML rPr 的 latin/ea 字体。
+_PPTX_THEMES = {
+    "default": {"accent": "2B4C7E", "body": "333333"},
+    "ocean": {"accent": "155E95", "body": "1F3B4D"},
+    "dark": {"accent": "1F2430", "body": "EDEDED", "invert": True},
+    "forest": {"accent": "2F5233", "body": "2C3A2C"},
+}
+
+
+def _pptx_cjk_run(run):
+    """为 python-pptx run 设置中日韩字体：latin + ea 都需写，否则中文走默认字体。"""
+    try:
+        from pptx.oxml.ns import qn
+    except Exception:
+        return
+    try:
+        rPr = run._r.get_or_add_rPr()
+        ea = rPr.find(qn("a:ea"))
+        if ea is None:
+            ea = rPr.makeelement(qn("a:ea"), {})
+            rPr.append(ea)
+        ea.set("typeface", "Microsoft YaHei")
+        # latin 交给 python-pptx 的 font.name（同时设 latin typeface 以防未设）
+        lat = rPr.find(qn("a:latin"))
+        if lat is None:
+            lat = rPr.makeelement(qn("a:latin"), {})
+            rPr.append(lat)
+        lat.set("typeface", "Arial")
+    except Exception:
+        pass
+
+
+def _pptx_text_frame_slides_body(tf, lines, body_color):
+    """把 body 行写入文本占位符；以缩进表达层级（- 子项 / -- 孙项）。"""
+    from pptx.util import Pt
+    body_color = body_color or "333333"
+    first = True
+    for ln in lines:
+        if not ln.strip():
+            continue
+        raw = str(ln)
+        indent = 0
+        while raw.startswith(("  ", "\t")):
+            raw = raw[1:].lstrip(" ")
+            indent += 1
+        stripped = raw.lstrip("- ").lstrip("* ").strip() if raw.strip().startswith(("- ", "* ")) else raw.strip()
+        if first:
+            p = tf.paragraphs[0]
+            first = False
+        else:
+            p = tf.add_paragraph()
+        p.level = min(indent, 4)
+        try:
+            p.font.size = Pt(18 if indent == 0 else 15)
+            if body_color:
+                p.font.color.rgb = _pptx_rgb(body_color)
+        except Exception:
+            pass
+        r = p.add_run()
+        r.text = stripped
+        _pptx_cjk_run(r)
+
+
+def _pptx_rgb(hexcolor):
+    from pptx.dml.color import RGBColor
+    return RGBColor.from_string(str(hexcolor or "333333").lstrip("#"))
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "pptx_create",
+                "description": "生成 PowerPoint .pptx 演示文稿。slides 传 JSON 数组，每页含 title（标题）、body（要点文本，支持 - 子项层级）或 bullets 数组、可选 notes（演讲者备注）、table={headers,rows}、image（本地图片路径）。或传 markdown outline（按 # 章节自动分页）生成。theme 内置 default/ocean/dark/forest；template 可传 .pptx 作为母版。中文字体自动嵌入",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "输出 .pptx 绝对路径（须在允许目录内）"},
+                        "slides": {"type": "array", "items": {}, "description": "可选：页面数组，每页 {\"title\":\"..\",\"body\":\"要点多行\"或\"bullets\":[..],\"notes\":\"..\",\"table\":{\"headers\":[..],\"rows\":[[..]]},\"image\":\"绝对路径\"}"},
+                        "outline": {"type": "string", "description": "可选：markdown 大纲，一级标题(#)分页"},
+                        "theme": {"type": "string", "description": "可选：default / ocean / dark / forest（默认 default）"},
+                        "title": {"type": "string", "description": "可选：演示标题（生成首页标题页）"},
+                        "template": {"type": "string", "description": "可选：作为母版的 .pptx 绝对路径"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='生成 PPT',
+    preactivate=(('ppt', 'pptx', '演示文稿', '读ppt'),),
+)
+def pptx_create(path, slides=None, outline="", theme="default", title="", template=""):
+    """生成 PPT .pptx：slides 数组或 markdown outline；可选 theme/template。"""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return "未安装 python-pptx，请先执行 pip_install python-pptx 后重试"
+    if not str(path or "").strip():
+        return "错误：path 必填"
+    if slides is not None and outline:
+        return "错误：slides 与 outline 只能二选一"
+    if slides is None and not str(outline or "").strip():
+        return "错误：slides 或 outline 必填"
+    p = permissions.resolve(path)
+    if not p:
+        return "错误：输出路径无效"
+    if not p.lower().endswith(".pptx"):
+        p += ".pptx"
+    ok, reason = permissions.check_filesystem(p, write=True)
+    if not ok:
+        return reason
+    tpl = ""
+    if str(template or "").strip():
+        tpl = permissions.resolve(template)
+        if not tpl or not os.path.isfile(tpl):
+            return f"错误：模板文件不存在：{template}"
+    theme = str(theme or "default").strip().lower()
+    th = _PPTX_THEMES.get(theme, _PPTX_THEMES["default"])
+    try:
+        # 解析页面数据
+        if isinstance(slides, list) and slides:
+            pages = slides
+        elif str(outline or "").strip():
+            pages = _parse_outline_to_slides(outline)
+        else:
+            return "错误：slides 为空"
+        if not pages:
+            return "错误：无有效页面内容"
+        # 打开或新建演示
+        if tpl:
+            prs = Presentation(tpl)
+        else:
+            prs = Presentation()
+            prs.slide_width = prs.slide_width  # 保持默认 16:9（python-pptx 默认即 16:9）
+        # 标题页
+        need_cover = bool(str(title or "").strip())
+        if need_cover:
+            _add_title_slide(prs, title, th)
+        # 内容页
+        added = 0
+        for i, page in enumerate(pages):
+            if isinstance(page, dict):
+                _add_content_slide(prs, page, th)
+                added += 1
+            else:
+                _add_content_slide(prs, {"title": f"第{i + 1}页", "body": str(page)}, th)
+        if added == 0 and not need_cover:
+            return "错误：未能生成任何内容页"
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        prs.save(p)
+        size = os.path.getsize(p)
+        permissions.audit("pptx_create", p, f"{len(pages)} 页 {size} 字节")
+        return f"已生成 PPT: {p}（{len(pages) + (1 if need_cover else 0)} 页，{size / 1024:.1f} KB）"
+    except Exception as e:
+        return f"错误：PPT 生成失败: {e}"
+
+
+def _parse_outline_to_slides(outline):
+    """markdown 大纲 → 页面：一级标题(#)开新页，其下正文为该页要点；支持 ### 作为子主题。"""
+    pages = []
+    cur = None
+    for ln in str(outline).splitlines():
+        s = ln.rstrip()
+        if not s.strip():
+            continue
+        if s.startswith("## "):
+            pages.append(cur)
+            cur = {"title": s[3:].strip(), "bullets": []}
+        elif s.startswith("### ") and cur is not None:
+            cur["bullets"].append("  - " + s[4:].strip())
+        elif s.startswith("# "):
+            if cur is not None:
+                pages.append(cur)
+            cur = {"title": s[2:].strip(), "bullets": []}
+        else:
+            body = s.lstrip("- ").strip()
+            if cur is None:
+                cur = {"title": "概述", "bullets": []}
+            if body:
+                cur["bullets"].append(s)
+    if cur is not None:
+        pages.append(cur)
+    return [pg for pg in pages if pg]
+
+
+def _add_title_slide(prs, title, th):
+    from pptx.util import Pt
+    try:
+        layout = prs.slide_layouts[0]  # Title Slide
+    except Exception:
+        layout = prs.slide_layouts[6]
+    slide = prs.slides.add_slide(layout)
+    for ph in slide.placeholders:
+        if ph.placeholder_format.idx == 0:
+            ph.text = str(title)
+            for para in ph.text_frame.paragraphs:
+                for run in para.runs:
+                    _pptx_cjk_run(run)
+                    try:
+                        run.font.size = Pt(40)
+                        run.font.bold = True
+                        run.font.color.rgb = _pptx_rgb(th.get("accent", "2B4C7E"))
+                    except Exception:
+                        pass
+        elif ph.placeholder_format.idx == 1:
+            try:
+                ph.text = ""
+            except Exception:
+                pass
+
+
+def _add_content_slide(prs, page, th):
+    from pptx.util import Pt
+    body = None
+    # body 来源：bullets 数组或 body 字符串（每行一要点）
+    if page.get("bullets"):
+        lines = [str(b) for b in page["bullets"] if str(b).strip()]
+    elif page.get("body"):
+        lines = [ln for ln in str(page["body"]).splitlines() if ln.strip()]
+    else:
+        lines = []
+    has_table = isinstance(page.get("table"), dict) and page["table"].get("rows")
+    has_image = str(page.get("image") or "").strip() and os.path.isfile(str(page["image"]).strip())
+    # 版式选择：含表格优先用 Title+Content（可腾出下方空间），否则也尽量用 content
+    try:
+        layout = prs.slide_layouts[1]  # Title and Content
+    except Exception:
+        layout = prs.slide_layouts[5]  # Title Only
+    slide = prs.slides.add_slide(layout)
+    title_set = False
+    for ph in slide.placeholders:
+        idx = ph.placeholder_format.idx
+        if idx == 0 and page.get("title"):
+            ph.text = str(page["title"])
+            title_set = True
+            for para in ph.text_frame.paragraphs:
+                for run in para.runs:
+                    _pptx_cjk_run(run)
+                    try:
+                        run.font.bold = True
+                        run.font.color.rgb = _pptx_rgb(th.get("accent", "2B4C7E"))
+                    except Exception:
+                        pass
+        elif idx == 1 and hasattr(ph, "text_frame"):
+            body = ph
+    if not title_set and page.get("title"):
+        # 无标题占位符的版式：用文本框补
+        from pptx.util import Inches, Pt as _Pt
+        tb = slide.shapes.add_textbox(Inches(0.4), Inches(0.2), Inches(9), Inches(0.7))
+        tb.text = str(page["title"])
+        for para in tb.text_frame.paragraphs:
+            for run in para.runs:
+                run.font.bold = True
+                run.font.size = _Pt(28)
+                _pptx_cjk_run(run)
+    # 写入正文 / 表格 / 图片
+    if has_table:
+        _write_slide_table(slide, page["table"], th, body)
+        if lines and body is not None:
+            _pptx_text_frame_slides_body(body.text_frame, lines, th.get("body", "333333"))
+    elif has_image:
+        try:
+            from pptx.util import Inches as _In
+            img = str(page["image"]).strip()
+            if body is not None:
+                body.text_frame.text = ""
+            slide.shapes.add_picture(img, _In(0.6), _In(1.4), width=_In(5))
+            if lines and body is not None:
+                _pptx_text_frame_slides_body(body.text_frame, lines, th.get("body", "333333"))
+        except Exception:
+            pass
+    elif lines:
+        if body is not None:
+            _pptx_text_frame_slides_body(body.text_frame, lines, th.get("body", "333333"))
+        else:
+            # 无正文占位符：加一个文本框（例如 title-only 版式）
+            try:
+                from pptx.util import Inches as _In2
+                tb2 = slide.shapes.add_textbox(_In2(0.4), _In2(1.2), _In2(9), _In2(5))
+                _pptx_text_frame_slides_body(tb2.text_frame, lines, th.get("body", "333333"))
+            except Exception:
+                pass
+    # 备注
+    if page.get("notes"):
+        try:
+            slide.notes_slide.notes_text_frame.text = str(page["notes"])[:1000]
+        except Exception:
+            pass
+
+
+def _write_slide_table(slide, table_spec, th, body_ph):
+    from pptx.util import Inches as _In, Pt as _Pt
+    from pptx.oxml.ns import qn as _qn
+    headers = list(table_spec.get("headers") or [])
+    rows = table_spec.get("rows") or []
+    if headers and rows:
+        data = [headers] + [[str(c) for c in r] for r in rows]
+    else:
+        data = [[str(c) for c in r] for r in rows] or [[]]
+    nrow = len(data)
+    ncol = max((len(r) for r in data), default=1)
+    try:
+        gt = slide.shapes.add_table(nrow, ncol, _In(0.5), _In(1.4), _In(9), _In(0.4 + 0.4 * nrow)).table
+        for i, r in enumerate(data):
+            for j in range(ncol):
+                cell = gt.cell(i, j)
+                cell.text = r[j] if j < len(r) else ""
+                for para in cell.text_frame.paragraphs:
+                    for run in para.runs:
+                        _pptx_cjk_run(run)
+                        try:
+                            run.font.size = _Pt(12)
+                            if i == 0:
+                                run.font.bold = True
+                                run.font.color.rgb = _pptx_rgb("FFFFFF")
+                        except Exception:
+                            pass
+        # 表头底色
+        try:
+            from pptx.dml.color import RGBColor as _RC
+            from pptx.oxml.ns import qn as _q2
+            accent = str(th.get("accent", "2B4C7E")).lstrip("#")
+            for j in range(ncol):
+                c = gt.cell(0, j)
+                tcPr = c._tc.get_or_add_tcPr()
+                tcPr.set("fill", "1")
+                from lxml import etree as _et
+                solid = tcPr.find(_q2("a:solidFill"))
+                if solid is None:
+                    solid = _et.SubElement(tcPr, _q2("a:solidFill"))
+                clr = solid.find(_q2("a:srgbClr"))
+                if clr is None:
+                    clr = _et.SubElement(solid, _q2("a:srgbClr"))
+                clr.set("val", accent)
+        except Exception:
+            pass
+        if body_ph is not None:
+            try:
+                body_ph.text_frame.text = ""
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 @tool(
         {
             "type": "function",
@@ -1571,7 +1920,7 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
             "type": "function",
             "function": {
                 "name": "create_doc",
-                "description": "创建文档（.md/.html 原生支持；.docx 需 python-docx，仅写入纯文本段落，markdown 语法不会转为 Word 富文本）。注意：不支持 .pptx/.pdf——PPT 请用 run_python 写 python-pptx 脚本，PDF 请用 pdf_create",
+                "description": "创建文档。.md/.html 原生支持；.docx 由 python-docx 渲染 Markdown 富文本（标题层级/加粗/斜体/行内代码/链接/有序与无序列表/表格/代码块/引用/水平线），中文字体自动处理。注意：不支持 .pptx/.pdf——PPT 请用 pptx_create，PDF 请用 pdf_create",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1588,7 +1937,7 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
     preactivate=(('写', '保存', '创建', '生成'),),
 )
 def create_doc(path, content, doc_type=""):
-    """创建文档：.md/.html 原生；.docx 依赖 python-docx（仅纯文本段落）。
+    """创建文档：.md/.html 原生；.docx 用 markdown→Word 富文本（标题/加粗/列表/表格/代码/图片）。
     扩展名白名单：md / html / docx，其余一律拒绝（防生成"扩展名 .pptx 内容却是 markdown"的坏文件）。"""
     if not str(path or "").strip():
         return "错误：path 必填"
@@ -1600,28 +1949,20 @@ def create_doc(path, content, doc_type=""):
     if ext not in ("md", "html", "htm", "docx"):
         return (
             f"错误：create_doc 不支持 .{ext or '(无扩展名)'} 格式。"
-            "支持 md / html / docx。若需生成 .pptx 请用 run_python 编写 python-pptx 脚本，"
+            "支持 md / html / docx。若需生成 .pptx 请用 pptx_create（或 run_python 写 python-pptx 脚本），"
             "若需生成 PDF 请使用 pdf_create 工具。"
         )
     if ext == "htm":
         ext = "html"
     try:
         if ext == "docx":
-            try:
-                from docx import Document
-            except ImportError:
-                return "错误：生成 .docx 需要 python-docx：pip install python-docx"
-            doc = Document()
-            for para in (content or "").splitlines():
-                if para.strip():
-                    doc.add_paragraph(para)
             created = not os.path.exists(p)
             if not created:
                 try:
                     shutil.copy2(p, p + ".bak")
                 except Exception:
                     pass
-            doc.save(p)
+            _build_docx_markdown(p, content or "")
         else:
             body = content or ""
             if ext == "html" and not body.lstrip().startswith("<"):
@@ -1638,4 +1979,252 @@ def create_doc(path, content, doc_type=""):
         return f"错误：文档创建失败: {e}"
 
 
-__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'pptx_read', 'secret_store', 'kv_store', 'create_doc']
+# ── S7: markdown → docx 富文本渲染辅助 ─────────────────────────────────
+_INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|`[^`]+`|\[[^\]\n]+]\([^)\s]+\))")
+
+def _md_inline_to_runs(paragraph, text):
+    """把 markdown 行内语法写到 docx paragraph 上：**bold** / *italic* / `code` / [t](url)。"""
+    def emit(seg, bold=False, italic=False, code=False, url=None):
+        if not seg:
+            return
+        if url:
+            # 真超链接：w:hyperlink 包裹 run（带 r:id 关系）
+            _add_docx_hyperlink(paragraph, seg, url, bold=bold, italic=italic)
+            return
+        run = paragraph.add_run(seg)
+        run.bold = bold
+        run.italic = italic
+        if code:
+            run.font.name = "Consolas"
+            try:
+                rPr = run._element.get_or_add_rPr()
+                from docx.oxml.ns import qn
+                rFonts = rPr.find(qn("w:rFonts"))
+                if rFonts is None:
+                    from docx.oxml import OxmlElement
+                    rFonts = OxmlElement("w:rFonts")
+                    rPr.append(rFonts)
+                rFonts.set(qn("w:ascii"), "Consolas")
+                rFonts.set(qn("w:hAnsi"), "Consolas")
+                rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+            except Exception:
+                pass
+        _set_run_cjk(run)
+    # 分割加粗/斜体/代码/链接
+    pos = 0
+    for m in _INLINE_RE.finditer(str(text or "")):
+        if m.start() > pos:
+            emit(text[pos:m.start()])
+        tok = m.group(1)
+        if tok.startswith("**") and tok.endswith("**") and len(tok) > 4:
+            emit(tok[2:-2], bold=True)
+        elif tok.startswith("*") and tok.endswith("*") and len(tok) > 2:
+            emit(tok[1:-1], italic=True)
+        elif tok.startswith("`") and tok.endswith("`"):
+            emit(tok[1:-1], code=True)
+        elif tok.startswith("[") and "](" in tok:
+            seg, _, url = tok[1:].partition("](")
+            emit(seg, url=url.rstrip(")"))
+        pos = m.end()
+    if pos < len(str(text or "")):
+        emit(text[pos:])
+    return paragraph
+
+
+def _add_docx_hyperlink(paragraph, text, url, bold=False, italic=False):
+    """在 docx paragraph 上追加一个可点击超链接 run。"""
+    try:
+        from docx.opc.constants import RELATIONSHIP_TYPE
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.shared import RGBColor
+        part = paragraph.part
+        r_id = part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+        hyperlink = OxmlElement("w:hyperlink")
+        hyperlink.set(qn("r:id"), r_id)
+        new_run = OxmlElement("w:r")
+        rPr = OxmlElement("w:rPr")
+        # 样式：蓝色 + 下划线
+        c = OxmlElement("w:color")
+        c.set(qn("w:val"), "0563C1")
+        rPr.append(c)
+        u = OxmlElement("w:u")
+        u.set(qn("w:val"), "single")
+        rPr.append(u)
+        if bold:
+            b = OxmlElement("w:b")
+            rPr.append(b)
+        if italic:
+            i = OxmlElement("w:i")
+            rPr.append(i)
+        new_run.append(rPr)
+        t = OxmlElement("w:t")
+        t.text = text
+        new_run.append(t)
+        hyperlink.append(new_run)
+        paragraph._p.append(hyperlink)
+        _set_run_cjk_xml(new_run)
+    except Exception:
+        # 降级：无关系挂接，仅下划线视觉链接
+        run = paragraph.add_run(text)
+        run.underline = True
+        _set_run_cjk(run)
+
+
+def _set_run_cjk_xml(run_el):
+    """给 w:r XML 元素补 rFonts eastAsia（超链接 run 无法走 python-docx run 对象）。"""
+    try:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        rPr = run_el.find(qn("w:rPr"))
+        if rPr is None:
+            rPr = OxmlElement("w:rPr")
+            run_el.insert(0, rPr)
+        rf = rPr.find(qn("w:rFonts"))
+        if rf is None:
+            rf = OxmlElement("w:rFonts")
+            rPr.insert(0, rf)
+        rf.set(qn("w:eastAsia"), "Microsoft YaHei")
+    except Exception:
+        pass
+
+
+def _set_run_cjk(run):
+    """docx run 设置中日韩字体（eastAsia），否则中文走默认西文字体易变方块。"""
+    try:
+        from docx.oxml.ns import qn
+        rPr = run._element.get_or_add_rPr()
+        rFonts = rPr.find(qn("w:rFonts"))
+        if rFonts is None:
+            from docx.oxml import OxmlElement
+            rFonts = OxmlElement("w:rFonts")
+            rPr.insert(0, rFonts)
+        rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+        if run.font.name is None:
+            rFonts.set(qn("w:ascii"), "Calibri")
+            rFonts.set(qn("w:hAnsi"), "Calibri")
+    except Exception:
+        pass
+
+
+def _build_docx_markdown(out_path, content):
+    """把 Markdown 渲染为富 .docx（标题/加粗/列表/表格/代码/引用/图片）。"""
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    try:
+        import mdparse
+    except Exception:
+        mdparse = None
+    doc = Document()
+    # 全局中文字体
+    try:
+        from docx.oxml.ns import qn
+        style = doc.styles["Normal"]
+        style.font.name = "Calibri"
+        style.font.size = Pt(11)
+        style.element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+    except Exception:
+        pass
+
+    def add_para(text="", style=None):
+        return doc.add_paragraph(text, style=style)
+
+    blocks = mdparse.parse_blocks(content) if mdparse else _fallback_blocks(content)
+    for blk in blocks:
+        kind = blk[0]
+        body = blk[1]
+        try:
+            if kind == "code":
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Pt(18)
+                p.paragraph_format.space_after = Pt(6)
+                for line in str(body).split("\n"):
+                    r = p.add_run((line if not p.runs else "\n" + line))
+                    r.font.name = "Consolas"
+                    r.font.size = Pt(9.5)
+                    _set_run_cjk(r)
+                # 浅灰底纹（单段浅色）
+                try:
+                    from docx.oxml import OxmlElement
+                    from docx.oxml.ns import qn as _qn
+                    shd = OxmlElement("w:shd")
+                    shd.set(_qn("w:val"), "clear")
+                    shd.set(_qn("w:fill"), "F2F2F2")
+                    p._p.get_or_add_pPr().append(shd)
+                except Exception:
+                    pass
+            elif kind == "table":
+                rows = _md_table_rows(body)
+                if len(rows) >= 1:
+                    ncol = max(len(r) for r in rows)
+                    t = doc.add_table(rows=len(rows), cols=ncol)
+                    t.style = "Light Grid Accent 1"
+                    for i, r in enumerate(rows):
+                        for j in range(ncol):
+                            cell = t.cell(i, j)
+                            cell.text = ""
+                            para = cell.paragraphs[0]
+                            _md_inline_to_runs(para, r[j] if j < len(r) else "")
+                            if i == 0:
+                                for run in para.runs:
+                                    run.bold = True
+            elif kind == "list":
+                ordered = False
+                for ln in str(body).split("\n"):
+                    s = ln.strip()
+                    if not s:
+                        continue
+                    if s[:1].isdigit() and s[1:2] in (".", ")"):
+                        ordered = True
+                for ln in str(body).split("\n"):
+                    s = ln.strip()
+                    if not s:
+                        continue
+                    is_ordered = s[:1].isdigit() and s[1:2] in (".", ")")
+                    style_name = "List Number" if (ordered or is_ordered) else "List Bullet"
+                    if is_ordered:
+                        s = s.split(".", 1)[1] if "." in s[:4] else s
+                    elif s.startswith("- "):
+                        s = s[2:]
+                    elif s.startswith("* "):
+                        s = s[2:]
+                    p = doc.add_paragraph(style=style_name)
+                    _md_inline_to_runs(p, s)
+            elif kind.startswith("h"):
+                try:
+                    level = min(int(kind[1]), 4)
+                except ValueError:
+                    level = 1
+                htext = str(body).strip()
+                p = doc.add_heading("", level=level)
+                _md_inline_to_runs(p, htext)
+            elif kind == "quote":
+                for ln in str(body).split("\n"):
+                    p = doc.add_paragraph()
+                    p.paragraph_format.left_indent = Pt(18)
+                    _md_inline_to_runs(p, ln)
+                    for run in p.runs:
+                        run.italic = True
+            elif kind == "hr":
+                p = doc.add_paragraph()
+                p.add_run("――――――――――――")
+            else:  # plain
+                for para_txt in str(body).split("\n"):
+                    p = doc.add_paragraph()
+                    _md_inline_to_runs(p, para_txt)
+        except Exception:
+            # 单块失败不中断整文档（降级为纯文本行）
+            try:
+                doc.add_paragraph(str(body))
+            except Exception:
+                pass
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    doc.save(out_path)
+
+
+def _fallback_blocks(content):
+    """mdparse 不可用时：纯文本退化为逐行 plain 块，保底可生成。"""
+    return [("plain", ln) for ln in str(content or "").splitlines() if ln.strip()]
+
+
+__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'pptx_read', 'pptx_create', 'secret_store', 'kv_store', 'create_doc']
