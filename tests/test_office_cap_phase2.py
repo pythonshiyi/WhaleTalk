@@ -136,3 +136,18 @@ def test_pptx_create_cover_image_and_multi_photo(tmp_path):
     # 多图页(第2张)应有 >=2 张图
     pics2 = [sh for sh in slides_objs[1].shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE]
     assert len(pics2) >= 2, f"多图页应有 >=2 张真实图，实际 {len(pics2)}"
+
+
+def test_html_render_produces_png(tmp_path):
+    """html_render：把 HTML/CSS 渲染成 PNG（AI 以 HTML 做专业排版的输出通道）。
+    需 playwright + 系统 Edge/chromium；缺则跳过。"""
+    pytest = __import__("pytest")
+    try:
+        import playwright  # noqa: F401
+    except Exception:
+        pytest.skip("未安装 playwright")
+    out = str(tmp_path / "d.png")
+    html = "<html><body style='margin:0'><div style='width:100vw;height:100vh;background:#0B3D63;color:#fff;display:flex;align-items:center;justify-content:center;font-family:sans-serif'>Hello 自助机</div></body></html>"
+    r = dc.html_render(html=html, output=out, width=640, height=360)
+    assert r.startswith("已渲染"), r
+    assert os.path.exists(out) and os.path.getsize(out) > 0

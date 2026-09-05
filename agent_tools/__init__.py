@@ -168,4 +168,5 @@ __all__ = [
     'secret_store',
     'kv_store',
     'create_doc',
+    'html_render',
 ]

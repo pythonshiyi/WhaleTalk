@@ -3120,4 +3120,116 @@ def _fallback_blocks(content):
     return [("plain", ln) for ln in str(content or "").splitlines() if ln.strip()]
 
 
-__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'secret_store', 'kv_store', 'create_doc']
+# ── HTML/CSS 设计 → 高清 PNG 渲染（AI 以 HTML 排版出图）────────────────
+# AI 反馈"专业排版是短板、想用 HTML/CSS 渲染路线"：让 AI 用擅长的 HTML/CSS 设计整页，
+# 经无头浏览器(优先系统 Edge，回退 playwright chromium)渲染成指定视口高清 PNG。
+# 产物 PNG 可直接用于演示、或后续由工具把多张 PNG 拼成 PPT 页。
+_HTML_RENDER_LOCK = None  # 惰性 threading.Lock（playwright 非线程安全，串行化）
+
+
+def _html_render_lock():
+    global _HTML_RENDER_LOCK
+    if _HTML_RENDER_LOCK is None:
+        import threading
+        _HTML_RENDER_LOCK = threading.Lock()
+    return _HTML_RENDER_LOCK
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "html_render",
+                "description": "把一段 HTML/CSS 渲染成高清 PNG 图片（本地无头浏览器，优先系统 Edge）。适合用 HTML/CSS 做专业版式设计后出图：设定 viewport 即生成该尺寸整页截图。产出 PNG 可作为 PPT 页面素材或演示图。CSS 支持 flex/grid/渐变/圆角/阴影/中文字体",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "html": {"type": "string", "description": "HTML/CSS 内容（完整 <html> 或用 body 片段，自动补全），与 source_path 二选一"},
+                        "source_path": {"type": "string", "description": "可选：从本地 .html 文件读取（与 html 二选一）"},
+                        "output": {"type": "string", "description": "输出 PNG 绝对路径（须在允许目录内；扩展名 .png/.jpg）"},
+                        "width": {"type": "integer", "description": "可选：视口宽 px（默认 1280）"},
+                        "height": {"type": "integer", "description": "可选：视口高 px（默认 720，16:9）"},
+                        "scale": {"type": "integer", "description": "可选：超采样倍数 1-3（默认 1；2~3 更清晰但文件更大）"},
+                        "full_page": {"type": "boolean", "description": "可选：true=整页截图(不限高)；false=仅视口高（默认 false）"},
+                    },
+                    "required": ["output"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='HTML 渲染成图',
+    preactivate=(('写', '保存', '创建', '生成'),),
+)
+def html_render(html="", source_path="", output="", width=1280, height=720,
+                scale=1, full_page=False):
+    """把 HTML/CSS 渲染成 PNG（无头浏览器，优先系统 Edge）。返回产物路径/错误。"""
+    if not str(output or "").strip():
+        return "错误：output 必填"
+    if str(html or "").strip() and str(source_path or "").strip():
+        return "错误：html 与 source_path 只能二选一"
+    content = str(html or "")
+    if not content.strip():
+        if not str(source_path or "").strip():
+            return "错误：html 或 source_path 必填"
+        sp = permissions.resolve(source_path)
+        if not sp or not os.path.isfile(sp):
+            return f"错误：源文件不存在：{source_path}"
+        ok, reason = permissions.check_filesystem(sp, write=False)
+        if not ok:
+            return reason
+        try:
+            with open(sp, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read(2_000_000)
+        except Exception as e:
+            return f"错误：读取源文件失败: {e}"
+    if not content.strip():
+        return "错误：HTML 内容为空"
+    out = permissions.resolve(output)
+    if not out:
+        return "错误：输出路径无效"
+    ext = os.path.splitext(out)[1].lower()
+    if ext not in (".png", ".jpg", ".jpeg"):
+        out += ".png"
+    ok, reason = permissions.check_filesystem(out, write=True)
+    if not ok:
+        return reason
+    try:
+        w = int(width) or 1280
+        h = int(height) or 720
+        sc = max(1, min(int(scale or 1), 3))
+        # 补全 HTML
+        if not content.lstrip().lower().startswith("<!doctype") and not content.lstrip().lower().startswith("<html"):
+            content = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
+                       "<style>html,body{margin:0;padding:0}*{box-sizing:border-box}</style></head>"
+                       f"<body>{content}</body></html>")
+        import base64
+        data_uri = "data:text/html;base64," + base64.b64encode(content.encode("utf-8")).decode("ascii")
+        from playwright.sync_api import sync_playwright
+        with _html_render_lock():
+            with sync_playwright() as p:
+                browser = None
+                try:
+                    try:
+                        browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
+                    except Exception:
+                        browser = p.chromium.launch(args=["--no-sandbox"])
+                    pg = browser.new_page(viewport={"width": w * sc, "height": h * sc},
+                                          device_scale_factor=sc)
+                    pg.goto(data_uri, wait_until="load")
+                    pg.wait_for_timeout(350)  # 等字体/图片
+                    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+                    pg.screenshot(path=out, full_page=bool(full_page))
+                finally:
+                    if browser is not None:
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
+        size = os.path.getsize(out)
+        permissions.audit("html_render", out, f"{size} 字节")
+        return f"已渲染 HTML 为 {out}（{w}x{h}{'×'+str(sc) if sc>1 else ''}，{size/1024:.0f} KB）"
+    except Exception as e:
+        return f"错误：HTML 渲染失败: {e}（需已安装 playwright，可用 pip_install playwright + playwright install chromium；或系统装有 Edge）"
+
+
+__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'secret_store', 'kv_store', 'create_doc']
