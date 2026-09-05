@@ -82,3 +82,27 @@ def test_s7_create_doc_docx_rich_markdown(tmp_path):
     styles = {p.style.name for p in doc.paragraphs}
     assert "List Bullet" in styles and "List Number" in styles, "列表样式应应用"
     assert any("print" in p.text for p in doc.paragraphs), "代码块应写入"
+
+
+def test_pptx_create_strips_markdown_in_body(tmp_path):
+    """回归：pptx body 含 markdown 标记时，不写字面 md 进幻灯片。
+    曾把 ## 标题/**加粗**/`代码`/[链接] 原样写入 → 内容显示成 md 文本。"""
+    from pptx import Presentation
+    out = str(tmp_path / "md.pptx")
+    slides = [{
+        "title": "背景",
+        "body": "## 为什么需要\n- **24小时**自助\n- 覆盖 `挂号` 与 *取号* [详情](https://x.com)\n[图片：排队场景]",
+    }]
+    r = dc.pptx_create(path=out, slides=slides)
+    assert r.startswith("已生成"), r
+    prs = Presentation(out)
+    body_text = ""
+    for s in prs.slides:
+        for sh in s.shapes:
+            if sh.has_text_frame:
+                body_text += sh.text_frame.text + "\n"
+    assert "##" not in body_text, "不应出现字面 ##"
+    assert "**" not in body_text, "不应出现字面 **"
+    assert "[" not in body_text or "[图片" in body_text, "md 链接应被剥离"
+    assert "24小时自助" in body_text.replace("**", ""), "加粗应剥离为纯文本"
+    assert "为什么需要" in body_text and "##" not in body_text

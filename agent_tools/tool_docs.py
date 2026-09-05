@@ -1956,25 +1956,145 @@ def _pptx_cjk_run(run):
         pass
 
 
+def _pptx_clean_inline(text):
+    """清洗单行 markdown 行内标记 → 幻灯片纯文本要点。
+    处理 **加粗**、*斜体*、`代码`、[文字](url)、![alt](url)（图保留 alt 作占位说明）、
+    残留的 ##/— 等，避免把字面 md 标记写进幻灯片。"""
+    t = str(text or "")
+    t = t.replace("**", "").replace("__", "")
+    # ![alt](url) 图占位 → 保留 alt 说明，去掉 URL 与 ![] 语法
+    import re as _re
+    t = _re.sub(r"!\[([^\]]*)\]\([^)]*\)", lambda m: (m.group(1).strip() or "图片"), t)
+    t = _re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", t)  # [文字](url) → 文字
+    t = _re.sub(r"`([^`]*)`", r"\1", t)              # `code` → code
+    t = _re.sub(r"(\*|_)([^*_]+)\1", r"\2", t)        # *斜体* / _斜体_
+    t = _re.sub(r"^#{1,6}\s*", "", t)                # 行首标题 #
+    t = _re.sub(r"^\s*[-*+]\s+", "", t)              # 行首无序列表
+    t = _re.sub(r"^\s*\d+[.)]\s+", "", t)             # 行首有序列表
+    t = _re.sub(r"^\s*>+\s?", "", t)                  # 引用
+    t = t.strip()
+    return t
+
+
+_IMG_PLACEHOLDER_RE = None  # 惰性构建
+
+def _pptx_image_placeholder_label(line):
+    """识别一行是否为图片占位标注，返回说明文字；非占位行返回 None。
+    支持形态：`[图片：机器正面]`、`[图片: xx]`、`（图片：xx）`、`图片：xx`、`![xx](url)`、
+    `[图]`/`[示意图]` 等。这些行不再写进正文，改为画真实占位框。"""
+    global _IMG_PLACEHOLDER_RE
+    s = str(line or "").strip()
+    if not s:
+        return None
+    if _IMG_PLACEHOLDER_RE is None:
+        import re as _r
+        _IMG_PLACEHOLDER_RE = _r.compile(
+            r"^\s*(?:\[(?:图片|图|配图|示意图|插图|照片|示例图)\s*[:：]?\s*([^\]]*)\]|"
+            r"(?:图片|图|配图|示意图|插图|照片)[：:]\s*([^\n]+)|"
+            r"!\[([^\]]*)\]\([^)]*\)|"
+            r"\[(?:图片|图|配图|示意图|插图|照片)\])\s*$"
+        )
+    m = _IMG_PLACEHOLDER_RE.match(s)
+    if not m:
+        return None
+    # 取非空捕获组
+    label = next((g for g in m.groups() if g and g.strip()), "")
+    return label.strip() or "图片"
+
+
+def _add_image_placeholder_boxes(slide, labels, body_top_in):
+    """在幻灯片底部画一组虚线圆角占位框 + 居中说明（图片位置预留的可见呈现）。
+    body_top_in：正文区域顶端英寸（从正文下方开始排框）。"""
+    from pptx.util import Inches as _In, Pt as _Pt
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.enum.text import PP_ALIGN
+    from pptx.dml.color import RGBColor
+    try:
+        labels = [l for l in labels if l]
+        if not labels:
+            return
+        left, width = 0.55, 9.0
+        top = max(body_top_in + 0.15, 1.35)
+        box_h = 1.15
+        if len(labels) > 1:
+            # 多图占位：并排两列
+            per_row = 2
+            rows = (len(labels) + per_row - 1) // per_row
+            box_h = 0.95
+        accent = "9BB7D4"
+        for i, lab in enumerate(labels):
+            row = i // 2
+            col = i % 2
+            if len(labels) == 1:
+                x, w = left, width
+            else:
+                w = (width - 0.3) / 2
+                x = left + col * (w + 0.3)
+            y = top + row * (box_h + 0.18)
+            # 若超出可用高度则截断（最多排到页底）
+            if y + box_h > 5.6:
+                break
+            try:
+                shp = slide.shapes.add_shape(
+                    MSO_SHAPE.ROUNDED_RECTANGLE, _In(x), _In(y), _In(w), _In(box_h))
+                shp.fill.solid()
+                shp.fill.fore_color.rgb = RGBColor(0xF4, 0xF8, 0xFC)
+                shp.line.color.rgb = RGBColor.from_string(accent)
+                shp.line.width = _Pt(1.25)
+                # 虚线
+                try:
+                    shp.line.dash_style = 2  # MSO_LINE_DASH_STYLE.DASH
+                except Exception:
+                    pass
+                tf = shp.text_frame
+                tf.word_wrap = True
+                tf.margin_top = _Pt(4); tf.margin_bottom = _Pt(4)
+                from pptx.enum.text import PP_ALIGN as _A
+                p = tf.paragraphs[0]
+                p.alignment = _A.CENTER
+                r = p.add_run()
+                r.text = f"🖼 图片占位：{lab}"
+                r.font.size = _Pt(12)
+                r.font.color.rgb = RGBColor.from_string("6B7A90")
+                _pptx_cjk_run(r)
+                # 居中纵向
+                try:
+                    from pptx.oxml.ns import qn as _qn
+                    tf.paragraphs[0].alignment = _A.CENTER
+                    bodyPr = tf._txBody.find(_qn("a:bodyPr"))
+                    if bodyPr is not None:
+                        bodyPr.set("anchor", "ctr")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _pptx_text_frame_slides_body(tf, lines, body_color):
-    """把 body 行写入文本占位符；以缩进表达层级（- 子项 / -- 孙项）。"""
+    """把 body 行写入文本占位符；以缩进表达层级（- 子项 / -- 孙项）。
+    每行先做 markdown 行内清洗，避免字面 md 标记（##/**/[..]）写进幻灯片。"""
     from pptx.util import Pt
     body_color = body_color or "333333"
     first = True
     for ln in lines:
-        if not ln.strip():
+        if not str(ln).strip():
             continue
         raw = str(ln)
         indent = 0
         while raw.startswith(("  ", "\t")):
             raw = raw[1:].lstrip(" ")
             indent += 1
-        stripped = raw.lstrip("- ").lstrip("* ").strip() if raw.strip().startswith(("- ", "* ")) else raw.strip()
-        if first:
-            p = tf.paragraphs[0]
-            first = False
-        else:
-            p = tf.add_paragraph()
+        # 去掉列表符号后提取层级；若开头是 # 标题或图占位则 indent=0 当主点
+        cleaned = _pptx_clean_inline(raw)
+        if not cleaned:
+            continue
+        # 以首行是否图片占位/无列表符判断是否为子层级（保持既有 2 空格缩进语义）
+        if cleaned.startswith(("[图片", "（图片", "图片：")):
+            indent = 0  # 图片占位作为页内独立标注，顶格
+        p = tf.paragraphs[0] if first else tf.add_paragraph()
+        first = False
         p.level = min(indent, 4)
         try:
             p.font.size = Pt(18 if indent == 0 else 15)
@@ -1983,7 +2103,7 @@ def _pptx_text_frame_slides_body(tf, lines, body_color):
         except Exception:
             pass
         r = p.add_run()
-        r.text = stripped
+        r.text = cleaned
         _pptx_cjk_run(r)
 
 
@@ -2140,14 +2260,25 @@ def _add_content_slide(prs, page, th):
     from pptx.util import Pt
     body = None
     # body 来源：bullets 数组或 body 字符串（每行一要点）
+    raw_lines = []
     if page.get("bullets"):
-        lines = [str(b) for b in page["bullets"] if str(b).strip()]
+        raw_lines = [str(b) for b in page["bullets"] if str(b).strip()]
     elif page.get("body"):
-        lines = [ln for ln in str(page["body"]).splitlines() if ln.strip()]
-    else:
-        lines = []
+        raw_lines = [ln for ln in str(page["body"]).splitlines() if ln.strip()]
+    # 拆出图片占位行（画真实占位框）与正文行
+    lines = []
+    img_labels = []
+    for _ln in raw_lines:
+        _lab = _pptx_image_placeholder_label(_ln)
+        if _lab:
+            img_labels.append(_lab)
+        elif str(_ln).strip():
+            lines.append(_ln)
     has_table = isinstance(page.get("table"), dict) and page["table"].get("rows")
     has_image = str(page.get("image") or "").strip() and os.path.isfile(str(page["image"]).strip())
+    # 有真实图片则不再画占位框
+    if has_image:
+        img_labels = []
     # 版式选择：含表格优先用 Title+Content（可腾出下方空间），否则也尽量用 content
     try:
         layout = prs.slide_layouts[1]  # Title and Content
@@ -2207,6 +2338,11 @@ def _add_content_slide(prs, page, th):
                 _pptx_text_frame_slides_body(tb2.text_frame, lines, th.get("body", "333333"))
             except Exception:
                 pass
+    # 图片占位：把 [图片：说明] 标注画成虚线占位框（真实图片位置预留的可见呈现）
+    if img_labels and not has_image and not has_table:
+        # 正文行数估算占位框起始高度（约每行 0.32 英寸，标题下 0.9 起）
+        est = 1.0 + len(lines) * 0.34
+        _add_image_placeholder_boxes(slide, img_labels, body_top_in=max(est, 1.2))
     # 备注
     if page.get("notes"):
         try:
