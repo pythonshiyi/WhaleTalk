@@ -131,14 +131,14 @@ def test_do_post_sources_decorated_methods():
 # ── P2-2：GET 路由表（do_GET 46 分支 if/elif 迁移而来）────────────────────
 
 def test_get_route_table_size():
-    """GET 端点数 = 47（39 精确 + 5 pre + 3 qpath），与迁移前的 do_GET 分支数一致。"""
+    """GET 端点数 = 48（39 精确 + 5 pre + 4 qpath，含 /v1/files/raw），与迁移前的 do_GET 分支数一致。"""
     routes = api_server._GET_ROUTES
-    assert len(routes) == 47, f"GET 路由表应有 47 条，实际 {len(routes)}"
+    assert len(routes) == 48, f"GET 路由表应有 48 条，实际 {len(routes)}"
     kinds = {}
     for matcher, _ in routes:
         k = matcher[0] if isinstance(matcher, tuple) else "exact"
         kinds[k] = kinds.get(k, 0) + 1
-    assert kinds == {"exact": 39, "pre": 5, "qpath": 3}, f"matcher 类型分布异常: {kinds}"
+    assert kinds == {"exact": 39, "pre": 5, "qpath": 4}, f"matcher 类型分布异常: {kinds}"
 
 
 def test_get_exact_match():

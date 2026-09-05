@@ -892,6 +892,25 @@ export async function invokeTool(name, args = {}) {
   return api(`/v1/tools/${encodeURIComponent(name)}/invoke`, { method: "POST", body: JSON.stringify({ args }) });
 }
 
+/** @param {string} path 取本地文件原始字节（经 /v1/files/raw，带 Bearer）。
+ * @returns {Promise<{ok:boolean, blob?:Blob, type?:string, error?:string}>} */
+export async function fetchFileBlob(path) {
+  const url = `${getBase()}/v1/files/raw?path=${encodeURIComponent(path)}`;
+  try {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${getToken()}` } });
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`;
+      try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (e) { /* 非 JSON */ }
+      return { ok: false, error: msg };
+    }
+    const type = r.headers.get("Content-Type") || "";
+    const blob = await r.blob();
+    return { ok: true, blob, type };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || "读取失败" };
+  }
+}
+
 // ── 配置 ─────────────────────────────────────────────
 
 /** @param {Object} patch 配置增量（与 GET /v1/config 同字段集）

@@ -4481,6 +4481,14 @@ _MIME = {
     ".ico": "image/x-icon",
     ".json": "application/json; charset=utf-8",
     ".woff2": "font/woff2",
+    # raw 端点/静态预览用：浏览器可内嵌的类型
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".md": "text/markdown; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
 }
 
 # 由 start_server 注入的运行时状态（模块级，单实例）
@@ -5355,6 +5363,47 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(200, data)
         else:
             self._json(200, _files())
+
+
+    @_get_route(("qpath", "/v1/files/raw"))
+    def _g_v1_files_raw(self):
+        """按绝对路径返回文件原始字节（供前端 docx-preview/pptx-preview/PDF iframe 拉取）。
+        Bearer 鉴权已由 do_GET 统一施加；仅校验文件存在与大小上限。"""
+        import urllib.parse
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        p = (qs.get("path") or [""])[0]
+        path = os.path.abspath(os.path.expanduser(str(p or "")))
+        if not path or not os.path.isfile(path):
+            self._json(404, {"error": "文件不存在"})
+            return
+        try:
+            size = os.path.getsize(path)
+        except OSError as e:
+            self._json(500, {"error": str(e)})
+            return
+        max_bytes = 60 * 1024 * 1024  # 60MB 上限（防止超大文件撑爆内存）
+        if size > max_bytes:
+            self._json(413, {"error": f"文件超过 {max_bytes // 1024 // 1024}MB，无法内嵌渲染"})
+            return
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except Exception as e:
+            self._json(500, {"error": f"读取失败: {e}"})
+            return
+        ext = os.path.splitext(path)[1].lower()
+        ctype = _MIME.get(ext, "application/octet-stream")
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as e:
+            logger.exception("raw 文件返回失败: %s", path)
+            self._json(500, {"error": str(e)})
 
 
     @_get_route("/v1/tasks")

@@ -12,6 +12,8 @@
     "typecheck": "tsc --noEmit -p jsconfig.json"
   },
   "dependencies": {
+    "docx-preview": "^0.4.0",
+    "pptx-preview": "^1.0.7",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

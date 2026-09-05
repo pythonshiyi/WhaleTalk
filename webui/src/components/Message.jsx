@@ -2,6 +2,7 @@ import React from "react";
 import Markdown from "./Markdown.jsx";
 import ToolCard from "./ToolCard.jsx";
 import { EditableTable, DocxEditable, TextDocPreview } from "./OfficePreview.jsx";
+import PixelDocViewer from "./PixelDocViewer.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
@@ -138,6 +139,7 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
   const [loading, setLoading] = React.useState(false);
   const [err, setErr] = React.useState("");
   const [preview, setPreview] = React.useState({});  // {path: {loading, data, err}}
+  const [pixel, setPixel] = React.useState({});  // {path: true} 是否像素渲染
 
   const loadPreview = async (path) => {
     const cur = preview[path];
@@ -284,22 +286,51 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
                   : <TablePreview header={d.header} rows={d.rows} total={d.total_rows} name={d.name} />
               )}
               {d.kind === "pdf" && (
-                <div style={{ marginTop: 4, fontSize: 12.5 }}>
-                  <div style={{ opacity: .8, marginBottom: 4 }}>📄 PDF（{d.page_count || "?"} 页）· 首页文本预览</div>
-                  {d.content ? (
-                    <pre style={{ whiteSpace: "pre-wrap", margin: 0, maxHeight: 240, overflow: "auto", fontFamily: "inherit", fontSize: 12.5 }}>
-                      {(d.content || "").slice(0, 4000)}
-                    </pre>
-                  ) : (
-                    <div style={{ opacity: .8 }}>（无文本层，可能是扫描件，可用系统程序打开）</div>
-                  )}
-                  <button className="msg-op" style={{ marginTop: 6 }} onClick={() => prodAct(p, "open")}>用系统程序打开</button>
-                </div>
+                pixel[p] ? (
+                  <div style={{ marginTop: 4 }}>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                      <span style={{ opacity: .8 }}>📄 PDF 像素预览</span>
+                      <button className="msg-op" onClick={() => setPixel((s) => ({ ...s, [p]: false }))}>看首页文本</button>
+                    </div>
+                    <PixelDocViewer path={p} ext={d.ext} />
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 4, fontSize: 12.5 }}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                      <span style={{ opacity: .8 }}>📄 PDF（{d.page_count || "?"} 页）</span>
+                      <button className="msg-op" onClick={() => { setPixel((s) => ({ ...s, [p]: true })); }}>真实页面预览</button>
+                    </div>
+                    {d.content ? (
+                      <pre style={{ whiteSpace: "pre-wrap", margin: 0, maxHeight: 240, overflow: "auto", fontFamily: "inherit", fontSize: 12.5 }}>
+                        {(d.content || "").slice(0, 4000)}
+                      </pre>
+                    ) : (
+                      <div style={{ opacity: .8 }}>（无文本层）</div>
+                    )}
+                    <button className="msg-op" style={{ marginTop: 6 }} onClick={() => prodAct(p, "open")}>用系统程序打开</button>
+                  </div>
+                )
               )}
               {d.kind === "doc" && (
-                d.docx && d.content
-                  ? <DocxEditable path={p} name={d.name} content={d.content} />
-                  : <TextDocPreview data={d} />
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 4, fontSize: 12.5 }}>
+                    {pixel[p] ? (
+                      <>
+                        <span style={{ opacity: .8 }}>真实排版预览（docx/pptx 像素渲染）</span>
+                        <button className="msg-op" onClick={() => setPixel((s) => ({ ...s, [p]: false }))}>回到可编辑视图</button>
+                      </>
+                    ) : (
+                      <>
+                        {d.docx && d.content && (
+                          <button className="msg-op" onClick={() => { setPixel((s) => ({ ...s, [p]: true })); }}>真实排版预览</button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  {pixel[p]
+                    ? <PixelDocViewer path={p} ext={d.ext} />
+                    : (d.docx && d.content ? <DocxEditable path={p} name={d.name} content={d.content} /> : <TextDocPreview data={d} />)}
+                </div>
               )}
               {!d.previewable && <div style={{ opacity: .8 }}>{d.reason || "该格式不支持内嵌预览"}</div>}
             </div>

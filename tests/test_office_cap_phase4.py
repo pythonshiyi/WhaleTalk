@@ -67,3 +67,15 @@ def test_pdf_cover_and_toc_and_total_pages(tmp_path):
     texts = "".join(doc[i].get_text() for i in range(doc.page_count))
     assert "共" in texts and "页" in texts, "页脚应有总页数"
     doc.close()
+
+
+def test_files_raw_mime_mapping_and_route():
+    """α：/v1/files/raw 端点注册为 qpath；_MIME 含浏览器可内嵌类型（pdf/office）。"""
+    import api_server
+    m = api_server._MIME
+    assert m.get(".pdf") == "application/pdf", "PDF 应可被浏览器原生 iframe 渲染"
+    assert "presentationml.presentation" in (m.get(".pptx") or ""), "pptx MIME"
+    assert "wordprocessingml.document" in (m.get(".docx") or ""), "docx MIME"
+    raw_route = [(matcher, name) for matcher, name in api_server._GET_ROUTES
+                 if isinstance(matcher, tuple) and matcher[:2] == ("qpath", "/v1/files/raw")]
+    assert raw_route, "/v1/files/raw 应以 qpath 注册"
