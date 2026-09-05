@@ -59,3 +59,70 @@ def test_needs_build_when_dist_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(web_app, "WEBUI_DIR", str(wd))
     monkeypatch.setattr(web_app, "_webui_sources_mtime", lambda: 0.0)
     assert web_app._webui_needs_build() is True
+
+
+def _mock_build_env(tmp_path, monkeypatch, deps_stale=False, built_dist=False):
+    wd = tmp_path / "webui"
+    (wd / "src").mkdir(parents=True, exist_ok=True)
+    (wd / "node_modules" / "react").mkdir(parents=True, exist_ok=True)
+    if built_dist:
+        d = wd / "dist"
+        d.mkdir(exist_ok=True)
+        (d / "index.html").write_text("x", encoding="utf-8")
+    (wd / "package.json").write_text(
+        '{"name":"t","dependencies":{"react":"^19","docx-preview":"^0.4","pptx-preview":"^1"}}', encoding="utf-8")
+    if built_dist:
+        for pkg in ("docx-preview", "pptx-preview"):
+            (wd / "node_modules" / pkg).mkdir(exist_ok=True)
+    monkeypatch.setattr(web_app, "WEBUI_DIR", str(wd))
+    monkeypatch.setattr(web_app, "WEBUI_DIR", str(wd))
+    if not built_dist:
+        monkeypatch.setattr(web_app, "_webui_needs_build", lambda: True)
+    else:
+        monkeypatch.setattr(web_app, "_webui_needs_build", lambda: False)
+    monkeypatch.setattr(web_app, "_run_npm", lambda *a, **k: (True, "ok"))
+    monkeypatch.setattr(web_app, "_run_npm_stream", lambda *a, **k: (True, "ok"))
+
+
+def test_headless_no_window_falls_back_to_console(tmp_path, monkeypatch, capsys):
+    """无 GUI（_can_show_tk False）→ 不弹进度窗，走控制台 npm 输出，正常返回。"""
+    _mock_build_env(tmp_path, monkeypatch, deps_stale=False, built_dist=False)
+    monkeypatch.setattr(web_app, "_can_show_tk", lambda: False)
+    opened = []
+    monkeypatch.setattr(web_app, "_setup_progress_window",
+                        lambda *a, **k: opened.append(1) or True)
+    ok, note = web_app._ensure_webui_build()
+    assert ok is True, note
+    assert opened == [], "headless 不应调用进度窗"
+    out = capsys.readouterr().out
+    assert "npm run build" in out or "构建" in out, "应走控制台输出"
+
+
+def test_desktop_uses_progress_window(tmp_path, monkeypatch):
+    """桌面（_can_show_tk True）→ 走友好进度窗并返回成功。"""
+    _mock_build_env(tmp_path, monkeypatch, deps_stale=True, built_dist=False)
+    monkeypatch.setattr(web_app, "_can_show_tk", lambda: True)
+    monkeypatch.setattr(web_app, "_setup_progress_window", lambda *a, **k: True)
+    ok, note = web_app._ensure_webui_build()
+    assert ok is True and "进度窗" in note, note
+
+
+def test_window_failure_reported(tmp_path, monkeypatch):
+    """进度窗返回失败 → _ensure_webui_build 报失败（不误报成功）。"""
+    _mock_build_env(tmp_path, monkeypatch, deps_stale=True, built_dist=False)
+    monkeypatch.setattr(web_app, "_can_show_tk", lambda: True)
+    monkeypatch.setattr(web_app, "_setup_progress_window", lambda *a, **k: False)
+    ok, note = web_app._ensure_webui_build()
+    assert ok is False and "失败" in note, note
+
+
+def test_window_raise_falls_back(tmp_path, monkeypatch):
+    """进度窗本身抛异常 → 回退控制台，不 crash。"""
+    _mock_build_env(tmp_path, monkeypatch, deps_stale=False, built_dist=False)
+    monkeypatch.setattr(web_app, "_can_show_tk", lambda: True)
+
+    def _boom(*a, **k):
+        raise RuntimeError("no display")
+    monkeypatch.setattr(web_app, "_setup_progress_window", _boom)
+    ok, note = web_app._ensure_webui_build()
+    assert ok is True, note  # 回退 console 成功

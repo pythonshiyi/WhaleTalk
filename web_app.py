@@ -393,11 +393,186 @@ def _run_npm(args, timeout=900):
         return False, str(e)
 
 
+def _run_npm_stream(args, on_line, timeout=1200):
+    """流式执行 npm（供进度窗显示实时输出）。on_line(line) 接收每行文本。
+    返回 (ok, 尾部 2000 字符)。"""
+    npm = "npm.cmd" if os.name == "nt" else "npm"
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    tail_buf = []
+    try:
+        p = subprocess.Popen(
+            [npm] + args, cwd=WEBUI_DIR,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", **kwargs)
+    except FileNotFoundError:
+        return False, "找不到 npm 命令：请先安装 Node.js（https://nodejs.org）"
+    except Exception as e:
+        return False, str(e)
+    import threading as _th
+    timer = [time.time()]
+    deadline = timer[0] + timeout
+
+    def _reader():
+        for line in p.stdout:
+            line = line.rstrip("\n")
+            if not line.strip():
+                continue
+            tail_buf.append(line)
+            if len(tail_buf) > 200:
+                tail_buf.pop(0)
+            try:
+                on_line(line)
+            except Exception:
+                pass
+            timer[0] = time.time()
+    _th.Thread(target=_reader, daemon=True).start()
+    while p.poll() is None:
+        if time.time() > deadline:
+            p.kill()
+            return False, f"npm {' '.join(args)} 超时（{timeout}s）"
+        time.sleep(0.1)
+    try:
+        p.wait(timeout=5)
+    except Exception:
+        pass
+    return p.returncode == 0, "\n".join(tail_buf[-60:])
+
+
+# ── 首次初始化友好进度窗（tkinter）─────────────────────────────
+# 服务未起、浏览器尚不可用时，用系统窗口展示安装阶段与实时日志，
+# 让用户明确感知"正在自动准备"而非干等黑屏。装完自动进入程序。
+def _setup_progress_window(title, subtitle, run_steps):
+    """展示一个带阶段标题 + 实时日志 + 活动条的安装窗。
+
+    run_steps(on_stage, on_log) 在工作线程执行：
+      - on_stage(label) 切换阶段标题（如"正在下载前端依赖…"）
+      - on_log(line)    追加一行日志
+    返回 True=成功 / False=失败（run_steps 应返回 bool）。tkinter 不可用返回 None。"""
+    import tkinter as tk
+    from tkinter import ttk
+    import queue as _queue
+    import threading as _th
+    root = tk.Tk()
+    root.title(title)
+    root.geometry("560x360")
+    root.resizable(False, False)
+    try:
+        root.attributes("-topmost", True)
+    except Exception:
+        pass
+    tk.Label(root, text=subtitle, font=("Microsoft YaHei", 12, "bold")).pack(pady=(14, 2))
+    stage = tk.StringVar(value="正在准备…")
+    tk.Label(root, textvariable=stage, font=("Microsoft YaHei", 10), fg="#1a4e8a").pack(pady=(6, 2))
+    bar = ttk.Progressbar(root, length=500, mode="indeterminate")
+    bar.pack(pady=(4, 6))
+    bar.start(12)
+    # 日志框
+    log = tk.Text(root, height=12, width=62, font=("Consolas", 9), state="disabled",
+                  relief="solid", borderwidth=1, wrap="word")
+    log.pack(padx=18, pady=(2, 6), fill="both", expand=True)
+    sc = ttk.Scrollbar(log, command=log.yview)
+    log.configure(yscrollcommand=sc.set)
+    sc.pack(side="right", fill="y")
+    tip = tk.StringVar(value="首次准备可能需要几分钟，请耐心等待；完成后将自动进入")
+    tk.Label(root, textvariable=tip, font=("Microsoft YaHei", 8), fg="#999").pack(pady=(0, 8))
+
+    q = _queue.Queue()
+    result = {"ok": None}
+
+    def worker():
+        try:
+            result["ok"] = bool(run_steps(
+                lambda s: q.put(("stage", s)),
+                lambda l: q.put(("log", l)),
+            ))
+        except Exception as e:
+            result["ok"] = False
+            q.put(("log", f"[错误] {e}"))
+        finally:
+            q.put(("done", None))
+
+    _th.Thread(target=worker, daemon=True).start()
+
+    def poll():
+        try:
+            while True:
+                kind, payload = q.get_nowait()
+                if kind == "stage":
+                    stage.set(payload)
+                    log.configure(state="normal")
+                    log.insert("end", f"\n── {payload}\n")
+                    log.configure(state="disabled")
+                    log.see("end")
+                elif kind == "log":
+                    log.configure(state="normal")
+                    log.insert("end", payload + "\n")
+                    log.configure(state="disabled")
+                    log.see("end")
+                elif kind == "done":
+                    bar.stop()
+                    if result["ok"]:
+                        stage.set("✅ 准备完成！正在启动鲸语…")
+                        tip.set("即将自动打开主界面")
+                        root.after(1200, root.destroy)
+                    else:
+                        stage.set("⚠ 准备未完成（详见上方日志）")
+                        tip.set("可关闭本窗口后查看详情，或检查网络后重试")
+                        root.after(6000, root.destroy)
+                    return
+        except _queue.Empty:
+            pass
+        root.after(100, poll)
+
+    root.after(100, poll)
+    root.mainloop()
+    return result["ok"]
+
+
+def _webui_install_steps(on_stage, on_log):
+    """首次 WebUI 准备的工作线程主体：装依赖 + 构建。返回 (ok, tail)。"""
+    def npm_stream(args, stage):
+        on_stage(stage)
+        return _run_npm_stream(args, on_log)
+    if _webui_deps_stale():
+        if os.path.isfile(os.path.join(WEBUI_DIR, "package-lock.json")):
+            ok, tail = npm_stream(["ci"], "正在下载前端依赖（npm ci）…")
+            if not ok:
+                # ci 对 lock/package.json 不一致会失败 → 回退 npm install
+                on_log("[npm ci 失败，自动改用 npm install 重试]")
+                ok, tail = npm_stream(["install"], "正在下载前端依赖（npm install）…")
+        else:
+            ok, tail = npm_stream(["install"], "正在下载前端依赖（npm install）…")
+        if not ok:
+            on_stage("❌ 依赖安装失败")
+            return False
+    on_stage("正在编译前端界面（npm run build）…")
+    ok, tail = _run_npm_stream(["run", "build"], on_log)
+    return ok
+
+
+def _can_show_tk():
+    """探测能否创建 tkinter 窗口（主线程执行，避免 tkinter 线程安全与退出残留问题）。
+    无头/服务会话（无 DISPLAY/窗口站）下 tk.Tk() 抛 TclError → 返回 False，
+    调用方将退回控制台输出，不会卡进 mainloop。"""
+    try:
+        import tkinter as tk
+        r = tk.Tk()
+        r.withdraw()
+        r.update_idletasks()
+        r.destroy()
+        return True
+    except Exception:
+        return False
+
+
 def _ensure_webui_build():
     """确保 WebUI 构建产物就绪（开箱即用）：
     - 已构建（dist/index.html 存在且源码未更新）→ 跳过；
     - 未构建或源码有更新 → 自动 npm run build（缺依赖先 npm ci/install）。
-    打包 exe（前端随程序分发）与 WHALETALK_NO_WEBUI_BUILD=1 时跳过自动构建。
+    桌面环境（tkinter 可真正驱动）弹友好进度窗实时展示安装/构建；无 GUI 环境退回
+    控制台打印。打包 exe 与 WHALETALK_NO_WEBUI_BUILD=1 时跳过。
     返回 (ok, 说明)。"""
     if getattr(sys, "frozen", False):
         return _webui_built(), "打包模式：前端产物随程序分发，跳过构建"
@@ -405,13 +580,26 @@ def _ensure_webui_build():
         return _webui_built(), "WHALETALK_NO_WEBUI_BUILD=1：已跳过自动构建"
     if not _webui_needs_build():
         return True, "WebUI 已构建，跳过构建步骤"
-    # 依赖过期或缺（node_modules 缺失，或 package-lock.json 声明了新依赖）→ 先装
+    # 桌面环境优先用友好进度窗（服务未起、浏览器不可用，需要给用户实时反馈）
+    window_ok = None
+    try:
+        if _can_show_tk():
+            window_ok = _setup_progress_window(
+                "鲸语 · 正在准备界面", "🐋 首次运行正在自动下载并构建界面（只需一次）",
+                _webui_install_steps)
+    except Exception as e:  # 无 tkinter/非桌面 → 走控制台
+        window_ok = None
+        print(f"[提示] 桌面进度窗不可用（{e}），改用控制台输出")
+    if window_ok is not None:
+        if window_ok:
+            return True, "WebUI 自动构建成功（进度窗）"
+        return False, "WebUI 自动构建失败（详见进度窗日志）"
+    # 控制台/无 GUI 回退：print 逐步输出
     if _webui_deps_stale():
         if os.path.isfile(os.path.join(WEBUI_DIR, "package-lock.json")):
             print("⏳ WebUI 依赖有更新，正在自动安装（npm ci）…")
             ok, tail = _run_npm(["ci"])
             if not ok:
-                # ci 对 lock/package.json 不一致会失败 → 回退 npm install
                 print("⏳ npm ci 失败，回退 npm install…")
                 ok, tail = _run_npm(["install"])
             if not ok:
