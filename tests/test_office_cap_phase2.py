@@ -151,3 +151,25 @@ def test_html_render_produces_png(tmp_path):
     r = dc.html_render(html=html, output=out, width=640, height=360)
     assert r.startswith("已渲染"), r
     assert os.path.exists(out) and os.path.getsize(out) > 0
+
+
+def test_html_to_ppt_makes_full_bleed_slides(tmp_path):
+    """html_to_ppt：多段 HTML 设计 → 每页全幅图的整份 PPT（HTML 专业排版闭环）。"""
+    pytest = __import__("pytest")
+    try:
+        import playwright  # noqa: F401
+    except Exception:
+        pytest.skip("未安装 playwright")
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    page1 = "<div style='width:100vw;height:100vh;background:#0B3D63;color:#fff'>封面</div>"
+    page2 = "<div style='width:100vw;height:100vh;background:#fff;color:#123'>内容</div>"
+    out = str(tmp_path / "h.pptx")
+    r = dc.html_to_ppt(path=out, pages=[page1, page2], width=640, height=360, scale=1)
+    assert r.startswith("已生成"), r
+    prs = Presentation(out)
+    slides = list(prs.slides)
+    assert len(slides) == 2, "两页 HTML 应生成两页"
+    for s in slides:
+        pics = [sh for sh in s.shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE]
+        assert pics, "每页应有全幅图"

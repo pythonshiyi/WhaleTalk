@@ -3135,6 +3135,45 @@ def _html_render_lock():
     return _HTML_RENDER_LOCK
 
 
+def _html_to_png(content, out_path, w, h, sc, full_page):
+    """渲染 HTML 字符串到 PNG（共用内核，html_render/html_to_ppt 复用）。
+    自动补全 HTML、data URI 注入、优先系统 Edge channel。成功返回 None，失败返回错误串。"""
+    try:
+        html_doc = str(content or "")
+        if not html_doc.strip():
+            return "HTML 内容为空"
+        if not html_doc.lstrip().lower().startswith("<!doctype") and not html_doc.lstrip().lower().startswith("<html"):
+            html_doc = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
+                        "<style>html,body{margin:0;padding:0}*{box-sizing:border-box}</style></head>"
+                        f"<body>{html_doc}</body></html>")
+        import base64
+        data_uri = "data:text/html;base64," + base64.b64encode(html_doc.encode("utf-8")).decode("ascii")
+        from playwright.sync_api import sync_playwright
+        with _html_render_lock():
+            with sync_playwright() as p:
+                browser = None
+                try:
+                    try:
+                        browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
+                    except Exception:
+                        browser = p.chromium.launch(args=["--no-sandbox"])
+                    pg = browser.new_page(viewport={"width": int(w) * int(sc), "height": int(h) * int(sc)},
+                                          device_scale_factor=int(sc))
+                    pg.goto(data_uri, wait_until="load")
+                    pg.wait_for_timeout(350)
+                    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+                    pg.screenshot(path=out_path, full_page=bool(full_page))
+                finally:
+                    if browser is not None:
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
+        return None
+    except Exception as e:
+        return f"HTML 渲染失败: {e}（需已装 playwright，可用 pip_install playwright；系统有 Edge 最佳）"
+
+
 @tool(
         {
             "type": "function",
@@ -3197,39 +3236,91 @@ def html_render(html="", source_path="", output="", width=1280, height=720,
         w = int(width) or 1280
         h = int(height) or 720
         sc = max(1, min(int(scale or 1), 3))
-        # 补全 HTML
-        if not content.lstrip().lower().startswith("<!doctype") and not content.lstrip().lower().startswith("<html"):
-            content = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
-                       "<style>html,body{margin:0;padding:0}*{box-sizing:border-box}</style></head>"
-                       f"<body>{content}</body></html>")
-        import base64
-        data_uri = "data:text/html;base64," + base64.b64encode(content.encode("utf-8")).decode("ascii")
-        from playwright.sync_api import sync_playwright
-        with _html_render_lock():
-            with sync_playwright() as p:
-                browser = None
-                try:
-                    try:
-                        browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
-                    except Exception:
-                        browser = p.chromium.launch(args=["--no-sandbox"])
-                    pg = browser.new_page(viewport={"width": w * sc, "height": h * sc},
-                                          device_scale_factor=sc)
-                    pg.goto(data_uri, wait_until="load")
-                    pg.wait_for_timeout(350)  # 等字体/图片
-                    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-                    pg.screenshot(path=out, full_page=bool(full_page))
-                finally:
-                    if browser is not None:
-                        try:
-                            browser.close()
-                        except Exception:
-                            pass
+        err = _html_to_png(content, out, w, h, sc, bool(full_page))
+        if err:
+            return "错误：" + err
         size = os.path.getsize(out)
         permissions.audit("html_render", out, f"{size} 字节")
         return f"已渲染 HTML 为 {out}（{w}x{h}{'×'+str(sc) if sc>1 else ''}，{size/1024:.0f} KB）"
     except Exception as e:
-        return f"错误：HTML 渲染失败: {e}（需已安装 playwright，可用 pip_install playwright + playwright install chromium；或系统装有 Edge）"
+        return f"错误：HTML 渲染失败: {e}（需已安装 playwright，可用 pip_install playwright；或系统装有 Edge）"
 
 
-__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'secret_store', 'kv_store', 'create_doc']
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "html_to_ppt",
+                "description": "把若干段 HTML/CSS 设计稿渲染成一份整页 .pptx（HTML→整份 PPT 闭环）：每段 HTML 渲染成 16:9 高清 PNG，各占一整页，无页边距。AI 可用擅长的 HTML/CSS 设计整套演示页再转 PPT，实现真正专业排版。CSS 支持 flex/grid/渐变/圆角/中文字体",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "输出 .pptx 绝对路径（须在允许目录内）"},
+                        "pages": {"type": "array", "items": {"type": "string"}, "description": "每段为一页的 HTML/CSS（body 片段或完整 <html>）。顺序=页序"},
+                        "width": {"type": "integer", "description": "可选：渲染视口宽 px（默认 1280）"},
+                        "height": {"type": "integer", "description": "可选：渲染视口高 px（默认 720，16:9）"},
+                        "scale": {"type": "integer", "description": "可选：超采样 1-3（默认 2，更清晰）"},
+                    },
+                    "required": ["path", "pages"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='HTML 生成 PPT',
+    preactivate=(('写', '保存', '创建', '生成'),),
+)
+def html_to_ppt(path, pages, width=1280, height=720, scale=2):
+    """把多段 HTML 渲染成整页 PPT（每段一页全幅，无默认模板感，AI 用 HTML 设计专业版式）。"""
+    if not str(path or "").strip():
+        return "错误：path 必填"
+    if not isinstance(pages, list) or not pages or not any(str(p).strip() for p in pages):
+        return "错误：pages 必须是 HTML 字符串的非空数组（每项一页）"
+    p = permissions.resolve(path)
+    if not p:
+        return "错误：输出路径无效"
+    if not p.lower().endswith(".pptx"):
+        p += ".pptx"
+    ok, reason = permissions.check_filesystem(p, write=True)
+    if not ok:
+        return reason
+    try:
+        from pptx import Presentation
+        from pptx.util import Inches as _In
+        w = int(width) or 1280
+        h = int(height) or 720
+        sc = max(1, min(int(scale or 1), 3))
+        cache_dir = os.path.join(os.path.dirname(p) or ".", ".wt_htmlppt")
+        os.makedirs(cache_dir, exist_ok=True)
+        prs = Presentation()
+        prs.slide_width = _In(13.333)
+        prs.slide_height = _In(7.5)
+        added = 0
+        for idx, page_html in enumerate(pages, 1):
+            html_s = str(page_html or "").strip()
+            if not html_s:
+                continue
+            png_path = os.path.join(cache_dir, f"slide_{idx:02d}.png")
+            err = _html_to_png(html_s, png_path, w, h, sc, False)
+            if err:
+                return f"错误：第{idx}页 HTML 渲染失败: {err}"
+            if not os.path.isfile(png_path):
+                return f"错误：第{idx}页未生成图片"
+            slide = prs.slides.add_slide(prs.slide_layouts[6])  # 空白版式
+            slide.shapes.add_picture(png_path, _In(0), _In(0), width=_In(13.333), height=_In(7.5))
+            added += 1
+        if added == 0:
+            return "错误：无有效页面"
+        prs.save(p)
+        size = os.path.getsize(p)
+        permissions.audit("html_to_ppt", p, f"{added} 页 {size} 字节")
+        import shutil
+        try:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+        except Exception:
+            pass
+        return f"已生成 PPT: {p}（{added} 页全幅 HTML 渲染，{size/1024:.1f} KB）"
+    except Exception as e:
+        return f"错误：PPT 生成失败: {e}"
+
+
+__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'html_to_ppt', 'secret_store', 'kv_store', 'create_doc']

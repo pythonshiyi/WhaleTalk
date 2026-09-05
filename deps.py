@@ -67,6 +67,7 @@ AUTO_INSTALL_DEPS = [
     ("numpy", "numpy", "数值计算 / 语音分析"),
     ("pymysql", "pymysql", "MySQL 数据库"),
     ("psycopg2", "psycopg2-binary", "PostgreSQL 数据库"),
+    ("playwright", "playwright", "浏览器渲染 / HTML 转图"),  # html_render/web_screenshot 依赖；chromium 内核另按需装
 ]
 
 # ── 重型 / 需系统组件：可选安装（首启弹窗勾选，用户取舍）──────────────────

@@ -1,4 +1,4 @@
-# ── 鲸语 WhaleTalk 核心依赖（31 项，与 deps.py AUTO_INSTALL_DEPS 保持一致）──
+# ── 鲸语 WhaleTalk 核心依赖（32 项，与 deps.py AUTO_INSTALL_DEPS 保持一致）──
 # 首次启动自动安装全部核心组件；大型可选能力（浏览器自动化/语音转写/Piper 语音/二维码识别/RAR）
 # 不在此清单，进入程序后在「设置 → 🔌 可选能力」按需一键安装。
 
@@ -62,9 +62,11 @@ PyMySQL>=1.1.0
 psycopg2-binary>=2.9.0
 # 鲸语大脑免密加密快照
 cryptography>=42.0
+# 浏览器渲染 / HTML 转图（html_render 用系统 Edge 渲染，chromium 内核按需另装）
+playwright>=1.40.0
 
 # ── 大型可选能力（不随核心自动安装，进程序后到「设置 → 可选能力」一键装）──
-# 浏览器自动化：playwright + playwright install chromium（约 150MB）
+# 浏览器内核：playwright install chromium（约 150MB；html_render 走系统 Edge 则无需）
 # 本地语音转写：faster-whisper（模型约 300MB）
 # Piper 本地离线语音：piper-tts[zh] g2pW sentence_stream unicode_rbnf（模型约 220MB）
 # 二维码识别：pyzbar（另需系统 zbar 库）

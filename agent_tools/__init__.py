@@ -169,4 +169,5 @@ __all__ = [
     'kv_store',
     'create_doc',
     'html_render',
+    'html_to_ppt',
 ]
