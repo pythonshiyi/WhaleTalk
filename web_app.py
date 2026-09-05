@@ -393,9 +393,10 @@ def _run_npm(args, timeout=900):
         return False, str(e)
 
 
-def _run_npm_stream(args, on_line, timeout=1200):
+def _run_npm_stream(args, on_line, timeout=1200, on_idle=None):
     """流式执行 npm（供进度窗显示实时输出）。on_line(line) 接收每行文本。
-    返回 (ok, 尾部 2000 字符)。"""
+    返回 (ok, 尾部 2000 字符)。on_idle(seconds) 可选：无输出超过 ~4s 时周期性回调，
+    供 UI 刷新"仍在进行/已等待 N 秒"，避免下载阶段看似卡死。"""
     npm = "npm.cmd" if os.name == "nt" else "npm"
     kwargs = {}
     if os.name == "nt":
@@ -411,8 +412,10 @@ def _run_npm_stream(args, on_line, timeout=1200):
     except Exception as e:
         return False, str(e)
     import threading as _th
-    timer = [time.time()]
-    deadline = timer[0] + timeout
+    start = time.time()
+    deadline = start + timeout
+    last_out = [start]
+    elapsed = [0.0]
 
     def _reader():
         for line in p.stdout:
@@ -422,17 +425,29 @@ def _run_npm_stream(args, on_line, timeout=1200):
             tail_buf.append(line)
             if len(tail_buf) > 200:
                 tail_buf.pop(0)
+            last_out[0] = time.time()
+            elapsed[0] = 0.0  # 有真实输出则重置空闲计时
             try:
                 on_line(line)
             except Exception:
                 pass
-            timer[0] = time.time()
     _th.Thread(target=_reader, daemon=True).start()
+    # 空闲心跳：即使 npm 静默（网络下载）也让 UI 有动静
+    idle_step = 5.0
+    next_idle = start + idle_step
     while p.poll() is None:
-        if time.time() > deadline:
+        now = time.time()
+        if now > deadline:
             p.kill()
             return False, f"npm {' '.join(args)} 超时（{timeout}s）"
-        time.sleep(0.1)
+        if on_idle is not None and now >= next_idle:
+            elapsed[0] += idle_step
+            next_idle = now + idle_step
+            try:
+                on_idle(int(now - start))
+            except Exception:
+                pass
+        time.sleep(0.2)
     try:
         p.wait(timeout=5)
     except Exception:
@@ -480,17 +495,46 @@ def _setup_progress_window(title, subtitle, run_steps):
 
     q = _queue.Queue()
     result = {"ok": None}
+    # 落盘 install.log：卡住/异常时可查真实卡点（进度条不动 ≠ 程序无响应）
+    logf = None
+    try:
+        lp = os.path.join(WEBUI_DIR, "install.log")
+        logf = open(lp, "a", encoding="utf-8")
+    except Exception:
+        logf = None
+
+    def _write(txt):
+        if logf:
+            try:
+                logf.write(txt + "\n")
+                logf.flush()
+            except Exception:
+                pass
 
     def worker():
+        _write("=== WebUI 准备开始 ===")
+        # idle: npm 静默超 5s → 刷新阶段文案为"仍在进行/已等待 Ns"（防"看似卡死"）
+        def _idle(secs):
+            cur = stage.get()
+            q.put(("idle", f"{cur}（仍在进行，已等待 {secs}s）"))
         try:
             result["ok"] = bool(run_steps(
-                lambda s: q.put(("stage", s)),
-                lambda l: q.put(("log", l)),
+                lambda s: (q.put(("stage", s)), _write("[阶段] " + s)),
+                lambda l: (q.put(("log", l)), _write(l)),
+                _idle,
             ))
         except Exception as e:
+            import traceback as _tb
             result["ok"] = False
             q.put(("log", f"[错误] {e}"))
+            _write("[异常]\n" + _tb.format_exc())
         finally:
+            _write(f"=== WebUI 准备结束：{'成功' if result['ok'] else '失败'} ===")
+            if logf:
+                try:
+                    logf.close()
+                except Exception:
+                    pass
             q.put(("done", None))
 
     _th.Thread(target=worker, daemon=True).start()
@@ -505,6 +549,9 @@ def _setup_progress_window(title, subtitle, run_steps):
                     log.insert("end", f"\n── {payload}\n")
                     log.configure(state="disabled")
                     log.see("end")
+                elif kind == "idle":
+                    # npm 静默中：仅刷新阶段文案（"仍在进行，已等待 Ns"），不刷日志防刷屏
+                    stage.set(payload)
                 elif kind == "log":
                     log.configure(state="normal")
                     log.insert("end", payload + "\n")
@@ -517,7 +564,7 @@ def _setup_progress_window(title, subtitle, run_steps):
                         tip.set("即将自动打开主界面")
                         root.after(1200, root.destroy)
                     else:
-                        stage.set("⚠ 准备未完成（详见上方日志）")
+                        stage.set("⚠ 准备未完成（详见上方日志与 install.log）")
                         tip.set("可关闭本窗口后查看详情，或检查网络后重试")
                         root.after(6000, root.destroy)
                     return
@@ -530,11 +577,14 @@ def _setup_progress_window(title, subtitle, run_steps):
     return result["ok"]
 
 
-def _webui_install_steps(on_stage, on_log):
-    """首次 WebUI 准备的工作线程主体：装依赖 + 构建。返回 (ok, tail)。"""
+def _webui_install_steps(on_stage, on_log, on_idle=None):
+    """首次 WebUI 准备的工作线程主体：装依赖 + 构建。返回 (ok, tail)。
+
+    on_idle(seconds)：npm 静默（网络下载中）超 5s 时回调，供窗口把阶段标题刷新成
+    "仍在进行 / 已等待 Ns"，避免用户误以为卡死。"""
     def npm_stream(args, stage):
         on_stage(stage)
-        return _run_npm_stream(args, on_log)
+        return _run_npm_stream(args, on_log, on_idle=on_idle)
     if _webui_deps_stale():
         if os.path.isfile(os.path.join(WEBUI_DIR, "package-lock.json")):
             ok, tail = npm_stream(["ci"], "正在下载前端依赖（npm ci）…")
@@ -548,7 +598,7 @@ def _webui_install_steps(on_stage, on_log):
             on_stage("❌ 依赖安装失败")
             return False
     on_stage("正在编译前端界面（npm run build）…")
-    ok, tail = _run_npm_stream(["run", "build"], on_log)
+    ok, tail = _run_npm_stream(["run", "build"], on_log, on_idle=on_idle)
     return ok
 
 
