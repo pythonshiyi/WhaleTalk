@@ -1158,4 +1158,97 @@ def environment_info():
     return "\n".join(lines)
 
 
-__all__ = ['read_file', 'write_file', 'edit_file', 'list_dir', 'search_local', 'clipboard_get', 'clipboard_set', 'delete_file', 'archive_files', 'extract_archive', 'list_snapshots', 'restore_snapshot', 'batch_rename', 'start_process', 'stop_process', 'list_processes', 'environment_info']
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "find_images",
+                "description": "在素材目录中检索本地图片素材（做 PPT/文档时替代占位符）：按文件名关键词、扩展名、最小尺寸筛选，返回候选路径+宽高+大小。便于你从用户本地图库挑选真实素材",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "dir": {"type": "string", "description": "起始目录（须在允许目录内）"},
+                        "keyword": {"type": "string", "description": "可选：文件名/路径包含关键词（如 挂号、缴费、案例），支持多个空格分隔=任一命中"},
+                        "ext": {"type": "array", "items": {"type": "string"}, "description": "可选：扩展名（默认 png/jpg/jpeg/webp）"},
+                        "limit": {"type": "integer", "description": "可选：最多返回条数（默认 30，上限 100）"},
+                        "recurse": {"type": "boolean", "description": "可选：是否递归子目录（默认 true，注意 E:/主图 等可能很深，限制条数）"},
+                        "min_width": {"type": "integer", "description": "可选：最小宽 px（过滤太小的图标/缩略图）"},
+                        "min_height": {"type": "integer", "description": "可选：最小高 px"},
+                    },
+                    "required": ["dir"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='找素材图',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
+)
+def find_images(dir, keyword="", ext=None, limit=30, recurse=True,
+                min_width=0, min_height=0):
+    """检索本地图片素材候选（路径/尺寸），供选真实图替代占位。"""
+    if not str(dir or "").strip():
+        return "错误：dir 必填"
+    ok, reason = permissions.check_filesystem(dir, write=False)
+    if not ok:
+        return reason
+    p = permissions.resolve(dir)
+    if not p or not os.path.isdir(p):
+        return f"错误：目录不存在：{dir}"
+    try:
+        limit = clamp_int(limit, 30, lo=1, hi=100)
+    except Exception:
+        limit = 30
+    exts = {("." + str(x).lstrip(".").lower()) for x in (ext or ["png", "jpg", "jpeg", "webp"])}
+    kw_parts = [k for k in str(keyword or "").lower().split() if k.strip()]
+    results = []
+
+    def _walk(base):
+        try:
+            entries = sorted(os.scandir(base), key=lambda e: e.name)
+        except Exception:
+            return
+        for e in entries:
+            if len(results) >= limit:
+                return
+            try:
+                if e.is_dir():
+                    if recurse:
+                        _walk(e.path)
+                else:
+                    fn = e.name
+                    ext_l = os.path.splitext(fn)[1].lower()
+                    if ext_l not in exts:
+                        continue
+                    if kw_parts and not any(k in (base + "\\" + fn).lower() for k in kw_parts):
+                        continue
+                    results.append(e.path)
+            except OSError:
+                continue
+    _walk(p)
+    # 逐条读尺寸（Pillow 惰性）；失败或过小过滤
+    out = []
+    for fp in results[:limit]:
+        try:
+            from PIL import Image
+            with Image.open(fp) as im:
+                w, h = im.size
+        except Exception:
+            continue
+        if min_width and w < int(min_width):
+            continue
+        if min_height and h < int(min_height):
+            continue
+        try:
+            sz = os.path.getsize(fp)
+        except OSError:
+            sz = 0
+        out.append(f"{fp}  [{w}x{h}, {sz/1024:.0f}KB]")
+        if len(out) >= limit:
+            break
+    if not out:
+        return f"未在 {p} 找到匹配图片（keyword={keyword or '任意'}）"
+    note = f"（递归）" if recurse else ""
+    return f"在 {p}{note} 找到 {len(out)} 张候选：\n" + "\n".join(out)
+
+
+__all__ = ['read_file', 'write_file', 'edit_file', 'list_dir', 'search_local', 'find_images', 'clipboard_get', 'clipboard_set', 'delete_file', 'archive_files', 'extract_archive', 'list_snapshots', 'restore_snapshot', 'batch_rename', 'start_process', 'stop_process', 'list_processes', 'environment_info']

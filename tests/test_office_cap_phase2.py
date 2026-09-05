@@ -173,3 +173,18 @@ def test_html_to_ppt_makes_full_bleed_slides(tmp_path):
     for s in slides:
         pics = [sh for sh in s.shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE]
         assert pics, "每页应有全幅图"
+
+
+def test_find_images_search_local_assets(tmp_path):
+    """find_images：按关键词/尺寸从本地素材目录检索图片（替代占位选真实图）。"""
+    from PIL import Image
+    mat = tmp_path / "素材"; (mat / "案例").mkdir(parents=True)
+    Image.new("RGB", (400, 300), (200, 30, 30)).save(str(mat / "挂号机_a.jpg"))
+    Image.new("RGB", (2048, 1536), (10, 120, 90)).save(str(mat / "挂号机_高清.png"))
+    Image.new("RGB", (40, 40), (0, 0, 200)).save(str(mat / "icon.png"))
+    Image.new("RGB", (1024, 768), (30, 80, 140)).save(str(mat / "案例" / "医院_现场.jpg"))
+    r = dc.find_images(str(mat), keyword="挂号", min_width=300)
+    assert "挂号机_高清" in r and "2048x1536" in r, r
+    assert "icon" not in r, "过小图应被 min_width 过滤"
+    r2 = dc.find_images(str(mat), keyword="医院")
+    assert "医院_现场" in r2, "应递归命中子目录"

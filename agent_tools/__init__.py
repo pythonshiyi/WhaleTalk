@@ -80,6 +80,7 @@ __all__ = [
     'write_file',
     'edit_file',
     'list_dir',
+    'find_images',
     'search_local',
     'clipboard_get',
     'clipboard_set',

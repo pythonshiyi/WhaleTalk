@@ -3068,7 +3068,7 @@ _TOOL_ORDER = [
     'get_date', 'ask_user', 'request_permission', 'write_memory', 'self_profile', 'read_memory', 'delete_memory', 'update_memory',
     'query_memory_graph', 'get_weather', 'run_python', 'read_file', 'fetch_url', 'fetch_blocked', 'search_web', 'search_github',
     'search_realtime', 'call_api', 'get_status', 'git', 'project_map', 'find_symbol', 'run_lint', 'verify_project',
-    'project_scaffold', 'dev_plan', 'database_query', 'send_email', 'pip_install', 'write_file', 'edit_file', 'list_dir',
+    'project_scaffold', 'dev_plan', 'database_query', 'send_email', 'pip_install', 'write_file', 'edit_file', 'list_dir', 'find_images',
     'watch_files', 'track_web', 'recall_session', 'run_command', 'search_local', 'code_lookup', 'create_doc', 'write_code_project',
     'rpa_screen_size', 'rpa_click', 'rpa_type', 'rpa_hotkey', 'rpa_move', 'rpa_scroll', 'rpa_screenshot', 'browser_navigate',
     'web_screenshot', 'publish_draft', 'send_webhook', 'im_send', 'telegram_poll_updates', 'download_file', 'epub_read', 'mobi_read',
