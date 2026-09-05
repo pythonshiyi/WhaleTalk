@@ -1802,39 +1802,79 @@ def _friendly_error(e):
     return s
 
 
+def _dc_wiring_table():
+    """dc（deepseek_client）运行时装配表：(属性名, 期望值)。
+
+    单一事实来源：注入与核对都基于本表。deepseek_client 对这些符号的默认值为
+    None（标注「由 api_server 注入」），注入前存在性检查可捕获「dc 侧删名/改名」
+    一类重构事故（否则 setattr 会静默新建属性、工具拿 None 静默失效）。
+    """
+    return (
+        ("MEMORY_FILE", MEMORY_PATH),
+        ("SELF_PROFILE_FILE", os.path.join(DATA_DIR, "self_profile.json")),
+        ("SESSIONS_DIR", SESSIONS_DIR),
+        ("WATCH_STATE_PATH", os.path.join(DATA_DIR, "watch_state.json")),
+        ("WEBHOOK_CONFIG_FILE", os.path.join(DATA_DIR, "webhooks.json")),
+        ("IM_CONFIG_FILE", os.path.join(DATA_DIR, "im_config.json")),
+        ("DB_CONFIG_FILE", os.path.join(DATA_DIR, "db_config.json")),
+        ("EMAIL_CONFIG_FILE", os.path.join(DATA_DIR, "email_config.json")),
+        ("SECRETS_FILE", os.path.join(DATA_DIR, "secrets.json")),
+        ("BROWSER_PROFILE_DIR", os.path.join(DATA_DIR, "browser_profile")),
+        ("SCHEDULES_FILE", SCHEDULES_PATH),
+        ("KNOWLEDGE_INDEX_FILE", os.path.join(DATA_DIR, "knowledge_index.json")),
+        ("WORKFLOWS_FILE", WORKFLOWS_PATH),
+        ("CHECKPOINT_FILE", CHECKPOINT_PATH),
+        ("STATS_FILE", STATS_PATH),
+        ("PATTERNS_FILE", PATTERNS_PATH),
+        ("RSS_SOURCES_FILE", os.path.join(DATA_DIR, "rss_sources.json")),
+        ("KV_CACHE_DIR", os.path.join(DATA_DIR, "kv_cache")),
+        ("WEBDAV_CONFIG_FILE", os.path.join(DATA_DIR, "webdav_config.json")),
+    )
+
+
 def _init_dc_paths():
     """注入外部配置文件路径与全局（完整对齐旧 main.py 启动注入）。
 
     v3.0 重构删除 main.py 后，这里成为唯一的应用接线点。凡是漏接的全局，
     对应工具都会静默失效（如 MEMORY_FILE 未接 → AI 任务中存不下长期记忆）。
+
+    P2 加固（必须失败/可降级显式区分）：
+    - 装配符号缺失/核对不一致 = 必须失败（RuntimeError）：否则相关工具静默拿 None，
+      运行期才暴露、且难以定位——远不如启动即报错；
+    - config 同步的运行态开关（图像/视觉自审/静默启动/邮件等）= 可降级：同步失败时
+      该能力退默认值并记录明确日志，不阻塞启动。
     """
     import deepseek_client as dc
     import config_utils
     import profiles as profiles_mod
     profiles_mod.DEFAULT_PROFILES_PATH = os.path.join(DATA_DIR, "profiles.json")
-    dc.MEMORY_FILE = MEMORY_PATH
-    dc.SELF_PROFILE_FILE = os.path.join(DATA_DIR, "self_profile.json")
-    dc.SESSIONS_DIR = SESSIONS_DIR
-    dc.WATCH_STATE_PATH = os.path.join(DATA_DIR, "watch_state.json")
-    dc.WEBHOOK_CONFIG_FILE = os.path.join(DATA_DIR, "webhooks.json")
-    dc.IM_CONFIG_FILE = os.path.join(DATA_DIR, "im_config.json")
-    dc.DB_CONFIG_FILE = os.path.join(DATA_DIR, "db_config.json")
-    dc.EMAIL_CONFIG_FILE = os.path.join(DATA_DIR, "email_config.json")
-    # ↓ v3.1.2 补齐的断链接线（对齐旧 main.py 注入清单）↓
-    dc.SECRETS_FILE = os.path.join(DATA_DIR, "secrets.json")
-    dc.BROWSER_PROFILE_DIR = os.path.join(DATA_DIR, "browser_profile")
-    dc.SCHEDULES_FILE = SCHEDULES_PATH
-    dc.KNOWLEDGE_INDEX_FILE = os.path.join(DATA_DIR, "knowledge_index.json")
-    dc.WORKFLOWS_FILE = WORKFLOWS_PATH
-    dc.CHECKPOINT_FILE = CHECKPOINT_PATH
-    dc.STATS_FILE = STATS_PATH
-    dc.PATTERNS_FILE = PATTERNS_PATH
-    dc.RSS_SOURCES_FILE = os.path.join(DATA_DIR, "rss_sources.json")
-    dc.KV_CACHE_DIR = os.path.join(DATA_DIR, "kv_cache")
-    dc.WEBDAV_CONFIG_FILE = os.path.join(DATA_DIR, "webdav_config.json")
+
+    wiring = _dc_wiring_table()
+    # 注入前存在性检查（必须失败，列出全部缺失项而非第一个）
+    missing = [attr for attr, _ in wiring if not hasattr(dc, attr)]
+    if missing:
+        raise RuntimeError(
+            "dc 装配目标符号缺失（相关工具将静默失效，拒绝带病启动）："
+            + ", ".join(missing)
+        )
+    for attr, value in wiring:
+        setattr(dc, attr, value)
     dc.PLUGIN_PATHS = _plugin_paths()
     dc.BUILD_SITUATION = build_situation  # 态势快照单一事实源（get_status 工具与前端 /v1/situation 共用）
     os.environ.setdefault("WHALETALK_DATA_DIR", DATA_DIR)  # 应用型插件数据目录（flybot.db 等）
+
+    # 注入后逐项核对（捕获全局被并发改写/深拷贝异常等）；非路径符号仅做存在性确认
+    mism = [
+        f"{attr}={getattr(dc, attr)!r}" for attr, value in wiring
+        if getattr(dc, attr) != value
+    ]
+    if mism:
+        raise RuntimeError("dc 装配核对不一致：\n- " + "\n- ".join(mism))
+    for attr in ("PLUGIN_PATHS", "BUILD_SITUATION"):
+        if getattr(dc, attr, None) is None:
+            raise RuntimeError(f"dc 装配后仍为 None：{attr}")
+
+    # ── 以下为 config 同步（可降级）：失败仅影响对应能力，不阻塞启动 ──
     try:
         cfg = config_utils.load_config()
         dc.IMAGE_GEN_KEY = str(cfg.get("image_api_key") or "").strip() or str(cfg.get("api_key") or "").strip()
@@ -1851,7 +1891,10 @@ def _init_dc_paths():
         if active_dir and os.path.isdir(active_dir):
             dc.WORKING_DIR = active_dir
     except Exception:
-        logger.exception("_init_dc_paths 配置同步部分失败（不影响启动）")
+        logger.exception(
+            "_init_dc_paths 配置同步失败（可降级）：图像生成/视觉自审/静默启动/邮件等"
+            "运行时开关保持默认值，对应能力可能不符合配置预期"
+        )
     # B1/B2：给 memory_store 注入统一读取层所需路径（memory.json / knowledge_index / 大脑目录）
     try:
         import memory_store as ms
@@ -1865,7 +1908,7 @@ def _init_dc_paths():
                      brain_dir=_brain_dir)
         ms.invalidate_cache()
     except Exception:
-        logger.exception("memory_store 路径注入失败（不影响启动）")
+        logger.exception("memory_store 路径注入失败（可降级）：记忆统一读取层不可用，工具将回退各自独立实现")
 
 
 def _record_failure(name, result):
@@ -4680,6 +4723,56 @@ def _match_post_route(path):
     return _match_routes(path, _POST_ROUTES)
 
 
+# ── 依赖安装共享逻辑（P1 去重：/v1/deps/install 与 /v1/deps/install_many 共用）────
+def _find_install_dep(key):
+    """按 import 名/能力名匹配依赖条目（重型优先，其次自动安装清单）。
+
+    AUTO_INSTALL_DEPS 三元组 (导入名, pip 包名, 显示名) 补齐为与 HEAVY_DEPS 一致的
+    dict 形态，消除两端点各自的重复查找。未命中返回 None。
+    """
+    try:
+        import deps as _deps_mod
+    except Exception:
+        return None
+    for d in _deps_mod.HEAVY_DEPS:
+        if str(key) in (d.get("import"), d.get("label")):
+            return d
+    for imp, pkg, label in _deps_mod.AUTO_INSTALL_DEPS:
+        if str(key) in (imp, label):
+            return {"import": imp, "label": label, "pip": pkg, "post_cmd": None, "note": ""}
+    return None
+
+
+def _install_dep_direct(dep, on_line=None):
+    """安装单个依赖：pip 安装（清华源）+ 装后动作。
+
+    Piper 能力装完后自动下载中文语音模型（约 220MB，含 g2pW 音素模型，
+    官方源超时自动回退国内镜像）——此前该分支在单装/批量两端点各复制一份。
+    返回 bool。事件外壳（start/done 或 item_start/item_done）由调用端点负责。
+    """
+    ok = True
+    try:
+        import deps as _deps_mod
+        ok = _deps_mod.install_optional(dep, on_line=on_line)
+    except Exception as e:  # noqa: BLE001
+        if on_line:
+            on_line(f"[{dep.get('label') or dep.get('import')}] 安装异常: {e}")
+        ok = False
+    if ok and dep.get("import") == "piper":
+        if on_line:
+            on_line("Piper 依赖就绪，正在下载中文语音模型（约 220MB，含 g2pW 音素模型）…")
+        try:
+            ok_v, msg_v = _piper_download("zh_CN-chaowen-medium")
+            if on_line:
+                on_line(msg_v)
+            ok = ok and ok_v
+        except Exception as e:  # noqa: BLE001
+            if on_line:
+                on_line(f"模型下载异常：{e}")
+            ok = False
+    return ok
+
+
 # P2-2：GET 端点路由表（装饰器注册，端点方法就近声明；由 @_get_route 动态填充）。
 # do_GET 原先 46 分支 if/elif 链迁移而来——表顺序即匹配优先级，语义与旧链一致。
 _GET_ROUTES = []  # (matcher, method_name)，顺序即匹配优先级（类定义时由 @_get_route 填充）
@@ -5543,7 +5636,6 @@ class _Handler(BaseHTTPRequestHandler):
         key = str((body or {}).get("key") or "")
         # 流式安装：NDJSON 逐行推送进度（前端实时显示安装日志）
         try:
-            import deps as deps_mod
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
@@ -5558,31 +5650,14 @@ class _Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-            dep = None
-            for d in deps_mod.HEAVY_DEPS:
-                if key in (d.get("import"), d.get("label")):
-                    dep = d
-                    break
-            if dep is None:
-                for imp, pkg, label in deps_mod.AUTO_INSTALL_DEPS:
-                    if key in (imp, label):
-                        dep = {"import": imp, "label": label, "pip": pkg, "post_cmd": None, "note": ""}
-                        break
+            dep = _find_install_dep(key)
             if dep is None:
                 emit({"type": "error", "message": f"未找到依赖：{key}"})
             else:
                 emit({"type": "start", "label": dep["label"]})
-                ok = deps_mod.install_optional(dep, on_line=lambda s: emit({"type": "line", "message": s}))
-                # Piper 可选能力：依赖装完后自动下载中文语音模型 + g2pW（免折腾，镜像回退）
-                if ok and dep.get("import") == "piper":
-                    emit({"type": "line", "message": "Piper 依赖就绪，正在下载中文语音模型（约 220MB，含 g2pW 音素模型）…"})
-                    try:
-                        ok_v, msg_v = _piper_download("zh_CN-chaowen-medium")
-                        emit({"type": "line", "message": msg_v})
-                        ok = ok and ok_v
-                    except Exception as e:  # noqa: BLE001
-                        emit({"type": "line", "message": f"模型下载异常：{e}"})
-                        ok = False
+                ok = _install_dep_direct(
+                    dep, on_line=lambda s: emit({"type": "line", "message": s})
+                )
                 emit({"type": "done", "ok": ok, "label": dep["label"]})
         except Exception as e:  # noqa: BLE001
             try:
@@ -5607,7 +5682,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "keys 必须是非空数组"})
             return
         try:
-            import deps as deps_mod
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
@@ -5625,31 +5699,15 @@ class _Handler(BaseHTTPRequestHandler):
             emit({"type": "batch_start", "total": len(keys)})
             failed = []
             for i, key in enumerate(keys, 1):
-                dep = None
-                for d in deps_mod.HEAVY_DEPS:
-                    if str(key) in (d.get("import"), d.get("label")):
-                        dep = d
-                        break
-                if dep is None:
-                    for imp, pkg, label in deps_mod.AUTO_INSTALL_DEPS:
-                        if str(key) in (imp, label):
-                            dep = {"import": imp, "label": label, "pip": pkg, "post_cmd": None, "note": ""}
-                            break
+                dep = _find_install_dep(key)
                 if dep is None:
                     emit({"type": "item_done", "ok": False, "index": i, "label": str(key), "key": str(key), "message": f"未找到依赖：{key}"})
                     failed.append(str(key))
                     continue
                 emit({"type": "item_start", "index": i, "label": dep["label"]})
-                ok = deps_mod.install_optional(dep, on_line=lambda s: emit({"type": "line", "message": s}))
-                if ok and dep.get("import") == "piper":
-                    emit({"type": "line", "message": "Piper 依赖就绪，正在下载中文语音模型（约 220MB，含 g2pW 音素模型）…"})
-                    try:
-                        ok_v, msg_v = _piper_download("zh_CN-chaowen-medium")
-                        emit({"type": "line", "message": msg_v})
-                        ok = ok and ok_v
-                    except Exception as e:  # noqa: BLE001
-                        emit({"type": "line", "message": f"模型下载异常：{e}"})
-                        ok = False
+                ok = _install_dep_direct(
+                    dep, on_line=lambda s: emit({"type": "line", "message": s})
+                )
                 if not ok:
                     failed.append(dep["label"])
                 emit({"type": "item_done", "ok": ok, "index": i, "label": dep["label"], "key": dep["import"]})
@@ -6820,30 +6878,46 @@ class _Handler(BaseHTTPRequestHandler):
             send("error", {"message": _friendly_error(e)})
         self._sse_end()
 def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
-    """启动本地 API 服务。token 为空时自动生成。返回 (port, token, error)。"""
+    """启动本地 API 服务。token 为空时自动生成。返回 (port, token, error)。
+
+    初始化错误分级（P2）：
+    - 必须失败：dc 运行时装配（_init_dc_paths）——装配缺失/不一致会让一批工具
+      静默失效，启动即报错远比运行期"工具莫名坏掉"好定位；
+    - 可降级：旧会话迁移 / 进程看门狗 / 入站 webhook / IM 轮询 / 权限与快照 /
+      workflow 发送通道——失败仅损失对应外围能力，记录明确影响后继续启动。
+    """
     global _SERVER, _THREAD, _TOKEN, _TOOLS_PROVIDER, _CHAT_PROVIDER, _PORT, _SCHEDULER_THREAD
     if _SERVER is not None:
         return _PORT, _TOKEN, None
     import secrets
-    _init_dc_paths()
+    # ── 必须失败：dc 运行时装配（自检清单见 _init_dc_paths）──
+    try:
+        _init_dc_paths()
+    except Exception as e:
+        logger.error("dc 运行时装配失败，拒绝启动：%s", e)
+        return None, "", f"dc 运行时装配失败: {e}"
+    # ── 可降级：外围能力逐项初始化，失败只损失对应能力 ──
     try:
         n = _migrate_legacy_sessions()
         if n:
             logger.info("已迁移 %s 个旧版会话到会话库", n)
     except Exception:
-        logger.exception("旧会话迁移失败（不影响启动）")
+        logger.warning("旧会话迁移失败（可降级）：旧版会话暂不可见，不影响新会话")
     if _SCHEDULER_THREAD is None:
         _SCHEDULER_THREAD = threading.Thread(target=_scheduler_loop, daemon=True)
         _SCHEDULER_THREAD.start()
-    _start_process_watchdog()
+    try:
+        _start_process_watchdog()
+    except Exception:
+        logger.warning("进程看门狗启动失败（可降级）：AI 启动的空闲进程将不被自动清理")
     try:
         _start_inbound()
     except Exception:
-        logger.exception("Webhook 接收端启动失败")
+        logger.warning("Webhook 接收端启动失败（可降级）：webhook 回调查收不可用")
     try:
         _start_im()
     except Exception:
-        logger.exception("IM 通道启动失败")
+        logger.warning("IM 通道启动失败（可降级）：IM 远程指令不可用")
     try:
         import permissions as perms
         perms.init(
@@ -6853,12 +6927,12 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
         )
         perms.set_full_auto(bool(_cu_load("full_auto")))
     except Exception:
-        logger.exception("权限模块初始化失败")
+        logger.warning("权限模块初始化失败（可降级，回落内置安全默认）：以黑名单默认权限运行")
     try:
         import snapshot as snapshot_mod
         snapshot_mod.init(os.path.join(DATA_DIR, "undo"))
     except Exception:
-        logger.exception("快照模块初始化失败（写操作将不带自动快照）")
+        logger.warning("快照模块初始化失败（可降级）：写操作将不带自动快照，误操作无法一键恢复")
     # run_workflow 的消息投递通道：Web 版无「投递输入框」，走无头后台执行
     def _send_to_headless(text):
         try:
@@ -6870,7 +6944,7 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
         import deepseek_client as _dcw
         _dcw.set_send_callback(_send_to_headless)
     except Exception:
-        logger.exception("workflow 发送通道接线失败")
+        logger.warning("workflow 发送通道接线失败（可降级）：run_workflow 投递不可用")
     token = (token or "").strip() or ("wt_" + secrets.token_hex(16))
     _TOKEN = token
     _TOOLS_PROVIDER = tools_provider
@@ -6889,6 +6963,12 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
 
 def stop_server():
     global _SERVER, _THREAD
+    # 工具留痕队列排空（异步写缓冲落盘，优雅退出不丢尾部日志）
+    try:
+        import permissions as _perms_flush
+        _perms_flush.tool_trace_flush()
+    except Exception:
+        pass
     # 大脑收尾钩子：服务停止前写一次心跳断点（会话生命周期与大脑对齐，
     # 下次启动 brain_context 可带回「上次思考断点」）
     try:

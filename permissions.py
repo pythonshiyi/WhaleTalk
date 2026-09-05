@@ -11,6 +11,7 @@
 import json
 import logging
 import os
+import queue
 import shlex
 import threading
 from datetime import datetime
@@ -593,6 +594,141 @@ def audit(action, target, detail="", result="ok"):
 _SENSITIVE_ARG_KEYS = ("password", "token", "secret", "key", "api_key", "apikey", "auth", "cookie", "value")
 
 
+# ── 工具留痕异步写入（P2：不在工具调用线程同步写盘）───────────────────
+# 高频工具循环（100 轮 × 每轮并行多工具）下，每工具一次 open/append/close 会把
+# 磁盘 I/O 压在调用线程上；改为有界队列 + 后台工作线程批量 drain 聚合写，
+# 调用线程只做格式化与 put_nowait（非阻塞，命中上限丢弃而非阻塞/堆积）。
+# 文件轮转（>10MB → .1）只发生在 worker 线程内，单写者天然无竞态。
+# actions.log（低频 audit()）保持同步写，保证 /v1/audit 等按需读取端点的即时性。
+_TRACE_QUEUE_MAX = 4096          # 有界队列上限：病理循环下丢弃而非吃掉内存
+_TRACE_ROTATE_BYTES = 10 * 1024 * 1024
+_TRACE_QUEUE = queue.Queue(maxsize=_TRACE_QUEUE_MAX)
+_TRACE_DROPPED = {"n": 0}
+_TRACE_WORKER = None
+_TRACE_WORKER_LOCK = threading.Lock()
+
+
+class _FlushMarker:
+    """flush 哨兵：worker 处理到它时，其之前入队的行已全部落盘并置位事件。"""
+
+    __slots__ = ("event",)
+
+    def __init__(self):
+        self.event = threading.Event()
+
+
+def _trace_drain_batch():
+    """取空当前队列：返回 (待写行, 顺带取到的 flush 哨兵)。
+
+    哨兵绝不在此置位——其语义是「排在我之前的行全部落盘」后才可返回，
+    drain 阶段置位会让 tool_trace_flush() 在本批真正写盘前虚假返回。
+    置位统一推迟到 worker 写完本批之后（见 _trace_worker）。
+    """
+    batch = []
+    markers = []
+    while True:
+        try:
+            nxt = _TRACE_QUEUE.get_nowait()
+        except queue.Empty:
+            return batch, markers
+        if isinstance(nxt, _FlushMarker):
+            markers.append(nxt)
+        else:
+            batch.append(nxt)
+
+
+def _trace_fire_markers(markers):
+    """批量置位 flush 哨兵事件（仅供 worker 在批写盘完成后调用）。"""
+    for m in markers:
+        m.event.set()
+
+
+def _trace_write_dir(batch, last_dir):
+    """解析当前 AUDIT_LOG_DIR 并写一批；目录变化时重建。返回最新 last_dir。"""
+    log_dir = AUDIT_LOG_DIR
+    if log_dir != last_dir:
+        try:
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+        except Exception:
+            log_dir = None
+        last_dir = log_dir
+    if log_dir and batch:
+        _trace_write_batch(log_dir, batch)
+    return last_dir
+
+
+def _trace_worker():
+    """后台写线程：聚合 drain 队列后一次性 append（减少 syscall），随后轮转检查。
+
+    每批读取当前 AUDIT_LOG_DIR（不固化启动时目录）——init 可能换目录（测试/重配），
+    始终写到「此刻生效」的日志目录。flush 哨兵：先落盘本批，再置位其事件
+    （保证 flush 返回时，排在其前的行已全部落盘）。
+    """
+    last_dir = None
+    while True:
+        try:
+            item = _TRACE_QUEUE.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        if item is None:  # 保留：None 为硬停止哨兵（当前未用，预留）
+            break
+        if isinstance(item, _FlushMarker):
+            # 到哨兵时，其前序行已在上几轮写完；再顺带清空其后积压，随后置位
+            batch, markers = _trace_drain_batch()
+            last_dir = _trace_write_dir(batch, last_dir)
+            _trace_fire_markers(markers)
+            item.event.set()
+            continue
+        batch, markers = _trace_drain_batch()
+        batch.insert(0, item)
+        last_dir = _trace_write_dir(batch, last_dir)
+        _trace_fire_markers(markers)
+
+
+def _trace_write_batch(log_dir, lines):
+    path = os.path.join(log_dir, "tools.log")
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.writelines(lines)
+        try:
+            if os.path.getsize(path) > _TRACE_ROTATE_BYTES:
+                os.replace(path, path + ".1")
+        except OSError:
+            pass
+    except Exception:
+        logging.exception("工具留痕异步写入失败")
+
+
+def _ensure_trace_worker():
+    global _TRACE_WORKER
+    if _TRACE_WORKER is not None and _TRACE_WORKER.is_alive():
+        return
+    with _TRACE_WORKER_LOCK:
+        if _TRACE_WORKER is not None and _TRACE_WORKER.is_alive():
+            return
+        _TRACE_WORKER = threading.Thread(
+            target=_trace_worker, name="wt-tools-log", daemon=True
+        )
+        _TRACE_WORKER.start()
+
+
+def tool_trace_flush(timeout=5.0):
+    """排空待写留痕（服务停止 / 需要读取 logs/tools.log 前调用）。
+
+    无工作线程或队列满等异常下静默返回（留痕属旁路，不允许影响主流程）。
+    """
+    worker = _TRACE_WORKER
+    if worker is None or not worker.is_alive():
+        return
+    try:
+        marker = _FlushMarker()
+        _TRACE_QUEUE.put(marker)
+        marker.event.wait(timeout)
+    except Exception:
+        pass
+
+
 def _arg_summary(args, limit=120):
     """工具参数摘要：只保留非敏感键值 + 打码敏感键，单行截断。"""
     if not isinstance(args, dict):
@@ -612,23 +748,25 @@ def _arg_summary(args, limit=120):
 
 def tool_trace(name, args, result, duration):
     """统一工具调用留痕（D2）：读/写/查一律记录——输入摘要 + 输出截断 + 耗时。
-    补齐 fetch_url/search_web 等读操作此前零留痕的排障盲区。"""
+    补齐 fetch_url/search_web 等读操作此前零留痕的排障盲区。
+    P2：只格式化 + 入队（非阻塞），实际写盘交给后台工作线程批量聚合。"""
     if not AUDIT_ENABLED or not AUDIT_LOG_DIR:
         return
     try:
-        os.makedirs(AUDIT_LOG_DIR, exist_ok=True)
         res = _audit_sanitize(result, 200)
         line = (
             f"{datetime.now():%Y-%m-%d %H:%M:%S} [tool:{_audit_sanitize(name, 40)}] "
             f"{_arg_summary(args)} | {res} | {duration:.2f}s\n"
         )
-        path = os.path.join(AUDIT_LOG_DIR, "tools.log")
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line)
         try:
-            if os.path.getsize(path) > 10 * 1024 * 1024:
-                os.replace(path, path + ".1")
-        except OSError:
-            pass
+            _ensure_trace_worker()
+            _TRACE_QUEUE.put_nowait(line)
+        except queue.Full:
+            # 队列满：丢弃并计数（低频告警），绝不让留痕拖慢或阻塞工具调用
+            _TRACE_DROPPED["n"] += 1
+            n = _TRACE_DROPPED["n"]
+            if n <= 3 or n % 1000 == 0:
+                logging.warning("工具留痕队列已满，丢弃日志（累计 %s 条）", n)
     except Exception:
-        logging.exception("工具留痕写入失败")
+        # 格式化异常属旁路：静默丢弃（写 debug 而非 logging.exception 避免二次 IO）
+        logging.debug("工具留痕格式化失败", exc_info=True)

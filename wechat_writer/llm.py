@@ -25,17 +25,42 @@ def _find_whaletalk_config():
 
 
 def _decrypt(token):
-    """DPAPI 解密（密文前缀 dpapi:）；无前缀按明文返回。解密失败返回空（防密文当明文）。"""
-    try:
-        import crypto
-        return crypto.decrypt(token)
-    except Exception:
-        return token
+    """DPAPI 解密：复用主程序 crypto.decrypt（单一实现，杜绝重复基建漂移）。
+
+    语义与主程序一致：无 'dpapi:' 前缀按旧明文原样返回；解密失败返回空串
+    （宁缺毋滥——绝不把密文当明文 key 用）。
+    """
+    import crypto  # noqa: WPS433 - 延迟导入：独立运行（无主程序依赖）时也不拖累
+
+    return crypto.decrypt(token)
 
 
 def load_api_config(config_path=None):
-    """返回 {"api_key", "base_url", "model"}。未配置时返回 api_key 空串（调用方报错）。"""
+    """返回 {"api_key", "base_url", "model"}。未配置时返回 api_key 空串（调用方报错）。
+
+    读取链（P1 去重，与主程序配置读取对齐）：
+      1) 应用内统一通道：优先复用 config_utils.load_config——默认值合并、字段钳制、
+         DPAPI 解密、进程内缓存全部与鲸语主程序同源，保证工具调用与主程序读到
+         完全一致的配置（含 DEFAULT_CONFIG_PATH 解析）；
+      2) 直读兼容：config_utils 不可用（独立运行缺主程序依赖）或读不到 key 时，
+         仅做 JSON 读取 + crypto 解密，保留大写键兼容（外部自定义配置）；
+      3) 环境变量兜底：DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_MODEL。
+    """
     path = config_path or _find_whaletalk_config()
+    # 1) 应用内统一通道
+    try:
+        import config_utils
+        full = config_utils.load_config(config_path=path) if path else {}
+        api_key = str(full.get("api_key") or "").strip()
+        if api_key:
+            return {
+                "api_key": api_key,
+                "base_url": str(full.get("base_url") or "https://api.deepseek.com").strip(),
+                "model": str(full.get("model") or "deepseek-v4-flash").strip(),
+            }
+    except Exception:
+        logger.exception("经 config_utils 读取鲸语配置失败，回退直读文件")
+    # 2) 直读兼容（独立运行降级）
     if path:
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -43,9 +68,14 @@ def load_api_config(config_path=None):
             api_key = str(cfg.get("api_key") or cfg.get("API_KEY") or "").strip()
             base_url = str(cfg.get("base_url") or cfg.get("BASE_URL") or "https://api.deepseek.com").strip()
             model = str(cfg.get("model") or cfg.get("MODEL") or "deepseek-v4-flash").strip()
-            return {"api_key": _decrypt(api_key), "base_url": base_url, "model": model or "deepseek-v4-flash"}
+            return {
+                "api_key": _decrypt(api_key),
+                "base_url": base_url,
+                "model": model or "deepseek-v4-flash",
+            }
         except Exception:
             logger.exception("读取鲸语配置失败，回退环境变量")
+    # 3) 环境变量兜底（独立运行）
     return {
         "api_key": os.environ.get("DEEPSEEK_API_KEY", "").strip(),
         "base_url": os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip(),

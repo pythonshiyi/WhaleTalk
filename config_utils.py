@@ -3,10 +3,16 @@
 
 从 main.py 中拆出，集中处理 config.json 的读取、默认值合并、字段钳制与
 敏感字段 DPAPI 加解密。
+
+v3.8.5 性能优化：load_config 加「mtime+size 签名」进程内缓存——
+对话/态势等高频路径不再每次读盘 + 3 次 DPAPI 解密 + 全量规范化；
+save_config 落盘后显式失效缓存（写路径唯一，磁盘直改也由签名变化兜底）。
 """
+import copy
 import json
 import logging
 import os
+import threading
 
 import crypto
 import deepseek_client as _dc
@@ -28,6 +34,54 @@ from user_tools import load_user_tools
 logger = logging.getLogger("whaletalk.config_utils")
 
 DEFAULT_CONFIG_PATH = None
+
+# ── 配置进程内缓存 ──────────────────────────────────────
+# 键 = 配置文件绝对路径；值 = (stat 签名, 规范化+解密后的 dict)。
+# 每次 load 仅 stat（廉价）：签名命中则返回深拷贝，跳过读盘 + DPAPI 解密 + 规范化。
+# save_config 是唯一的本进程写入口，落盘后主动失效；外部进程直改文件由签名变化兜底。
+_CONFIG_CACHE_LOCK = threading.Lock()
+_CONFIG_CACHE = {}  # type: dict[str, tuple]
+
+
+def _config_sig(path):
+    """文件 stat 签名（mtime_ns + size）；不存在返回 None。"""
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _config_cache_get(key, sig):
+    with _CONFIG_CACHE_LOCK:
+        hit = _CONFIG_CACHE.get(key)
+        if hit is not None and hit[0] == sig:
+            return copy.deepcopy(hit[1])
+        return None
+
+
+def _config_cache_put(key, sig, cfg):
+    with _CONFIG_CACHE_LOCK:
+        _CONFIG_CACHE[key] = (sig, copy.deepcopy(cfg))
+
+
+def _config_cache_drop(path):
+    """保存后显式失效（path=None 时取当前默认路径）。"""
+    if path is None:
+        path = DEFAULT_CONFIG_PATH
+    if not path:
+        return
+    try:
+        key = os.path.abspath(path)
+    except (TypeError, ValueError):
+        return
+    with _CONFIG_CACHE_LOCK:
+        _CONFIG_CACHE.pop(key, None)
+
+
+def invalidate_config_cache(path=None):
+    """供外部（如配置被其它通道修改时）显式清缓存。"""
+    _config_cache_drop(path)
 
 
 def normalize_config(cfg):
@@ -182,6 +236,27 @@ def normalize_config(cfg):
 def load_config(config_path=None):
     if config_path is None:
         config_path = DEFAULT_CONFIG_PATH
+    sig = None
+    key = None
+    if config_path:
+        try:
+            key = os.path.abspath(config_path)
+        except (TypeError, ValueError):
+            key = None
+        if key is not None:
+            sig = _config_sig(config_path)
+            cached = _config_cache_get(key, sig) if sig is not None else None
+            if cached is not None:
+                return cached
+    cfg = _load_config_uncached(config_path)
+    if config_path and sig is not None:
+        # 仅缓存「文件确实存在且可 stat」的情形；文件缺失时每次 stat 后走读默认，
+        # 避免缓存「缺席」状态导致文件创建后仍读旧默认（首次启动/向导场景）。
+        _config_cache_put(key, sig, cfg)
+    return cfg
+
+
+def _load_config_uncached(config_path):
     cfg = dict(DEFAULT_CONFIG)
     if config_path and os.path.exists(config_path):
         try:
@@ -244,3 +319,9 @@ def save_config(cfg, config_path=None):
             pass
     except Exception as e:
         logger.error("保存配置失败: %s", e)
+    finally:
+        # 保存后显式失效缓存（无论成功与否都强制下次重读，杜绝陈旧视图）
+        try:
+            _config_cache_drop(config_path)
+        except Exception:
+            pass

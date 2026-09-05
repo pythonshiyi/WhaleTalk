@@ -504,8 +504,34 @@ def self_evolve(feature_name, files, project_dir=None):
 
     if compile_ok and lint_ok and smoke_ok and tests_ok:
         _git(["add", "."])
-        _git(["commit", "-m", f"self-evolve: {name}"])
-        _git(["checkout", cur])
+        commit_out, commit_code = _git(["commit", "-m", f"self-evolve: {name}"])
+        if commit_code != 0 and (
+            "user.name" in commit_out or "user.email" in commit_out
+            or "identity" in commit_out.lower() or "身份" in commit_out
+        ):
+            # 本机 git 未配置提交身份：用工具确定性身份兜底提交一次，保证「可审查分支」
+            # 始终存在（用户已在仓库/全局配置身份时仍优先用户身份）。
+            commit_out, commit_code = _git([
+                "-c", "user.name=WhaleTalk",
+                "-c", "user.email=whaletalk@local",
+                "commit", "-m", f"self-evolve: {name}",
+            ])
+        if commit_code != 0:
+            # 提交失败：回滚 + 删除分支 + 明确原因。分支头 == 原分支头（未产生提交），
+            # 内存备份写回 + checkout -f 即完整恢复生产文件——绝不留下脏状态冒充成功。
+            for rel in applied:
+                _evolve_restore_file(base, rel, orig.get(rel))
+            _git(["checkout", "-f", cur])
+            _git(["branch", "-D", branch])
+            return (
+                f"进化验证通过但分支提交失败，已回滚（生产代码保持原状）："
+                f"{commit_out[:200]}\n"
+                "提示：可配置 git 提交身份（git config --global user.name/user.email）后重试。"
+            )
+        checkout_out, checkout_code = _git(["checkout", cur])
+        if checkout_code != 0:
+            # 提交成功后工作区干净，切回理论上必成；被其它改动挡住时强制切回
+            _git(["checkout", "-f", cur])
         return (
             f"进化完成：{name}\n"
             f"分支：{branch}（已提交，可审查后合入 main）\n"
