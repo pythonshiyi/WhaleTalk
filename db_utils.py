@@ -81,13 +81,22 @@ def db_preview_sql(stmt):
 
 
 def table_to_md(rows, cell_max=TABLE_CELL_MAX):
-    """把 list[list] 转 Markdown 表格（含单元格截断与空行过滤）。"""
+    """把 list[list] 转 Markdown 表格（含单元格截断与空行过滤）。
+
+    markdown 表格以 | 定界，单元格内出现 | 会把一行切成多列、破坏结构
+    （excel/csv 单元格内容常见），故统一转义为 \\|（渲染时仍显示单 |）。
+    新增空行整行过滤：全空行（如 CSV 中间空行）不留 —— 与 docx/pptx 读取
+    （先剔除空文本段落再转表）行为对齐，避免表格中出现空行噪声。
+    """
     rows = [[str(c).strip() for c in r] for r in rows]
     rows = [[c[:cell_max] + ("…" if len(c) > cell_max else "") for c in r] for r in rows]
+    rows = [[c.replace("|", "\\|") for c in r] for r in rows]
     if not rows:
         return "（空表格）"
     width = max(len(r) for r in rows)
     rows = [r + [""] * (width - len(r)) for r in rows]
     lines = ["| " + " | ".join(rows[0]) + " |", "| " + " | ".join("---" for _ in rows[0]) + " |"]
-    lines += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+    for r in rows[1:]:
+        if any(c.strip() for c in r):
+            lines.append("| " + " | ".join(r) + " |")
     return "\n".join(lines)

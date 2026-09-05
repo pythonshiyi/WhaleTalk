@@ -36,6 +36,7 @@ from deepseek_client import (
     _table_to_md,
 )
 from db_utils import force_limit  # L3: SQL 层强制 LIMIT（防无界查询）
+from db_utils import table_to_md as _md_table  # 统一 markdown 表格渲染（含 | 转义）
 
 # L3: SQLite 只读查询语句级超时（progress handler 中断慢查询，防占住共享工具线程池）
 _SQLITE_QUERY_TIMEOUT_S = 15.0
@@ -185,13 +186,14 @@ def database_query_postgres(connection="default", sql="", max_rows=20):
             "type": "function",
             "function": {
                 "name": "read_excel",
-                "description": "读取 Excel 文件（.xlsx，openpyxl），返回表格文本",
+                "description": "读取 Excel 文件（.xlsx，openpyxl），返回 markdown 表格（首行默认作表头，has_header=false 时补占位表头）；公式列读到缓存值，若为空会给出提示",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Excel 文件绝对路径"},
                         "sheet": {"type": "string", "description": "可选：工作表名或序号（默认第一个）"},
                         "max_rows": {"type": "integer", "description": "可选：最多返回行数（默认 100）"},
+                        "has_header": {"type": "boolean", "description": "可选：首行是否为表头（默认 true；false 时补占位列名 col_1..col_n）"},
                     },
                     "required": ["path"],
                 },
@@ -201,8 +203,8 @@ def database_query_postgres(connection="default", sql="", max_rows=20):
     phrases='读 Excel',
     preactivate=(('表格', 'excel', 'csv', '报表'),),
 )
-def read_excel(path, sheet=0, max_rows=100):
-    """读取 Excel 文件（openpyxl，.xlsx）。"""
+def read_excel(path, sheet=0, max_rows=100, has_header=True):
+    """读取 Excel 文件（openpyxl，.xlsx）。返回 markdown 表格；首行默认作表头。"""
     try:
         from openpyxl import load_workbook
     except ImportError:
@@ -228,17 +230,44 @@ def read_excel(path, sheet=0, max_rows=100):
                 ws = wb[sheet]
         except KeyError:
             return f"错误：工作表不存在：{sheet}"
-        lines = []
+        grid = []
         for i, row in enumerate(ws.iter_rows(values_only=True)):
             if i >= limit:
                 break
-            cells = ["" if v is None else str(v) for v in row]
-            # 单元格截断：超长文本（minified JSON 等）撑爆上下文
-            cells = [c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "") for c in cells]
-            lines.append(" | ".join(cells))
-        if not lines:
+            grid.append([("" if v is None else v) for v in row])
+        if not grid:
             return "（空工作表）"
-        return "\n".join(lines) + (f"\n[前 {limit} 行…]" if len(lines) >= limit else "")
+        # 公式无缓存值探测：data_only=True 只能读缓存，程序新写 / 未用 Excel 打开过的
+        # 公式单元格值为 None——单独开 data_only=False 检查是否"疑似公式"（值以 = 开头）。
+        formula_hit = None
+        try:
+            if any(v is None or (isinstance(v, str) and not v) for row in grid for v in row):
+                wb_f = load_workbook(p, data_only=False)
+                ws_f = wb_f[wb_f.sheetnames[wb.sheetnames.index(ws.title)]] if ws.title in wb_f.sheetnames else wb_f.active
+                for row in ws_f.iter_rows(min_row=1, max_row=len(grid), max_col=max((len(r) for r in grid), default=1)):
+                    for cell in row:
+                        if isinstance(cell.value, str) and cell.value.lstrip().startswith("="):
+                            formula_hit = cell.coordinate
+                            break
+                    if formula_hit:
+                        break
+        except Exception:
+            pass
+        # 归一化：全为字符串/数字，交给 _md_table 统一截断 + 转义
+        body = [[("" if c is None else str(c)) for c in row] for row in grid]
+        if not bool(has_header):
+            ncols = max(len(r) for r in body) if body else 1
+            header = [f"col_{i}" for i in range(1, ncols + 1)]
+            data_rows = body
+        else:
+            header, data_rows = body[0], body[1:]
+        md = _md_table([header] + data_rows) if data_rows else _md_table([header])
+        note = ""
+        if len(grid) >= limit:
+            note += f"[前 {limit} 行…]"
+        if formula_hit is not None:
+            note += f"\n[提示: {formula_hit} 含公式，当前读到的是缓存值/为空；请先用 Excel 打开保存或指定 data_only=False]"
+        return f"{md}\n[共 {len(grid)} 行{note}]"
     except Exception as e:
         return f"错误：读取 Excel 失败: {e}"
 
@@ -529,7 +558,7 @@ def _excel_append_rows(ws, data_rows, cols):
             "type": "function",
             "function": {
                 "name": "write_excel",
-                "description": "写入/追加 Excel 文件（.xlsx）。data 传 JSON 数组（行数组或对象数组）；mode=append 追加到已有文件；sheets 传 {表名: 数据行} 一次写多表（此时 data 可传空数组）",
+                "description": "写入/追加 Excel 文件（.xlsx）。data 传 JSON 数组（行数组或对象数组）；mode=append 追加到已有文件（保留原样式/公式/其它工作表）；mode=overwrite（默认）会全量重建工作簿（仅含本次数据，原文件的其它 sheet/公式/样式不保留，已存在时自动备份 .bak）；sheets 传 {表名: 数据行} 一次写多表（此时 data 可传空数组）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -596,7 +625,13 @@ def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None):
                 total += len(rows)
             wb.save(p)
             return f"已追加 Excel 至 {p}（{total} 行，{len(plan)} 个工作表）"
-        # overwrite：多表/单表全量重写
+        # overwrite：多表/单表全量重写（新建工作簿，原文件的其它 sheet/公式/样式/图表不保留）
+        had_existing = os.path.isfile(p)
+        if had_existing:
+            try:
+                shutil.copy2(p, p + ".bak")
+            except Exception:
+                pass
         wb = Workbook()
         wb.remove(wb.active)
         total = 0
@@ -609,7 +644,12 @@ def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None):
             total += len(rows)
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
         wb.save(p)
-        return f"已写入 Excel 至 {p}（{total} 行，{len(plan)} 个工作表）"
+        warn = (
+            "（原文件已备份为 .bak；原文件的其它工作表/公式/样式/图表不保留，如需保留请改用 mode=append）"
+            if had_existing
+            else ""
+        )
+        return f"已写入 Excel 至 {p}（{total} 行，{len(plan)} 个工作表）{warn}"
     except Exception as e:
         return f"错误：写入 Excel 失败: {e}"
 
@@ -1531,7 +1571,7 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
             "type": "function",
             "function": {
                 "name": "create_doc",
-                "description": "创建文档（.md/.html 原生支持；.docx 依赖 python-docx），需 write 权限",
+                "description": "创建文档（.md/.html 原生支持；.docx 需 python-docx，仅写入纯文本段落，markdown 语法不会转为 Word 富文本）。注意：不支持 .pptx/.pdf——PPT 请用 run_python 写 python-pptx 脚本，PDF 请用 pdf_create",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1544,16 +1584,27 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
             },
         },
     groups=['📊 数据与文档'],
-    phrases='创建 Office 文档（docx/pptx/pdf）',
+    phrases='创建文档（md/html/docx）',
     preactivate=(('写', '保存', '创建', '生成'),),
 )
 def create_doc(path, content, doc_type=""):
-    """创建文档：.md/.html 原生；.docx 依赖 python-docx（缺失时返回安装指引）。"""
+    """创建文档：.md/.html 原生；.docx 依赖 python-docx（仅纯文本段落）。
+    扩展名白名单：md / html / docx，其余一律拒绝（防生成"扩展名 .pptx 内容却是 markdown"的坏文件）。"""
+    if not str(path or "").strip():
+        return "错误：path 必填"
     ok, reason = permissions.check_filesystem(path, write=True)
     if not ok:
         return reason
     p = permissions.resolve(path)
     ext = (doc_type or "").lower() or os.path.splitext(p)[1].lstrip(".").lower()
+    if ext not in ("md", "html", "htm", "docx"):
+        return (
+            f"错误：create_doc 不支持 .{ext or '(无扩展名)'} 格式。"
+            "支持 md / html / docx。若需生成 .pptx 请用 run_python 编写 python-pptx 脚本，"
+            "若需生成 PDF 请使用 pdf_create 工具。"
+        )
+    if ext == "htm":
+        ext = "html"
     try:
         if ext == "docx":
             try:
@@ -1572,8 +1623,6 @@ def create_doc(path, content, doc_type=""):
                     pass
             doc.save(p)
         else:
-            if ext != "html":
-                ext = "md"
             body = content or ""
             if ext == "html" and not body.lstrip().startswith("<"):
                 body = (
