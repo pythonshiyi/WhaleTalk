@@ -3073,14 +3073,14 @@ _TOOL_ORDER = [
     'rpa_screen_size', 'rpa_click', 'rpa_type', 'rpa_hotkey', 'rpa_move', 'rpa_scroll', 'rpa_screenshot', 'browser_navigate',
     'web_screenshot', 'publish_draft', 'send_webhook', 'im_send', 'telegram_poll_updates', 'download_file', 'epub_read', 'mobi_read',
     'doc_read', 'msg_read', 'archive_list', 'tts_save', 'image_process', 'ocr_image', 'read_csv', 'write_csv',
-    'read_excel', 'write_excel', 'chart_data', 'database_query_mysql', 'database_query_postgres', 'subagent_run', 'run_tests', 'verify_output',
+    'read_excel', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query_mysql', 'database_query_postgres', 'subagent_run', 'run_tests', 'verify_output',
     'start_process', 'stop_process', 'list_processes', 'environment_info', 'project_info', 'read_project_file', 'create_evolution', 'self_evolve',
     'verify_files', 'schedule_task', 'list_schedules', 'cancel_schedule', 'notify_desktop', 'clipboard_get', 'clipboard_set', 'delete_file',
     'archive_files', 'extract_archive', 'list_snapshots', 'restore_snapshot', 'batch_rename', 'image_understand', 'screen_see', 'chart_read',
     'screenshot_to_html', 'debug_screenshot', 'scan_read', 'image_batch', 'screen_capture', 'speech_to_text', 'tts_speak', 'tts_stop',
     'app_manage', 'screen_find_click', 'vision_loop', 'voice_chat_loop', 'team_run', 'net_diagnose', 'fetch_url_smart', 'knowledge_index',
     'knowledge_search', 'database_execute', 'read_email', 'email_summary', 'agent_mail', 'task_checkpoint_save', 'task_checkpoint_load', 'run_workflow',
-    'image_generate', 'usage_report', 'pdf_extract', 'pdf_create', 'docx_read', 'pptx_read', 'pptx_create', 'rss_fetch', 'qrcode',
+    'image_generate', 'usage_report', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'rss_fetch', 'qrcode',
     'secret_store', 'kv_store', 'media_ffmpeg', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_plugin',
 ]
 

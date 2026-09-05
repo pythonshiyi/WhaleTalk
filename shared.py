@@ -507,10 +507,18 @@ $toast = New-Object Windows.UI.Notifications.ToastNotification $template
 # 新增工具域阈值常量请添加在此处，勿回写主文件。
 
 # ===== 文档处理域：PDF 提取 / PDF 生成 / Word 读取 / PPT 读取（可选依赖模式）=====
+# S14：Office 读出工具统一长度上限族。目标：长文档/大表一次性灌入上下文前先截断，
+# 由各工具在返回末尾追加 "[已截断前 N 字符/行]" 提示，保证 AI 不会被单文件撑爆。
 
 PDF_EXTRACT_MAX_OUTPUT = 60000   # pdf_extract 单次输出上限（防撑爆上下文）
 
-DOCX_MAX_DEFAULT = 50000         # docx_read 默认输出上限
+DOCX_MAX_DEFAULT = 50000         # docx_read 默认输出上限（clamp 200..500000）
+
+PPTX_MAX_DEFAULT = 50000         # pptx_read 默认输出上限（S14 补齐：此前无全局上限）
+PPTX_MAX_PAGE_BODY = 40          # pptx_read 每页正文行数上限
+PPTX_MAX_NOTES = 500             # pptx_read 每页备注字符上限
+
+TABLE_READ_MAX_ROWS = 500        # read_excel/read_csv 行数上限（clamp_int hi）
 
 # ===== 嵌入式 KV 存储（diskcache 可选依赖；支持 TTL 与模糊检索）=====
 

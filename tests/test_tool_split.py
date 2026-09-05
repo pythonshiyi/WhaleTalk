@@ -198,8 +198,8 @@ def test_all_split_tools_module_ownership():
 
 def test_all_split_tools_in_all_six_layers():
     names = [t["function"]["name"] for t in dc.TOOLS]
-    assert len(names) == 136, "工具总数应为 136（新增 pptx_create），实际 %d" % len(names)
-    assert len(dc._TOOL_ORDER) == 136, "顺序表必须与工具数一致"
+    assert len(names) == 138, "工具总数应为 138（+pptx_create/docx_edit/xlsx_edit），实际 %d" % len(names)
+    assert len(dc._TOOL_ORDER) == 138, "顺序表必须与工具数一致"
     assert set(dc.TOOL_CALL_MAP) == set(dc._TOOL_ORDER), "CALL_MAP 键与 ORDER 必须一一对应"
     for n in _uniq(ALL_SPLIT_TOOLS):
         assert n in names, "%s 必须仍在 TOOLS 列表" % n

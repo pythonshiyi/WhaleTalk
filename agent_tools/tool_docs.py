@@ -13,7 +13,7 @@ import subprocess
 
 import permissions
 
-from shared import clamp_int, PDF_EXTRACT_MAX_OUTPUT, DOCX_MAX_DEFAULT, KV_VALUE_MAX_BYTES  # D4: 参数校验辅助
+from shared import clamp_int, PDF_EXTRACT_MAX_OUTPUT, DOCX_MAX_DEFAULT, PPTX_MAX_DEFAULT, KV_VALUE_MAX_BYTES  # D4: 参数校验辅助
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
@@ -558,15 +558,20 @@ def _excel_append_rows(ws, data_rows, cols):
             "type": "function",
             "function": {
                 "name": "write_excel",
-                "description": "写入/追加 Excel 文件（.xlsx）。data 传 JSON 数组（行数组或对象数组）；mode=append 追加到已有文件（保留原样式/公式/其它工作表）；mode=overwrite（默认）会全量重建工作簿（仅含本次数据，原文件的其它 sheet/公式/样式不保留，已存在时自动备份 .bak）；sheets 传 {表名: 数据行} 一次写多表（此时 data 可传空数组）",
+                "description": "写入 Excel（.xlsx）。mode=overwrite 覆盖(默认，备份.bak)、append 追加到已有文件末尾、update 覆盖指定 sheet 首块区域(保留其它单元格/格式)。data=行数组或对象数组；sheets={表名:数据行} 多表。可选 header/start_cell/style/charts（见参数）。数值类型保留",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "输出文件绝对路径"},
                         "data": {"type": "array", "items": {}, "description": "数据行（sheets 提供时可传 []）"},
                         "sheet": {"type": "string", "description": "可选：工作表名（默认 Sheet1）"},
-                        "mode": {"type": "string", "description": "可选：overwrite 覆盖（默认）/ append 追加到已有文件"},
-                        "sheets": {"type": "object", "description": "可选：{表名: 数据行} 多表一次写入，与 data 二选一"},
+                        "mode": {"type": "string", "description": "可选：overwrite 覆盖（默认）/ append 追加到已有文件末尾 / update 覆盖指定 sheet 的起始区域（保留其余单元格与格式）"},
+                        "sheets": {"type": "object", "description": "可选：{表名: 数据行} 多表，与 data 二选一"},
+                        "header": {"type": "boolean", "description": "可选：是否写入表头行（默认自动：dict 数据写键名；数组数据不写，可用 headers 指定）"},
+                        "headers": {"type": "array", "items": {"type": "string"}, "description": "可选：表头数组（数组数据且 header=true 时写第一行）"},
+                        "start_cell": {"type": "string", "description": "可选：起始单元格（如 A1/B2），从该处写入（覆盖/update 用）；默认从 A1 顺序写"},
+                        "style": {"type": ["boolean", "object"], "description": "可选：true=表头加粗+蓝底+冻结首行+自动筛选+自适应列宽；或 {bold_header,fill,freeze,autofilter,autofit,fill_color} 细调"},
+                        "charts": {"type": "array", "items": {}, "description": "可选：在数据旁内嵌原生图表，每项 {type:bar/line/pie, title, categories(类目数组或列引用), values(数值数组/列引用), series_name}"},
                     },
                     "required": ["path", "data"],
                 },
@@ -576,24 +581,36 @@ def _excel_append_rows(ws, data_rows, cols):
     phrases='写 Excel',
     preactivate=(('表格', 'excel', 'csv', '报表'),),
 )
-def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None):
-    """写入或追加 Excel 文件（.xlsx）。data 为 JSON 数组（行数组或对象数组）；
-    mode=append 追加到已有文件；sheets 为 {表名: 数据行} 一次写多表。"""
+def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None,
+                header=None, headers=None, start_cell="", style=None, charts=None):
+    """写入 Excel（.xlsx）：overwrite / append / update；支持表头/样式/起始格/原生图表。"""
     try:
         from openpyxl import Workbook, load_workbook
+        from openpyxl.utils.cell import coordinate_from_string, column_index_from_string
     except ImportError:
         return "错误：需要 openpyxl（pip install openpyxl）"
     if not path or not str(path).strip():
         return "错误：path 必填"
-    if mode not in ("overwrite", "append"):
-        return "错误：mode 仅支持 overwrite（覆盖）/ append（追加）"
+    if mode not in ("overwrite", "append", "update"):
+        return "错误：mode 仅支持 overwrite（覆盖）/ append（追加）/ update（更新指定区域）"
     p = permissions.resolve(path)
     if not p:
         return "错误：路径无效"
     ok, reason = permissions.check_filesystem(p, write=True)
     if not ok:
         return reason
-    # 归一化写入计划：sheets（多表）优先；否则 data+sheet 单表
+    # 起始格解析（A1 / B2 / C3 等）
+    start_r = 1
+    start_c = 1
+    if str(start_cell or "").strip():
+        try:
+            sc = str(start_cell).strip().upper()
+            col_let, row_num = coordinate_from_string(sc)
+            start_c = column_index_from_string(col_let)
+            start_r = int(row_num)
+        except Exception:
+            return f"错误：start_cell 格式无效：{start_cell}（应如 A1 / B2）"
+    # 归一化写入计划
     if sheets is not None:
         if not isinstance(sheets, dict) or not sheets:
             return "错误：sheets 必须是 {表名: 数据行} 的非空对象"
@@ -606,52 +623,327 @@ def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None):
             return "错误：data 必须是非空数组"
         plan = {str(sheet or "Sheet1")[:31]: data}
     try:
-        if mode == "append":
+        if mode == "update":
             if not os.path.isfile(p):
-                return f"错误：追加模式要求文件已存在：{p}"
+                return f"错误：update 模式要求文件已存在：{p}"
             wb = load_workbook(p)
-            total = 0
-            for sname, rows in plan.items():
-                if sname in wb.sheetnames:
-                    ws = wb[sname]
-                    add_header = False  # 已有表直接追加数据，不重复写表头
-                else:
-                    ws = wb.create_sheet(sname)
-                    add_header = True
-                cols = _excel_rows_columns(rows)
-                if add_header and cols is not None:
-                    ws.append(cols)
-                _excel_append_rows(ws, rows, cols)
-                total += len(rows)
-            wb.save(p)
-            return f"已追加 Excel 至 {p}（{total} 行，{len(plan)} 个工作表）"
-        # overwrite：多表/单表全量重写（新建工作簿，原文件的其它 sheet/公式/样式/图表不保留）
-        had_existing = os.path.isfile(p)
-        if had_existing:
-            try:
-                shutil.copy2(p, p + ".bak")
-            except Exception:
-                pass
-        wb = Workbook()
-        wb.remove(wb.active)
+        elif mode == "append":
+            if not os.path.isfile(p):
+                return f"错误：append 模式要求文件已存在：{p}"
+            wb = load_workbook(p)
+        else:  # overwrite
+            had_existing = os.path.isfile(p)
+            if had_existing:
+                try:
+                    shutil.copy2(p, p + ".bak")
+                except Exception:
+                    pass
+            wb = Workbook()
+            wb.remove(wb.active)
         total = 0
+        header_written_rows = []  # (ws, header_row) for style
         for sname, rows in plan.items():
-            ws = wb.create_sheet(sname)
-            cols = _excel_rows_columns(rows)
+            if sname in wb.sheetnames:
+                ws = wb[sname]
+                ws_existed = True
+            elif mode in ("append", "update") and sname == "Sheet1" and wb.sheetnames and wb.sheetnames == ["Sheet"]:
+                # 兼容：默认表名 Sheet1 与 openpyxl 默认活动表 "Sheet" 不一致。
+                # append/update 到既有文件且目标恰好是默认名、文件只有一张默认 "Sheet" 时，
+                # 落到该活动表（不新建同名空表，避免写进一张用户看不见的 Sheet1）。
+                ws = wb[wb.sheetnames[0]]
+                ws_existed = True
+            else:
+                ws = wb.create_sheet(sname)
+                ws_existed = False
+            cols = _excel_rows_columns(rows)  # dict 数据 → 键名；数组数据 → None
+            if cols is None and headers:
+                cols = [str(h) for h in headers]
+            # 表头开关：显式 header 优先；否则仅对"本调用新建的表"自动写表头
+            write_header = bool(header) if header is not None else (cols is not None and not ws_existed)
+            # 起始行定位
+            if mode == "append" and ws_existed:
+                # 已有表：追加到内容末尾（不重写表头）
+                write_header = False
+                cur_r = (ws.max_row or 0) + 1
+                if cur_r < 1:
+                    cur_r = 1
+            elif mode == "append" and not ws_existed:
+                cur_r = 1  # 新建表从 A1 起，含表头
+            elif mode == "update":
+                # 覆盖指定起始区域（默认 A1），保留该区域外其它单元格
+                write_header = bool(header)  # update 只在显式要求时才写表头，避免覆盖既有表头
+                cur_r = start_r
+            else:  # overwrite
+                cur_r = start_r
+            if write_header and cols:
+                for j, colname in enumerate(cols):
+                    ws.cell(row=cur_r, column=start_c + j, value=colname)
+                header_written_rows.append((ws, cur_r))
+                cur_r += 1
+            # 写数据（dict 行按 cols 取字段，缺键补空；数组行保留类型与位置）
             if cols is not None:
-                ws.append(cols)
-            _excel_append_rows(ws, rows, cols)
+                for row in rows:
+                    vals = [row.get(c, "") for c in cols] if isinstance(row, dict) else [""] * len(cols)
+                    for j, v in enumerate(vals):
+                        ws.cell(row=cur_r, column=start_c + j, value=v)
+                    cur_r += 1
+            else:
+                for row in rows:
+                    seq = list(row) if isinstance(row, (list, tuple)) else [row]
+                    for j, v in enumerate(seq):
+                        ws.cell(row=cur_r, column=start_c + j, value=v)
+                    cur_r += 1
             total += len(rows)
+            # 记录本表实表头行（供样式阶段用），并记录列数
+            last_written = (ws, cur_r)
+        # 统一应用样式（表头加粗/冻结/筛选/列宽），取各表实际写入的头行
+        if style:
+            for _sname, _rows in plan.items():
+                _ws2 = wb[_sname]
+                _ncol = max((len(r) for r in _rows), default=0)
+                # 找本表是否写了表头
+                _hrow = None
+                for _wi, _hr in header_written_rows:
+                    if _wi is _ws2:
+                        _hrow = _hr
+                        break
+                _excel_apply_style(_ws2, header_row=_hrow,
+                                   ncols=_ncol or (_ws2.max_column or 1),
+                                   style_spec=style)
+        # 原生图表
+        if charts:
+            for cspec in (charts if isinstance(charts, list) else [charts]):
+                _excel_embed_chart(wb, cspec)
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
         wb.save(p)
+        if mode == "append":
+            return f"已追加 Excel 至 {p}（{total} 行，{len(plan)} 个工作表）"
+        if mode == "update":
+            return f"已更新 Excel {p}（{total} 行写入，保留其余单元格与格式）"
         warn = (
-            "（原文件已备份为 .bak；原文件的其它工作表/公式/样式/图表不保留，如需保留请改用 mode=append）"
+            "（原文件已备份为 .bak；原文件的其它工作表/公式/样式/图表不保留，如需保留请改用 mode=append/update）"
             if had_existing
             else ""
         )
         return f"已写入 Excel 至 {p}（{total} 行，{len(plan)} 个工作表）{warn}"
     except Exception as e:
         return f"错误：写入 Excel 失败: {e}"
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "xlsx_edit",
+                "description": "就地编辑 .xlsx 指定单元格（保留其它单元格、公式、样式、其它工作表）。cells 传 {\"A1\":值,\"B2\":值,...}，值可为字符串/数字/公式字符串（以 = 开头原样写入公式）；可选 cell_type 数值/文本",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": ".xlsx 文件绝对路径"},
+                        "cells": {"type": "object", "description": "必填：{单元格坐标: 值}，如 {\"A1\":\"标题\",\"C5\":\"=SUM(C1:C4)\"}"},
+                        "sheet": {"type": "string", "description": "可选：工作表名（默认活动表）"},
+                    },
+                    "required": ["path", "cells"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='编辑 Excel 单元格',
+    preactivate=(('表格', 'excel', 'csv', '报表'),),
+)
+def xlsx_edit(path, cells, sheet=""):
+    """就地编辑 .xlsx 单元格：保留其它内容/格式。值以 = 开头按公式写入。"""
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.utils.cell import coordinate_from_string as _cfs
+    except ImportError:
+        return "错误：需要 openpyxl（pip install openpyxl）"
+    if not str(path or "").strip():
+        return "错误：path 必填"
+    if not isinstance(cells, dict) or not cells:
+        return "错误：cells 必须是 {单元格: 值} 的非空对象"
+    p = permissions.resolve(path)
+    if not p or not os.path.isfile(p):
+        return f"错误：文件不存在：{path}"
+    if not p.lower().endswith(".xlsx"):
+        return "错误：仅支持 .xlsx"
+    ok, reason = permissions.check_filesystem(p, write=True)
+    if not ok:
+        return reason
+    try:
+        try:
+            shutil.copy2(p, p + ".bak")
+        except Exception:
+            pass
+        wb = load_workbook(p)  # 默认保留公式与格式
+        if str(sheet or "").strip():
+            if sheet not in wb.sheetnames:
+                return f"错误：工作表不存在：{sheet}"
+            ws = wb[sheet]
+        else:
+            ws = wb.active
+        updated = 0
+        for coord, val in cells.items():
+            c = str(coord).strip().upper()
+            try:
+                _cfs(c)
+            except Exception:
+                return f"错误：非法单元格坐标：{coord}"
+            # 值归一化：None 清空；布尔/数字保留；以 = 开头写公式
+            if val is None:
+                ws[c] = None
+            elif isinstance(val, str) and val.lstrip().startswith("="):
+                ws[c] = val  # openpyxl 视 = 开头为公式
+            elif isinstance(val, bool):
+                ws[c] = val
+            else:
+                ws[c] = val
+            updated += 1
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        wb.save(p)
+        permissions.audit("xlsx_edit", p, f"{updated} 个单元格")
+        return f"已更新 {updated} 个单元格：{p}（保留其它内容/公式/样式，原文件备份 .bak）"
+    except Exception as e:
+        return f"错误：Excel 编辑失败: {e}"
+
+
+def _excel_apply_style(ws, header_row, ncols, style_spec):
+    """给工作表加样式：表头加粗/填色/冻结/筛选/自适应列宽。
+    style_spec=True 用默认；或 dict：{bold_header,fill,freeze,autofilter,autofit,fill_color}。"""
+    try:
+        from openpyxl.styles import Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except Exception:
+        return
+    if isinstance(style_spec, dict):
+        st = dict(style_spec)
+    else:
+        st = {}
+    fill_color = str(st.get("fill_color") or "2B4C7E").lstrip("#")
+    ncols = max(int(ncols or 0), 1)
+    if header_row is not None and st.get("bold_header", True):
+        try:
+            fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+            for j in range(1, ncols + 1):
+                c = ws.cell(row=header_row, column=j)
+                c.font = Font(bold=True, color="FFFFFF")
+                c.fill = fill
+        except Exception:
+            pass
+    if st.get("freeze", True) and header_row is not None:
+        try:
+            ws.freeze_panes = ws.cell(row=header_row + 1, column=1).coordinate
+        except Exception:
+            pass
+    if st.get("autofilter", True) and header_row is not None:
+        try:
+            last_col = get_column_letter(ncols)
+            ws.auto_filter.ref = f"A{header_row}:{last_col}{max(header_row + 1, ws.max_row or header_row + 1)}"
+        except Exception:
+            pass
+    if st.get("autofit", True):
+        try:
+            for j in range(1, ncols + 1):
+                col_letter = get_column_letter(j)
+                maxlen = 8
+                for r in range(1, min((ws.max_row or 1) + 1, 200)):
+                    v = ws.cell(row=r, column=j).value
+                    if v is not None:
+                        ln = len(str(v))
+                        if ln > maxlen:
+                            maxlen = ln
+                ws.column_dimensions[col_letter].width = min(maxlen * 1.2 + 2, 50)
+        except Exception:
+            pass
+
+
+def _excel_embed_chart(wb, cspec):
+    """在工作簿末尾追加一张带原生图表的图表面板（bar/line/pie/scatter）。
+
+    cspec：{type, title, categories:[类目], values:[数值] 或 {系列名:[数值],...}}。
+    数组先写入图表面板列，再以 Reference 建图，避免引用错位。
+    """
+    try:
+        from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+        from openpyxl.chart.series import SeriesLabel as _SL
+        from openpyxl.chart import Series as _CSeries
+    except Exception:
+        return
+    try:
+        ctype = str(cspec.get("type") or "bar").lower()
+        title = str(cspec.get("title") or "")
+        chart_sheet = wb.create_sheet(title or f"{ctype}chart")
+        cats = cspec.get("categories") or []
+        if not isinstance(cats, (list, tuple)):
+            cats = []
+        vals = cspec.get("values") or []
+        # 归一化为 {系列名: 数值列表}
+        if isinstance(vals, dict):
+            series = {str(k): v for k, v in vals.items() if isinstance(v, (list, tuple))}
+            if not cats:
+                cats = list(range(1, max((len(v) for v in series.values()), default=0) + 1))
+        elif isinstance(vals, (list, tuple)) and vals and isinstance(vals[0], dict):
+            series = {}
+            for item in vals:
+                name = str(item.get("name") or f"系列{len(series) + 1}")
+                d = item.get("data") or []
+                if isinstance(d, (list, tuple)):
+                    series[name] = d
+        else:
+            series = {"数据": list(vals) if isinstance(vals, (list, tuple)) else []}
+        if not series:
+            return
+        n = max((len(v) for v in series.values()), default=0)
+        if not cats and n:
+            cats = list(range(1, n + 1))
+        # 写入图表面板列：A=类目，B..=各系列
+        for i, c in enumerate(cats):
+            chart_sheet.cell(row=2 + i, column=1, value=c)
+        col_idx = 2
+        for sname, sdata in series.items():
+            for i, v in enumerate(sdata):
+                chart_sheet.cell(row=2 + i, column=col_idx, value=v)
+            col_idx += 1
+        # 建图
+        if ctype == "pie":
+            chart = PieChart()
+        elif ctype == "line":
+            chart = LineChart()
+        elif ctype == "scatter":
+            chart = None
+        else:
+            chart = BarChart()
+        cat_ref = Reference(chart_sheet, min_col=1, min_row=2, max_row=2 + max(n - 1, 0))
+        if ctype == "scatter":
+            from openpyxl.chart import ScatterChart as _SC
+            chart = _SC()
+            for si, (sname, sdata) in enumerate(series.items()):
+                # x 用序号列（复制到 C 之后的空列避免与类目冲突）
+                xcol = col_idx + si
+                for i in range(len(sdata)):
+                    chart_sheet.cell(row=2 + i, column=xcol, value=i + 1)
+                yref = Reference(chart_sheet, min_col=2 + si, min_row=2, max_row=2 + len(sdata) - 1)
+                xref = Reference(chart_sheet, min_col=xcol, min_row=2, max_row=2 + len(sdata) - 1)
+                s = _CSeries(yref, xvalues=xref, title=_SL(v=str(sname)))
+                chart.series.append(s)
+        else:
+            for si, (sname, sdata) in enumerate(series.items()):
+                data_ref = Reference(chart_sheet, min_col=2 + si, min_row=1, max_row=1 + max(n, 0))
+                # 系列名放第一行以便 add_data from_rows
+                chart_sheet.cell(row=1, column=2 + si, value=sname)
+            data_ref = Reference(chart_sheet, min_col=2, min_row=1, max_col=2 + len(series) - 1, max_row=1 + n)
+            chart.add_data(data_ref, titles_from_data=True)
+            if ctype != "pie":
+                chart.set_categories(cat_ref)
+        if title:
+            chart.title = title
+        chart_sheet.add_chart(chart, "E2")
+        try:
+            chart_sheet.sheet_view.showGridLines = False
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def _chart_cjk_fonts():
@@ -1208,10 +1500,40 @@ def pdf_create(content="", source_path="", output="", title=""):
                 flow.append(Paragraph(_md_inline_html(body), styles["body"]))
         if not flow:
             return "错误：内容未能解析为可排版元素"
+        # S13：页眉（文档标题）+ 页脚（页码）回调用 canvas 绘制，中文字体取已注册名
+        from reportlab.lib.pagesizes import A4 as _A4
+        from reportlab.lib.units import mm as _mm
+
+        def _footer(canv, docobj):
+            canv.saveState()
+            try:
+                canv.setFont(font, 8)
+                canv.setFillColor(colors.Color(0.45, 0.45, 0.45))
+            except Exception:
+                pass
+            # 页码：右下
+            canv.drawRightString(_A4[0] - 30, 18, f"{docobj.page}")
+            # 页眉标题：右上（仅在非首页或总是——简单起见全部页都画标题小字到左上）
+            if doc_title and docobj.page > 1:
+                try:
+                    canv.setFont(font, 8)
+                except Exception:
+                    pass
+                canv.drawString(30, _A4[1] - 24, str(doc_title)[:80])
+            # 底部分隔线
+            try:
+                canv.setStrokeColor(colors.Color(0.85, 0.85, 0.85))
+                canv.setLineWidth(0.5)
+                canv.line(30, 22, _A4[0] - 30, 22)
+            except Exception:
+                pass
+            canv.restoreState()
+
         doc = SimpleDocTemplate(out, pagesize=A4,
-                                leftMargin=54, rightMargin=54, topMargin=54, bottomMargin=54,
-                                title=doc_title)
-        doc.build(flow)
+                                leftMargin=54, rightMargin=54, topMargin=54, bottomMargin=64,
+                                title=doc_title,
+                                author="WhaleTalk")
+        doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
         size = os.path.getsize(out) if os.path.exists(out) else 0
         permissions.audit("pdf_create", out, f"{size} 字节")
         return f"已生成 PDF: {out}（{size / 1024:.1f} KB，中文字体 {'已嵌入' if font != 'Helvetica' else '未找到（可能乱码，请安装中文字体）'}）"
@@ -1265,11 +1587,17 @@ def docx_read(path, max_chars=50000):
 
         doc = Document(p)
         parts = []
+        img_count = 0
+        from docx.oxml.ns import qn as _qn
         for child in doc.element.body.iterchildren():
             tag = child.tag.split("}")[-1]
             if tag == "p":
                 para = _Para(child, doc)
                 text = para.text.strip()
+                # 统计段落内图片（w:drawing）
+                drawings = child.findall(".//" + _qn("w:drawing"))
+                if drawings:
+                    img_count += len(drawings)
                 if not text:
                     continue
                 style = str(para.style.name or "")
@@ -1296,11 +1624,118 @@ def docx_read(path, max_chars=50000):
         if not parts:
             return "（文档无可见内容）"
         result = "\n\n".join(parts)
+        if img_count:
+            result += f"\n\n[图片: 共 {img_count} 张（占位标注，未提取图片本身）]"
         if len(result) > limit:
             result = result[:limit] + f"\n[内容较长已截断前 {limit} 字符]"
         return result
     except Exception as e:
         return f"错误：Word 读取失败: {e}"
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "docx_edit",
+                "description": "就地编辑已有 .docx：action=replace 全文查找替换文本；action=insert 在含 anchor 的段落后插入新段落 text（可带 **加粗** 等行内）；action=append 在文档末尾追加段落 text。保留段落样式与其它内容",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": ".docx 文件绝对路径"},
+                        "action": {"type": "string", "description": "replace / insert / append"},
+                        "find": {"type": "string", "description": "replace 必填：要查找的文本（匹配含该文本的段落）"},
+                        "replace": {"type": "string", "description": "replace 必填：替换为的文本"},
+                        "anchor": {"type": "string", "description": "insert 必填：在其后插入的锚点文本"},
+                        "text": {"type": "string", "description": "insert/append 必填：要插入/追加的文本（支持 **加粗** 等行内语法）"},
+                    },
+                    "required": ["path", "action"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='编辑 Word',
+    preactivate=(('word', 'docx', '读word', '读取文档'),),
+)
+def docx_edit(path, action="", find="", replace="", anchor="", text=""):
+    """就地编辑 .docx：replace 查找替换 / insert 段后插入 / append 末尾追加。保留段落样式。"""
+    try:
+        from docx import Document
+    except ImportError:
+        return "未安装 python-docx，请先执行 pip_install python-docx 后重试"
+    if not str(path or "").strip():
+        return "错误：path 必填"
+    if action not in ("replace", "insert", "append"):
+        return "错误：action 仅支持 replace / insert / append"
+    p = permissions.resolve(path)
+    if not p or not os.path.isfile(p):
+        return f"错误：文件不存在：{path}"
+    if not p.lower().endswith(".docx"):
+        return "错误：仅支持 .docx"
+    ok, reason = permissions.check_filesystem(p, write=True)
+    if not ok:
+        return reason
+    try:
+        # 备份
+        try:
+            shutil.copy2(p, p + ".bak")
+        except Exception:
+            pass
+        doc = Document(p)
+        # 收集所有段落（正文 + 表格单元格），统一做替换
+        all_paras = list(doc.paragraphs)
+        for t in doc.tables:
+            for row in t.rows:
+                for cell in row.cells:
+                    all_paras.extend(cell.paragraphs)
+        if action == "replace":
+            if not str(find or "").strip() or not str(replace or "").strip():
+                return "错误：replace 需要 find 与 replace"
+            hits = 0
+            for para in all_paras:
+                full = "".join(run.text for run in para.runs)
+                if str(find) in full:
+                    new_text = full.replace(str(find), str(replace))
+                    # 清除原有 runs，重建（保留段落样式）
+                    for run in list(para.runs):
+                        run._r.getparent().remove(run._r)
+                    _md_inline_to_runs(para, new_text)
+                    hits += 1
+            if hits == 0:
+                return f"未找到包含「{find}」的段落"
+            doc.save(p)
+            permissions.audit("docx_edit", p, f"replace {hits} 处")
+            return f"已替换 {hits} 处「{find}」→「{replace}」（原文件已备份 .bak）"
+        elif action == "insert":
+            if not str(anchor or "").strip() or not str(text or "").strip():
+                return "错误：insert 需要 anchor 与 text"
+            target = None
+            for para in all_paras:
+                if str(anchor) in "".join(r.text for r in para.runs):
+                    target = para
+                    break
+            if target is None:
+                return f"未找到锚点段落（含「{anchor}」）"
+            # python-docx 无 insert_after；用 XML 在 target 之后插入克隆样式的段落
+            from docx.text.paragraph import Paragraph as _Para2
+            from docx.oxml.ns import qn as _qn2
+            new_el = target._p.makeelement(_qn2("w:p"), {})
+            target._p.addnext(new_el)
+            new_para = _Para2(new_el, doc)
+            _md_inline_to_runs(new_para, str(text))
+            doc.save(p)
+            permissions.audit("docx_edit", p, "insert after anchor")
+            return f"已在「{anchor}」段后插入段落（原文件已备份 .bak）"
+        else:  # append
+            if not str(text or "").strip():
+                return "错误：append 需要 text"
+            para = doc.add_paragraph()
+            _md_inline_to_runs(para, str(text))
+            doc.save(p)
+            permissions.audit("docx_edit", p, "append")
+            return f"已在文档末尾追加段落（原文件已备份 .bak）"
+    except Exception as e:
+        return f"错误：Word 编辑失败: {e}"
 
 
 @tool(
@@ -1396,7 +1831,11 @@ def pptx_read(path, include_notes=True):
                         out.append(f"备注: {nt[:500]}")
                 except Exception:
                     pass
-        return "\n".join(out)
+        result = "\n".join(out)
+        # S14：全局输出上限（此前 pptx_read 无总长截断，超长 PPT 会整篇灌入上下文）
+        if len(result) > PPTX_MAX_DEFAULT:
+            result = result[:PPTX_MAX_DEFAULT] + f"\n[内容较长已截断前 {PPTX_MAX_DEFAULT} 字符]"
+        return result
     except Exception as e:
         return f"错误：PPT 读取失败: {e}"
 
@@ -2210,6 +2649,12 @@ def _build_docx_markdown(out_path, content):
                 p.add_run("――――――――――――")
             else:  # plain
                 for para_txt in str(body).split("\n"):
+                    if not para_txt.strip():
+                        continue
+                    img_path = _docx_image_path_from_line(para_txt)
+                    if img_path is not None:
+                        _docx_add_picture(doc, img_path)
+                        continue
                     p = doc.add_paragraph()
                     _md_inline_to_runs(p, para_txt)
         except Exception:
@@ -2222,9 +2667,41 @@ def _build_docx_markdown(out_path, content):
     doc.save(out_path)
 
 
+def _docx_image_path_from_line(line):
+    """从 markdown 图片行 `![alt](path)` 提取本地图片路径；非图片行返回 None。"""
+    s = str(line or "").strip()
+    if not (s.startswith("![") and "](" in s):
+        return None
+    alt_end = s.find("](")
+    rest = s[alt_end + 2:]
+    url = rest.split(")")[0].strip()
+    if not url:
+        return None
+    url = url.split(" ")[0]
+    if url.startswith(("http://", "https://", "data:")):
+        return None  # 远程/内联不支持，跳过（docx 需本地文件）
+    return url
+
+
+def _docx_add_picture(doc, path):
+    """把本地图片插入 docx 末尾；失败静默（路径无效/格式不支持时降级为占位文本）。"""
+    try:
+        p = permissions.resolve(path)
+        if p and os.path.isfile(p):
+            from docx.shared import Inches
+            doc.add_picture(p, width=Inches(5.5))
+            return
+        doc.add_paragraph(f"[图片未能插入: {path}]")
+    except Exception:
+        try:
+            doc.add_paragraph(f"[图片未能插入: {path}]")
+        except Exception:
+            pass
+
+
 def _fallback_blocks(content):
     """mdparse 不可用时：纯文本退化为逐行 plain 块，保底可生成。"""
     return [("plain", ln) for ln in str(content or "").splitlines() if ln.strip()]
 
 
-__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'pptx_read', 'pptx_create', 'secret_store', 'kv_store', 'create_doc']
+__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'secret_store', 'kv_store', 'create_doc']
