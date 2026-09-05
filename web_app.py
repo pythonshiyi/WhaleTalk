@@ -774,11 +774,39 @@ def _hard_deps_window(hard_miss):
 
     result = {"ok": True}
     q = queue.Queue()
+    # 落盘 python 安装日志（与 WebUI 窗同款，卡住可查真实卡点）
+    logf = None
+    try:
+        logf = open(os.path.join(WEBUI_DIR or ".", "install.log"), "a", encoding="utf-8")
+    except Exception:
+        logf = None
+
+    def _write(txt):
+        if logf:
+            try:
+                logf.write(txt + "\n")
+                logf.flush()
+            except Exception:
+                pass
 
     def worker():
-        ok, failed = deps.install_many(hard_miss)
-        result["ok"] = ok and not failed
-        q.put("done")
+        import traceback as _tb
+        _write("=== Python 核心组件安装开始 ===")
+        try:
+            ok, failed = deps.install_many(hard_miss)
+            result["ok"] = ok and not failed
+        except Exception:
+            result["ok"] = False
+            _write("[异常]\n" + _tb.format_exc())
+            q.put(("log", "[异常] " + _tb.format_exc().splitlines()[-1]))
+        finally:
+            _write(f"=== Python 核心组件安装结束：{'成功' if result['ok'] else '失败'} ===")
+            if logf:
+                try:
+                    logf.close()
+                except Exception:
+                    pass
+            q.put("done")
 
     _th.Thread(target=worker, daemon=True).start()
 
@@ -806,6 +834,15 @@ def _hard_deps_window(hard_miss):
     return result["ok"]
 
 
+def _hard_deps_missing():
+    """返回缺失的硬依赖 [(pip包名, 显示名)]（2 元组，供 deps.install_many 直接消费）。
+
+    注意：HARD_DEPS 是 (import名, pip包名, 显示名) 3 元组，但 deps.install_many 只收
+    (pip包名, 显示名)——曾误传 3 元组导致解包 ValueError、GUI 初始化窗 worker 静默崩、
+    UI 永卡"正在准备…"。抽成纯函数便于回归测试。"""
+    return [(pkg, label) for _imp, pkg, label in HARD_DEPS if not _importable(_imp)]
+
+
 def _ensure_python_deps():
     """启动依赖保障：永不弹窗、永不阻塞用户。
 
@@ -816,8 +853,7 @@ def _ensure_python_deps():
     - 可选能力（重型）：完全静默，去设置页「可选能力」面板按需安装。
     """
     import deps
-    hard_miss = [(imp, pkg, label) for imp, pkg, label in HARD_DEPS
-                 if not _importable(imp)]
+    hard_miss = _hard_deps_missing()
     if hard_miss:
         print("⏳ 必需组件缺失，正在自动安装（清华源）…")
         if os.environ.get("WHALETALK_DEPS_CONSOLE") == "1":

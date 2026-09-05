@@ -150,3 +150,17 @@ def test_dist_fresh_but_deps_stale_forces_rebuild(tmp_path, monkeypatch, capsys)
     ok, note = web_app._ensure_webui_build()
     assert ok is True, note
     assert built and any("build" in b for b in built), "依赖过期时即使 mtime 够新也必须重建"
+
+
+def test_hard_deps_missing_returns_2tuples(monkeypatch):
+    """回归：_hard_deps_missing() 必须返回 (pip包名, 显示名) 2 元组供 install_many 消费。
+    曾误把 HARD_DEPS 的 (import名,pip包名,显示名) 3 元组传入 → install_many 解包 ValueError
+    → GUI 初始化窗 worker 静默崩 → UI 永卡"正在准备…"。"""
+    monkeypatch.setattr(web_app, "_importable", lambda name: False)
+    missing = web_app._hard_deps_missing()
+    assert missing, "应检测到缺失硬依赖"
+    for item in missing:
+        # install_many 内部 `for i,(pkg,label) in enumerate(miss)` 需恰好 2 元组
+        pkg, label = item  # 若为 3 元组此处即 ValueError
+        assert isinstance(pkg, str) and isinstance(label, str)
+        assert pkg and label
