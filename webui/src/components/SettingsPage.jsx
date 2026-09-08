@@ -29,6 +29,17 @@ const PRESETS = [
   { id: "creative", name: "✍️ 创作", desc: "无思考 + 高温度，写作与创意", cfg: { model: "deepseek-v4-flash", thinking: "none", max_tokens: 16384, temperature: 1.3, top_p: 0.95 } },
 ];
 
+// ── 供应商预设（模型无关：一键切 OpenAI 兼容网关 / 本地 Ollama）──────
+// 只填 base_url + 推荐 model（api_key 由用户自填）。点选即切网关。
+const PROVIDER_PRESETS = [
+  { id: "deepseek", name: "🧬 DeepSeek", base: "https://api.deepseek.com", model: "deepseek-v4-flash", desc: "官方默认 · 深度优化" },
+  { id: "openai", name: "🟢 OpenAI", base: "https://api.openai.com/v1", model: "gpt-4o", desc: "填自己的 sk-… Key" },
+  { id: "ollama", name: "🦙 Ollama 本地", base: "http://localhost:11434/v1", model: "qwen2.5", desc: "本地免费离线 · 无需 Key" },
+  { id: "kimi", name: "🔴 Kimi(月之暗面)", base: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k", desc: "填 Kimi Key" },
+  { id: "zhipu", name: "🟣 智谱", base: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash", desc: "填智谱 Key" },
+  { id: "qwen", name: "🔵 通义千问", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus", desc: "填 DashScope Key" },
+];
+
 const THEMES = [
   { id: "starfield", name: "星空黑", desc: "极黑冷底 · 亮青点缀", preview: ["#05070e", "#111827", "#38bdf8"] },
   { id: "deepsea", name: "深海蓝", desc: "深蓝底 · 亮湖蓝", preview: ["#02101f", "#082542", "#22c8ff"] },
@@ -913,6 +924,14 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
     }
   };
 
+  // 供应商切换：切 base_url + 推荐 model（api_key 用户自填后生效）
+  const applyProvider = async (prov) => {
+    await saveField({ base_url: prov.base, model: prov.model });
+    setBaseUrlDraft(null); setModelDraft(null);
+    setTip(`✅ 已切换网关「${prov.name}」（${prov.base}）——若需新 Key 请在下方 API Key 处填写${prov.id === "ollama" ? "（本地无需 Key）" : ""}`);
+    setTimeout(() => setTip(""), 3500);
+  };
+
   const resetAll = async () => {
     if (!window.confirm("恢复全部默认配置？（API Key 会保留）")) return;
     const d = await api.resetConfig().catch(() => null);
@@ -962,6 +981,15 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
           <ProfilesBlock onTip={setTip} />
           <div className="svc-title" style={{ marginTop: 16 }}>核心设置</div>
           <div className="set-card">
+            <div className="svc-title" style={{ fontSize: 12, opacity: .7, marginBottom: 4 }}>🔀 供应商网关（模型无关 · 一键切换）</div>
+            <div className="preset-grid" style={{ marginBottom: 6 }}>
+              {PROVIDER_PRESETS.map((p) => (
+                <button key={p.id} className="preset-card" style={{ fontSize: 11 }} title={`${p.base} · 推荐模型 ${p.model}`} onClick={() => applyProvider(p)}>
+                  <b>{p.name}</b>
+                  <span>{p.desc} · {p.model}</span>
+                </button>
+              ))}
+            </div>
             <Row label="模型" desc="官方三模型 + 任意 OpenAI 兼容">
               {customModel || !modelOptions.includes(cfg.model) ? (
                 <input className="set-select set-combo" value={modelText} placeholder="输入任意模型名" onChange={(e) => setModelDraft(e.target.value)} onBlur={(e) => commitModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
