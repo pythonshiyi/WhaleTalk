@@ -54,3 +54,50 @@ python tools/validate_tools.py         # smart_tools 全链路回归（能力地
 
 - 类型前缀：`fix:` / `feat:` / `docs:` / `chore:` / `refactor:`
 - 示例：`fix: run_command 接入 check_shell（黑名单生效）`
+
+## 推送 / 远程协作 / Pushing
+
+远程仓库：`github.com/pythonshiyi/WhaleTalk`（分支 `main`）。origin 建议按如下配置：
+
+```bash
+# fetch 走 https；push 走 ssh —— 见下方「HTTPS 代理坑」，不要两路都走 https
+git remote set-url origin            https://github.com/pythonshiyi/WhaleTalk.git   # fetch
+git remote set-url --push origin     git@github.com:pythonshiyi/WhaleTalk.git        # push
+```
+
+### HTTPS 经本地代理会卡死的坑（重要）
+
+本机设置了环境代理 `HTTP_PROXY / HTTPS_PROXY = http://127.0.0.1:4890`。
+当 `git push`/`git fetch` 走 **https** 远程时，会卡在 SSL 握手：
+`schannel: failed to receive handshake, SSL/TLS connection failed`，且可能长时间无输出（
+git 默认多次重试，几分钟都不退出）。**遇到 `git push` 无输出/SSL 握手失败时，先停掉该进程，
+改用 ssh 通道**（ssh 不受该代理影响，实测 8 秒完成）。
+
+### 推送（推荐 ssh）
+
+```bash
+# 显式走 ssh（最稳）：
+GIT_SSH_COMMAND="ssh -o ConnectTimeout=20 -o BatchMode=yes" \
+  git push git@github.com:pythonshiyi/WhaleTalk.git main:main
+# 或配置好 push URL 后直接：
+git push origin main
+```
+
+### 核验是否推送成功（用 ls-remote，别信本地陈旧引用）
+
+本地跟踪引用 `origin/main` 在用显式 ssh URL 推送后**不会自动更新**，
+`git log origin/main..HEAD` 会误报"本地领先 N 个提交"（假象）。要以**远程真实 HEAD** 为准：
+
+```bash
+GIT_SSH_COMMAND="ssh -o ConnectTimeout=20" git ls-remote git@github.com:pythonshiyi/WhaleTalk.git refs/heads/main
+git rev-parse HEAD        # 两者输出一致 = 已同步
+```
+
+### 卡住/超时的处理
+
+- `git push` 后台跑了几分钟无输出 → 大概率 HTTPS 握手卡死，`Ctrl-C`/停掉任务，改走 ssh（见上）
+- 提交后 shell 若报 SIGTERM，先 `git log --oneline -1` 确认 commit 是否已落（commit 常已成功，只是收尾被打断）
+
+### 本地不入库产物
+
+`能力差距分析_*.md`、`*能力报告_*.md`、`*阅读报告_*.md` 等分析文档历来**不入库**（项目只提交代码/前端/测试/依赖），推送到远程前不必 `git add` 它们。

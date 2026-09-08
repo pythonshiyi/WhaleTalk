@@ -226,6 +226,13 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 - **打包**：`build_exe.bat` → PyInstaller（WhaleTalk.spec：webui/dist + sample_plugins 内置；playwright/faster-whisper/PyMuPDF 等大型依赖排除）
 - **备份**：`backup.py` 源码快照（compresslevel=1；排除 .venv/dist/backups/.git 等）
 - **更新**：GitHub Releases 检测；Ed25519 签名（`update_public_key`）+ SHA-256 校验；更新前自动备份可回滚
+- **Git 推送（给维护 AI 的操作指引）**：
+  - 远程 `github.com/pythonshiyi/WhaleTalk`，分支 `main`。origin 建议 **fetch 走 https、push 走 ssh**：`git remote set-url origin https://github.com/pythonshiyi/WhaleTalk.git` + `git remote set-url --push origin git@github.com:pythonshiyi/WhaleTalk.git`
+  - **坑**：本机设了环境代理 `HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:4890`，`git push`/`fetch` 走 **https** 会卡死在 SSL 握手（`schannel: failed to receive handshake`）且数分钟无输出。**遇到 `git push` 无输出/握手失败：停掉该进程，改走 ssh**（实测 8s 完成，不受代理影响）
+  - 推送：`GIT_SSH_COMMAND="ssh -o ConnectTimeout=20 -o BatchMode=yes" git push git@github.com:pythonshiyi/WhaleTalk.git main:main`（或配置好 push URL 后 `git push origin main`）
+  - **核验**：用显式 ssh URL push 后本地 `origin/main` 引用不自动更新，`git log origin/main..HEAD` 会误报"领先 N 提交"。以远程真实 HEAD 为准：`GIT_SSH_COMMAND="ssh -o ConnectTimeout=20" git ls-remote git@github.com:pythonshiyi/WhaleTalk.git refs/heads/main` 与 `git rev-parse HEAD` 一致 = 已同步
+  - commit 报 SIGTERM 时先 `git log --oneline -1` 确认是否已落（常已成功，仅收尾被打断）
+  - 本地不入库产物：`能力差距分析_*.md` / `*能力报告_*.md` / `*阅读报告_*.md` 等分析文档历来不入库（只提交代码/前端/测试/依赖），push 前不必 `git add`
 
 ## 18. 踩坑记录（Web 版）
 
