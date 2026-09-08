@@ -200,15 +200,15 @@ def refresh_self_model():
 
 
 def _genesis_model_call(prompt, max_tokens=900):
-    """创世化初始：调当前配置模型自主生成一版前史。返回模型文本。
-    需已配 API Key（load_config 已解密 dpapi）；未配返回空。"""
+    """创世化初始：调当前配置模型自主生成一版前史。返回 (text, err)。
+    未配 key/余额不足/网络失败等返回 err 供上层精确提示，不再误导为"未配 Key"。"""
+    import config_utils
+    import deepseek_client as dc
     try:
-        import config_utils
-        import deepseek_client as dc
         cfg = config_utils.load_config()
         key = str(cfg.get("api_key") or "").strip()
         if not key:
-            return ""
+            return "", "未配置 API Key——请先在设置→模型与网关 填写 API Key"
         client = dc.DeepSeekClient(
             key, base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
             model=cfg.get("model") or dc.DEFAULT_MODEL,
@@ -218,11 +218,24 @@ def _genesis_model_call(prompt, max_tokens=900):
             [{"role": "user", "content": prompt}],
             scenario=cfg.get("scenario") or "通用",
             thinking="none", max_tokens=int(max_tokens or 900),
-            tools_enabled=False, smart_tools=False,
+            tools_enabled=False,
             on_content=lambda c: acc.append(c) if c else None)
-        return "".join(acc).strip()
-    except Exception:
-        return ""
+        txt = "".join(acc).strip()
+        return txt, ("" if txt else "模型未返回内容（可能是余额不足或网关异常）")
+    except Exception as e:
+        # 精确分类：余额不足 / 鉴权 / 其它
+        msg = str(e)
+        low = msg.lower()
+        if "402" in low or "insufficient balance" in low or "余额不足" in low:
+            return "", "API 账户余额不足（402）——请到对应平台充值后重试"
+        if "401" in low or "invalid api key" in low or "authentication" in low:
+            return "", "API Key 无效或已失效——请检查设置中的 Key"
+        if "404" in low or "model" in low:
+            return "", f"模型不可用或不存在——请检查设置的模型名（可切换其它供应商）"
+        if "timed out" in low or "timeout" in low or "connection" in low or "网络" in low:
+            return "", "网络/网关超时——请检查网络或 base_url"
+        # 其它：透传首段
+        return "", f"模型调用失败：{msg[:120]}"
 
 
 def brain_action(action, payload=None):
@@ -232,10 +245,17 @@ def brain_action(action, payload=None):
         # 创世化初始：AI 自主 roll n 版前史候选（需已配模型）
         import genesis
         n = int(payload.get("n") or 3)
-        cands = genesis.roll_candidates(_genesis_model_call, n=n)
+        first_err = [""]
+
+        def gen(prompt):
+            txt, err = _genesis_model_call(prompt)
+            if err and not first_err[0]:
+                first_err[0] = err
+            return txt
+        cands = genesis.roll_candidates(gen, n=n)
         if not cands:
-            return {"ok": False,
-                    "message": "生成失败：未配置 API Key 或模型未返回有效前史。请在设置中配置 API Key 后重试。"}
+            msg = first_err[0] or "模型未返回有效前史，请重试"
+            return {"ok": False, "message": f"生成失败：{msg}"}
         # 返回完整候选供前端展示+选中后完整写回（前端仅展示时截断）
         view = []
         for c in cands:
