@@ -1,17 +1,31 @@
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import Sidebar from "./components/Sidebar.jsx";
 import FirstRunPage from "./components/FirstRunPage.jsx";
 import ChatPage, { BackendBanner } from "./components/ChatPage.jsx";
 import DepsBanner from "./components/DepsBanner.jsx";
 import InstallBanner from "./components/InstallBanner.jsx";
-import { AbilitiesPage, PluginsPage, SettingsPage, WorkbenchPage } from "./components/Pages.jsx";
-import BrainPage from "./components/BrainPage.jsx";
-import AutonomyPage from "./components/AutonomyPage.jsx";
-import PromptsPage from "./components/PromptsPage.jsx";
 import { FlashProvider, ToastProvider } from "./components/FlashToast.jsx";
 import * as api from "./api.js";
 
 import { silentWarn } from "./quiet.js";
+
+// ── M2 按页懒加载：除首屏 Chat 外，其余页面按需加载（砍首屏主 chunk）──
+// 每页切成独立 chunk，进入时才 fetch。chat 保持同步渲染（首屏体验）。
+const LazyPages = {
+  workbench: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.WorkbenchPage }))),
+  abilities: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.AbilitiesPage }))),
+  plugins: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.PluginsPage }))),
+  settings: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.SettingsPage }))),
+  prompts: lazy(() => import("./components/PromptsPage.jsx")),
+  brain: lazy(() => import("./components/BrainPage.jsx")),
+  autonomy: lazy(() => import("./components/AutonomyPage.jsx")),
+};
+const PageFallback = () => (
+  <div className="page" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", color: "var(--text-3)", fontSize: "var(--fs-sm)" }}>
+    <span className="page-loading-dot" aria-hidden="true" /> 加载中…
+  </div>
+);
+
 export const ThemeContext = React.createContext({ theme: "starfield", setTheme: () => {} });
 export const ModeContext = React.createContext({ mode: "task", setMode: () => {}, switchMode: () => {} });
 export const DisplayContext = React.createContext({ density: "comfort", setDensity: () => {}, fontSize: 14, setFontSize: () => {} });
@@ -203,6 +217,7 @@ export default function App() {
                     }}
                   />
                   <ErrorBoundary>
+                    <Suspense fallback={<PageFallback />}>
                     {page === "chat" && (
                       <ChatPage
                         onGoWorkbench={() => setPage("workbench")}
@@ -215,44 +230,57 @@ export default function App() {
                         onToggleQuiet={toggleQuiet}
                       />
                     )}
-                    {page === "workbench" && (
-                      <WorkbenchPage
-                        onApply={(text) => {
-                          setApplyPrompt(text);
-                          setPage("chat");
-                        }}
-                        onPickSession={(id) => {
-                          setOpenSessionId(id);
-                          setPage("chat");
-                        }}
-                      />
-                    )}
-                    {page === "abilities" && <AbilitiesPage />}
-                    {page === "plugins" && (
-                      <PluginsPage
-                        onApply={(text) => {
-                          setApplyPrompt(text);
-                          setPage("chat");
-                        }}
-                      />
-                    )}
-                    {page === "prompts" && (
-                      <PromptsPage
-                        onApply={(text) => {
-                          setApplyPrompt(text);
-                          setPage("chat");
-                        }}
-                      />
-                    )}
-                    {page === "brain" && <BrainPage />}
-                    {page === "autonomy" && <AutonomyPage />}
-                    {page === "settings" && (
-                      <SettingsPage
-                        onGoPrompts={() => setPage("prompts")}
-                        quietMode={quietMode}
-                        onToggleQuiet={toggleQuiet}
-                      />
-                    )}
+                    {page === "workbench" && (() => {
+                      const P = LazyPages.workbench;
+                      return (
+                        <P
+                          onApply={(text) => {
+                            setApplyPrompt(text);
+                            setPage("chat");
+                          }}
+                          onPickSession={(id) => {
+                            setOpenSessionId(id);
+                            setPage("chat");
+                          }}
+                        />
+                      );
+                    })()}
+                    {page === "abilities" && <LazyPages.abilities />}
+                    {page === "plugins" && (() => {
+                      const P = LazyPages.plugins;
+                      return (
+                        <P
+                          onApply={(text) => {
+                            setApplyPrompt(text);
+                            setPage("chat");
+                          }}
+                        />
+                      );
+                    })()}
+                    {page === "prompts" && (() => {
+                      const P = LazyPages.prompts;
+                      return (
+                        <P
+                          onApply={(text) => {
+                            setApplyPrompt(text);
+                            setPage("chat");
+                          }}
+                        />
+                      );
+                    })()}
+                    {page === "brain" && <LazyPages.brain />}
+                    {page === "autonomy" && <LazyPages.autonomy />}
+                    {page === "settings" && (() => {
+                      const P = LazyPages.settings;
+                      return (
+                        <P
+                          onGoPrompts={() => setPage("prompts")}
+                          quietMode={quietMode}
+                          onToggleQuiet={toggleQuiet}
+                        />
+                      );
+                    })()}
+                    </Suspense>
                   </ErrorBoundary>
                 </main>
               </div>

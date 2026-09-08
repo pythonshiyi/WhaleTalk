@@ -62,7 +62,8 @@ ASK_TIMEOUT = 180.0
 
 
 def _respond(body):
-    """前端回传：{id, answer?} 或 {id, option?}（ask 点选）/ {id, allow?, reason?}（approval）。"""
+    """前端回传：{id, selections?}(多选) / {id, option?}(单选点选) / {id, answer?}(自由输入)
+       / {id, allow?, reason?}(approval)。"""
     rid = str(body.get("id") or "")
     if not rid:
         return False, "缺少 id"
@@ -73,9 +74,13 @@ def _respond(body):
     box = entry["box"]
     typ = entry["type"]
     if typ == "ask":
+        selections = body.get("selections")
         option = str(body.get("option") or "").strip()
         answer = str(body.get("answer") or "").strip()
-        if option:
+        if isinstance(selections, (list, tuple)) and len(selections) > 0:
+            # 多选：只收干净字符串
+            box["selections"] = [str(s).strip() for s in selections if str(s).strip()]
+        elif option:
             box["option"] = option
         elif answer:
             box["answer"] = answer
@@ -136,21 +141,24 @@ def _make_approval_cb(send, stop_event):
 
 
 def _make_ask_cb(send, stop_event):
-    """on_ask：向用户提问（可带 options 供一键选择），阻塞等待回答。"""
+    """on_ask：向用户提问（可带 options 单选/多选），阻塞等待回答。"""
 
-    def cb(prompt, options=None):
+    def cb(prompt, options=None, multi=False):
         rid = secrets_token(4)
         ev = threading.Event()
-        box = {"answer": None, "option": None}
+        box = {"answer": None, "option": None, "selections": None}
         with _PENDING_LOCK:
             _PENDING[rid] = {"ev": ev, "box": box, "type": "ask"}
         # 归一 options：只收干净字符串，上限 6
         opts = None
         if isinstance(options, (list, tuple)):
             opts = [str(o).strip() for o in options if str(o).strip()][:6] or None
+        is_multi = bool(multi) and bool(opts)  # 无 options 的多选无意义，退化为单选自由输入
         ev_payload = {"id": rid, "prompt": str(prompt)}
         if opts:
             ev_payload["options"] = opts
+        if is_multi:
+            ev_payload["multi"] = True
         send("ask_request", ev_payload)
         deadline = time.monotonic() + ASK_TIMEOUT
         while not ev.wait(0.5):
@@ -167,8 +175,10 @@ def _make_ask_cb(send, stop_event):
                 break
         with _PENDING_LOCK:
             _PENDING.pop(rid, None)
-        # 优先取用户点选的 option，其次自由文本 answer
-        answer = box.get("option")
+        # 组装回答：多选取 selections(列表)，其次单选 option，再自由文本 answer
+        answer = box.get("selections")
+        if answer is None:
+            answer = box.get("option")
         if answer is None:
             answer = box.get("answer")
         if answer is None:
@@ -180,14 +190,19 @@ def _make_ask_cb(send, stop_event):
                 "reason": "（用户未在限时内回答）",
             })
             return "（用户未在限时内回答，请简化问题或改用其他方式）"
+        # 多选答案格式化为人类可读串，便于模型理解
+        if isinstance(answer, (list, tuple)):
+            answer_str = "、".join(str(x) for x in answer)
+        else:
+            answer_str = str(answer)
         _record_approval({
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
             "type": "ask",
             "prompt": str(prompt)[:200],
             "result": "已回答",
-            "reason": str(answer)[:200],
+            "reason": answer_str[:200],
         })
-        return str(answer)
+        return answer_str
 
     return cb
 

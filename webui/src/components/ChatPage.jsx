@@ -320,10 +320,10 @@ function useBackendChat({
               toast("🧠 上下文压缩：" + (ev.mode === "summary" ? "已用 LLM 摘要替换" : "已硬裁剪") + "最早 " + ev.removed_turns + " 轮对话（" + ev.removed_msgs + " 条消息）" + (ev.archived_path ? "（已归档 " + ev.archived_path + "）" : ""));
             },
             onAskRequest: (ev) => {
-              if (alive && !stopRef.current) onPrompt && onPrompt({ type: "ask", ...ev });
+              if (alive && !stopRef.current) onPrompt && onPrompt({ ...ev, type: "ask" });
             },
             onApprovalRequest: (ev) => {
-              if (alive && !stopRef.current) onPrompt && onPrompt({ type: "approval", ...ev });
+              if (alive && !stopRef.current) onPrompt && onPrompt({ ...ev, type: "approval" });
             },
             onDone: () => finish(true),
             onError: (e) => {

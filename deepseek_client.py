@@ -3149,7 +3149,8 @@ register_tool(
                     "type": "object",
                     "properties": {
                         "prompt": {"type": "string", "description": "向用户提出的问题（简洁明确）"},
-                        "options": {"type": "array", "description": "可选答案列表（2-6 项，供用户一键选择；可省略则用户自由输入）", "items": {"type": "string"}},
+                        "options": {"type": "array", "description": "可选答案列表（2-6 项，供用户点选；可省略则用户自由输入）", "items": {"type": "string"}},
+                        "multi": {"type": "boolean", "description": "是否允许多选（可多选时置 true，用户勾选多项后一次提交；默认 false=单选点一下即确认）"},
                     },
                     "required": ["prompt"],
                 },
@@ -4248,7 +4249,7 @@ class DeepSeekClient:
                     args = {}
                     t0 = time.monotonic()
                     if name == "ask_user":
-                        # 询问用户：阻塞等待 UI 回答（on_ask 由 main 提供，支持 options 一键选择）
+                        # 询问用户：阻塞等待 UI 回答（on_ask 由 main 提供，支持 options 单选/多选）
                         try:
                             qargs = _parse_tool_args(raw_args)
                             if isinstance(qargs, dict):
@@ -4260,19 +4261,24 @@ class DeepSeekClient:
                                 if isinstance(opts, (list, tuple)):
                                     cleaned = [str(o).strip() for o in opts if str(o).strip()]
                                     options = cleaned[:6] or None
+                                multi = bool(qargs.get("multi") or qargs.get("multiple"))
                             else:
                                 prompt = raw_args[:200]
                                 options = None
+                                multi = False
                         except ValueError:
                             prompt = raw_args[:200]
                             options = None
+                            multi = False
                         if not prompt:
                             prompt = "请提供需要用户回答的问题"
                         if on_ask is not None:
-                            result = on_ask(prompt, options)
+                            result = on_ask(prompt, options, multi)
                             args = {"prompt": prompt}
                             if options:
                                 args["options"] = options
+                            if multi:
+                                args["multi"] = True
                         else:
                             result = "错误：无法询问用户（当前环境不支持交互式询问）"
                     elif name == "request_permission":
@@ -4333,6 +4339,7 @@ class DeepSeekClient:
                     tc for tc in tool_calls if tc["name"] not in ("ask_user", "request_permission")
                 ]
                 exec_results = {}
+                pending = set()  # 并行工具 future 集合；无并行工具时保持空，避免下方 if pending 触发 UnboundLocalError
                 if parallel_tools:
                     futs = {
                         tc["id"]: _tool_executor_for(tc["name"]).submit(execute_tool, tc)

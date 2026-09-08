@@ -53,6 +53,7 @@
 /* ── 星空黑（默认）：极黑冷底 + 亮青点缀 ─────────── */
 :root,
 [data-theme="starfield"] {
+  color-scheme: dark;
   --bg-0: #05070e;
   --bg-1: #0a0e18;
   --bg-2: #10162a;
@@ -100,6 +101,7 @@
 
 /* ── 深海蓝：深蓝底 + 亮湖蓝 ────────────────────── */
 [data-theme="deepsea"] {
+  color-scheme: dark;
   --bg-0: #02101f;
   --bg-1: #041a30;
   --bg-2: #082542;
@@ -146,6 +148,7 @@
 
 /* ── 北极冰：纯白系（中性无蓝调，适合长时间阅读） ─────────────── */
 [data-theme="arctic"] {
+  color-scheme: light;
   --bg-0: #ffffff;
   --bg-1: #fafbfd;
   --bg-2: #ffffff;
