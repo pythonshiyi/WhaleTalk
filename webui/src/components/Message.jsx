@@ -6,7 +6,6 @@ import PixelDocViewer from "./PixelDocViewer.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
-import formatToolResult from "../formatToolResult.js";
 
 import { silentWarn } from "../quiet.js";
 // 表格内嵌预览（CSV/XLSX）：分页展示，不超过后端返回的 rows 上限
@@ -85,23 +84,7 @@ const Whale = () => (
   </svg>
 );
 
-// 从助手回复/工具结果中提取产物路径（仅匹配以产物扩展名结尾的绝对路径，
-// 避免目录段如 D:\workspace\ 误匹配）
-const ABS_PATH_RE = /[A-Za-z]:[\\/][^\s"“”“<>|,，；;]*?[.](?:md|txt|json|csv|xlsx|docx|pptx|pdf|png|jpg|jpeg|html|htm|zip|py|log)\b/gi;
-
-function extractProducts(text) {
-  if (!text) return [];
-  const found = [];
-  const seen = new Set();
-  for (const m of String(text).matchAll(ABS_PATH_RE)) {
-    const raw = m[0].replace(/[),，;；。]+$/, "").trim();
-    if (raw.length < 8 || seen.has(raw)) continue;
-    seen.add(raw);
-    found.push(raw);
-    if (found.length >= 4) break;
-  }
-  return found;
-}
+// 从助手回复/工具结果中提取产物路径（已抽到 extractProducts.js 单例）
 
 function ThinkBlock({ text, streaming }) {
   // 对齐原程序：思考卡片默认折叠，生成结束后自动收起
@@ -139,20 +122,6 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
   const [speaking, setSpeaking] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [err, setErr] = React.useState("");
-  const [preview, setPreview] = React.useState({});  // {path: {loading, data, err}}
-  const [pixel, setPixel] = React.useState({});  // {path: true} 是否像素渲染
-
-  const loadPreview = async (path) => {
-    const cur = preview[path];
-    if (cur && (cur.data || cur.loading)) return;
-    setPreview((s) => ({ ...s, [path]: { loading: true } }));
-    try {
-      const d = await api.previewFile(path);
-      setPreview((s) => ({ ...s, [path]: { loading: false, data: d } }));
-    } catch (e) {
-      setPreview((s) => ({ ...s, [path]: { loading: false, err: e && e.message ? e.message : "预览失败" } }));
-    }
-  };
 
   // 朗读/停止切换：点击立即 ⏳（合成中）→ 播放 ⏹ → 失败 ⚠ 并提示原因。
   // 用 speakText 整段合成朗读：V4 一次性合成(或≤3900字分大块)连续播放，无逐句间隙、可随时停止。
@@ -179,19 +148,7 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
   const isStarred = msg.starred;
   const isPinned = msg.pinned;
 
-  // 产物路径：助手回复文本 ∪ 工具结果
-  const products = React.useMemo(() => {
-    if (msg.role === "user" || msg.role === "system" ) return [];
-    const text = [msg.text, ...(msg.tools || []).map((t) => formatToolResult(t.result))].join("\n");
-    return extractProducts(text);
-  }, [msg]);
-
-  const prodAct = async (path, act) => {
-    try {
-      if (act === "opendir") await api.openDir(path);
-      else await api.openFile(path);
-    } catch (e) { silentWarn(e, "Message"); }
-  };
+  // 产物已迁出聊天（在右侧「🔧 活动」标签顶部置顶），聊天只保留正文。
 
   if (msg.role === "user") {
     return (
@@ -230,113 +187,29 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
         {msg.think && (
           <ThinkBlock text={msg.think} streaming={msg.streaming} />
         )}
-        {(msg.tools && msg.tools.length > 0 || msg.streaming) && (
-          <TaskProgress tools={msg.tools} streaming={msg.streaming} />
+        {(msg.streaming && msg.tools && msg.tools.length > 0) && (
+          <TaskProgress tools={msg.tools} streaming />
         )}
-        {msg.tools && msg.tools.map((t, i) => (
-          <ToolCard key={i} {...t} />
-        ))}
-        {!msg.streaming && products.length > 0 && (
-          <div className="prod-bar">
-            <span className="prod-label">📦 产物直达</span>
-            {products.map((p) => {
-              const pv = preview[p];
-              const canPreview = !pv || (pv.data && pv.data.previewable !== false) || pv.data === undefined;
-              return (
-                <span className="prod-chip" key={p} title={p}>
-                  <button className="prod-op" title="打开文件" onClick={() => prodAct(p, "open")}>打开</button>
-                  <span className="prod-name" style={{ cursor: canPreview ? "pointer" : "default" }}
-                    onClick={() => canPreview && loadPreview(p)}
-                    title={pv ? (pv.data ? (pv.data.previewable ? "点击查看预览" : pv.data.reason || "") : "预览") : "点击查看预览"}>
-                    {String(p).split(/[\\/]/).pop()}
-                  </span>
-                  <button className="prod-op" title="打开所在文件夹" onClick={() => prodAct(p, "opendir")}>⌖</button>
-                  {pv && (pv.data || pv.loading || pv.err) && (
-                    <button className="prod-op" title={pv.data && pv.data.previewable ? "收起预览" : "关闭"} onClick={() => setPreview((s) => ({ ...s, [p]: undefined }))}>✕</button>
-                  )}
-                  {pv && pv.loading && <span className="prod-op">⏳</span>}
-                </span>
-              );
-            })}
-          </div>
+        {msg.tools && msg.tools.length > 0 && (
+          <>
+            {/* 工具/产物详情已从聊天流移除：完整每步细节在侧栏「🔧 活动」标签里
+                实时列出（点击展开看参数与结果），产物直达也置顶在活动顶部。
+                聊天只保留正文与流式光标——不刷屏。 */}
+            <button
+              className="tool-summary"
+              onClick={() => onFocusActivity && onFocusActivity()}
+              title="在右侧『活动』查看工具详情与产物"
+            >
+              <span className="tool-summary-icon">🔧</span>
+              <span className="tool-summary-text">
+                {msg.streaming
+                  ? `AI 正在调用工具（${msg.tools.length} 步）…`
+                  : `本次调用 ${msg.tools.length} 个工具${msg.tools.some((t) => t.status === "failed") ? " · 部分失败" : " · 完成"} · 查看详情 ▸`}
+              </span>
+              <span className="tool-summary-chev">›</span>
+            </button>
+          </>
         )}
-        {products.length > 0 && products.map((p) => {
-          const pv = preview[p];
-          if (!pv || !pv.data) return null;
-          const d = pv.data;
-          return (
-            <div className="prod-preview" key={"pv_" + p} style={{
-              margin: "4px 0 10px", padding: 10, borderRadius: 10,
-              background: "var(--bg-2, rgba(128,140,160,.08))", fontSize: 13, overflow: "auto",
-            }}>
-              <div style={{ marginBottom: 6, opacity: .8 }}>{d.name}{d.truncated ? "（已截断）" : ""}</div>
-              {d.kind === "image" && d.data_uri && (
-                // eslint-disable-next-line jsx-a11y/alt-text
-                <img src={d.data_uri} style={{ maxWidth: "100%", maxHeight: 360, borderRadius: 8 }} />
-              )}
-              {d.kind === "html" && (
-                <iframe title={d.name} srcDoc={d.content} sandbox="" style={{ width: "100%", height: 260, border: "1px solid var(--border)", borderRadius: 8, background: "#fff" }} />
-              )}
-              {d.kind === "md" && <Markdown text={d.content} deferCode={false} />}
-              {d.kind === "text" && (
-                <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit", fontSize: 12.5 }}>{d.content}</pre>
-              )}
-              {d.kind === "table" && (
-                (d.ext === ".xlsx")
-                  ? <EditableTable path={p} name={d.name} header={d.header} rows={d.rows} total={d.total_rows} />
-                  : <TablePreview header={d.header} rows={d.rows} total={d.total_rows} name={d.name} />
-              )}
-              {d.kind === "pdf" && (
-                pixel[p] ? (
-                  <div style={{ marginTop: 4 }}>
-                    <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                      <span style={{ opacity: .8 }}>📄 PDF 像素预览</span>
-                      <button className="msg-op" onClick={() => setPixel((s) => ({ ...s, [p]: false }))}>看首页文本</button>
-                    </div>
-                    <PixelDocViewer path={p} ext={d.ext} />
-                  </div>
-                ) : (
-                  <div style={{ marginTop: 4, fontSize: 12.5 }}>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
-                      <span style={{ opacity: .8 }}>📄 PDF（{d.page_count || "?"} 页）</span>
-                      <button className="msg-op" onClick={() => { setPixel((s) => ({ ...s, [p]: true })); }}>真实页面预览</button>
-                    </div>
-                    {d.content ? (
-                      <pre style={{ whiteSpace: "pre-wrap", margin: 0, maxHeight: 240, overflow: "auto", fontFamily: "inherit", fontSize: 12.5 }}>
-                        {(d.content || "").slice(0, 4000)}
-                      </pre>
-                    ) : (
-                      <div style={{ opacity: .8 }}>（无文本层）</div>
-                    )}
-                    <button className="msg-op" style={{ marginTop: 6 }} onClick={() => prodAct(p, "open")}>用系统程序打开</button>
-                  </div>
-                )
-              )}
-              {d.kind === "doc" && (
-                <div style={{ marginTop: 4 }}>
-                  <div style={{ display: "flex", gap: 6, marginBottom: 4, fontSize: 12.5 }}>
-                    {pixel[p] ? (
-                      <>
-                        <span style={{ opacity: .8 }}>真实排版预览（docx/pptx 像素渲染）</span>
-                        <button className="msg-op" onClick={() => setPixel((s) => ({ ...s, [p]: false }))}>回到可编辑视图</button>
-                      </>
-                    ) : (
-                      <>
-                        {d.docx && d.content && (
-                          <button className="msg-op" onClick={() => { setPixel((s) => ({ ...s, [p]: true })); }}>真实排版预览</button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                  {pixel[p]
-                    ? <PixelDocViewer path={p} ext={d.ext} />
-                    : (d.docx && d.content ? <DocxEditable path={p} name={d.name} content={d.content} /> : <TextDocPreview data={d} />)}
-                </div>
-              )}
-              {!d.previewable && <div style={{ opacity: .8 }}>{d.reason || "该格式不支持内嵌预览"}</div>}
-            </div>
-          );
-        })}
         {msg.text && <Markdown text={msg.text} deferCode={msg.streaming} />}
         {msg.streaming && <span className="caret" />}
         {!msg.streaming && msg.text && (

@@ -544,6 +544,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [ctxOpen, setCtxOpen] = React.useState(false);
   const [listOpen, setListOpen] = React.useState(true);
   const [auxOpen, setAuxOpen] = React.useState(true);
+  const [auxTab, setAuxTab] = React.useState("params");
+  const focusActivity = React.useCallback(() => setAuxTab("activity"), []);
   const [promptReq, setPromptReq] = React.useState(null);
   const [backendNote, setBackendNote] = React.useState("");
   const [multiSel, setMultiSel] = React.useState(null); // null=关闭, Set(index)
@@ -566,6 +568,29 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [batchPanel, setBatchPanel] = React.useState(false);
   const [batchFiles, setBatchFiles] = React.useState("");
   const [batchTpl, setBatchTpl] = React.useState("请处理以下文件：{file}");
+
+  // ── 活动镜像：把"最近一次工具链"喂给侧栏「🔧 活动」标签 ──
+  // 取最新的 assistant 消息（含工具或正在流式）作为实时活动；工具执行从聊天流"搬"到侧栏，
+  // 聊天正文只保留精简摘要。streaming=true 时侧栏自动切到活动标签并显示进行中。
+  const liveActivity = React.useMemo(() => {
+    const last = [...msgs].reverse().find((m) =>
+      m && m.role === "assistant" && ((m.tools && m.tools.length > 0) || m.streaming)
+    );
+    if (!last) return { steps: [], streaming: false, text: "" };
+    const steps = (last.tools || []).map((t) => ({
+      tool: t.tool || "?",
+      status: t.status || (last.streaming ? "running" : "done"),
+      duration: t.duration,
+      result: t.result,
+      argsText: t.args ? JSON.stringify(t.args).slice(0, 200) : undefined,
+    }));
+    return {
+      steps,
+      streaming: !!last.streaming,
+      text: last.text || "",
+      label: last.streaming ? "AI 正在执行" : "最近一次工具调用",
+    };
+  }, [msgs]);
 
   const doBatch = () => {
     const files = batchFiles.split("\n").map((s) => s.trim()).filter(Boolean);
@@ -1402,6 +1427,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                     onEdit={() => onEditMsg(gi)}
                     onRegenerate={m.role === "assistant" ? onRegenerate : undefined}
                     onContinue={m.role === "assistant" && !m.streaming ? () => onContinue(gi) : undefined}
+                    onFocusActivity={focusActivity}
                   />
                 </div>
               );
@@ -1416,7 +1442,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         )}
 
         {auxOpen && (
-          <AuxPanel onClose={() => setAuxOpen(false)} onInjectFile={onInjectFile} />
+          <AuxPanel onClose={() => setAuxOpen(false)} onInjectFile={onInjectFile} activity={liveActivity}
+            tab={auxTab} onTabChange={setAuxTab} />
         )}
       </div>
 

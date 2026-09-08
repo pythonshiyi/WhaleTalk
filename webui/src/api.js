@@ -858,6 +858,11 @@ export async function openDir(path) {
   return api("/v1/files/opendir", { method: "POST", body: JSON.stringify({ path }) });
 }
 
+/** @param {string} path @returns {Promise<{ok:boolean, faved:boolean}>} 收藏/取消收藏文件或目录 */
+export async function favFile(path) {
+  return api("/v1/files/fav", { method: "POST", body: JSON.stringify({ path }) });
+}
+
 /** @param {string} path @returns {Promise<{content?:string, truncated?:boolean, error?:string}>} 读文件正文 */
 export async function readFile(path) {
   return api("/v1/files/read", { method: "POST", body: JSON.stringify({ path }) });

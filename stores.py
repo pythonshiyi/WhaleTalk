@@ -28,6 +28,44 @@ def save_recent(path, recent):
     return atomic_json_write(path, recent)
 
 
+def load_favs(path):
+    """读取文件收藏（路径列表）。"""
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [str(x) for x in data if str(x).strip()]
+    except Exception:
+        logger.exception("读取文件收藏失败")
+    return []
+
+
+def save_favs(path, favs):
+    return atomic_json_write(path, favs)
+
+
+def toggle_fav(path, favs_path, max_favs=100):
+    """收藏/取消收藏一个路径，返回 (是否已收藏, 新收藏列表)。"""
+    favs = load_favs(favs_path)
+    p = str(path or "").strip()
+    if not p:
+        return False, favs
+    try:
+        p = os.path.abspath(p)
+    except Exception:
+        pass
+    if p in favs:
+        favs = [x for x in favs if x != p]
+    else:
+        favs.append(p)
+        if len(favs) > max_favs:
+            favs = favs[-max_favs:]
+    save_favs(favs_path, favs)
+    return (p in favs), favs
+
+
+
 def load_patterns(path):
     try:
         if os.path.exists(path):

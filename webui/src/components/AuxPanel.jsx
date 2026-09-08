@@ -1,6 +1,7 @@
 import React from "react";
 import * as api from "../api.js";
 import { ThemeContext, DisplayContext } from "../App.jsx";
+import extractProducts from "../extractProducts.js";
 
 import { silentWarn } from "../quiet.js";
 // ── 启动即预取（不等打开面板才加载）──────────────────
@@ -66,38 +67,53 @@ function FilesTab({ onInject }) {
   const [loading, setLoading] = React.useState({});
   const [err, setErr] = React.useState("");
   const [busyPath, setBusyPath] = React.useState(null);
+  const [q, setQ] = React.useState("");
+  const [favs, setFavs] = React.useState(null); // {path: meta} 收藏缓存
 
-  React.useEffect(() => {
-    api.listFiles().then((d) => {
-      if (d) setRoots(d);
-      else setErr("文件列表加载失败：后端未连接");
-    }).catch(() => setErr("文件列表加载失败：后端未连接"));
+  const load = React.useCallback(async (showLoading) => {
+    try {
+      const d = await api.listFiles();
+      if (d) {
+        setRoots(d);
+        // 建收藏 path→meta 映射
+        const m = {};
+        (d.favs || []).forEach((f) => { m[f.path] = f; });
+        setFavs(m);
+      } else if (showLoading) setErr("文件列表加载失败：后端未连接");
+    } catch (e) { if (showLoading) setErr("文件列表加载失败：后端未连接"); }
   }, []);
 
+  React.useEffect(() => {
+    load(true);
+    const iv = setInterval(() => load(false), 8000); // 新产物自动跟出
+    return () => clearInterval(iv);
+  }, [load]);
+
+  const flashErr = (e) => { setErr(e && e.message ? e.message : "操作失败"); setTimeout(() => setErr(""), 3000); };
   const openFile = async (path) => {
     if (!path || busyPath) return;
     setBusyPath(path);
-    try {
-      await api.openFile(path);
-    } catch (e) {
-      setErr(e.message || "打开失败");
-      setTimeout(() => setErr(""), 3000);
-    } finally {
-      setBusyPath(null);
-    }
+    try { await api.openFile(path); } catch (e) { flashErr(e); } finally { setBusyPath(null); }
   };
-
   const openDir = async (path) => {
     if (!path || busyPath) return;
     setBusyPath(path);
+    try { await api.openDir(path); } catch (e) { flashErr(e); } finally { setBusyPath(null); }
+  };
+
+  const toggleFav = async (path) => {
     try {
-      await api.openDir(path);
-    } catch (e) {
-      setErr(e.message || "打开文件夹失败");
-      setTimeout(() => setErr(""), 3000);
-    } finally {
-      setBusyPath(null);
-    }
+      const r = await api.favFile(path);
+      // 乐观更新本地收藏
+      setFavs((prev) => {
+        const next = { ...(prev || {}) };
+        if (r.faved) next[path] = { path, name: String(path).split(/[\\/]/).pop() };
+        else delete next[path];
+        return next;
+      });
+      // 后台刷新真实数据（含目录树 faved 标记）
+      setTimeout(() => load(false), 200);
+    } catch (e) { flashErr(e); }
   };
 
   const toggle = async (path) => {
@@ -107,72 +123,162 @@ function FilesTab({ onInject }) {
       setLoading((l) => ({ ...l, [path]: true }));
       try {
         const d = await api.listFiles(path);
-        if (d && d.entries) setChildren((c) => ({ ...c, [path]: d.entries }));
+        if (d && d.entries) {
+          setChildren((c) => ({ ...c, [path]: d.entries }));
+          setFavs((prev) => {
+            const nv = { ...(prev || {}) };
+            d.entries.forEach((en) => { if (en.faved) nv[en.path] = en; });
+            return nv;
+          });
+        }
       } catch (e) { silentWarn(e, "AuxPanel"); }
       setLoading((l) => ({ ...l, [path]: false }));
     }
   };
 
-  const entry = (e, depth) => (
-    <div key={e.path} className="fx-row" style={{ paddingLeft: 6 + depth * 14 }}>
-      {e.is_dir ? (
-        <button className="fx-dir" title={e.path} onClick={() => toggle(e.path)}>
-          {expanded[e.path] ? "▾" : "▸"} 📁 {e.name}
+  const favIcon = (path) => (favs && favs[path] ? "★" : "☆");
+  const isFav = (path) => !!(favs && favs[path]);
+
+  // ── 一行文件：图标 + 收藏 + 名称(+状态) + 操作 ──
+  const fileRow = (meta, indent) => {
+    const p = meta.path;
+    const missing = meta.exists === false;
+    return (
+      <div className={`fx-row ${missing ? "fx-missing" : ""}`} style={{ paddingLeft: 6 + (indent || 0) * 14 }}>
+        <button className={`fx-fav ${isFav(p) ? "fx-fav-on" : ""}`} title={isFav(p) ? "取消收藏" : "收藏"}
+          onClick={(e) => { e.stopPropagation(); toggleFav(p); }}>
+          {favIcon(p)}
         </button>
-      ) : (
         <span className="fx-file">
-          <span className="fx-fname" title={e.path} onDoubleClick={() => openFile(e.path)}>📄 {e.name}</span>
-          <button className="fx-act" title="打开文件" onClick={() => openFile(e.path)}>打开</button>
-          <button className="fx-act" title="打开所在文件夹" onClick={() => openDir(e.path)}>⌖</button>
-          <button className="fx-act" title="读取内容到输入框" onClick={() => onInject && onInject(e.path)}>注入</button>
+          <span className={`fx-fname ${missing ? "fx-fname-missing" : ""}`} title={`${p}${missing ? "\n（文件已不存在）" : ""}`}
+            onDoubleClick={() => !missing && openFile(p)}>
+            {meta.is_dir ? "📁" : "📄"} {meta.name}
+          </span>
+          {!missing && meta.size_label && <span className="fx-size">{meta.size_label}</span>}
+          {!missing && (meta.mtime_label || meta.mtime) && (
+            <span className="fx-time">{meta.mtime_label || fmtRel(meta.mtime)}</span>
+          )}
         </span>
-      )}
-      {e.is_dir && (
-        <button className="fx-act" title="打开该文件夹" onClick={() => openDir(e.path)}>⌖</button>
-      )}
-    </div>
-  );
+        <span className="fx-acts">
+          <button className="fx-act" title="打开文件" onClick={() => !missing && openFile(p)}>打开</button>
+          <button className="fx-act" title="打开所在文件夹" onClick={() => !missing && openDir(p)}>⌖</button>
+          {!meta.is_dir && <button className="fx-act" title="读取内容到输入框" onClick={() => !missing && onInject && onInject(p)}>注入</button>}
+        </span>
+      </div>
+    );
+  };
+
+  // 目录树项（含收藏星）
+  const entry = (e, depth) => {
+    if (!e || !e.path) return null;
+    const p = e.path;
+    if (e.is_dir) {
+      return (
+        <div key={p} className="fx-row" style={{ paddingLeft: 6 + depth * 14 }}>
+          <button className={`fx-fav ${isFav(p) ? "fx-fav-on" : ""}`} title={isFav(p) ? "取消收藏" : "收藏文件夹"}
+            onClick={(ev) => { ev.stopPropagation(); toggleFav(p); }}>{favIcon(p)}</button>
+          <button className="fx-dir" title={p} onClick={() => toggle(p)}>
+            {expanded[p] ? "▾" : "▸"} 📁 {e.name}
+          </button>
+          <button className="fx-act" title="打开该文件夹" onClick={() => openDir(p)}>⌖</button>
+        </div>
+      );
+    }
+    return fileRow({ path: p, name: e.name, is_dir: false, size_label: e.size_label, mtime_label: e.mtime, exists: true }, depth);
+  };
 
   const renderDir = (path, depth) => {
     if (!expanded[path]) return null;
     const items = children[path];
     if (!items) return <div className="fx-row fx-hint" style={{ paddingLeft: 20 + depth * 14 }}>{loading[path] ? "加载中…" : "空"}</div>;
-    return items.map((e) => (
-      <React.Fragment key={e.path}>
-        {entry(e, depth + 1)}
-        {e.is_dir && renderDir(e.path, depth + 1)}
-      </React.Fragment>
-    ));
+    return items
+      .filter((e) => !q || e.name.toLowerCase().includes(q.toLowerCase()))
+      .map((e) => (
+        <React.Fragment key={e.path}>
+          {entry(e, depth + 1)}
+          {e.is_dir && renderDir(e.path, depth + 1)}
+        </React.Fragment>
+      ));
   };
+
+  const now = Date.now();
+  const justCut = 2 * 60 * 1000; // 刚刚 = <2min
+  const dayCut = 24 * 3600 * 1000;
+  const bucket = (m) => {
+    const t = m.mtime ? m.mtime * 1000 : (m.mtime_epoch ? m.mtime_epoch * 1000 : 0);
+    if (!t) return "old";
+    if (now - t < justCut) return "just";
+    if (now - t < dayCut && new Date(t).getDate() === new Date().getDate()) return "today";
+    return "old";
+  };
+  const fmtRel = (m) => {
+    if (!m) return "";
+    const t = m.mtime ? m.mtime * 1000 : m;
+    if (typeof m !== "number") return m; // 已是标签
+    const d = new Date(t);
+    return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  // 收藏列表（含缺省展开树里的收藏项）
+  const favList = favs ? Object.values(favs) : [];
+  const recent = roots ? roots.recent || [] : [];
+  const recentFiltered = recent.filter((m) => !q || (m.name || "").toLowerCase().includes(q.toLowerCase()));
+  const just = recentFiltered.filter((m) => bucket(m) === "just");
+  const today = recentFiltered.filter((m) => bucket(m) === "today");
+  const older = recentFiltered.filter((m) => bucket(m) === "old" && m.exists);
+
+  const group = (title, list, emptyHint) => (
+    <div key={title}>
+      <div className="fx-root">{title}（{list.length}）</div>
+      {list.length > 0 ? list.map((m, i) => (
+        <React.Fragment key={m.path + i}>{fileRow(m, 0)}</React.Fragment>
+      )) : emptyHint && <div className="fx-hint">{emptyHint}</div>}
+    </div>
+  );
+
+  const showTree = !q || true; // 搜索时仍显示树（树内已过滤）
 
   return (
     <div className="aux-tab">
+      <div className="fx-search">
+        <input className="fx-q" placeholder="搜索文件/目录…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button className="msg-op" title="刷新" onClick={() => load(true)}>⟳</button>
+      </div>
       {roots && (
         <>
-          <div className="fx-root">
-            <span title={roots.active_dir}>{roots.active_dir}</span>
-            {roots.active_dir && (
-              <button className="fx-act" title="打开工作区文件夹" onClick={() => openDir(roots.active_dir)}>打开</button>
-            )}
+          <div className="fx-root" style={{ marginTop: 2 }}>
+            <span title={roots.active_dir} className="fx-rootpath">{roots.active_dir}</span>
+            {roots.active_dir && <button className="fx-act" title="打开工作区文件夹" onClick={() => openDir(roots.active_dir)}>打开</button>}
           </div>
-          <div className="fx-root">⭐ 最近产物（{roots.recent?.length || 0}）</div>
-          <div className="fx-recent">
-            {(roots.recent || []).slice(0, 8).map((r, i) => (
-              <div className="fx-row" key={i} title={r}>
-                <span className="fx-fname" onDoubleClick={() => openFile(r)}>📦 {String(r).split(/[\\/]/).pop()}</span>
-                <button className="fx-act" title="打开文件" onClick={() => openFile(r)}>打开</button>
-                <button className="fx-act" title="打开所在文件夹" onClick={() => openDir(r)}>⌖</button>
-                <button className="fx-act" title="读取内容到输入框" onClick={() => onInject && onInject(r)}>注入</button>
-              </div>
-            ))}
-          </div>
-          <div className="fx-root">📁 工作区</div>
-          {(roots.entries || []).map((e) => (
-            <React.Fragment key={e.path}>
-              {entry(e, 0)}
-              {e.is_dir && renderDir(e.path, 0)}
-            </React.Fragment>
-          ))}
+
+          {group("⭐ 收藏", favList, "点文件/目录旁的 ☆ 收藏到这里")}
+          {group("⏱ 刚刚产出", just, null)}
+          {group("📅 今天", today, null)}
+          {group("🕘 更早", older, q ? "没有匹配的更早文件" : null)}
+
+          {!q && recent.length === 0 && favList.length === 0 && (
+            <div className="fx-hint">还没有产物——让 AI 写文件/出图后会出现在这里。</div>
+          )}
+
+          <div className="fx-root">🗂 全部文件</div>
+          {showTree && (roots.entries || []).filter((e) => !q || e.name.toLowerCase().includes(q.toLowerCase())).length === 0 && q ? (
+            <div className="fx-hint">工作区无匹配项</div>
+          ) : (
+            (roots.entries || []).map((e) => {
+              if (q && !e.name.toLowerCase().includes(q.toLowerCase())) {
+                // 搜索模式下仅展开含匹配项的目录
+                return e.is_dir ? <React.Fragment key={e.path}><div style={{ paddingLeft: 6 }} className="fx-row">
+                  <button className="fx-dir" onClick={() => toggle(e.path)}>{expanded[e.path] ? "▾" : "▸"} 📁 {e.name}</button>
+                </div>{renderDir(e.path, 0)}</React.Fragment> : null;
+              }
+              return (
+                <React.Fragment key={e.path}>
+                  {entry(e, 0)}
+                  {e.is_dir && renderDir(e.path, 0)}
+                </React.Fragment>
+              );
+            })
+          )}
         </>
       )}
       {!roots && <div className="fx-hint">加载中…</div>}
@@ -180,6 +286,7 @@ function FilesTab({ onInject }) {
     </div>
   );
 }
+
 
 // ── ⚙ 进程：终端输出 ───────────────────────────────
 function ProcessesTab({ onInject }) {
@@ -492,9 +599,112 @@ function ParamsTab() {
   );
 }
 
+// ═══ 🔧 活动（AI 工具调用链 · 实时）═══════
+// 工具执行从聊天流"搬"到这里：聊天不再堆详细工具卡，活动区按最近一次任务实时
+// 列出每一步（名称/状态/耗时），点开某步才见参数与结果——感知与"奖励感"在，细节不刷屏。
+function ActivityTab({ activity, onOpenChatTools, onGoFiles, onInject }) {
+  const [expanded, setExpanded] = React.useState(null);
+  const steps = (activity && activity.steps) || [];
+  const streaming = !!(activity && activity.streaming);
+  const done = steps.filter((s) => s.status === "done").length;
+  const failed = steps.filter((s) => s.status === "failed").length;
+
+  React.useEffect(() => setExpanded(null), [activity && activity.taskId]);
+
+  const products = React.useMemo(() => extractProducts(activity && activity.text), [activity && activity.text]);
+  const prodAct = (path, act) => {
+    if (act === "opendir") api.openDir(path);
+    else api.openFile(path);
+  };
+
+  return (
+    <div className="aux-tab">
+      <div className={"act-products " + (products.length > 0 ? "act-products-pinned" : "act-products-empty")}>
+        <div className="act-products-head">
+          <span className="act-products-title">📦 产物直达（{products.length}）</span>
+          {products.length > 0 && onGoFiles && (
+            <button className="msg-op" title="去文件栏管理" onClick={() => onGoFiles()}>去文件 ▸</button>
+          )}
+        </div>
+        {products.length > 0 ? (
+          <div className="act-prod-list">
+            {products.map((p, i) => (
+              <div className="act-prod-chip" key={p + i} title={p}>
+                <span className="act-prod-name">📄 {String(p).split(/[\\/]/).pop()}</span>
+                <button className="msg-op" title="打开" onClick={() => prodAct(p, "open")}>打开</button>
+                <button className="msg-op" title="打开所在文件夹" onClick={() => prodAct(p, "opendir")}>⌖</button>
+                {onInject && <button className="msg-op" title="读取内容到输入框" onClick={() => onInject(p)}>注入</button>}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="fx-hint">AI 写出文件后会置顶出现在这里（打开/⌖/注入/去文件）。</div>
+        )}
+      </div>
+
+      <div className="px-head" style={{ marginBottom: 6 }}>
+        <b style={{ fontSize: 12.5 }}>{activity && activity.label ? activity.label : "工具活动"}</b>
+        {steps.length > 0 && (
+          <span className={"px-badge " + (streaming ? "px-badge-run" : failed ? "px-badge-exit" : "px-badge-ok")}>
+            {streaming ? `⏳ ${done}/${steps.length}` : failed ? `⚠ ${failed} 失败` : `✓ ${steps.length} 完成`}
+          </span>
+        )}
+      </div>
+
+      {steps.length === 0 ? (
+        <div className="fx-hint">AI 调用工具时会实时显示在这里（不占用聊天正文）。</div>
+      ) : (
+        <div className="act-list">
+          {steps.map((s, i) => {
+            const isOpen = expanded === i;
+            const isRun = s.status === "running";
+            return (
+              <div key={i} className={"act-item " + (isOpen ? "act-open " : "") + s.status}>
+                <button className="act-row" onClick={() => setExpanded(isOpen ? null : i)}>
+                  <span className="act-icon">
+                    {isRun ? <span className="act-spin" /> : s.status === "done" ? "✓" : s.status === "failed" ? "✕" : "…"}
+                  </span>
+                  <span className="act-name">{s.tool}</span>
+                  <span className="act-meta">
+                    {s.status === "done" && s.duration ? `${s.duration}s` : ""}
+                    {isRun ? "执行中…" : s.status === "failed" ? "失败" : ""}
+                  </span>
+                  <span className="act-chev">{isOpen ? "▾" : "▸"}</span>
+                </button>
+                {isOpen && (
+                  <div className="act-detail">
+                    {s.argsText && <div className="act-args">参数：{s.argsText}</div>}
+                    {s.result != null && (
+                      <pre className="act-result">{String(s.result)}</pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 面板容器（默认「参数」控制台：模型/思考档/场景一秒可切换）──
-export default function AuxPanel({ onClose, onInjectFile }) {
-  const [tab, setTab] = React.useState("params");
+export default function AuxPanel({ onClose, onInjectFile, activity, onOpenChat, tab, onTabChange }) {
+  const isControlled = tab != null && typeof onTabChange === "function";
+  const [internalTab, setInternalTab] = React.useState("params");
+  const curTab = isControlled ? tab : internalTab;
+  const setCurTab = isControlled ? onTabChange : setInternalTab;
+  const wasStreaming = React.useRef(false);
+  // 仅当"从空闲→开始执行"这一跳自动切到「活动」，避免执行中反复跳 tab 打扰
+  const hasRun = !!(activity && activity.steps && activity.steps.length > 0 && activity.streaming);
+  React.useEffect(() => {
+    if (hasRun) {
+      if (!wasStreaming.current) setCurTab("activity");
+      wasStreaming.current = true;
+    } else {
+      wasStreaming.current = false; // 任务结束/无执行 → 复位，下一任务到来再自动切
+    }
+  }, [hasRun, setCurTab]);
   return (
     <aside className="aux-panel">
       <div className="aux-head">
@@ -506,14 +716,20 @@ export default function AuxPanel({ onClose, onInjectFile }) {
         </button>
       </div>
       <div className="aux-tabs">
-        <button className={`aux-tab-btn ${tab === "params" ? "aux-tab-on" : ""}`} onClick={() => setTab("params")}>🎛 参数</button>
-        <button className={`aux-tab-btn ${tab === "files" ? "aux-tab-on" : ""}`} onClick={() => setTab("files")}>📂 文件</button>
-        <button className={`aux-tab-btn ${tab === "procs" ? "aux-tab-on" : ""}`} onClick={() => setTab("procs")}>⚙ 进程</button>
+        <button className={`aux-tab-btn ${curTab === "activity" ? "aux-tab-on" : ""}`}
+          onClick={() => setCurTab("activity")}
+          title="AI 工具调用链（实时，点开看细节）">🔧 活动
+          {activity && activity.streaming && <span className="aux-tab-dot" aria-hidden="true" />}
+        </button>
+        <button className={`aux-tab-btn ${curTab === "params" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("params")}>🎛 参数</button>
+        <button className={`aux-tab-btn ${curTab === "files" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("files")}>📂 文件</button>
+        <button className={`aux-tab-btn ${curTab === "procs" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("procs")}>⚙ 进程</button>
       </div>
       <div className="aux-body">
-        {tab === "params" && <ParamsTab />}
-        {tab === "files" && <FilesTab onInject={onInjectFile} />}
-        {tab === "procs" && <ProcessesTab />}
+        {curTab === "activity" && <ActivityTab activity={activity} onOpenChatTools={onOpenChat} onGoFiles={() => setCurTab("files")} onInject={onInjectFile} />}
+        {curTab === "params" && <ParamsTab />}
+        {curTab === "files" && <FilesTab onInject={onInjectFile} />}
+        {curTab === "procs" && <ProcessesTab />}
       </div>
     </aside>
   );

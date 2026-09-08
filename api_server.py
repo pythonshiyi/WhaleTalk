@@ -952,11 +952,71 @@ def build_situation(section=None):
     return out
 
 
+def _file_meta(p, base=None):
+    """给路径补前端展示元数据：是否存在/名称/类型/大小/修改时间/相对路径。
+    不存在的旧产物仍在(便于提示"已删除")，exists=False。"""
+    try:
+        st = os.stat(p)
+        is_dir = os.path.isdir(p)
+        rel = ""
+        if base:
+            try:
+                rel = os.path.relpath(p, base)
+            except Exception:
+                rel = p
+        return {
+            "path": p,
+            "name": os.path.basename(p.rstrip("/\\")) or p,
+            "rel": rel if base else p,
+            "exists": True,
+            "is_dir": is_dir,
+            "size": st.st_size if os.path.isfile(p) else 0,
+            "size_label": _fmt_size(st.st_size) if os.path.isfile(p) else "",
+            "mtime": int(st.st_mtime),
+            "mtime_label": time.strftime("%m-%d %H:%M", time.localtime(st.st_mtime)),
+            "ext": os.path.splitext(p)[1].lstrip(".").lower() if os.path.isfile(p) else "",
+        }
+    except Exception:
+        return {
+            "path": p,
+            "name": os.path.basename(p.rstrip("/\\")) or p,
+            "exists": False,
+            "is_dir": False,
+            "size": 0, "size_label": "",
+            "mtime": 0, "mtime_label": "",
+            "ext": "",
+        }
+
+
+def _fmt_size(n):
+    try:
+        if n >= 1 << 20:
+            return f"{n / (1 << 20):.1f}MB"
+        if n >= 1 << 10:
+            return f"{n / (1 << 10):.0f}KB"
+        return f"{n}B"
+    except Exception:
+        return ""
+
+
 def _files():
-    """文件与产物：最近产物 + 工作区顶层条目。"""
+    """文件与产物：最近产物(带元数据) + 工作区顶层条目 + 收藏列表。"""
     import stores
-    recent = stores.load_recent(RECENT_PATH)[-30:]
+    recent_paths = stores.load_recent(RECENT_PATH)[-30:]
     active_dir = _status()["active_dir"]
+    recent = []
+    for p in reversed(recent_paths):  # 新→旧
+        recent.append(_file_meta(p, base=active_dir))
+    favs = stores.load_favs(FAV_PATH)
+    fav_meta = []
+    fav_set = set()
+    for p in favs:
+        fp = _file_meta(p, base=active_dir)
+        fav_meta.append(fp)
+        try:
+            fav_set.add(os.path.abspath(p))
+        except Exception:
+            pass
     entries = []
     try:
         for fn in sorted(os.listdir(active_dir)):
@@ -968,13 +1028,21 @@ def _files():
                     "path": p,
                     "is_dir": os.path.isdir(p),
                     "size": st.st_size if os.path.isfile(p) else 0,
+                    "size_label": _fmt_size(st.st_size) if os.path.isfile(p) else "",
                     "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime)),
+                    "mtime_epoch": int(st.st_mtime),
                 })
             except Exception:
                 continue
     except Exception:
         pass
-    return {"active_dir": active_dir, "recent": recent, "entries": entries[:60]}
+    return {
+        "active_dir": active_dir,
+        "recent": recent,
+        "favs": fav_meta,
+        "entries": entries[:60],
+        "_fav_set": list(fav_set),
+    }
 
 
 def _tasks():
@@ -1594,10 +1662,12 @@ def _start_process(body):
 
 def _list_dir(path):
     """列目录（文件面板树，懒加载）。"""
+    import stores
     path = os.path.abspath(os.path.expanduser(str(path or "")))
     if not os.path.isdir(path):
         return None, "目录不存在"
     entries = []
+    fav_set = set(stores.load_favs(FAV_PATH)) if True else set()
     try:
         for fn in sorted(os.listdir(path)):
             p = os.path.join(path, fn)
@@ -1610,7 +1680,11 @@ def _list_dir(path):
                     "path": p,
                     "is_dir": os.path.isdir(p),
                     "size": st.st_size if os.path.isfile(p) else 0,
+                    "size_label": _fmt_size(st.st_size) if os.path.isfile(p) else "",
                     "mtime": time.strftime("%m-%d %H:%M", time.localtime(st.st_mtime)),
+                    "mtime_epoch": int(st.st_mtime),
+                    "ext": os.path.splitext(fn)[1].lstrip(".").lower() if os.path.isfile(p) else "",
+                    "faved": p in fav_set,
                 })
             except Exception:
                 continue
@@ -4545,6 +4619,7 @@ USER_ROLES_PATH = os.path.join(DATA_DIR, "user_roles.json")
 PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
 SCHEDULES_PATH = os.path.join(DATA_DIR, "schedules.json")
 RECENT_PATH = os.path.join(DATA_DIR, "recent_outputs.json")
+FAV_PATH = os.path.join(DATA_DIR, "favorites.json")
 WORKSPACE_DIR = os.path.join(DATA_DIR, "workspace")
 EVOLUTIONS_DIR = os.path.join(_ORIG_DIR, "evolutions")
 ARCHIVES_DIR = os.path.join(DATA_DIR, "archives")
@@ -6631,6 +6706,22 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": err})
         else:
             self._json(200, data)
+
+
+    @_post_route("/v1/files/fav")
+    def _p_v1_files_fav(self):
+        """收藏/取消收藏一个文件或目录（favorites.json）。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        path = str(body.get("path") or "").strip()
+        if not path:
+            self._json(400, {"error": "缺少 path"})
+            return
+        import stores
+        fav_set, favs = stores.toggle_fav(path, FAV_PATH)
+        self._json(200, {"ok": True, "faved": fav_set, "count": len(favs)})
 
 
     @_post_route("/v1/processes/stop")

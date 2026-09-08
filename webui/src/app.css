@@ -313,6 +313,20 @@ button {
   overflow: hidden;
   animation: msgIn .25s var(--ease);
 }
+/* 聊天内工具链摘要（默认收起，点开展开 N 张工具卡） */
+.tool-summary {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  margin: 6px 0 10px; padding: 7px 12px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--r-md); color: var(--text-2);
+  font-size: var(--fs-sm); cursor: pointer; text-align: left;
+  transition: border-color .15s var(--ease), background .15s var(--ease);
+}
+.tool-summary:hover { border-color: var(--border-strong); background: var(--bg-3); }
+.tool-summary-icon { font-size: 12px; }
+.tool-summary-text { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tool-summary-chev { color: var(--text-3); font-size: 10px; }
+.tool-card-list { animation: msgIn .2s var(--ease); }
 .tool-card-head {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 14px; cursor: pointer;
@@ -1683,6 +1697,31 @@ button {
 .fx-hint { color: var(--text-3); font-size: 10px; padding: 2px 6px; }
 .fx-err { color: var(--danger); }
 .fx-recent { margin-bottom: 4px; }
+/* 文件栏智能分组增强 */
+.fx-search { display: flex; align-items: center; gap: 6px; margin: 6px 0 4px; }
+.fx-q {
+  flex: 1; min-width: 0; font-size: var(--fs-xs); padding: 6px 9px;
+  background: var(--bg-2); border: 1px solid var(--border-strong);
+  color: var(--text-1); border-radius: var(--r-md); outline: none;
+  font-family: var(--font-ui);
+}
+.fx-q:focus { border-color: rgba(var(--brand-rgb),.55); box-shadow: 0 0 0 3px rgba(var(--brand-rgb),.10); }
+.fx-rootpath { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 9px; }
+.fx-row { align-items: center; min-height: 20px; }
+.fx-fav {
+  flex-shrink: 0; width: 16px; background: none; border: none; cursor: pointer;
+  font-size: 11px; color: var(--text-3); padding: 0; line-height: 1; text-align: center;
+}
+.fx-fav:hover { color: var(--warn); }
+.fx-fav-on { color: var(--warn) !important; }
+.fx-fname { display: inline-flex; align-items: center; gap: 3px; }
+.fx-size { font-size: 9px; color: var(--text-3); flex-shrink: 0; margin-left: 2px; font-family: var(--font-mono); }
+.fx-time { font-size: 9px; color: var(--text-3); flex-shrink: 0; font-family: var(--font-mono); }
+.fx-acts { margin-left: auto; display: inline-flex; gap: 2px; flex-shrink: 0; }
+.fx-acts .fx-act { opacity: 0; }
+.fx-row:hover .fx-acts .fx-act { opacity: 1; }
+.fx-missing { opacity: .5; }
+.fx-fname-missing { text-decoration: line-through; color: var(--danger); }
 
 /* 进程 tab */
 .px-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
@@ -1692,6 +1731,36 @@ button {
 .px-badge { font-size: 9px; font-weight: 700; padding: 1px 8px; border-radius: var(--r-full); }
 .px-badge-run { color: var(--ok); background: var(--ok-soft); }
 .px-badge-exit { color: var(--danger); background: var(--danger-soft); }
+.px-badge-ok { color: var(--ok); background: var(--ok-soft); }
+/* 「活动」tab 小红点：有工具正在执行时提示 */
+.aux-tab-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--brand); margin-left: 3px; vertical-align: 1px; animation: breathe 1.6s var(--ease) infinite; }
+/* 活动 tab：工具调用链（名称/状态/耗时一行，点开看参数+结果） */
+.act-list { display: flex; flex-direction: column; gap: 4px; }
+.act-item { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; background: var(--bg-2); }
+.act-item.failed { border-color: rgba(var(--danger-rgb),.35); }
+.act-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; padding: 7px 10px; cursor: pointer;
+  color: var(--text-1); font-size: var(--fs-xs); text-align: left;
+}
+.act-row:hover { background: var(--bg-hover); }
+.act-icon { width: 14px; text-align: center; color: var(--text-3); flex-shrink: 0; }
+.act-item.done .act-icon { color: var(--ok); }
+.act-item.failed .act-icon { color: var(--danger); }
+.act-spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--border-strong); border-top-color: var(--brand); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -1px; }
+.act-name { flex: 1; min-width: 0; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-meta { color: var(--text-3); font-size: 10px; flex-shrink: 0; }
+.act-item.running .act-meta { color: var(--brand-strong); }
+.act-chev { color: var(--text-3); font-size: 9px; flex-shrink: 0; }
+.act-detail { border-top: 1px solid var(--border); padding: 8px 10px; background: var(--bg-1); }
+.act-args { font-size: var(--fs-xs); color: var(--text-2); margin-bottom: 6px; word-break: break-all; }
+.act-result {
+  margin: 0; font-size: 11px; line-height: 1.6; color: var(--text-2);
+  font-family: var(--font-mono); white-space: pre-wrap; word-break: break-word;
+  max-height: 220px; overflow-y: auto; user-select: text;
+}
+.act-item.done .act-result { color: var(--text-2); }
+.act-item.failed .act-result { color: var(--danger); }
 .px-term {
   background: var(--code-bg); border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -2725,3 +2794,19 @@ button { -webkit-tap-highlight-color: transparent; }
   border: 2px solid var(--border-strong); border-top-color: var(--brand);
   animation: spin .8s linear infinite; margin-right: 8px; flex-shrink: 0;
 }
+
+/* 活动 tab：产物直达（置顶抽屉，pinned 时带边框强调） */
+.act-products { border-radius: var(--r-md); padding: 6px 8px; margin: 0 0 8px; }
+.act-products-pinned { background: var(--brand-soft); border: 1px solid rgba(var(--brand-rgb),.35); }
+.act-products-empty { background: transparent; }
+.act-products-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.act-products-title { font-size: var(--fs-xs); font-weight: 700; color: var(--text-1); }
+.act-prod-list { display: flex; flex-direction: column; gap: 2px; }
+.act-prod-chip {
+  display: flex; align-items: center; gap: 4px; font-size: var(--fs-xs);
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 2px 6px;
+}
+.act-prod-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.act-prod-chip .msg-op { font-size: 9px; padding: 1px 6px; opacity: .8; }
+.act-prod-chip:hover .msg-op { opacity: 1; }
