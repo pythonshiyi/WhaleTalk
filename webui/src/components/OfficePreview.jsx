@@ -98,11 +98,11 @@ export function EditableTable({ path, name, header = [], rows = [], total = 0 })
       <div style={{ opacity: .8, marginBottom: 4 }}>
         📊 {name}（{total > 0 ? total + " 行" : (rows.length || 0) + " 行"}）· 可点击单元格编辑
       </div>
-      <div style={{ overflow: "auto", maxHeight: 320, border: "1px solid var(--border)", borderRadius: 8 }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
+      <div style={{ overflow: "auto", maxHeight: 320, border: "1px solid var(--border)", borderRadius: "var(--r-md)" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "var(--fs-sm)" }}>
           {header.length > 0 && (
             <thead><tr>{(header || []).map((h, i) => (
-              <th key={i} style={{ padding: "4px 8px", background: "rgba(128,140,160,.15)", textAlign: "left", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
+              <th key={i} style={{ padding: "4px 8px", background: "var(--bg-3)", textAlign: "left", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
             ))}</tr></thead>
           )}
           <tbody>
@@ -201,7 +201,7 @@ export function DocxEditable({ path, name, content = "" }) {
   return (
     <div style={{ marginTop: 4 }}>
       <div style={{ opacity: .8, marginBottom: 4 }}>📄 {name}（Word 内容预览）{editableCount > 0 ? `· ${editableCount} 段可 ✎ 就地编辑` : "· 只读展示（表格/代码块请在对话中指示 AI 修改）"}</div>
-      <div style={{ maxHeight: 380, overflow: "auto", borderRadius: 8, border: "1px solid var(--border)", padding: 8, background: "var(--bg-1, rgba(0,0,0,.02))" }}>
+      <div style={{ maxHeight: 380, overflow: "auto", borderRadius: "var(--r-md)", border: "1px solid var(--border)", padding: 8, background: "var(--bg-1)" }}>
         {blocks.map((b, i) => (
           <div key={i} style={{ position: "relative", margin: "2px 0" }} onMouseEnter={(e) => { const el = e.currentTarget.querySelector(".blk-edit"); if (el) el.style.opacity = 1; }} onMouseLeave={(e) => { const el = e.currentTarget.querySelector(".blk-edit"); if (el) el.style.opacity = 0; }}>
             <div className="blk-edit" style={{ position: "absolute", right: 2, top: 0, opacity: 0, transition: "opacity .15s", zIndex: 2 }}>
@@ -236,7 +236,7 @@ export function TextDocPreview({ data }) {
     <div style={{ marginTop: 4 }}>
       <div style={{ opacity: .8, marginBottom: 4 }}>📄 {d.name}{isPptx ? "（PPT 内容预览）" : d.docx ? "（Word 内容预览）" : "（文档预览）"}</div>
       {d.content ? (
-        <div style={{ maxHeight: 360, overflow: "auto", borderRadius: 8, border: "1px solid var(--border)", padding: 8, background: "var(--bg-1, rgba(0,0,0,.02))" }}>
+        <div style={{ maxHeight: 360, overflow: "auto", borderRadius: "var(--r-md)", border: "1px solid var(--border)", padding: 8, background: "var(--bg-1)" }}>
           <Markdown text={d.content} deferCode={false} />
         </div>
       ) : (

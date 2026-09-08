@@ -42,7 +42,7 @@ function BrainKanban() {
       {err && <div className="sched-text" style={{ color: "var(--danger)", marginBottom: 8 }}>⚠ {err}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, alignItems: "start" }}>
         {COLS.map((c) => (
-          <div key={c.key} style={{ background: "var(--panel, rgba(127,127,127,.06))", borderRadius: 10, padding: 8 }}>
+          <div key={c.key} style={{ background: "var(--panel)", borderRadius: "var(--r-sm)", padding: 8 }}>
             <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>
               {c.title} <span style={{ opacity: 0.6 }}>({grouped[c.key].length})</span>
             </div>

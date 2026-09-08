@@ -83,7 +83,7 @@ function EvTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">📋 进化提案（create_evolution）</div>
         {evs === null ? (
-          <div className="empty-tip">加载中…</div>
+          <div className="empty-tip is-loading">加载中…</div>
         ) : evs.length === 0 ? (
           <EmptyState icon="💡" title="还没有进化提案" hint="让 AI 用 create_evolution 提出改进方案（如：对 X 提出改进提案），方案会出现在这里供你审阅采纳。" compact />
         ) : (
@@ -117,7 +117,7 @@ function EvTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">🔀 自我进化分支（self_evolve）</div>
         {branches === null ? (
-          <div className="empty-tip">加载中…</div>
+          <div className="empty-tip is-loading">加载中…</div>
         ) : branches.length === 0 ? (
           <EmptyState icon="🌿" title="还没有改进分支" hint="AI 用 self_evolve 提交的改进分支会出现在这里，可查看 diff 后合并。" compact />
         ) : (
@@ -168,7 +168,7 @@ function ApprovalTab({ onToast }) {
     <div className="au-card">
       <div className="au-card-title">🛡 审批与询问记录（最近 200 条）</div>
       {items === null ? (
-        <div className="empty-tip">加载中…</div>
+        <div className="empty-tip is-loading">加载中…</div>
       ) : items.length === 0 ? (
         <EmptyState icon="📋" title="还没有审批记录" hint="AI 请求权限或向你提问时，记录会出现在这里。" compact />
       ) : (
@@ -205,7 +205,7 @@ function ActivityTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">🗂 最近任务（tasklog · AI 干了什么）</div>
         {tasks === null ? (
-          <div className="empty-tip">加载中…</div>
+          <div className="empty-tip is-loading">加载中…</div>
         ) : tasks.length === 0 ? (
           <div className="empty-tip">暂无任务记录</div>
         ) : (
@@ -227,7 +227,7 @@ function ActivityTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">🧾 审计日志（最近 200 条）</div>
         {audit === null ? (
-          <div className="empty-tip">加载中…</div>
+          <div className="empty-tip is-loading">加载中…</div>
         ) : audit.length === 0 ? (
           <div className="empty-tip">暂无审计记录（工具调用审计未开启或尚未产生）</div>
         ) : (
@@ -252,7 +252,7 @@ function SelfTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">🧠 核心自我状态（self_profile · 跨会话连续）</div>
         {profile === null ? (
-          <div className="empty-tip">加载中…</div>
+          <div className="empty-tip is-loading">加载中…</div>
         ) : (
           <pre className="au-profile">{profile}</pre>
         )}
@@ -260,7 +260,7 @@ function SelfTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">💥 失败模式库（AI 犯过的错 · 下次自动规避）</div>
         {failures === null ? (
-          <div className="empty-tip">加载中…</div>
+          <div className="empty-tip is-loading">加载中…</div>
         ) : failures.length === 0 ? (
           <div className="empty-tip">暂无失败记录</div>
         ) : (

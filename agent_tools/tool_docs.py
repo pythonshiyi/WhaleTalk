@@ -558,7 +558,7 @@ def _excel_append_rows(ws, data_rows, cols):
             "type": "function",
             "function": {
                 "name": "write_excel",
-                "description": "写入 Excel（.xlsx）。mode=overwrite 覆盖(默认，备份.bak)、append 追加到已有文件末尾、update 覆盖指定 sheet 首块区域(保留其它单元格/格式)。data=行数组或对象数组；sheets={表名:数据行} 多表。可选 header/start_cell/style/charts（见参数）。数值类型保留",
+                "description": "写入 Excel：overwrite 覆盖(默认，备份.bak)/append 追加/update 覆盖指定区域。data=行数组或对象数组；sheets={表名:数据行} 多表。可选 header/start_cell/style/charts",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1776,7 +1776,7 @@ def docx_read(path, max_chars=50000):
             "type": "function",
             "function": {
                 "name": "docx_edit",
-                "description": "就地编辑已有 .docx：action=replace 全文查找替换文本；action=insert 在含 anchor 的段落后插入新段落 text（可带 **加粗** 等行内）；action=append 在文档末尾追加段落 text。保留段落样式与其它内容",
+                "description": "就地编辑 .docx：replace=全文查找替换；insert=在含 anchor 的段落后插入新段落(可带 **加粗** 行内)；append=文末追加。保留段落样式",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -2275,7 +2275,7 @@ def _pptx_add_picture(slide, path, left_in, top_in, width_in=None, height_in=Non
             "type": "function",
             "function": {
                 "name": "pptx_create",
-                "description": "生成 PowerPoint .pptx。slides 数组每页可含：title/body(要点，支持md清洗)/bullets/notes/table/image（本地图片：单路径或[{path,left,top,width,height,cover,caption}]多图，cover自动居中裁铺）。主题含辅助色+封面大图。cover_image 做封面全幅背景图(自动压暗叠标题)。outline 传 markdown(#分页)。中文字体自动嵌入",
+                "description": "生成 .pptx。每页可含 title/body(md)/bullets/table/image(本地图,cover 裁铺)/notes；支持 cover_image 封面背景、outline 传 markdown(#分页)、中文字体自动嵌入",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -2813,7 +2813,7 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
             "type": "function",
             "function": {
                 "name": "create_doc",
-                "description": "创建文档。.md/.html 原生支持；.docx 由 python-docx 渲染 Markdown 富文本（标题层级/加粗/斜体/行内代码/链接/有序与无序列表/表格/代码块/引用/水平线），中文字体自动处理。docx 可选 style 预设（default/formal/blueprint，控制标题色/正文字体字号）。注意：不支持 .pptx/.pdf——PPT 请用 pptx_create，PDF 请用 pdf_create",
+                "description": "创建文档。.md/.html 原生；.docx 用 python-docx 渲染 Markdown 富文本(标题/加粗/列表/表格/代码)，中文字体自动处理，可设 style。不支持 .pptx/.pdf，分别用 pptx_create/pdf_create",
                 "parameters": {
                     "type": "object",
                     "properties": {

@@ -243,7 +243,7 @@ export default function PromptsPage({ onApply }) {
         </aside>
 
         <main className="pm-main">
-          {!items && <div className="empty-tip">加载中…</div>}
+          {!items && <div className="empty-tip is-loading">加载中…</div>}
           {items && filtered.length === 0 && (
             <div className="empty-tip">没有匹配的指令（换个筛选条件，或点「＋ 新建指令」）</div>
           )}

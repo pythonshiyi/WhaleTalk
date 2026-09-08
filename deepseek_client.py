@@ -3144,16 +3144,19 @@ register_tool(
             "type": "function",
             "function": {
                 "name": "ask_user",
-                "description": "向用户提问（遇到歧义、缺少关键信息、需确认高风险操作时使用）。阻塞等待用户回答后继续",
+                "description": "向用户提问并等待选择/回答（遇到歧义、缺少关键信息、需用户在多个方案中拍板时使用）。建议在 prompt 中说明并优先给 options 供一键选择；无 options 时用户可自由输入。阻塞等待用户响应后继续",
                 "parameters": {
                     "type": "object",
-                    "properties": {"prompt": {"type": "string", "description": "向用户提出的问题（简洁明确，可给出选项）"}},
+                    "properties": {
+                        "prompt": {"type": "string", "description": "向用户提出的问题（简洁明确）"},
+                        "options": {"type": "array", "description": "可选答案列表（2-6 项，供用户一键选择；可省略则用户自由输入）", "items": {"type": "string"}},
+                    },
                     "required": ["prompt"],
                 },
             },
         },
     groups=['🔧 系统与基础'],
-    phrases='向用户提问（澄清/确认）',
+    phrases='向用户提问（澄清/确认/请用户在选项中拍板）',
 )
 register_tool(
         {
@@ -4245,17 +4248,31 @@ class DeepSeekClient:
                     args = {}
                     t0 = time.monotonic()
                     if name == "ask_user":
-                        # 询问用户：阻塞等待 UI 回答（on_ask 由 main 提供）
+                        # 询问用户：阻塞等待 UI 回答（on_ask 由 main 提供，支持 options 一键选择）
                         try:
                             qargs = _parse_tool_args(raw_args)
-                            prompt = str(qargs.get("prompt") or "") if isinstance(qargs, dict) else ""
+                            if isinstance(qargs, dict):
+                                prompt = str(qargs.get("prompt") or "")
+                                opts = qargs.get("options")
+                                if opts is None:
+                                    opts = qargs.get("choices")
+                                options = None
+                                if isinstance(opts, (list, tuple)):
+                                    cleaned = [str(o).strip() for o in opts if str(o).strip()]
+                                    options = cleaned[:6] or None
+                            else:
+                                prompt = raw_args[:200]
+                                options = None
                         except ValueError:
                             prompt = raw_args[:200]
+                            options = None
                         if not prompt:
                             prompt = "请提供需要用户回答的问题"
                         if on_ask is not None:
-                            result = on_ask(prompt)
+                            result = on_ask(prompt, options)
                             args = {"prompt": prompt}
+                            if options:
+                                args["options"] = options
                         else:
                             result = "错误：无法询问用户（当前环境不支持交互式询问）"
                     elif name == "request_permission":

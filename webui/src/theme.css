@@ -222,3 +222,15 @@ select, input, textarea { font-family: inherit; }
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ═══ 语义别名令牌（供历史/脑组件引用） ═════════════ */
+/* 这些名字在 theme.css 长期缺失，导致 var(--accent) 等静默落到 hex 兜底、
+   无法随主题变化。此处统一收敛为对「规范令牌」的别名，随主题惰性解析：
+   --accent ≈ 品牌强调色(蓝) · --success = 成功(绿) · --panel = 表面层 ·
+   --bg = 页面底色。单一取色来源仍为左侧规范令牌，避免双名漂移。 */
+:root {
+  --accent: var(--brand);
+  --success: var(--ok);
+  --panel: var(--bg-2);
+  --bg: var(--bg-0);
+}

@@ -344,7 +344,7 @@ export default function PluginsPage({ onApply }) {
               🧩 AI 插件设计工坊——描述需求，AI 帮你造插件
             </button>
           </div>
-          {err && <div className="empty-tip">{err}</div>}
+          {err && <div className="empty-tip is-err">{err}</div>}
           <div className="plugin-grid">
             {gallery.map((p) => <Card key={p.name} p={p} />)}
           </div>
@@ -359,7 +359,7 @@ export default function PluginsPage({ onApply }) {
               {marketInfo.signature_enforced ? "🔒 已强制 Ed25519 签名校验" : "🔒 下载后 SHA-256 校验"} · 来源 {marketInfo.source}
             </span>
           </div>
-          {marketInfo.error && <div className="empty-tip">市场索引不可用：{marketInfo.error}</div>}
+          {marketInfo.error && <div className="empty-tip is-err">市场索引不可用：{marketInfo.error}</div>}
           <div className="plugin-grid">
             {market.map((p) => {
               const tm = TIER_META[p.tier] || TIER_META.community;
@@ -403,7 +403,7 @@ export default function PluginsPage({ onApply }) {
 
       {tab === "installed" && (
         <>
-          {err && <div className="empty-tip">{err}</div>}
+          {err && <div className="empty-tip is-err">{err}</div>}
         <div className="plugin-grid">
           {installed.length === 0 && <div className="empty-tip">暂无已安装插件——去画廊安装或 AI 工坊生成</div>}
           {installed.map((p) => (

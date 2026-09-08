@@ -1,3 +1,25 @@
+/* ═══════════════════════════════════════════════════
+   鲸语 WhaleTalk 组件样式 · app.css
+   本文件与 theme.css（设计令牌/主题）分离；按逻辑域以 ═══ 区段头分层。
+   规范令牌(theme.css)：--bg-* / --text-* / --border* / --brand / --ok / --warn /
+   --danger / --ai / --r-* / --sp-* / --fs-* / --ease。UI 一律引用令牌，勿裸写色值。
+
+   区段索引（随文件演化，新增请在对应域追加并在下方登记）：
+   ─ 布局骨架      L1        ─ 侧边栏          L27
+   ─ 会话页三栏    L107      ─ 输入区          L503
+   ─ 上下文面板    L604      ─ 通用页面/插件   L662
+   ─ 欢迎页        L1060     ─ 顶栏菜单        L1103
+   ─ 状态栏        L1164     ─ overlay 面板    L1197
+   ─ 任务/文件/进化 L1228    ─ 确认门          L1268
+   ─ 指令/目录      L1326     ─ 权限/能力中心   L1353
+   ─ 消息操作       L1424     ─ 能力测试台      L1447
+   ─ 消息徽标/密度  L1491     ─ 控制台/文件     L1574
+   ─ Toast/美化     L1734     ─ 设置页          L1819
+   ─ 多选/收藏      L1840     ─ 进化/搜索/任务  L1862
+   ─ 会话批删/工坊  L1952     ─ 指令库          L1976
+   ─ 工作台 v2/v3   L2135     ─ 自主            L2335
+   ─ 按钮体系       L2624     ─ 空状态/三态     L2645
+═══════════════════════════════════════════════════ */
 /* ═══ 布局骨架 ═══════════════════════════════════ */
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
@@ -1247,7 +1269,21 @@ button {
 .evo-line1 b { font-family: var(--font-mono); font-size: var(--fs-sm); }
 .evo-badge { font-size: 10px; color: var(--ok); background: var(--ok-soft); padding: 1px 8px; border-radius: var(--r-full); }
 .evo-line2 { font-size: var(--fs-xs); color: var(--text-3); margin-top: 5px; }
+/* ── 三态提示族：空态/加载/错误（A4 一致性）
+   空 = neutral 弱化文字 · 加载 = 转圈(::before) + 弱化 · 错误 = 危险色。
+   历史代码的裸 .empty-tip 保持「空态」弱化文字语义，无破坏。 */
 .empty-tip { color: var(--text-3); font-size: var(--fs-sm); padding: var(--sp-4) 0; }
+.empty-tip.is-loading {
+  display: flex; align-items: center; gap: 8px; color: var(--text-2);
+}
+.empty-tip.is-loading::before {
+  content: ""; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--border-strong); border-top-color: var(--brand);
+  animation: spin .8s linear infinite; flex-shrink: 0;
+}
+.empty-tip.is-err { color: var(--danger); }
+.empty-tip.is-err::before { content: "⚠ "; }
+.empty-tip .et-sub { color: var(--text-3); font-size: 11px; margin-top: 2px; }
 .warn-text { color: var(--warn) !important; }
 .sys-path { font-family: var(--font-mono); font-size: var(--fs-xs); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
 
@@ -1307,6 +1343,31 @@ button {
   border: none; color: #fff;
 }
 .confirm-primary:hover:not(:disabled) { box-shadow: 0 3px 14px rgba(var(--brand-rgb),.4); }
+/* ── 确认门增强（面向用户选择器 + 可关闭）── */
+.confirm-head-right { display: flex; align-items: center; gap: 10px; }
+.confirm-x {
+  width: 24px; height: 24px; border-radius: var(--r-full);
+  border: none; background: transparent; color: var(--text-3);
+  font-size: 13px; cursor: pointer; line-height: 1; flex-shrink: 0;
+}
+.confirm-x:hover { background: var(--bg-hover); color: var(--text-1); }
+/* 一键选择（标准面向用户选择器） */
+.confirm-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: var(--sp-4); }
+.confirm-opt {
+  text-align: left; padding: 11px 14px; border-radius: var(--r-md);
+  background: var(--bg-2); border: 1px solid var(--border);
+  color: var(--text-1); font-size: var(--fs-sm); font-family: var(--font-ui);
+  cursor: pointer; transition: border-color .15s var(--ease), background .15s var(--ease);
+  line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+}
+.confirm-opt:hover { border-color: var(--brand); background: var(--bg-active); }
+.confirm-opt:first-child { border-color: var(--brand); background: var(--bg-active); }
+/* 选择器下方「或自定义输入」分隔线 */
+.confirm-ask-or { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; color: var(--text-3); font-size: var(--fs-xs); }
+.confirm-ask-line { flex: 1; height: 1px; background: var(--border); }
+/* 超时兜底动作 */
+.confirm-timeout-actions { padding-top: var(--sp-2); }
+.confirm-timeout-actions .confirm-prompt { color: var(--warn); }
 .confirm-danger { color: var(--danger); }
 
 /* ═══ 指令 / 目录菜单 ════════════════════════════ */

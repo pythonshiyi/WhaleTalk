@@ -93,7 +93,7 @@ export function AbilitiesPage() {
       )}
       {tab === "perms" && <PermissionsPage />}
       {testTool && <ToolTest name={testTool} onClose={() => setTestTool(null)} />}
-      {err && <div className="empty-tip">{err}</div>}
+      {err && <div className="empty-tip is-err">{err}</div>}
     </div>
   );
 }
@@ -131,7 +131,7 @@ function KnowledgeBaseBlock() {
           onChange={(e) => setKquery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} />
         <button className="confirm-btn confirm-primary" onClick={doSearch}>🔍 检索</button>
       </div>
-      {kerr && <div className="empty-tip">{kerr}</div>}
+      {kerr && <div className="empty-tip is-err">{kerr}</div>}
       {khits && khits.length > 0 && (
         <div className="mem-list">
           {khits.map((h, i) => (
@@ -661,7 +661,7 @@ export function TasksPage() {
           </div>
         </>
       )}
-      {!tasks && <div className="empty-tip">任务模板加载失败：后端未连接，请启动服务后刷新</div>}
+      {!tasks && <div className="empty-tip is-err">任务模板加载失败：后端未连接，请启动服务后刷新</div>}
     </div>
   );
 }
@@ -694,7 +694,7 @@ export function FilesPage() {
       </div>
       <div className="wb-card-title">最近产物（{files?.recent?.length || 0}）</div>
       <div className="files-list">
-        {err && <div className="empty-tip">{err}</div>}
+        {err && <div className="empty-tip is-err">{err}</div>}
         {(files ? files.recent || [] : []).map((r, i) => (
           <div className="files-row" key={i}>📦 {r}</div>
         ))}

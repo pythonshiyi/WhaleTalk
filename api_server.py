@@ -62,7 +62,7 @@ ASK_TIMEOUT = 180.0
 
 
 def _respond(body):
-    """前端回传：{id, answer?} / {id, allow?, reason?}。"""
+    """前端回传：{id, answer?} 或 {id, option?}（ask 点选）/ {id, allow?, reason?}（approval）。"""
     rid = str(body.get("id") or "")
     if not rid:
         return False, "缺少 id"
@@ -73,10 +73,14 @@ def _respond(body):
     box = entry["box"]
     typ = entry["type"]
     if typ == "ask":
+        option = str(body.get("option") or "").strip()
         answer = str(body.get("answer") or "").strip()
-        if not answer:
+        if option:
+            box["option"] = option
+        elif answer:
+            box["answer"] = answer
+        else:
             return False, "答案不能为空"
-        box["answer"] = answer
     elif typ == "approval":
         box["allow"] = bool(body.get("allow"))
         box["reason"] = str(body.get("reason") or ("用户允许" if box["allow"] else "用户拒绝"))
@@ -132,15 +136,22 @@ def _make_approval_cb(send, stop_event):
 
 
 def _make_ask_cb(send, stop_event):
-    """on_ask：向用户提问，阻塞等待回答。"""
+    """on_ask：向用户提问（可带 options 供一键选择），阻塞等待回答。"""
 
-    def cb(prompt):
+    def cb(prompt, options=None):
         rid = secrets_token(4)
         ev = threading.Event()
-        box = {"answer": None}
+        box = {"answer": None, "option": None}
         with _PENDING_LOCK:
             _PENDING[rid] = {"ev": ev, "box": box, "type": "ask"}
-        send("ask_request", {"id": rid, "prompt": str(prompt)})
+        # 归一 options：只收干净字符串，上限 6
+        opts = None
+        if isinstance(options, (list, tuple)):
+            opts = [str(o).strip() for o in options if str(o).strip()][:6] or None
+        ev_payload = {"id": rid, "prompt": str(prompt)}
+        if opts:
+            ev_payload["options"] = opts
+        send("ask_request", ev_payload)
         deadline = time.monotonic() + ASK_TIMEOUT
         while not ev.wait(0.5):
             if stop_event and stop_event.is_set():
@@ -156,7 +167,10 @@ def _make_ask_cb(send, stop_event):
                 break
         with _PENDING_LOCK:
             _PENDING.pop(rid, None)
-        answer = box.get("answer")
+        # 优先取用户点选的 option，其次自由文本 answer
+        answer = box.get("option")
+        if answer is None:
+            answer = box.get("answer")
         if answer is None:
             _record_approval({
                 "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -182,6 +196,29 @@ def _sync_full_auto():
     """每次会话请求前同步权限模块的 FULL_AUTO（防进程内状态漂移）。"""
     try:
         import permissions as perms
+        import config_utils
+        cfg = config_utils.load_config()
+        perms.set_full_auto(bool(cfg.get("full_auto")))
+    except Exception:
+        pass
+
+
+def _sync_request_full_auto(body):
+    """按"本次请求"的实际模式同步 FULL_AUTO —— 根因兜底。
+
+    任务模式(mode=task)即零审批：无论进程内/持久化配置如何漂移，只要本次请求声明
+    任务模式，就强制 FULL_AUTO=True，从而 approval 弹窗绝无可能触发。
+    仅 dialog 或未声明 mode 时才回退读取配置里的 full_auto。
+    这是对"零审批不应弹窗"最底层的保障（避免历史遗留 whitelist 或 approval_actions
+    状态在任务模式会话中被误触发审批）。"""
+    try:
+        import permissions as perms
+        mode = ""
+        if isinstance(body, dict):
+            mode = str(body.get("mode") or "")
+        if mode == "task":
+            perms.set_full_auto(True)
+            return
         import config_utils
         cfg = config_utils.load_config()
         perms.set_full_auto(bool(cfg.get("full_auto")))
@@ -216,11 +253,16 @@ _TOOL_DOMAIN = {
     "extract_archive": "文件与目录", "batch_rename": "文件与目录", "archive_list": "文件与目录",
     "download_file": "文件与目录", "search_local": "文件与目录", "code_lookup": "编程与执行",
     "list_snapshots": "文件与目录", "restore_snapshot": "文件与目录",
+    "find_images": "文件与目录", "asset_import": "文件与目录", "asset_list": "文件与目录",
+    "asset_organize": "文件与目录",
     "read_csv": "数据与文档", "write_csv": "数据与文档", "read_excel": "数据与文档",
     "write_excel": "数据与文档", "chart_data": "数据与文档", "pdf_extract": "数据与文档",
     "pdf_create": "数据与文档", "docx_read": "数据与文档", "pptx_read": "数据与文档",
     "create_doc": "数据与文档", "epub_read": "数据与文档", "mobi_read": "数据与文档",
     "doc_read": "数据与文档", "msg_read": "数据与文档",
+    "docx_edit": "数据与文档", "pptx_create": "数据与文档", "xlsx_edit": "数据与文档",
+    "html_render": "数据与文档", "html_to_ppt": "数据与文档", "html_to_pdf": "数据与文档",
+    "pdf_visual_check": "数据与文档", "ppt_layout_check": "数据与文档",
     "database_query": "数据库", "database_query_mysql": "数据库",
     "database_query_postgres": "数据库", "database_execute": "数据库",
     "fetch_url": "网络与通信", "fetch_blocked": "网络与通信", "search_web": "网络与通信",
@@ -6856,7 +6898,7 @@ class _Handler(BaseHTTPRequestHandler):
         if messages is None:
             self._json(400, {"error": "invalid messages"})
             return
-        _sync_full_auto()
+        _sync_request_full_auto(body)
         try:
             client, cfg = self._client_from_cfg(body)
             kb = self._budget_block(cfg)
@@ -6910,7 +6952,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid messages"})
             return
         sid = str(body.get("session_id") or "").strip()  # 已有会话继续对话时由前端携带，用于完成后自动落盘
-        _sync_full_auto()
+        _sync_request_full_auto(body)
+
         self._sse_start()
         stop_event = threading.Event()
 
