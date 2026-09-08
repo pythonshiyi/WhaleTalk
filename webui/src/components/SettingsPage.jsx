@@ -880,6 +880,13 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
     if (clean) saveField({ base_url: clean });
     setBaseUrlDraft(null);
   };
+  // 从"自定义模型名"切回预设下拉：选一预设即保存并退出自定义态
+  const switchToPreset = (v) => {
+    if (!v || v === "__custom__") return;
+    saveField({ model: v });
+    setCustomModel(false);
+    setModelDraft(null);
+  };
   // API Key：留空提交=不修改；与后端约定一致（密钥不回显，只显示脱敏提示）
   const commitApiKey = async (v) => {
     const clean = String(v).trim();
@@ -990,9 +997,15 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                 </button>
               ))}
             </div>
-            <Row label="模型" desc="官方三模型 + 任意 OpenAI 兼容">
+            <Row label="模型" desc="官方多模型 + 任意 OpenAI 兼容">
               {customModel || !modelOptions.includes(cfg.model) ? (
-                <input className="set-select set-combo" value={modelText} placeholder="输入任意模型名" onChange={(e) => setModelDraft(e.target.value)} onBlur={(e) => commitModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
+                <div style={{ display: "flex", gap: 6, width: "100%", maxWidth: 380 }}>
+                  <input className="set-select set-combo" style={{ flex: 1 }} value={modelText} placeholder="输入任意模型名" onChange={(e) => setModelDraft(e.target.value)} onBlur={(e) => commitModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
+                  <select className="set-select" style={{ width: "auto" }} value="__custom__" title="回到预设模型下拉" onChange={(e) => switchToPreset(e.target.value)}>
+                    <option value="__custom__" disabled>⇄ 预设</option>
+                    {modelOptions.map((m) => <option key={"p" + m} value={m}>{m}</option>)}
+                  </select>
+                </div>
               ) : (
                 <select className="set-select" value={modelOptions.includes(cfg.model) ? cfg.model : "__custom__"} onChange={(e) => {
                   if (e.target.value === "__custom__") setCustomModel(true);
@@ -1070,7 +1083,13 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                 </Row>
                 <Row label="模型" desc={activeModelMeta ? `${activeModelMeta.label} · 上下文 ${(activeModelMeta.max_context_tokens / 1000000).toFixed(1)}M · 输出 ${(activeModelMeta.max_output_tokens / 1024).toFixed(0)}K` : "可输入任意兼容模型"}>
                   {customModel || !modelOptions.includes(cfg.model) ? (
-                    <input className="set-select set-combo" value={modelText} placeholder="输入任意模型名" onChange={(e) => setModelDraft(e.target.value)} onBlur={(e) => commitModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
+                    <div style={{ display: "flex", gap: 6, width: "100%", maxWidth: 420 }}>
+                      <input className="set-select set-combo" style={{ flex: 1 }} value={modelText} placeholder="输入任意模型名" onChange={(e) => setModelDraft(e.target.value)} onBlur={(e) => commitModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
+                      <select className="set-select" style={{ width: "auto" }} value="__custom__" title="回到预设模型下拉" onChange={(e) => switchToPreset(e.target.value)}>
+                        <option value="__custom__" disabled>⇄ 预设</option>
+                        {modelOptions.map((m) => <option key={"p" + m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
                   ) : (
                     <select className="set-select" value={modelOptions.includes(cfg.model) ? cfg.model : "__custom__"} onChange={(e) => {
                       if (e.target.value === "__custom__") setCustomModel(true);
