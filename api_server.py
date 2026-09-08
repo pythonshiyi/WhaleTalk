@@ -4441,7 +4441,43 @@ try:
     _cu.DEFAULT_CONFIG_PATH = CONFIG_PATH
 except Exception:
     pass
-DATA_DIR = os.path.join(os.path.expanduser("~"), "Documents", "WhaleTalk")
+
+
+def _writable_dir(path):
+    """目录可写探测：不存在则尝试建，能建/能写返回 True。"""
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".wtest")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_data_dir():
+    """数据目录定位：
+    1) env WHALETALK_DATA_DIR 显式指定（最高优先，便携/自定义部署）；
+    2) 默认 <程序目录>/data（程序旁，便携场景用户期望数据随程序走）——目录可写时选用；
+    3) 程序目录不可写（如装在只读盘 Program Files）→ 回退 ~/Documents/WhaleTalk。
+    不做数据迁移（旧数据不保留，一切以开发运行为准）。"""
+    legacy = os.path.join(os.path.expanduser("~"), "Documents", "WhaleTalk")
+    env_dir = os.environ.get("WHALETALK_DATA_DIR", "").strip()
+    if env_dir:
+        try:
+            os.makedirs(env_dir, exist_ok=True)
+            return env_dir
+        except Exception:
+            pass  # env 目录不可建则继续默认逻辑
+    preferred = os.path.join(BASE_DIR, "data")
+    if _writable_dir(preferred):
+        return preferred
+    return legacy
+
+
+# 数据目录：会话历史/记忆/大脑数据/工作区产物等全部落此（默认程序旁 data/，可 env 覆盖）。
+DATA_DIR = _resolve_data_dir()
 
 _VOICE_CACHE_DIR = os.path.join(DATA_DIR, "voice", "cache")
 HISTORY_DIR = os.path.join(DATA_DIR, "history")
