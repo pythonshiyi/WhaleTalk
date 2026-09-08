@@ -263,6 +263,16 @@ MODELS = {
         "max_output_tokens": 384 * 1024,
         "vision": True,
     },
+    # DeepSeek V4.1 Flash 内测中间版：新模型结构 · 原生多模态 · 更快更省
+    # base_url 不变，仅设模型名即可；计费与 deepseek-v4-flash 相同
+    "deepseek-v4-flash-expires-on-0910": {
+        "label": "DeepSeek V4.1 Flash (内测 09-10)",
+        "version": "DeepSeek-V4.1-Flash-Beta",
+        "max_context_tokens": 1_000_000,
+        "max_output_tokens": 384 * 1024,
+        "vision": True,  # 原生多模态：图片输入无需切换专用视觉模型
+        "v41": True,
+    },
 }
 
 VISION_MODEL = "deepseek-v4-flash-vision-exp"

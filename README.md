@@ -61,7 +61,7 @@
 
 ### 🖼 多模态视觉 Agent
 
-- **视觉模型支持**：`deepseek-v4-flash-vision-exp`（图片输入，自动切换/返回）
+- **视觉模型支持**：`deepseek-v4-flash-vision-exp`（图片输入，自动切换/返回）· **`deepseek-v4-flash-expires-on-0910`**（DeepSeek V4.1 Flash 内测：**原生多模态**，聊天模型直接看图，更快更省）
 - **拖拽/粘贴/按钮三方传图**（JPEG/PNG/GIF/WebP，≤32MB）
 - **屏幕视觉闭环**：`screen_see` 截图 + 图表理解，AI"看屏幕-自查-修正"
 - **图像理解**：`image_understand` / `chart_read` / `screenshot_to_html` / `scan_read` / `debug_screenshot` / `image_batch`
