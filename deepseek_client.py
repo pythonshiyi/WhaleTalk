@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import queue
 import time
 import weakref
 from collections import deque
@@ -1842,6 +1843,99 @@ _BROWSER_PW = None
 _BROWSER = None          # Browser 或 persistent BrowserContext
 _BROWSER_CTX = None      # 共享 BrowserContext（非 persistent 模式：多页签/多窗口共用登录态）
 _BROWSER_PAGE = None     # 当前激活页签（open/click/type 等操作的作用对象）
+
+# ── 浏览器单线程执行器（修复：playwright sync 对象跨线程 → greenlet 线程错）
+# playwright sync API 绑定创建线程；工具在工作线程池调用时，同一浏览器对象被不同线程
+# 使用会报 "Cannot switch to a different thread"。故所有浏览器操作统一派发到唯一
+# _BROWSER_WORKER 线程执行，对象永不跨线程。_BROWSER_LOCK 退化为同线程内的重入保护。
+_BROWSER_WORKER = None
+_BROWSER_TASKQ = None
+
+
+def _browser_worker_loop():
+    """专属浏览器线程：串行执行浏览器操作。异常不会让线程死掉。"""
+    while True:
+        try:
+            item = _BROWSER_TASKQ.get()
+            if item is None:
+                break
+            fn, box, lock = item
+            try:
+                res = fn()
+                box["ok"] = True
+                box["result"] = res
+            except BaseException as e:  # noqa: BLE001
+                box["ok"] = False
+                box["error"] = repr(e)
+            finally:
+                lock.set()
+        except Exception:
+            break
+
+
+def _browser_run(fn, timeout=600):
+    """在专属浏览器线程执行 fn 并返回结果（线程安全：对象不跨线程）。"""
+    global _BROWSER_WORKER, _BROWSER_TASKQ
+    if _BROWSER_WORKER is None or not _BROWSER_WORKER.is_alive():
+        _BROWSER_TASKQ = queue.Queue() if _BROWSER_TASKQ is None else _BROWSER_TASKQ
+        # 重建队列（线程重启后旧队列可能残留）
+        _BROWSER_TASKQ = queue.Queue()
+        _BROWSER_WORKER = threading.Thread(target=_browser_worker_loop, name="whaletalk-browser", daemon=True)
+        _BROWSER_WORKER.start()
+    box = {}
+    done = threading.Event()
+    _BROWSER_TASKQ.put((fn, box, done))
+    if not done.wait(timeout):
+        raise TimeoutError("浏览器操作超时")
+    if box.get("ok"):
+        return box["result"]
+    raise RuntimeError(box.get("error", "浏览器操作失败"))
+
+
+def _browser_thread(fn):
+    """装饰器：让被装饰的浏览器工具函数整体在专属浏览器线程执行。
+    修复 playwright sync 对象被工作线程池跨线程使用导致的 greenlet 线程错。"""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*a, **k):
+        return _browser_run(lambda: fn(*a, **k))
+    return wrapper
+
+
+def _ensure_browser_visible():
+    """有头模式下，尽力把浏览器窗口挪回可见区域并还原（扫码/验证码等需人看）。
+    依赖可选 pygetwindow；失败静默（无头模式无需，非 Windows 忽略）。"""
+    if _browser_headless() or os.name != "nt":
+        return
+    try:
+        import pygetwindow as gw  # 可选
+    except Exception:
+        return
+    try:
+        for w in gw.getAllWindows():
+            title = (w.title or "")
+            if "Chrome" in title or "chromium" in title.lower() or "Chromium" in title:
+                try:
+                    if w.isMinimized:
+                        w.restore()
+                    # 屏幕外(< -500 或 > 20000)才纠正，避免干扰用户自排的窗口
+                    if w.left < -500 or w.top < -500 or w.width < 300:
+                        w.moveTo(100, 60)
+                        w.resizeTo(1200, 900)
+                    if not w.isActive:
+                        try:
+                            w.activate()
+                        except Exception:
+                            pass
+                    return
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+
+
 
 
 def _browser_headless():

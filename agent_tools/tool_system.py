@@ -787,10 +787,17 @@ def notify_desktop(title="鲸语提醒", text="", fallback_sound=True, silent=Fa
                 f.write(script)
             proc = subprocess.run(
                 ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", ps_path],
-                capture_output=True, text=True, timeout=15,
-                encoding="utf-8", errors="replace",
+                capture_output=True, timeout=15,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
+            # PowerShell 5.1 报错信息按系统控制台代码页(中文=GBK)写 stderr；
+            # 若强制 UTF-8 解码会成乱码。用系统首选编码解，让真实报错可读。
+            try:
+                import locale
+                _ps_enc = locale.getpreferredencoding(False) or "utf-8"
+            except Exception:
+                _ps_enc = "utf-8"
+            _ps_err = proc.stderr.decode(_ps_enc, errors="replace") if proc.stderr else ""
             if proc.returncode != 0:
                 # Toast 不可用（老系统/受限环境）时兜底为提示音（可关闭）
                 if fallback_sound:
@@ -801,7 +808,7 @@ def notify_desktop(title="鲸语提醒", text="", fallback_sound=True, silent=Fa
                         winsound.Beep(660, 250)
                     except Exception:
                         pass
-                return f"通知显示失败{'（已静音）' if not fallback_sound else '（已播放提示音）'}：{(proc.stderr or '')[:150]}"
+                return f"通知显示失败{'（已静音）' if not fallback_sound else '（已播放提示音）'}：{_ps_err[:150]}"
             note = "（静音）" if silent else ""
             return f"已发送桌面通知：{title}{note}"
         finally:

@@ -1,7 +1,6 @@
 import React from "react";
 import * as api from "../api.js";
 import { ThemeContext, DisplayContext } from "../App.jsx";
-import extractProducts from "../extractProducts.js";
 
 import { silentWarn } from "../quiet.js";
 // ── 启动即预取（不等打开面板才加载）──────────────────
@@ -602,7 +601,7 @@ function ParamsTab() {
 // ═══ 🔧 活动（AI 工具调用链 · 实时）═══════
 // 工具执行从聊天流"搬"到这里：聊天不再堆详细工具卡，活动区按最近一次任务实时
 // 列出每一步（名称/状态/耗时），点开某步才见参数与结果——感知与"奖励感"在，细节不刷屏。
-function ActivityTab({ activity, onOpenChatTools, onGoFiles, onInject }) {
+function ActivityTab({ activity, products, onOpenChatTools, onGoFiles, onInject }) {
   const [expanded, setExpanded] = React.useState(null);
   const steps = (activity && activity.steps) || [];
   const streaming = !!(activity && activity.streaming);
@@ -611,7 +610,8 @@ function ActivityTab({ activity, onOpenChatTools, onGoFiles, onInject }) {
 
   React.useEffect(() => setExpanded(null), [activity && activity.taskId]);
 
-  const products = React.useMemo(() => extractProducts(activity && activity.text), [activity && activity.text]);
+  // 会话内「产物书架」：由上层按 msgs 累计传下（新→旧，去重），新消息不冲掉旧产物
+  const prodList = Array.isArray(products) ? products : [];
   const prodAct = (path, act) => {
     if (act === "opendir") api.openDir(path);
     else api.openFile(path);
@@ -619,26 +619,30 @@ function ActivityTab({ activity, onOpenChatTools, onGoFiles, onInject }) {
 
   return (
     <div className="aux-tab">
-      <div className={"act-products " + (products.length > 0 ? "act-products-pinned" : "act-products-empty")}>
+      <div className={"act-products " + (prodList.length > 0 ? "act-products-pinned" : "act-products-empty")}>
         <div className="act-products-head">
-          <span className="act-products-title">📦 产物直达（{products.length}）</span>
-          {products.length > 0 && onGoFiles && (
+          <span className="act-products-title">📦 本会话产物（{prodList.length}）</span>
+          {prodList.length > 0 && onGoFiles && (
             <button className="msg-op" title="去文件栏管理" onClick={() => onGoFiles()}>去文件 ▸</button>
           )}
         </div>
-        {products.length > 0 ? (
+        {prodList.length > 0 ? (
           <div className="act-prod-list">
-            {products.map((p, i) => (
-              <div className="act-prod-chip" key={p + i} title={p}>
-                <span className="act-prod-name">📄 {String(p).split(/[\\/]/).pop()}</span>
-                <button className="msg-op" title="打开" onClick={() => prodAct(p, "open")}>打开</button>
-                <button className="msg-op" title="打开所在文件夹" onClick={() => prodAct(p, "opendir")}>⌖</button>
-                {onInject && <button className="msg-op" title="读取内容到输入框" onClick={() => onInject(p)}>注入</button>}
-              </div>
-            ))}
+            {prodList.map((item, i) => {
+              const path = item.path || item;
+              const nm = item.name || String(path).split(/[\/]/).pop();
+              return (
+                <div className="act-prod-chip" key={path} title={path}>
+                  <span className="act-prod-name">📄 {nm}</span>
+                  <button className="msg-op" title="打开" onClick={() => prodAct(path, "open")}>打开</button>
+                  <button className="msg-op" title="打开所在文件夹" onClick={() => prodAct(path, "opendir")}>⌖</button>
+                  {onInject && <button className="msg-op" title="读取内容到输入框" onClick={() => onInject(path)}>注入</button>}
+                </div>
+              );
+            })}
           </div>
         ) : (
-          <div className="fx-hint">AI 写出文件后会置顶出现在这里（打开/⌖/注入/去文件）。</div>
+          <div className="fx-hint">AI 写出文件后会像书架一样列在这里，反复可看。</div>
         )}
       </div>
 
@@ -687,9 +691,7 @@ function ActivityTab({ activity, onOpenChatTools, onGoFiles, onInject }) {
     </div>
   );
 }
-
-// ── 面板容器（默认「参数」控制台：模型/思考档/场景一秒可切换）──
-export default function AuxPanel({ onClose, onInjectFile, activity, onOpenChat, tab, onTabChange }) {
+export default function AuxPanel({ onClose, onInjectFile, activity, products, onOpenChat, tab, onTabChange }) {
   const isControlled = tab != null && typeof onTabChange === "function";
   const [internalTab, setInternalTab] = React.useState("params");
   const curTab = isControlled ? tab : internalTab;
@@ -726,7 +728,7 @@ export default function AuxPanel({ onClose, onInjectFile, activity, onOpenChat, 
         <button className={`aux-tab-btn ${curTab === "procs" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("procs")}>⚙ 进程</button>
       </div>
       <div className="aux-body">
-        {curTab === "activity" && <ActivityTab activity={activity} onOpenChatTools={onOpenChat} onGoFiles={() => setCurTab("files")} onInject={onInjectFile} />}
+        {curTab === "activity" && <ActivityTab activity={activity} products={products || []} onOpenChatTools={onOpenChat} onGoFiles={() => setCurTab("files")} onInject={onInjectFile} />}
         {curTab === "params" && <ParamsTab />}
         {curTab === "files" && <FilesTab onInject={onInjectFile} />}
         {curTab === "procs" && <ProcessesTab />}

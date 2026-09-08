@@ -20,6 +20,9 @@ from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 from shared import DOWNLOAD_MAX_BYTES, SEARCH_MAX_RESULTS, _SEARCH_ENGINES, CALL_API_MAX_BYTES, CALL_API_METHODS, CALL_API_MAX_HEADERS, RSS_FETCH_TIMEOUT, RSS_MAX_ITEMS, RSS_SUMMARY_MAX, RSS_PRESET_SOURCES, WEBDAV_MAX_SIZE  # P1-3: 阈值常量下沉 shared
 from deepseek_client import (
     _BROWSER_LOCK,
+    _browser_run,
+    _browser_thread,
+    _ensure_browser_visible,
     _NET_PROBE_REFS,
     _SEARCH_UA,
     _browser_active_page,
@@ -613,6 +616,7 @@ def search_realtime(query="", num=5, source="hn"):
     phrases='控制浏览器（多标签页：打开/点击/输入/填表/提交/切换/关闭，共享登录态）',
     preactivate=(('网页', 'url', '抓取', '爬'),),
 )
+@_browser_thread
 def browser_navigate(url="", action="open", selector="", text="", handle=""):
     """浏览器可视操作（Playwright 可选依赖，未安装时返回安装提示）。
 
@@ -660,6 +664,7 @@ def browser_navigate(url="", action="open", selector="", text="", handle=""):
                 if not url:
                     return "错误：new_tab 需要 url"
                 page = _browser_new_page(url)
+                _ensure_browser_visible()
                 return f"已新开页签并激活：{page.title() or url}\n当前 URL: {page.url}"
 
             if action in ("switch_tab", "switch"):
@@ -678,6 +683,7 @@ def browser_navigate(url="", action="open", selector="", text="", handle=""):
                 if not url:
                     return "错误：open 需要 url（列表页签用 action=tabs）"
                 _browser_goto(page, url)
+                _ensure_browser_visible()  # 有头模式把窗口带回可见区(人工介入如扫码能看见)
                 return f"已打开：{page.title() or url}\n当前 URL: {page.url}"
             if action in ("back", "forward", "reload"):
                 if action == "back":
@@ -751,6 +757,7 @@ def browser_navigate(url="", action="open", selector="", text="", handle=""):
     phrases='网页截图保存',
     preactivate=(('网页', 'url', '抓取', '爬'),),
 )
+@_browser_thread
 def web_screenshot(url, width=1280, height=800):
     """网页截图并保存到工作区（依赖 playwright，复用共享浏览器）。"""
     ok, hint = _playwright_ready()

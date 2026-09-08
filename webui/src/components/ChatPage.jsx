@@ -14,6 +14,7 @@ import { unwrapLongText } from "../longTextUtil.js";
 import { speakText, getVoiceConfig, onSpeechState, stopSpeak, resumeSpeak } from "../ttsUtil.js";
 import { nowClock } from "../timeFmt.js";
 import formatToolResult from "../formatToolResult.js";
+import extractProducts from "../extractProducts.js";
 
 import { silentWarn } from "../quiet.js";
 // 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
@@ -590,6 +591,27 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       text: last.text || "",
       label: last.streaming ? "AI 正在执行" : "最近一次工具调用",
     };
+  }, [msgs]);
+
+  // ── 会话内「产物书架」：累计本会话所有 assistant 产出，去重、新→旧排好 ──
+  // 不像"最近一次"那样每次新消息被冲掉——像书架上按顺序摆好的书，反复可看。
+  const liveProducts = React.useMemo(() => {
+    const seen = new Set();
+    const list = [];
+    // 从后往前扫，让"最近产出"排最前
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (!m || m.role === "user") continue;
+      const textParts = [m.text || ""];
+      (m.tools || []).forEach((t) => { if (t.result) textParts.push(String(t.result)); });
+      const paths = extractProducts(textParts.join("\n"));
+      for (const p of paths) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        list.push({ path: p, name: String(p).split(/[\\/]/).pop(), at: i, from: m.role });
+      }
+    }
+    return list;
   }, [msgs]);
 
   const doBatch = () => {
@@ -1443,6 +1465,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
 
         {auxOpen && (
           <AuxPanel onClose={() => setAuxOpen(false)} onInjectFile={onInjectFile} activity={liveActivity}
+            products={liveProducts}
             tab={auxTab} onTabChange={setAuxTab} />
         )}
       </div>

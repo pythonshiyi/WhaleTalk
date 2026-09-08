@@ -6942,18 +6942,20 @@ class _Handler(BaseHTTPRequestHandler):
                     parts.append(bc)
             except Exception:
                 pass
-        # 当前工作目录注入：与 _status() 同口径兜底（active_dir 空/失效 → <DATA_DIR>/workspace），
-        # 保证 AI 每次都能看到明确的工作区根，避免瞎猜路径/乱放桌面
-        active_dir = str(cfg.get("active_dir") or "").strip()
-        if not active_dir or not os.path.isdir(active_dir):
-            active_dir = os.path.join(DATA_DIR, "workspace")
-            os.makedirs(active_dir, exist_ok=True)
-        parts.append(
-            "[工作区目录] " + active_dir
-            + "\n所有新任务的产物都写入该目录下的独立子目录（按任务名新建子目录并写入其中），"
-            + "不要写到桌面/临时/系统目录；"
-            + "文档/PPT/PDF/图片等给用户看的交付物可放在该子目录或用户指定位置。"
-        )
+        # 当前工作目录注入（仅任务模式）：与 _status() 同口径兜底（active_dir 空/失效 → <DATA_DIR>/workspace），
+        # 保证 AI 每次都能看到明确的工作区根，避免瞎猜路径/乱放桌面。
+        # 对话/纯净模式(pure_chat)无工具、不写文件，故不注入——避免纯聊天也收到"去写产物"的指令。
+        if not pure_chat:
+            active_dir = str(cfg.get("active_dir") or "").strip()
+            if not active_dir or not os.path.isdir(active_dir):
+                active_dir = os.path.join(DATA_DIR, "workspace")
+                os.makedirs(active_dir, exist_ok=True)
+            parts.append(
+                "[工作区目录] " + active_dir
+                + "\n所有新任务的产物都写入该目录下的独立子目录（按任务名新建子目录并写入其中），"
+                + "不要写到桌面/临时/系统目录；"
+                + "文档/PPT/PDF/图片等给用户看的交付物可放在该子目录或用户指定位置。"
+            )
         if not pure_chat:
             try:
                 fpm = stores_mod.failure_patterns_text(FAILURES_PATH)
