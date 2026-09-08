@@ -2,21 +2,8 @@ import React from "react";
 import EmptyState from "./EmptyState.jsx";
 
 import { silentWarn } from "../quiet.js";
+import { tagColorClass } from "../tagColor.js";
 
-// 标签配色：内置语义标签用固定语义色；任意用户标签按稳定哈希映射到调色板，
-// 保证同一标签在列表中始终同色（此前误用 `tag-临时` 使所有标签同色）。
-const TAG_PALETTE = ["c-brand", "c-ai", "c-ok", "c-warn", "c-danger"];
-const TAG_SEMANTIC = {
-  "调研": "c-brand", "写作": "c-danger", "开发": "c-ai",
-  "数据": "c-ok", "临时": "c-warn", "会话": "c-brand",
-};
-function tagColorClass(tag) {
-  const t = String(tag || "").trim();
-  if (TAG_SEMANTIC[t]) return TAG_SEMANTIC[t];
-  let h = 0;
-  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
-  return TAG_PALETTE[h % TAG_PALETTE.length];
-}
 export default function SessionList({ sessions, activeId, onPick, onClose, onDelete, onPin, onRename, onEditTags, onExport, onImport, onBatchDelete }) {
   const [q, setQ] = React.useState("");
   const [tagFilter, setTagFilter] = React.useState(null);

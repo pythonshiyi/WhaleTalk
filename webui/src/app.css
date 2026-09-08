@@ -391,15 +391,11 @@ button {
   color: var(--code-text);
   tab-size: 4;
 }
-.md-code-lang {
-  position: absolute; top: 8px; right: 12px;
-  font-size: 10px; color: var(--text-3);
-  text-transform: lowercase;
-}
+/* .md-code-lang 的权威定义在 .md-code-wrap 区段(顶部语言标签，right 预留复制钮)；此处不重复定义 */
 .md-code-open { opacity: .7; }
 .md-table-wrap { overflow-x: auto; margin: 12px 0; border: 1px solid var(--border); border-radius: var(--r-md); }
 .md-table-wrap table { border-collapse: collapse; width: 100%; font-size: var(--fs-sm); }
-.md-table-wrap th, .md-table-wrap td { padding: 8px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+.md-table-wrap th, .md-table-wrap td { padding: 9px 16px; text-align: left; border-bottom: 1px solid var(--border); line-height: 1.65; }
 .md-table-wrap th { background: var(--bg-2); color: var(--brand-strong); font-weight: 600; font-size: var(--fs-xs); text-transform: none; }
 .md-table-wrap tr:last-child td { border-bottom: none; }
 .md-table-wrap tr:hover td { background: var(--bg-hover); }
