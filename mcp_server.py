@@ -28,7 +28,7 @@ import sys
 # 工具名 → 白名单：默认开放全部注册工具（外部调用需真执行，谨慎）。可设环境变量
 # WHALETALK_MCP_TOOLS="a,b,c" 限制；或 WHALETALK_MCP_ALLOW_READ=1 只暴露只读工具。
 _PROTOCOL_VERSION = "2024-11-05"
-_SERVER_INFO = {"name": "WhaleTalk", "version": "3.8.5"}
+_SERVER_INFO = {"name": "WhaleTalk", "version": "3.9.0"}
 
 
 def _load_tools():

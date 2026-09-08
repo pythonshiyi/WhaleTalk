@@ -8,9 +8,9 @@
 
 > **中文为主 · English follows**（中文完整介绍 + 英文简版）
 
-**鲸语 WhaleTalk v3.8.5** 是一个为 DeepSeek V4 API 深度优化的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
+**鲸语 WhaleTalk v3.9.0** 是一个为 DeepSeek V4 API 深度优化的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
 
-*WhaleTalk v3.8.5 is a Windows AI agent deeply optimized for the DeepSeek V4 API — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
+*WhaleTalk v3.9.0 is a Windows AI agent deeply optimized for the DeepSeek V4 API — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
 
 > 🌐 **官网 / Website：**https://whaletalk.top/
 
@@ -51,7 +51,7 @@
 - **说得出**：💬 对话/思考模式/语音合成（TTS：Piper 本地离线 / Edge 在线 / SAPI，**自动朗读可逐句流式跟读**）/朗读
 
 > 🎙 **Piper 本地语音**：设置 → 🔌 可选能力 →「Piper 本地语音」一键安装——自动装齐依赖并下载中文语音模型（官方源超时自动回退国内镜像），完成后**断网也能本地离线朗读**，全程无需手工配置。
-- **做得了**：⚡ 135 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理/快照恢复），默认自由权限模型（黑名单为唯一限制来源）
+- **做得了**：⚡ 147 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理/快照恢复），默认自由权限模型（黑名单为唯一限制来源）
 - **会进化**：🧬 自我进化（提案分支、失败模式库、成功模式复用）
 - **自疗**：🔁 失败模式沉淀 + 已知坑注入，AI 越用越聪明
 
@@ -79,7 +79,7 @@
 - **📋 指令库（独立栏目）**：提示词资产中心——新建/编辑/删除/分类/标签/图标/短命令，内置 24 条模板可一键复制到我的指令；支持搜索、排序、导入导出、恢复内置、禁用与「应用」试跑；输入框打 `/` 即可模糊搜索调用，支持 `{{TEXT}}`（选中文本）/`{{DATE}}`/`{ASK:}` 变量与「调用后自动发送」；插件技能作为只读来源统一纳管（可复制）
 - **🪄 自主（独立栏目）**：AI 自主能力的观察与管理窗口——进化管理（create_evolution 提案一键采纳/忽略 + self_evolve 分支查看 diff/确认合并/删除，合入权在用户）、审批与询问历史（时间/工具/参数/结果/理由）、行为日志（任务链 tasklog + 工具审计 audit）、自我状态（self_profile 跨会话连续自我 + 失败模式库）
 
-### ⚡ Agent 工具链（135 项）
+### ⚡ Agent 工具链（147 项）
 
 - **信息**：搜索（多引擎/分页/过滤/健康降级）、GitHub、实时热点（Hacker News）、网页抓取（含被墙站点代理通道）、RSS
 - **执行**：Python（`run_python` 直通本机解释器）、终端/进程、pip 安装、浏览器自动化
@@ -90,6 +90,7 @@
 - **自动化**：定时任务（错峰省费）、流程编排、任务检查点、知识库
 - **v3.1 新增**：📦 应用管理 `app_manage`（winget/choco 装/卸/搜/升级，环境搭建闭环）· 🖱 视觉定位点击 `screen_find_click`（看图→定位→点击一步完成）· 🎙 实时语音对话 `voice_chat_loop`（听一句答一句）· 🤝 多智能体编排 `team_run`（协调者拆解+角色接力+共享黑板）· 🌐 网络自愈 `net_diagnose`/`fetch_url_smart`（分层诊断+自动走代理兜底）
 - **v3.5 P2 新增**：🛡 写操作自动快照 `list_snapshots`/`restore_snapshot`（写文件/编辑/重命名/数据库写前自动备份，误操作一键恢复）· 🌐 在线插件市场（远程索引 + **SHA-256 哈希校验 + Ed25519 签名校验**（可选强制）+ **质量分级**：官方/社区/实验）· 🧪 外部内容注入防护（抓取内容显式分隔标记，防 prompt 注入）· 🎯 垂直领域场景（运营/法律/金融/教育/医疗健康/写作创作，预设采样参数）· ⚡ 前端长会话窗口化渲染 + SSE 高频事件 rAF 批处理
+- **v3.9 大版本新增（147 项）**：🎨 **HTML/CSS 设计三角**——`html_render`(→高清 PNG) · `html_to_ppt`(多段 HTML 整页渲染成专业 PPT，批量提速) · `html_to_pdf`(→印刷级 PDF) · `pdf_visual_check`(每页渲染自检分页/空白) · `ppt_layout_check`(版面几何自检)；🗂 **AI 素材空间**——`find_images`(扫本地素材) → `asset_import`(复制进素材库，不碰原文件) → `asset_list`/`asset_organize`(自主分类命名)，安全免授权管理素材；🔌 **MCP 出口**——`mcp_server.py` 作为 MCP stdio server 供外部 host(Claude/Cline)调用其全部工具，开放生态；🔀 **模型无关切换**——设置页一键切 DeepSeek/OpenAI/Ollama/Kimi/智谱/通义 供应商网关；🛡 **工具参数 JSON 健壮性**——中文引号/单引号/尾逗号等污染自动降级解析；✨ **创世化初始**——大脑页让 AI 完全自主设定自己的"前半生"(多版候选供选)
 
 ### 🧬 自我进化
 
@@ -220,7 +221,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 鲸语 WhaleTalk 是一个**独立开发的个人作品**，关注「本地 AI 智能体」体验——
 
 - **目标**：让 Windows 用户拥有一个真正"看得见、做得了、能进化"的 AI 助手，而非只是一个聊天窗口
-- **理念**：本地优先（数据不出本机）、能力为王（135 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
+- **理念**：本地优先（数据不出本机）、能力为王（147 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
 - **联系**：
   - 官网：https://whaletalk.top/
   - GitHub Issues：https://github.com/pythonshiyi/WhaleTalk/issues
@@ -233,7 +234,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 
 安全模型分层——**默认自由**，限制全部来自用户配置而非程序默认强加：
 
-- **默认自由**：默认任务模式（`full_auto`）零审批、零白名单——AI 可调用全部 135 项工具；`run_python`/`run_command` 等同本机直接执行（无沙箱/无静态拦截）
+- **默认自由**：默认任务模式（`full_auto`）零审批、零白名单——AI 可调用全部 147 项工具；`run_python`/`run_command` 等同本机直接执行（无沙箱/无静态拦截）
 - **黑名单（唯一限制来源）**：用户在权限页添加 shell 命令 / 文件路径 / 网络主机黑名单；出厂默认仅预置云元数据地址 `169.254.169.254` 一项；`blocklist_enabled` 一键全放行开关（关闭连黑名单也不拦）；旧 `whitelist` 严格模式与高危审批清单（`approval_actions`）保留为可选回退/加严路径，均非默认
 - **硬限额（防误伤兜底）**：读取/下载/响应体大小与工具超时上限（如单文件下载 ≤200MB、API 响应 ≤500KB、`run_python` ≤10s）；写操作自动快照可恢复；删除默认进回收站
 - **数据不出本机**：仅 127.0.0.1 监听 + Bearer token；API Key DPAPI 加密存储；隐私模式可关快照/会话/记忆/统计
@@ -251,10 +252,10 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 
 ## English Introduction
 
-WhaleTalk v3.8.5 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745), served from the browser with a system tray resident process.
+WhaleTalk v3.9.0 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745), served from the browser with a system tray resident process.
 
 - **v3.0 highlights**: 3 themes (starfield/deepsea/arctic), console sidebar (model/thinking/scene/appearance), artifact one-click access, unified `web_app.py` entry (desktop/browser/headless)
-- **Capabilities**: 135 Agent tools (files/browser/DB/mail/media/desktop RPA/snapshots), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
+- **Capabilities**: 147 Agent tools (files/browser/DB/mail/media/desktop RPA/snapshots), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
 - **Stack**: Python 3.9+ + React (Vite) + local API (openai/httpx) · Windows 10/11
 
 ### Quick Start
