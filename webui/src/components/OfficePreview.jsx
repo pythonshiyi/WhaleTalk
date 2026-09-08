@@ -158,7 +158,17 @@ function stripMdForFind(block) {
 }
 
 export function DocxEditable({ path, name, content = "" }) {
-  const blocks = React.useMemo(() => String(content || "").split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean), [content]);
+  const [blocks, setBlocks] = React.useState(() =>
+    String(content || "").split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean));
+  // 父级 content（工具初始预览）变更时同步一次（新消息），本地已编辑的 state 不被打断
+  const lastContent = React.useRef(String(content || ""));
+  React.useEffect(() => {
+    const c = String(content || "");
+    if (c !== lastContent.current) {
+      lastContent.current = c;
+      setBlocks(c.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean));
+    }
+  }, [content]);
   const finds = React.useMemo(() => blocks.map(stripMdForFind), [blocks]);
   const [editing, setEditing] = React.useState(null);
   const [draft, setDraft] = React.useState("");
@@ -174,7 +184,13 @@ export function DocxEditable({ path, name, content = "" }) {
       const r = await api.invokeTool("docx_edit", { path, action: "replace", find, replace });
       const t = r && (r.result || r.error);
       const isErr = !t || (typeof t === "string" && /^(错误|未安装|失败)/.test(t));
-      setMsg(isErr ? (typeof t === "string" ? t : "替换失败") : "✓ 已就地替换（docx_edit）");
+      if (isErr) {
+        setMsg(typeof t === "string" ? t : "替换失败");
+      } else {
+        // 就地替换成功：本地即时更新该块文本，使预览立刻反映改动（无需重拉文件）
+        setMsg("✓ 已就地替换（docx_edit）");
+        setBlocks((prev) => prev.map((b, i) => (i === idx ? String(replace) : b)));
+      }
       setEditing(null);
     } catch (e) { setMsg((e && e.message) || "替换失败"); silentWarn(e, "DocxEditable"); }
     finally { setBusy(false); }
