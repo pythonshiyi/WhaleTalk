@@ -227,3 +227,27 @@ def test_pdf_visual_check_renders_and_flags_blank(tmp_path):
     imgs = [l.strip().lstrip('- ').strip() for l in r.split("\n") if ".png" in l]
     assert len(imgs) == 3, "应渲染 3 页缩略图"
     assert all(os.path.exists(x) for x in imgs), "缩略图文件应存在"
+
+
+def test_asset_library_import_list_organize(tmp_path):
+    """AI 素材库：import(复制进库/不碰原素材) → list → organize(重命名/归类)。"""
+    import permissions
+    from PIL import Image
+    ws = tmp_path / "workspace"; ws.mkdir()
+    permissions.WORKSPACE_DIR = os.path.realpath(str(ws))
+    src = tmp_path / "原素材_挂号"; src.mkdir()
+    (src / "8d71aab0.jpg").write_bytes(b"xx")  # 用非图片也行，import 是通用复制
+    # import 单文件 + 分类
+    r = dc.asset_import(str(src / "8d71aab0.jpg"), name="挂号缴费机.png", category="医疗")
+    assert "素材库" in r and os.path.exists(os.path.join(str(ws), "素材库", "医疗", "挂号缴费机.png"))
+    # 原素材未被改动（仍存在、内容不变）
+    assert (src / "8d71aab0.jpg").read_bytes() == b"xx"
+    # list 能看到
+    r2 = dc.asset_list(category="医疗")
+    assert "挂号缴费机" in r2
+    # organize 归类到 医疗/案例
+    r3 = dc.asset_organize("医疗/挂号缴费机.png", move_category="医疗/案例")
+    assert "案例" in r3 and os.path.exists(os.path.join(str(ws), "素材库", "医疗", "案例", "挂号缴费机.png"))
+    # 越界防护：不允许动库外
+    r4 = dc.asset_organize("../outside.png", move_category="x")
+    assert "只能" in r4 or "不存在" in r4 or "错误" in r4

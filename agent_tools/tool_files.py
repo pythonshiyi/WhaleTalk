@@ -1253,4 +1253,256 @@ def find_images(dir, keyword="", ext=None, limit=30, recurse=True,
     return head
 
 
-__all__ = ['read_file', 'write_file', 'edit_file', 'list_dir', 'search_local', 'find_images', 'clipboard_get', 'clipboard_set', 'delete_file', 'archive_files', 'extract_archive', 'list_snapshots', 'restore_snapshot', 'batch_rename', 'start_process', 'stop_process', 'list_processes', 'environment_info']
+# ── AI 专属素材空间 ─────────────────────────────────────────
+# 理念：AI 从本地任意目录【复制】素材进一个固定的素材库（而非直接改用户原素材），
+# 在库内自行按理解重命名/分类，之后做 PPT/文档从库中调用。全程只读原素材 + 写库内，
+# blacklist 模式下无需单独授权，且绝不破坏用户原始文件。
+def _asset_lib_dir():
+    """素材库根目录（AI 固定空间）。默认 <workspace>/素材库，可用 env WHALETALK_ASSET_LIB 覆盖。"""
+    env = os.environ.get("WHALETALK_ASSET_LIB", "").strip()
+    if env:
+        r = permissions.resolve(env)
+        if r:
+            return r
+    ws = permissions.WORKSPACE_DIR
+    if ws:
+        return os.path.join(ws, "素材库")
+    # 兜底：用户主目录下 .whaletalk_assets
+    try:
+        return os.path.join(os.path.expanduser("~"), ".whaletalk_assets")
+    except Exception:
+        return os.path.join(os.getcwd(), "素材库")
+
+
+def _asset_safe_name(base, name):
+    """在 base 下生成不冲突的文件名：原名存在则追加 _2、_3…"""
+    cand = name
+    stem, ext = os.path.splitext(name)
+    n = 2
+    while os.path.exists(os.path.join(base, cand)):
+        cand = f"{stem}_{n}{ext}"
+        n += 1
+    return cand
+
+
+def _asset_lib_summary(lib):
+    exists = os.path.isdir(lib)
+    nfiles = 0
+    if exists:
+        for _root, _dirs, files in os.walk(lib):
+            nfiles += len([f for f in files if not f.startswith(".")])
+    return lib, exists, nfiles
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "asset_import",
+                "description": "把本地素材【复制】进 AI 专属素材库（不碰原素材）：源可为单文件或目录，复制后按你的意图命名/分类（默认保留原文件名，冲突自动加序号）。返回库内新路径。之后做 PPT/文档从素材库取",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string", "description": "源素材路径（文件或目录）或 find_images 返回的候选路径"},
+                        "name": {"type": "string", "description": "可选：入库后的新文件名（如 '挂号缴费机_主图.png'）；缺省保留原名，目录入库则保留原目录名"},
+                        "category": {"type": "string", "description": "可选：入库子目录（自动建），用于按你的主题分类（如 '医疗/挂号机'）"},
+                        "recursive": {"type": "boolean", "description": "可选：source 为目录时是否递归复制子目录（默认 true）"},
+                    },
+                    "required": ["source"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='导入素材',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
+)
+def asset_import(source, name="", category="", recursive=True):
+    """把本地素材复制进素材库（只读原素材，写库内），返回库内路径。"""
+    src = permissions.resolve(str(source or "").strip())
+    if not src:
+        return "错误：源路径无效"
+    if not os.path.exists(src):
+        return f"错误：源路径不存在：{source}"
+    ok, reason = permissions.check_filesystem(src, write=False)
+    if not ok:
+        return reason
+    lib = _asset_lib_dir()
+    try:
+        os.makedirs(lib, exist_ok=True)
+    except Exception as e:
+        return f"错误：素材库创建失败: {e}"
+    # 目标分类目录
+    cat = str(category or "").strip().strip("/\\")
+    target_dir = os.path.join(lib, cat) if cat else lib
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+    except Exception as e:
+        return f"错误：分类目录创建失败: {e}"
+    try:
+        new_name = str(name or "").strip()
+        imported = []
+        if os.path.isfile(src):
+            stem = new_name or os.path.basename(src)
+            fname = _asset_safe_name(target_dir, stem)
+            import shutil
+            shutil.copy2(src, os.path.join(target_dir, fname))
+            imported.append(os.path.join(target_dir, fname))
+        else:
+            # 目录入库：递归复制其下素材
+            top = new_name or os.path.basename(src.rstrip("/\\")) or "素材"
+            top = _asset_safe_name(lib if not cat else target_dir, top)
+            dest_root = os.path.join(target_dir if cat else lib, top)
+            os.makedirs(dest_root, exist_ok=True)
+            import shutil
+            for root, dirs, files in os.walk(src):
+                # 跳过大目录/隐藏/缓存
+                dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "__pycache__", ".venv")
+                           and not d.startswith(".")]
+                rel = os.path.relpath(root, src)
+                for fn in files:
+                    if fn.startswith("."):
+                        continue
+                    s = os.path.join(root, fn)
+                    d = os.path.join(dest_root, rel if rel != "." else "", fn)
+                    os.makedirs(os.path.dirname(d), exist_ok=True)
+                    shutil.copy2(s, d)
+                    imported.append(d)
+                    if not recursive:
+                        break
+            if not recursive:
+                imported = imported[:1]
+        lib_full, _ex, nf = _asset_lib_summary(lib)
+        permissions.audit("asset_import", str(source), f"→{lib} {len(imported)} 文件")
+        if len(imported) == 1:
+            return f"已导入素材库: {imported[0]}（素材库共 {nf} 文件）\n后续可用 asset_list 查看、asset_organize 调整命名/归类。"
+        return f"已导入 {len(imported)} 个文件到素材库: {target_dir}（素材库共 {nf} 文件）\n顶层: {lib_full}"
+    except Exception as e:
+        return f"错误：素材导入失败: {e}"
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "asset_list",
+                "description": "列出 AI 素材库内容（含分类子目录与文件），可按分类/关键词过滤。做 PPT/文档前从这里找已整理好的素材",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "category": {"type": "string", "description": "可选：只看某分类子目录"},
+                        "keyword": {"type": "string", "description": "可选：文件名关键词过滤"},
+                        "limit": {"type": "integer", "description": "可选：最多条数（默认 100）"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='列素材库',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
+)
+def asset_list(category="", keyword="", limit=100):
+    """列素材库内容（分类/文件名过滤）。返回结构化清单。"""
+    lib = _asset_lib_dir()
+    if not os.path.isdir(lib):
+        return f"素材库为空（{lib}）\n用 asset_import 把本地素材复制进来，AI 自行分类命名后即可调用。"
+    cat = str(category or "").strip().strip("/\\")
+    kw = str(keyword or "").lower().strip()
+    base = os.path.join(lib, cat) if cat else lib
+    if not os.path.isdir(base):
+        return f"分类不存在：{category or ''}"
+    lines = [f"📁 AI 素材库: {lib}"]
+    n = 0
+    try:
+        limit = clamp_int(limit, 100, lo=1, hi=500)
+    except Exception:
+        limit = 100
+    # 顶层分类
+    for root, dirs, files in os.walk(base):
+        rel = os.path.relpath(root, lib)
+        prefix = "  " if rel != "." else ""
+        dirs.sort(); files.sort()
+        if rel != "." and n < limit:
+            lines.append(f"{prefix}📂 {rel}/")
+        for fn in files:
+            if fn.startswith("."):
+                continue
+            full = os.path.join(root, fn)
+            if kw and kw not in fn.lower():
+                continue
+            if n >= limit:
+                break
+            try:
+                sz = os.path.getsize(full)
+            except OSError:
+                sz = 0
+            relp = os.path.join(rel, fn) if rel != "." else fn
+            lines.append(f"{prefix}  • {relp}（{sz/1024:.0f}KB）")
+            n += 1
+        if n >= limit:
+            break
+    if n == 0:
+        return f"素材库 {lib} 暂无匹配（keyword={keyword or '任意'}）"
+    if n >= limit:
+        lines.append(f"… 共 {n} 项（已达上限）")
+    return "\n".join(lines)
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "asset_organize",
+                "description": "在 AI 素材库内重命名或移动文件/目录归类（只改库内，不碰用户原素材）。如把 hash 名改成可读名、挪到更贴切的分类",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target": {"type": "string", "description": "素材库内的相对路径（文件或目录，相对素材库根）"},
+                        "new_name": {"type": "string", "description": "可选：新的文件名（须在同一分类，保持扩展名）"},
+                        "move_category": {"type": "string", "description": "可选：移动到该分类子目录（自动建）"},
+                    },
+                    "required": ["target"],
+                },
+            },
+        },
+    groups=['📁 文件与目录'],
+    phrases='整理素材',
+    preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
+)
+def asset_organize(target, new_name="", move_category=""):
+    """素材库内重命名 / 归类（仅库内操作，安全）。"""
+    lib = _asset_lib_dir()
+    tgt = str(target or "").strip().strip("/\\")
+    if not tgt:
+        return "错误：target 必填"
+    # 防越界：目标必须在素材库内
+    src_full = os.path.join(lib, tgt)
+    real_src = os.path.realpath(src_full)
+    real_lib = os.path.realpath(lib) + os.sep
+    if not real_src.startswith(real_lib):
+        return "错误：只能在素材库内操作"
+    if not os.path.exists(src_full):
+        return f"错误：素材库内不存在：{tgt}"
+    nn = str(new_name or "").strip()
+    mc = str(move_category or "").strip().strip("/\\")
+    if not nn and not mc:
+        return "错误：需提供 new_name 或 move_category"
+    try:
+        # 目标目录：move_category 给定则入该分类；否则留在原目录（只改名）
+        dest_dir = os.path.join(lib, mc) if mc else os.path.dirname(src_full)
+        os.makedirs(dest_dir, exist_ok=True)
+        # 目标文件名：给了 new_name 用之；否则用原名（随目录移动）
+        fname = nn if nn else os.path.basename(src_full)
+        dest = os.path.join(dest_dir, fname)
+        if os.path.abspath(dest) == os.path.abspath(src_full):
+            return "错误：新位置与当前相同"
+        if os.path.exists(dest):
+            return f"错误：目标已存在：{os.path.relpath(dest, lib)}"
+        os.rename(src_full, dest)
+        permissions.audit("asset_organize", tgt, os.path.relpath(dest, lib))
+        return f"已整理: {tgt} → {os.path.relpath(dest, lib)}"
+    except Exception as e:
+        return f"错误：整理失败: {e}"
+
+
+__all__ = ['read_file', 'write_file', 'edit_file', 'list_dir', 'search_local', 'find_images', 'asset_import', 'asset_list', 'asset_organize', 'clipboard_get', 'clipboard_set', 'delete_file', 'archive_files', 'extract_archive', 'list_snapshots', 'restore_snapshot', 'batch_rename', 'start_process', 'stop_process', 'list_processes', 'environment_info']

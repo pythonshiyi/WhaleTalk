@@ -233,6 +233,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
   - **核验**：用显式 ssh URL push 后本地 `origin/main` 引用不自动更新，`git log origin/main..HEAD` 会误报"领先 N 提交"。以远程真实 HEAD 为准：`GIT_SSH_COMMAND="ssh -o ConnectTimeout=20" git ls-remote git@github.com:pythonshiyi/WhaleTalk.git refs/heads/main` 与 `git rev-parse HEAD` 一致 = 已同步
   - commit 报 SIGTERM 时先 `git log --oneline -1` 确认是否已落（常已成功，仅收尾被打断）
   - 本地不入库产物：`能力差距分析_*.md` / `*能力报告_*.md` / `*阅读报告_*.md` 等分析文档历来不入库（只提交代码/前端/测试/依赖），push 前不必 `git add`
+- **AI 素材空间（asset_library）**：AI 做 PPT/文档时的素材管理范式——**不直接改用户原素材**，而是从本地任意目录（如 `E:/主图`）**复制**进一个固定的素材库，在库内自行按理解命名/分类后调用。blacklist 模式下读原素材+写库内天然允许，无需用户单独授权，且绝不破坏原始文件。默认库目录 `<workspace>/素材库`（可用环境变量 `WHALETALK_ASSET_LIB` 覆盖）。工具：`find_images`(扫原素材找候选) → `asset_import`(复制入库+命名/分类) → `asset_list`(列库) → `asset_organize`(库内重命名/归类)。做 PPT/文档应**优先从素材库取图**，缺素材才 asset_import 导入新素材
 
 ## 18. 踩坑记录（Web 版）
 
