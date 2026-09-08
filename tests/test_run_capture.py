@@ -194,3 +194,32 @@ def test_pip_install_bad_chars():
 def test_pip_install_empty():
     r = pip_install("")
     assert "错误" in r
+
+
+def test_parse_tool_args_lenient_json():
+    """工具参数 JSON 健壮性：中文引号/单引号/尾逗号/外层裹文字/json围栏 都应解析成功，
+    不再抛"工具参数解析失败"（真实 AI 偶发污染参数导致调用失败）。"""
+    P = dsc._parse_tool_args
+    # 中文全角引号做值（用户真实反馈场景）
+    r = P('{"title":"自助挂号机","body":"这是\u201c关键\u201d内容"}')
+    assert isinstance(r, dict) and r["title"] == "自助挂号机"
+    # 单引号字符串
+    r = P("{'a':'1','b':'x'}")
+    assert r == {"a": "1", "b": "x"}, r
+    # 尾逗号
+    r = P('{"a":1,"b":[1,2,],}')
+    assert r == {"a": 1, "b": [1, 2]}, r
+    # 外层裹解释文字
+    r = P('好的我来生成：{"path":"/x/1.pptx","theme":"ocean"} 完成')
+    assert isinstance(r, dict) and r.get("path") == "/x/1.pptx", r
+    # ```json 围栏
+    r = P('```json\n{"slides":[{"title":"封面"}]}\n```')
+    assert isinstance(r, dict) and r["slides"][0]["title"] == "封面", r
+    # 空串 → {}
+    assert P("") == {}
+    # 纯非法仍抛 ValueError
+    try:
+        P("完全不是 json {{{")
+        assert False, "应抛 ValueError"
+    except ValueError:
+        pass

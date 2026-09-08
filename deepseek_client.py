@@ -2866,6 +2866,115 @@ def _extract_json_obj(text, must_keys=("left",)):
     return None
 
 
+def _clean_json_quotes(s):
+    """把中文/弯引号替换为 ASCII 引号（AI 偶发输出 “xx” / ‘yy’ 作键值）。"""
+    s = str(s or "")
+    for a, b in (("\u201c", '"'), ("\u201d", '"'), ("\u2018", "'"), ("\u2019", "'"),
+                 ("\u201a", "'"), ("\u201b", "'"), ("\u00ab", '"'), ("\u00bb", '"')):
+        s = s.replace(a, b)
+    return s
+
+
+def _try_loose_json(s):
+    """宽松 JSON 解析工具参数（strict 失败后逐级降级）。返回 dict 或 None。
+
+    AI function-call 参数偶发：中文引号、单引号字符串、尾逗号、// 注释、
+    外层裹解释文字、流式截断。逐级清洗后仍解析不出则返回 None。"""
+    import re as _re
+    raw = str(s or "").strip()
+    if not raw:
+        return {}
+    candidates = []
+
+    def _add(x):
+        if x and x not in candidates:
+            candidates.append(x)
+
+    # 1) 原始
+    _add(raw)
+    # 2) 剥掉外层 ```json ``` 围栏 / 说明文字包裹（取首个 { 到末个 } 的平衡段）
+    si = raw.find("{")
+    ei = raw.rfind("}")
+    if si != -1 and ei > si:
+        _add(raw[si:ei + 1])
+    # 3) 中文引号归一为 ASCII
+    norm = _clean_json_quotes(raw)
+    _add(norm)
+    # 4) 去注释（// 与 # 到行尾，行内保留）
+    def _strip_comments(x):
+        lines = []
+        for ln in x.splitlines():
+            out = _re.sub(r"^\s*(//[^\"]*)$", "", ln)   # 整行注释
+            out = _re.sub(r"(?<!\")//[^\"\n]*$", "", out)  # 行尾 // 注释
+            out = _re.sub(r"(?<![\w])#\s[^\n]*$", "", out)  # jsonc # 注释
+            lines.append(out)
+        return "\n".join(lines)
+    _add(_strip_comments(norm))
+    # 5) 单引号字符串 → 双引号（仅当单引号不成对出现在内容里；逐字符处理更稳）
+    def _sq_to_dq(x):
+        out = []
+        in_str = False
+        quote = None
+        i = 0
+        n = len(x)
+        while i < n:
+            c = x[i]
+            if c in "\"'":
+                if not in_str:
+                    in_str, quote = True, c
+                elif c == quote:
+                    in_str = False
+                else:  # 字符串内出现另一引号（如 'it"s'）→ 保留
+                    out.append(c)
+                    i += 1
+                    continue
+                out.append('"' if c == "'" else c)
+            else:
+                out.append(c)
+            i += 1
+        return "".join(out)
+    _add(_sq_to_dq(_strip_comments(norm)))
+    # 6) 去尾逗号（对象/数组最后一项后）
+    def _no_trailing(x):
+        return _re.sub(r",\s*([}\]])", r"\1", x)
+    _add(_no_trailing(_sq_to_dq(_strip_comments(norm))))
+
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            continue
+    # 7) 最后兜底：逐个剥离外层字符试 JSON（容忍极少数模型包解释文字）
+    if si != -1 and ei > si:
+        inner = raw[si:ei + 1]
+        try:
+            obj = json.loads(_no_trailing(_sq_to_dq(_strip_comments(inner))))
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+    return None
+
+
+def _parse_tool_args(raw_args):
+    """解析工具参数为 dict：严格优先，宽松降级。解析失败抛 ValueError(带清晰信息)。"""
+    if not str(raw_args or "").strip():
+        return {}
+    try:
+        obj = json.loads(raw_args)
+        if not isinstance(obj, dict):
+            raise ValueError("工具参数必须是 JSON 对象")
+        return obj
+    except Exception:
+        pass
+    loose = _try_loose_json(raw_args)
+    if loose is not None:
+        return loose
+    raise ValueError(f"参数非合法 JSON：{str(raw_args)[:200]}")
+
+
 def _parse_scroll(target):
     """解析滚动目标：'向上3' / '向下 5' / '3' → pyautogui 正负次数。"""
     t = str(target or "").strip()
@@ -4128,9 +4237,9 @@ class DeepSeekClient:
                     if name == "ask_user":
                         # 询问用户：阻塞等待 UI 回答（on_ask 由 main 提供）
                         try:
-                            qargs = json.loads(raw_args) if raw_args else {}
+                            qargs = _parse_tool_args(raw_args)
                             prompt = str(qargs.get("prompt") or "") if isinstance(qargs, dict) else ""
-                        except json.JSONDecodeError:
+                        except ValueError:
                             prompt = raw_args[:200]
                         if not prompt:
                             prompt = "请提供需要用户回答的问题"
@@ -4142,8 +4251,8 @@ class DeepSeekClient:
                     elif name == "request_permission":
                         # 兼容旧接口：黑名单模式下不再弹窗，统一直接放行；无白名单语义
                         try:
-                            pargs = json.loads(raw_args) if raw_args else {}
-                        except json.JSONDecodeError:
+                            pargs = _parse_tool_args(raw_args)
+                        except ValueError:
                             pargs = {}
                         atype = str(pargs.get("action_type") or "") if isinstance(pargs, dict) else ""
                         pvalue = str(pargs.get("value") or "") if isinstance(pargs, dict) else ""
@@ -4170,9 +4279,7 @@ class DeepSeekClient:
                             result = reason_a or "权限拒绝：未获批准"
                         else:
                             try:
-                                args = json.loads(raw_args)
-                                if not isinstance(args, dict):
-                                    raise ValueError("工具参数必须是 JSON 对象")
+                                args = _parse_tool_args(raw_args)
                                 result = fn(**args)
                             except (json.JSONDecodeError, ValueError) as e:
                                 result = (
@@ -4422,9 +4529,7 @@ class DeepSeekClient:
         if err:
             return f"错误：自定义工具 endpoint 不合法（{err}）"
         try:
-            args = json.loads(raw_args) if raw_args else {}
-            if not isinstance(args, dict):
-                raise ValueError("工具参数必须是 JSON 对象")
+            args = _parse_tool_args(raw_args)
         except (json.JSONDecodeError, ValueError) as e:
             return f"工具参数解析失败: {e}，原始参数: {raw_args!r}"
         try:
