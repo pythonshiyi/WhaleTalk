@@ -786,9 +786,10 @@ def notify_desktop(title="鲸语提醒", text="", fallback_sound=True, silent=Fa
             with open(ps_path, "w", encoding="utf-8-sig") as f:
                 f.write(script)
             proc = subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps_path],
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", ps_path],
                 capture_output=True, text=True, timeout=15,
                 encoding="utf-8", errors="replace",
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             if proc.returncode != 0:
                 # Toast 不可用（老系统/受限环境）时兜底为提示音（可关闭）
