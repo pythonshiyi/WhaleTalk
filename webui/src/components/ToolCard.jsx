@@ -83,20 +83,22 @@ export default function ToolCard({ tool, status, args, result, cost, duration })
           {running ? (
             <>
               <span className="tool-spin" />
-              <span className="tool-status">执行中</span>
+              <span className="tool-status" title="AI 正在调用该工具，结果返回前请稍候">执行中</span>
             </>
           ) : done ? (
             <>
-              <span className="tool-check">✓</span>
-              <span className="tool-status tool-status-done">{duration && duration !== "—" ? `${duration}s` : "完成"}</span>
+              <span className="tool-check" title="该工具执行成功">✓</span>
+              <span className="tool-status tool-status-done" title={duration && duration !== "—" ? `该工具耗时 ${duration} 秒` : "该工具执行成功"}>
+                {duration && duration !== "—" ? `${duration}s` : "完成"}
+              </span>
             </>
           ) : (
             <>
-              <span className="tool-x">✕</span>
-              <span className="tool-status">失败</span>
+              <span className="tool-x" title="该工具执行失败，点击上方卡片可查看错误详情">✕</span>
+              <span className="tool-status" title="点击卡片查看失败原因">失败</span>
             </>
           )}
-          {cost && <span className="tool-cost">{cost}</span>}
+          {cost && <span className="tool-cost" title="本工具调用估算成本">{cost}</span>}
           <svg className="tool-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M6 9l6 6 6-6" />
           </svg>

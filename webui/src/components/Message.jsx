@@ -17,17 +17,17 @@ function TablePreview({ header = [], rows = [], total = 0, name = "" }) {
   return (
     <div style={{ marginTop: 4 }}>
       <div style={{ opacity: .8, marginBottom: 4 }}>📊 {name}（{total > 0 ? total + " 行" : rows.length + " 行"}）</div>
-      <div style={{ overflow: "auto", maxHeight: 300, border: "1px solid var(--border)", borderRadius: 8 }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>{header.length > 0 && (
+      <div style={{ overflow: "auto", maxHeight: 300, border: "1px solid var(--border)", borderRadius: "var(--r-md)" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "var(--fs-sm)" }}>{header.length > 0 && (
           <thead><tr>{(header || []).map((h, i) => (
-            <th key={i} style={{ padding: "4px 8px", background: "rgba(128,140,160,.15)", textAlign: "left", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
+            <th key={i} style={{ padding: "4px 8px", background: "var(--bg-3)", textAlign: "left", fontWeight: 600, borderBottom: "1px solid var(--border)", whiteSpace: "nowrap", color: "var(--text-2)" }}>{h}</th>
           ))}</tr></thead>
         )}
           <tbody>
             {(cur || []).map((r, ri) => (
               <tr key={ri}>
                 {(r || []).map((c, ci) => (
-                  <td key={ci} style={{ padding: "4px 8px", borderBottom: "1px solid rgba(128,140,160,.12)", whiteSpace: "nowrap", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{c}</td>
+                  <td key={ci} style={{ padding: "4px 8px", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{c}</td>
                 ))}
               </tr>
             ))}
@@ -58,16 +58,16 @@ function TaskProgress({ tools, streaming }) {
   const currentTool = cur ? cur.tool : null;
   return (
     <div className="task-progress" style={{
-      margin: "6px 0 4px", padding: "8px 12px", borderRadius: 10,
-      background: "var(--bg-2, rgba(128,140,160,.08))", fontSize: 12.5,
-      color: "var(--text, #ddd)", display: "flex", alignItems: "center", gap: 10,
+      margin: "6px 0 4px", padding: "8px 12px", borderRadius: "var(--r-md)",
+      background: "var(--bg-2)", fontSize: "var(--fs-sm)",
+      color: "var(--text-1)", display: "flex", alignItems: "center", gap: 10,
     }}>
       <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>
         {streaming && (!done || running) ? "⏳ 任务进行中" : done >= total && total ? "✅ 任务完成" : "🔄 任务"}
       </span>
       <span style={{ flex: 1 }}>
-        <div style={{ height: 6, borderRadius: 3, background: "rgba(128,140,160,.18)", overflow: "hidden" }}>
-          <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg,#0ea5e9,#2563eb)", transition: "width .3s" }} />
+        <div style={{ height: 6, borderRadius: 3, background: "var(--bg-3)", overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg, var(--brand), var(--ai))", transition: "width .3s var(--ease)" }} />
         </div>
       </span>
       <span className="task-prog-count" style={{ whiteSpace: "nowrap", opacity: .85 }}>

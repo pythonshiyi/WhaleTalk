@@ -8,7 +8,6 @@ import { silentWarn } from "../quiet.js";
 export default function StatusBar({ mode, onSwitchMode, generating, generatingText }) {
   const { flashMsg } = React.useContext(FlashContext);
   const [status, setStatus] = React.useState(null);
-  const [sonar, setSonar] = React.useState(0);
 
   React.useEffect(() => {
     let alive = true;
@@ -24,11 +23,6 @@ export default function StatusBar({ mode, onSwitchMode, generating, generatingTe
       alive = false;
       clearInterval(iv);
     };
-  }, []);
-
-  React.useEffect(() => {
-    const iv = setInterval(() => setSonar((s) => (s + 1) % 40), 50);
-    return () => clearInterval(iv);
   }, []);
 
   const u = status?.usage_total || {};
@@ -64,21 +58,17 @@ export default function StatusBar({ mode, onSwitchMode, generating, generatingTe
   return (
     <div className="status-bar">
       <div className="status-left">
-        <span className="status-sonar">
-          <span className="status-dot" style={{ transform: `scale(${1 + sonar / 40})`, opacity: 0.4 - sonar / 100 }} />
+        <span className="status-sonar" aria-hidden="true">
+          <span className="status-dot" />
           <span className="status-dot-core" />
         </span>
         <span className="status-whale">🐋</span>
         <span className="status-text-wrap">{display}</span>
       </div>
       <div className="status-right">
-        <span className="st-right-text">
+        <span className="st-right-text" title={status ? `模型 ${status.model} · 角色 ${status.role} · 场景 ${status.scenario} · 思考档 ${status.thinking}` : undefined}>
           {status ? `模型 ${status.model} · 🎭 ${status.role} · 场景 ${status.scenario} · 思考 ${status.thinking}` : "连接中…"}
         </span>
-        <span className="st-ctx">上下文</span>
-        <div className="st-ctx-bar">
-          <div className="st-ctx-fill" style={{ width: `${Math.min(100, Math.max(3, Math.round(((u.prompt || 0) / 1000000) * 100)))}%` }} />
-        </div>
       </div>
     </div>
   );

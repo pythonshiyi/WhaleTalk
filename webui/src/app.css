@@ -166,12 +166,13 @@ button {
 .sl-pin { font-size: 11px; }
 .sl-item-line2 { font-size: var(--fs-xs); color: var(--text-3); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sl-item-line3 { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
-.sl-tag { font-size: 10px; padding: 1px 7px; border-radius: var(--r-full); }
-.tag-调研 { color: var(--brand-strong); background: rgba(var(--brand-rgb),.12); }
-.tag-写作 { color: #f472b6; background: rgba(244,114,182,.12); }
-.tag-开发 { color: #a78bfa; background: rgba(167,139,250,.12); }
-.tag-数据 { color: #34d399; background: rgba(var(--ok-rgb),.12); }
-.tag-临时 { color: #fbbf24; background: rgba(251,191,36,.12); }
+.sl-tag { font-size: 10px; padding: 1px 7px; border-radius: var(--r-full); white-space: nowrap; }
+/* 标签语义调色板（均走主题令牌，三主题自动适配） */
+.sl-tag.c-brand { color: var(--brand-strong); background: rgba(var(--brand-rgb),.13); }
+.sl-tag.c-ai    { color: var(--ai);          background: rgba(var(--ai-rgb),.13); }
+.sl-tag.c-ok    { color: var(--ok);          background: rgba(var(--ok-rgb),.13); }
+.sl-tag.c-warn  { color: var(--warn);        background: rgba(var(--warn-rgb),.14); }
+.sl-tag.c-danger{ color: var(--danger);      background: rgba(var(--danger-rgb),.13); }
 .sl-time { font-size: 10px; color: var(--text-3); margin-left: auto; }
 .sl-model { font-size: 10px; color: var(--text-3); font-family: var(--font-mono); }
 
@@ -1172,11 +1173,18 @@ button {
 }
 .status-left { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
 .status-sonar { position: relative; width: 14px; height: 14px; flex-shrink: 0; }
+/* 呼吸声波：纯 CSS 动画替代原 50ms JS 定时器（消除每秒 20 次 re-render） */
 .status-dot {
   position: absolute; inset: 0; border-radius: 50%;
-  background: var(--ok); transition: transform .05s linear;
+  background: var(--ok);
+  animation: sonar-ping 2s var(--ease) infinite;
 }
-.status-dot-core { position: absolute; inset: 3px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.status-dot-core { position: absolute; inset: 3px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); z-index: 1; }
+@keyframes sonar-ping {
+  0%   { transform: scale(1);   opacity: .5; }
+  60%  { transform: scale(2.1); opacity: 0; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
 .status-whale { font-size: var(--fs-sm); }
 .status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st-task { color: var(--brand-strong); }
@@ -1184,10 +1192,7 @@ button {
 .st-budget-over { color: var(--danger); font-weight: 600; }
 .st-budget-near { color: var(--warn); }
 .status-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.st-right-text { color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 380px; }
-.st-ctx { color: var(--text-3); font-size: 10px; }
-.st-ctx-bar { width: 90px; height: 5px; border-radius: 3px; background: var(--bg-3); overflow: hidden; }
-.st-ctx-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--brand), var(--ai)); }
+.st-right-text { color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 560px; }
 
 /* ═══ overlay 面板（菜单对话框） ══════════════════ */
 .overlay-mask {
@@ -1754,7 +1759,6 @@ button {
 }
 .status-text-wrap { min-width: 0; overflow: hidden; }
 .status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.st-ctx-fill { transition: width .6s var(--ease); }
 .sl-resize {
   position: absolute; top: 0; right: -3px; width: 6px; height: 100%;
   cursor: col-resize; z-index: 10;
@@ -2605,11 +2609,16 @@ button {
 
 /* ═══ 按钮体系规范（三层统一：主 / 次 / 图标+最小操作） ════════ */
 button { -webkit-tap-highlight-color: transparent; }
-/* 聚焦可见性（键盘可达）：所有交互控件统一品牌色光环 */
-.confirm-btn:focus-visible, .msg-op:focus-visible, .icon-btn:focus-visible,
-.deps-btn:focus-visible, .send-btn:focus-visible, .sl-act:focus-visible,
-.brain-tab:focus-visible, .acc-head:focus-visible, .set-select:focus-visible {
+/* 聚焦可见性（键盘可达）：统一品牌色光环——覆盖所有可交互控件，
+   超出此前手写白名单（sb-item/cbtn/sl-item/aux-tab/ctx-tab/prompt/theme/
+   toggle/slash-item/suggest-chip/mode-chip 等此前缺失的控件自动获得焦点环）。 */
+:where(
+  button, a, [role="button"], [role="tab"], [role="switch"], [role="menuitem"],
+  [tabindex]:not([tabindex="-1"]), select, input:not([type="hidden"]), textarea,
+  [contenteditable="true"]
+):focus-visible {
   outline: 2px solid var(--brand); outline-offset: 2px;
+  border-radius: 2px;
 }
 /* 禁用态统一 */
 .confirm-btn:disabled, .msg-op:disabled, .icon-btn:disabled,

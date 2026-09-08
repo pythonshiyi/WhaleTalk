@@ -144,11 +144,11 @@ function DetailOverlay({ name, onClose }) {
         </div>
         <div className="tf-desc-line">{d.description}</div>
         <div className="perm-chips" style={{ marginBottom: 10 }}>
-          <span className="sl-tag tag-起草">{d.kind}</span>
+          <span className="sl-tag c-brand">{d.kind}</span>
           {d.trigger && <span className="plugin-trigger">{d.trigger}</span>}
-          {d.enabled ? <span className="evo-badge">已启用</span> : <span className="sl-tag tag-临时">已停用</span>}
+          {d.enabled ? <span className="evo-badge">已启用</span> : <span className="sl-tag c-danger">已停用</span>}
           {d.requires && d.requires.length > 0 && (
-            <span className="sl-tag tag-考证" style={{ color: "var(--warn)", background: "var(--warn-soft)" }}>
+            <span className="sl-tag c-warn">
               {d.requires.join(" + ")}
             </span>
           )}

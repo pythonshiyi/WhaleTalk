@@ -12,6 +12,7 @@ import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { speakText, getVoiceConfig, onSpeechState, stopSpeak, resumeSpeak } from "../ttsUtil.js";
+import { nowClock } from "../timeFmt.js";
 
 import { silentWarn } from "../quiet.js";
 // 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
@@ -147,8 +148,9 @@ function useBackendChat({
     if (isContinue) {
       updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, streaming: true } : x)));
     } else {
-      msg = { role: "assistant", think: "", tools: [], text: "", streaming: true, time: new Date().toTimeString().slice(0, 8) };
-      updateMsgs((m) => [...m, { role: "user", text: userText, time: new Date().toTimeString().slice(0, 8) }, msg]);
+      const t0 = nowClock();
+      msg = { role: "assistant", think: "", tools: [], text: "", streaming: true, time: t0 };
+      updateMsgs((m) => [...m, { role: "user", text: userText, time: t0 }, msg]);
     }
     if (!stopSignalRef.current || stopSignalRef.current.signal.aborted) stopSignalRef.current = new AbortController();
 
@@ -785,7 +787,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     setBackendNote("");
   };
 
-  const nowTime = () => new Date().toTimeString().slice(0, 8);
+  const nowTime = () => nowClock();
 
   const onInjectFile = async (path) => {
     try {

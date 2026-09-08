@@ -1,4 +1,5 @@
 import React from "react";
+import EmptyState from "./EmptyState.jsx";
 
 export default function ContextPanel({ data, onClose }) {
   const [tab, setTab] = React.useState("工具");
@@ -47,20 +48,26 @@ export default function ContextPanel({ data, onClose }) {
             </>
           );
         })()}
-        {tab === "记忆" && (
-          <>
-            {((data && data.memory) || []).map((m) => (
-              <div className="mem-card" key={m.id}>
-                <div className="mem-card-head">
-                  <span className="mem-id">{m.id}</span>
-                  <span className="mem-tag">{m.tag}</span>
+        {tab === "记忆" && (() => {
+          const mem = (data && data.memory) || [];
+          return mem.length > 0 ? (
+            <>
+              {mem.map((m) => (
+                <div className="mem-card" key={m.id}>
+                  <div className="mem-card-head">
+                    <span className="mem-id">{m.id}</span>
+                    <span className="mem-tag">{m.tag}</span>
+                  </div>
+                  <div className="mem-text">{m.text}</div>
                 </div>
-                <div className="mem-text">{m.text}</div>
-              </div>
-            ))}
-            <button className="ctx-action">检索记忆库</button>
-          </>
-        )}
+              ))}
+              <button className="ctx-action">检索记忆库</button>
+            </>
+          ) : (
+            <EmptyState compact icon="🧠" title="还没有长期记忆"
+              hint="对话中要求记住的关键信息会沉淀到这里" />
+          );
+        })()}
         {tab === "用量" && (() => {
           const usage = (data || {}).usage || {};
           const hitRate = Math.min(100, Math.max(0, parseFloat(String(usage.cached || "").replace("%", "")) || 0));

@@ -103,6 +103,12 @@ def read_version():
     return None
 
 
+def version_major_minor(version):
+    """从完整版本号提取主.次（3.9.0 → 3.9），无法解析返回原串。"""
+    m = re.match(r"(\d+)\.(\d+)", str(version))
+    return f"{m.group(1)}.{m.group(2)}" if m else str(version)
+
+
 # ── 文档声明清单：(文件, 正则[首捕获组=数字], 期望来源, 含义) ──
 # 注意：正则需要让「数字」单独成捕获组，--fix 只替换该组，绝不触碰组外文本。
 CLAIMS = [
@@ -131,7 +137,7 @@ STALE_TEXT = [
     (README, "工具权限黑白名单",       "已无黑白名单双轨表述（黑名单为唯一限制来源）"),
     (README, "zip 炸弹防护",          "无对应代码，属白名单时代的幽灵声明"),
     (README, "沙箱 Python、",         "run_python 已直通本机解释器（无沙箱）"),
-    (SECURITY, "3.5.x（main 分支）",  "当前支持版本为 3.8.x"),
+    (SECURITY, "3.5.x（main 分支）",  "当前支持版本为 3.9.x（见 SECURITY 支持版本表一致性检查）"),
     (SECURITY, "静态 AST 检查 + `-I -S` 隔离执行", "run_python 无沙箱（等同本机 python -c）"),
     (SECURITY, "要求新增行动工具接入审批流", "默认零审批（approval_actions 空）；确需加严才登记"),
     (CONTRIB, "沙箱补 ast 校验",      "run_python 无沙箱；示例提交信息已过时"),
@@ -181,6 +187,25 @@ def main(argv=None):
         if frag in text:
             problems += 1
             print(f"[过期表述] {path.name} 仍含「{frag}」：{why}")
+
+    # ── SECURITY 支持版本表与单一版本源对齐 ──
+    # 表行形如 "| 3.9.x（main 分支） | ✅ 积极维护 |"：主版本号从源码 VERSION 推导。
+    mm = version_major_minor(expected["version"])
+    sec_text = SECURITY.read_text(encoding="utf-8")
+    sec_ver = re.search(r"\|\s*(\d+\.\d+)\.x", sec_text)
+    if sec_ver:
+        if sec_ver.group(1) != mm:
+            problems += 1
+            print(f"[不一致] SECURITY.md 支持版本表声明 {sec_ver.group(1)}.x，"
+                  f"实测 {mm}.x（--fix 自动修正）")
+            if fix:
+                new_sec = sec_text.replace(
+                    sec_ver.group(1) + ".x", mm + ".x", 1)
+                SECURITY.write_text(new_sec, encoding="utf-8")
+                print(f"       已修正支持版本表为 {mm}.x")
+    else:
+        problems += 1
+        print(f"[缺失] SECURITY.md 找不到「支持的版本」表行（期望 {mm}.x）")
 
     if problems:
         print(f"\n校验未通过：{problems} 处问题（--fix 可修正数字类问题）")

@@ -213,3 +213,12 @@ body {
 select, input, textarea { font-family: inherit; }
 
 ::selection { background: rgba(14, 165, 233, 0.35); }
+
+/* ═══ 无障碍：尊重系统「减弱动态效果」 ═════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
