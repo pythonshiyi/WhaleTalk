@@ -41,6 +41,17 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
     """
     import tempfile
 
+    # 强制子进程以 UTF-8 编码 stdout/stderr：Windows 下子进程默认按 GBK/cp936 输出，
+    # 而父进程这里用 encoding="utf-8" 解码 → 中文乱码 / UnicodeEncodeError（根因：只修了
+    # "怎么解"、没修"怎么编"）。注入 PYTHONIOENCODING 让子进程"怎么编"也用 UTF-8。
+    env = None
+    try:
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+    except Exception:
+        env = None
+
     with tempfile.SpooledTemporaryFile(
         max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
     ) as out:
@@ -53,6 +64,7 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
             errors="replace",
             cwd=cwd,
             shell=shell,
+            env=env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         try:
@@ -709,36 +721,55 @@ def find_symbol(name, path=None, max_files=150):
     if not os.path.isdir(base):
         return f"错误：目录不存在：{base}"
 
-    py_files = []
-    for root, dirs, files in os.walk(base):
-        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build")]
-        for fn in files:
-            if fn.endswith(".py"):
-                py_files.append(os.path.join(root, fn))
-        if len(py_files) >= max_files:
-            break
+    def scan_one(b):
+        """在目录 b 下 AST 扫描 name 的定义/引用，返回 (defs, refs)。"""
+        d_local, r_local = [], []
+        n_files = 0
+        for root, dirs, files in os.walk(b):
+            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build", ".workbuddy")]
+            for fn in files:
+                if not fn.endswith(".py"):
+                    continue
+                if n_files >= max_files:
+                    break
+                n_files += 1
+                p = os.path.join(root, fn)
+                rel = os.path.relpath(p, b)
+                try:
+                    with open(p, "r", encoding="utf-8", errors="replace") as f:
+                        tree = ast.parse(f.read())
+                except Exception:
+                    continue
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                        d_local.append(f"{rel}:{node.lineno}  def {node.name}(...)")
+                    elif isinstance(node, ast.ClassDef) and node.name == name:
+                        d_local.append(f"{rel}:{node.lineno}  class {node.name}")
+                    elif isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Load):
+                        r_local.append(f"{rel}:{node.lineno}")
+                    elif isinstance(node, ast.Attribute) and node.attr == name:
+                        r_local.append(f"{rel}:{node.lineno}")
+                    elif isinstance(node, ast.ImportFrom):
+                        for a in node.names:
+                            if a.name == name:
+                                r_local.append(f"{rel}:{node.lineno}")
+            if n_files >= max_files:
+                break
+        return d_local, r_local
 
-    defs, refs = [], []
-    for p in py_files[:max_files]:
-        rel = os.path.relpath(p, base)
+    defs, refs = scan_one(base)
+
+    # P2 兜底：未显式给 path 时，若工作区/默认目录未命中定义，再补扫 WhaleTalk 源码目录，
+    # 以便定位鲸语自身工具函数（get_status/run_python 等定义在 agent_tools/ 域模块）。
+    if not defs and not path:
         try:
-            with open(p, "r", encoding="utf-8", errors="replace") as f:
-                tree = ast.parse(f.read())
+            _src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # …/WhaleTalk
+            if os.path.isdir(_src_dir) and os.path.abspath(_src_dir) != os.path.abspath(base):
+                d2, r2 = scan_one(_src_dir)
+                defs = d2
+                refs = r2 + refs
         except Exception:
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-                defs.append(f"{rel}:{node.lineno}  def {node.name}(...)")
-            elif isinstance(node, ast.ClassDef) and node.name == name:
-                defs.append(f"{rel}:{node.lineno}  class {node.name}")
-            elif isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Load):
-                refs.append(f"{rel}:{node.lineno}")
-            elif isinstance(node, ast.Attribute) and node.attr == name:
-                refs.append(f"{rel}:{node.lineno}")
-            elif isinstance(node, ast.ImportFrom):
-                for a in node.names:
-                    if a.name == name:
-                        refs.append(f"{rel}:{node.lineno}")
+            pass
 
     lines = [f"符号「{name}」定位结果：", f"  定义（{len(defs)}）："]
     lines += [f"    - {d}" for d in defs[:20]] or ["    - （未找到定义）"]

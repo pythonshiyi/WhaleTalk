@@ -4314,6 +4314,17 @@ class DeepSeekClient:
                             try:
                                 args = _parse_tool_args(raw_args)
                                 result = fn(**args)
+                                # 结构化结果归一为可读文本：dict/list 用 JSON(保留中文)，
+                                # 其余非 str(int/bool/None) 转 str——避免 dict 结果漏到前端
+                                # SSE 成对象，UI 渲染成 "[object Object]"（get_status 等曾触发）。
+                                if not isinstance(result, str):
+                                    if isinstance(result, (dict, list, tuple)):
+                                        try:
+                                            result = json.dumps(result, ensure_ascii=False, default=str)
+                                        except Exception:
+                                            result = str(result)
+                                    else:
+                                        result = str(result)
                             except (json.JSONDecodeError, ValueError) as e:
                                 result = (
                                     f"工具参数解析失败: {e}，原始参数: {raw_args!r}，请修正参数格式后重试"

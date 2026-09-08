@@ -6,6 +6,7 @@ import PixelDocViewer from "./PixelDocViewer.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
+import formatToolResult from "../formatToolResult.js";
 
 import { silentWarn } from "../quiet.js";
 // 表格内嵌预览（CSV/XLSX）：分页展示，不超过后端返回的 rows 上限
@@ -181,7 +182,7 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
   // 产物路径：助手回复文本 ∪ 工具结果
   const products = React.useMemo(() => {
     if (msg.role === "user" || msg.role === "system" ) return [];
-    const text = [msg.text, ...(msg.tools || []).map((t) => t.result || "")].join("\n");
+    const text = [msg.text, ...(msg.tools || []).map((t) => formatToolResult(t.result))].join("\n");
     return extractProducts(text);
   }, [msg]);
 

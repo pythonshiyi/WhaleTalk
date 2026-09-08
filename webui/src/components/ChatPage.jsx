@@ -13,6 +13,7 @@ import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { speakText, getVoiceConfig, onSpeechState, stopSpeak, resumeSpeak } from "../ttsUtil.js";
 import { nowClock } from "../timeFmt.js";
+import formatToolResult from "../formatToolResult.js";
 
 import { silentWarn } from "../quiet.js";
 // 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
@@ -265,9 +266,9 @@ function useBackendChat({
                   const card = [...tools].reverse().find((t) => t.tool === name && t.status === "running");
                   if (card) {
                     card.status = "done";
-                    card.result = String(result || "").slice(0, 8000);
+                    card.result = formatToolResult(result).slice(0, 8000);
                   } else {
-                    tools.push({ tool: name, result: String(result || "").slice(0, 8000), status: "done" });
+                    tools.push({ tool: name, result: formatToolResult(result).slice(0, 8000), status: "done" });
                   }
                   return { ...x, tools };
                 }));
@@ -275,9 +276,9 @@ function useBackendChat({
                 const card = [...msg.tools].reverse().find((t) => t.tool === name && t.status === "running");
                 if (card) {
                   card.status = "done";
-                  card.result = String(result || "").slice(0, 8000);
+                  card.result = formatToolResult(result).slice(0, 8000);
                 } else {
-                  msg.tools.push({ tool: name, result: String(result || "").slice(0, 8000), status: "done" });
+                  msg.tools.push({ tool: name, result: formatToolResult(result).slice(0, 8000), status: "done" });
                 }
                 updateMsgs((m) => [...m]);
               }

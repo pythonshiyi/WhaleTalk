@@ -1,4 +1,5 @@
 import React from "react";
+import formatToolResult from "../formatToolResult.js";
 
 // 多智能体流水线步骤面板：解析工具结果里的 __TEAM_JSON__ 结构化段，渲染步骤条
 function TeamRunSteps({ result }) {
@@ -111,9 +112,9 @@ export default function ToolCard({ tool, status, args, result, cost, duration })
             {tool === "team_run" ? (
               <>
                 <TeamRunSteps result={result} />
-                {String(result).replace(/__TEAM_JSON__\{.*\}/, "").trim()}
+                {formatToolResult(result).replace(/__TEAM_JSON__\{.*\}/, "").trim()}
               </>
-            ) : result}
+            ) : formatToolResult(result)}
           </div>
         </div>
       )}

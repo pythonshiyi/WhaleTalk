@@ -1,5 +1,6 @@
 import React from "react";
 import * as api from "../api.js";
+import formatToolResult from "../formatToolResult.js";
 
 import { silentWarn } from "../quiet.js";
 // ── 能力测试台：JSON Schema → 表单 → 直调工具 ────────
@@ -114,7 +115,7 @@ export default function ToolTest({ name, onClose }) {
     setResult("");
     try {
       const r = await api.invokeTool(name, values);
-      setResult(String(r.result || "（空结果）"));
+      setResult(formatToolResult(r?.result) || "（空结果）");
     } catch (e) {
       setResult(`⚠️ 调用失败：${e.message}`);
     }

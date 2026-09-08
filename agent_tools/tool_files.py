@@ -985,9 +985,12 @@ def start_process(command, name=""):
             return f"错误：后台进程数已达上限（{MAX_PROCESSES} 个），请先 stop_process 停止部分进程"
     try:
         # shell=True：Windows 走 cmd /c、POSIX 走 /bin/sh -c，原生支持管道/重定向；
-        # PYTHONUNBUFFERED=1 替代 -u 注入（shell 模式下无需拆 argv），python 实时日志不缓冲
+        # PYTHONUNBUFFERED=1 替代 -u 注入（shell 模式下无需拆 argv），python 实时日志不缓冲；
+        # PYTHONIOENCODING/PYTHONUTF8：强制子进程 stdout 用 UTF-8（Windows 默认 GBK 会乱码）
         env = dict(os.environ)
         env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
