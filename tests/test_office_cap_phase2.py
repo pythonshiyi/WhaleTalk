@@ -188,3 +188,24 @@ def test_find_images_search_local_assets(tmp_path):
     assert "icon" not in r, "过小图应被 min_width 过滤"
     r2 = dc.find_images(str(mat), keyword="医院")
     assert "医院_现场" in r2, "应递归命中子目录"
+
+
+def test_html_to_pdf_chinese_embedded(tmp_path):
+    """html_to_pdf：HTML/CSS 渲染成印刷级 PDF，中文可提取、支持分页。"""
+    pytest = __import__("pytest")
+    try:
+        import playwright  # noqa: F401
+    except Exception:
+        pytest.skip("未安装 playwright")
+    out = str(tmp_path / "d.pdf")
+    html = ("<html><head><meta charset='utf-8'><style>@page{size:A4}"
+            "body{font-family:'Microsoft YaHei'}</style></head>"
+            "<body><h1>自助挂号机系统</h1><p>中文正文可嵌入。</p>"
+            "<div style='page-break-before:always'></div><p>第二页</p></body></html>")
+    r = dc.html_to_pdf(html=html, output=out, size="A4")
+    assert r.startswith("已生成"), r
+    assert os.path.exists(out) and os.path.getsize(out) > 0
+    import pymupdf
+    d = pymupdf.open(out)
+    assert d.page_count >= 2, "应正确分页"
+    assert "自助挂号机" in d[0].get_text(), "中文应可提取"

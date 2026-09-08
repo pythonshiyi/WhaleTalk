@@ -3327,6 +3327,98 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
         {
             "type": "function",
             "function": {
+                "name": "html_to_pdf",
+                "description": "把 HTML/CSS 渲染成印刷级 PDF（HTML 排版 → PDF，支持分页/页边距/页眉页脚）。AI 可用擅长的 CSS（@page 分页、字号行距、配色、图片）排出比代码排印美观的 PDF。依赖 playwright（优先系统 Edge，免下载 chromium）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "html": {"type": "string", "description": "HTML/CSS 内容（body 片段或完整 <html>，含 <style>），与 source_path 二选一"},
+                        "source_path": {"type": "string", "description": "可选：从本地 .html 读取（与 html 二选一）"},
+                        "output": {"type": "string", "description": "输出 .pdf 绝对路径（须在允许目录内）"},
+                        "size": {"type": "string", "description": "可选：A4/A3/Letter/Legal（默认 A4）"},
+                        "margin": {"type": "string", "description": "可选：页边距 CSS 值如 '1cm' 或 '0.5in'（默认 1cm；设 0 则无，适合全幅设计稿转 PDF）"},
+                        "landscape": {"type": "boolean", "description": "可选：横向（默认 false）"},
+                    },
+                    "required": ["output"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='HTML 转 PDF',
+    preactivate=(('写', '保存', '创建', '生成'),),
+)
+def html_to_pdf(html="", source_path="", output="", size="A4", margin="1cm", landscape=False):
+    """HTML/CSS → PDF（无头浏览器 print 渲染，优先系统 Edge）。返回路径/错误。"""
+    if not str(output or "").strip():
+        return "错误：output 必填"
+    if str(html or "").strip() and str(source_path or "").strip():
+        return "错误：html 与 source_path 只能二选一"
+    content = str(html or "")
+    if not content.strip():
+        if not str(source_path or "").strip():
+            return "错误：html 或 source_path 必填"
+        sp = permissions.resolve(source_path)
+        if not sp or not os.path.isfile(sp):
+            return f"错误：源文件不存在：{source_path}"
+        okr, reasonr = permissions.check_filesystem(sp, write=False)
+        if not okr:
+            return reasonr
+        try:
+            with open(sp, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read(2_000_000)
+        except Exception as e:
+            return f"错误：读取源文件失败: {e}"
+    if not content.strip():
+        return "错误：HTML 内容为空"
+    out = permissions.resolve(output)
+    if not out:
+        return "错误：输出路径无效"
+    if not out.lower().endswith(".pdf"):
+        out += ".pdf"
+    ok, reason = permissions.check_filesystem(out, write=True)
+    if not ok:
+        return reason
+    try:
+        if not content.lstrip().lower().startswith("<!doctype") and not content.lstrip().lower().startswith("<html"):
+            content = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
+                       "<style>html,body{margin:0;padding:0}*{box-sizing:border-box}</style></head>"
+                       f"<body>{content}</body></html>")
+        import base64
+        data_uri = "data:text/html;base64," + base64.b64encode(content.encode("utf-8")).decode("ascii")
+        from playwright.sync_api import sync_playwright
+        with _html_render_lock():
+            with sync_playwright() as p:
+                browser = None
+                try:
+                    try:
+                        browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
+                    except Exception:
+                        browser = p.chromium.launch(args=["--no-sandbox"])
+                    pg = browser.new_page()
+                    pg.goto(data_uri, wait_until="load")
+                    pg.wait_for_timeout(400)
+                    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+                    pg.pdf(path=out, format=str(size or "A4").upper(),
+                           margin={"top": str(margin), "bottom": str(margin),
+                                   "left": str(margin), "right": str(margin)},
+                           print_background=True, landscape=bool(landscape))
+                finally:
+                    if browser is not None:
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
+        sz = os.path.getsize(out)
+        permissions.audit("html_to_pdf", out, f"{sz} 字节")
+        return f"已生成 PDF: {out}（{size} {('横向' if landscape else '纵向')}，{sz/1024:.1f} KB）"
+    except Exception as e:
+        return f"错误：PDF 生成失败: {e}（需已装 playwright，系统有 Edge 最佳）"
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
                 "name": "ppt_layout_check",
                 "description": "对生成的 .pptx 做版面自检（美学自检回路·几何层）：逐页检查每个形状是否越出画布、元素是否相互重叠、文本框是否可能溢出。返回每页诊断（含元素 id/坐标/问题），供你据以修正后再生成。注意：这是几何/布局层面的定量自检；视觉观感(配色/留白节奏)建议另用 html_render 渲染成图 + image_understand 看图评估",
                 "parameters": {
@@ -3424,4 +3516,4 @@ def ppt_layout_check(path, margin=0.05):
         return f"错误：版面检查失败: {e}"
 
 
-__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'html_to_ppt', 'ppt_layout_check', 'secret_store', 'kv_store', 'create_doc']
+__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check', 'secret_store', 'kv_store', 'create_doc']

@@ -3190,7 +3190,7 @@ _TOOL_ORDER = [
     'app_manage', 'screen_find_click', 'vision_loop', 'voice_chat_loop', 'team_run', 'net_diagnose', 'fetch_url_smart', 'knowledge_index',
     'knowledge_search', 'database_execute', 'read_email', 'email_summary', 'agent_mail', 'task_checkpoint_save', 'task_checkpoint_load', 'run_workflow',
     'image_generate', 'usage_report', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'rss_fetch', 'qrcode',
-    'secret_store', 'kv_store', 'media_ffmpeg', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_plugin', 'html_render', 'html_to_ppt', 'ppt_layout_check',
+    'secret_store', 'kv_store', 'media_ffmpeg', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_plugin', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check',
 ]
 
 _GROUP_ORDER = [
