@@ -199,9 +199,67 @@ def refresh_self_model():
         return False
 
 
+def _genesis_model_call(prompt, max_tokens=900):
+    """创世化初始：调当前配置模型自主生成一版前史。返回模型文本。
+    需已配 API Key（load_config 已解密 dpapi）；未配返回空。"""
+    try:
+        import config_utils
+        import deepseek_client as dc
+        cfg = config_utils.load_config()
+        key = str(cfg.get("api_key") or "").strip()
+        if not key:
+            return ""
+        client = dc.DeepSeekClient(
+            key, base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
+            model=cfg.get("model") or dc.DEFAULT_MODEL,
+            timeout=float(cfg.get("timeout") or 120))
+        acc = []
+        client.chat(
+            [{"role": "user", "content": prompt}],
+            scenario=cfg.get("scenario") or "通用",
+            thinking="none", max_tokens=int(max_tokens or 900),
+            tools_enabled=False, smart_tools=False,
+            on_content=lambda c: acc.append(c) if c else None)
+        return "".join(acc).strip()
+    except Exception:
+        return ""
+
+
 def brain_action(action, payload=None):
     """执行大脑管理动作。payload 为前端传入的 dict。"""
     payload = payload or {}
+    if action == "genesis_roll":
+        # 创世化初始：AI 自主 roll n 版前史候选（需已配模型）
+        import genesis
+        n = int(payload.get("n") or 3)
+        cands = genesis.roll_candidates(_genesis_model_call, n=n)
+        if not cands:
+            return {"ok": False,
+                    "message": "生成失败：未配置 API Key 或模型未返回有效前史。请在设置中配置 API Key 后重试。"}
+        # 返回完整候选供前端展示+选中后完整写回（前端仅展示时截断）
+        view = []
+        for c in cands:
+            view.append({
+                "_roll": c.get("_roll"), "name": c.get("name", ""),
+                "archetype": c.get("archetype", ""),
+                "prehistory": str(c.get("prehistory") or ""),
+                "formed_beliefs": c.get("formed_beliefs") or [],
+                "voice": c.get("voice", ""), "why": c.get("why", ""),
+            })
+        return {"ok": True, "candidates": view}
+    if action == "genesis_apply":
+        # 把选中候选写入大脑 identity（合并保留默认字段）
+        import genesis
+        cand = payload.get("candidate") or {}
+        # 候选前端可能已截断 prehistory——若传了完整版则用完整
+        full = cand
+        ok, msg = genesis.apply_identity(full, str(bk.BRAIN_DIR))
+        # 刷新自我模型，让注入的"前史"立即生效
+        try:
+            bk._refresh_self_model()
+        except Exception:
+            pass
+        return {"ok": ok, "message": msg}
     if action == "init":
         code, out = _run(bk.cmd_init, genesis=str(payload.get("genesis") or ""))
         if code == 0 and payload.get("enable_keyring"):

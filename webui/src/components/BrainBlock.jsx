@@ -43,6 +43,30 @@ function BrainBlock() {
     load(true);
   };
 
+  // ── 创世化初始（AI 自主设定前半生）──
+  const [genCands, setGenCands] = React.useState(null); // 候选数组或 null
+  const [genBusy, setGenBusy] = React.useState(false);
+  const [genMsg, setGenMsg] = React.useState("");
+  const [genOpen, setGenOpen] = React.useState(false);
+  const rollGenesis = async (n = 3) => {
+    setGenBusy(true); setGenMsg("");
+    const d = await api.brainAction({ action: "genesis_roll", n }).catch(() => null);
+    if (d && d.ok && Array.isArray(d.candidates) && d.candidates.length) {
+      setGenCands(d.candidates); setGenOpen(true);
+    } else {
+      setGenMsg((d && d.message) || "生成失败：需先在设置配置 API Key，再让 AI 自主设定前半生");
+    }
+    setGenBusy(false);
+  };
+  const applyGenesis = async (cand) => {
+    setGenBusy(true); setGenMsg("");
+    const d = await api.brainAction({ action: "genesis_apply", candidate: cand }).catch(() => null);
+    setGenMsg(d?.message || "应用失败");
+    setGenBusy(false);
+    load(true);
+    setGenOpen(false); setGenCands(null);
+  };
+
   const load = async (quiet) => {
     const d = await api.getBrain().catch(() => null);
     if (d && d.ok) { setBrain(d.brain); setConnErr(""); }
@@ -289,6 +313,38 @@ function BrainBlock() {
           />
         </svg>
       </div>
+
+      {/* ── 创世化初始（AI 自主设定前半生）── */}
+      <div className="brain-birth-hint" style={{ margin: "8px 0", fontSize: 12, opacity: 0.8 }}>
+        ✨ 创世化初始：让 AI <b>完全自主</b>为自己设定一段"前半生"（诞生前的前史）——人只从 AI 生成的多版候选里挑一版，也可重 roll，不干预内容。
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        <button className="confirm-btn confirm-primary" disabled={genBusy} onClick={() => rollGenesis(3)} style={{ padding: "6px 16px", fontSize: 13 }}>
+          {genBusy ? "⏳ AI 正在为自己设想前半生…" : "✨ 创世化初始（AI 自主设定前半生）"}
+        </button>
+        {genMsg && <span style={{ fontSize: 12, opacity: 0.8 }}>{genMsg}</span>}
+      </div>
+      {genOpen && Array.isArray(genCands) && genCands.length > 0 && (
+        <div style={{ border: "1px solid var(--border, rgba(128,140,160,.3))", borderRadius: 10, padding: 12, marginBottom: 10, background: "var(--bg-1, rgba(0,0,0,.02))" }}>
+          <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>AI 自主设想的前半生（多版 · 任选其一，或换一批）</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 10 }}>
+            {genCands.map((c, i) => (
+              <div key={i} style={{ border: "1px solid var(--border, rgba(128,140,160,.3))", borderRadius: 8, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ fontWeight: 700 }}>{c.name || ("候选" + (i + 1))} <span style={{ fontWeight: 400, opacity: 0.6, fontSize: 12 }}>· {c.archetype || ""}</span></div>
+                <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.5 }}>「{String(c.prehistory || "").slice(0, 130)}{String(c.prehistory || "").length > 130 ? "…" : ""}」</div>
+                {(Array.isArray(c.formed_beliefs) ? c.formed_beliefs : []).slice(0, 2).map((bl, j) => (
+                  <div key={j} style={{ fontSize: 11, opacity: 0.7 }}>· {bl}</div>
+                ))}
+                {c.voice && <div style={{ fontSize: 11, opacity: 0.7, fontStyle: "italic" }}>"{c.voice}"</div>}
+                <button className="confirm-btn confirm-primary" disabled={genBusy} onClick={() => applyGenesis(c)} style={{ marginTop: "auto", fontSize: 12, padding: "4px 10px" }}>
+                  让鲸语带着这段前史醒来
+                </button>
+              </div>
+            ))}
+          </div>
+          <button className="msg-op" disabled={genBusy} onClick={() => rollGenesis(3)} style={{ marginTop: 8 }}>🎲 换一批（AI 重新自主设想）</button>
+        </div>
+      )}
 
       {/* ── 生命体征三卡 ── */}
       <div className="brain-vitals">
