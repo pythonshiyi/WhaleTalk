@@ -209,3 +209,21 @@ def test_html_to_pdf_chinese_embedded(tmp_path):
     d = pymupdf.open(out)
     assert d.page_count >= 2, "应正确分页"
     assert "自助挂号机" in d[0].get_text(), "中文应可提取"
+
+
+def test_pdf_visual_check_renders_and_flags_blank(tmp_path):
+    """pdf_visual_check：PDF 每页渲染缩略图 + 空白页检测（供 AI 视觉自检分页/排版）。"""
+    import pymupdf
+    pdf = str(tmp_path / "t.pdf")
+    doc = pymupdf.open()
+    for i in range(3):
+        pg = doc.new_page()
+        if i != 1:
+            pg.insert_text((72, 72), f"第{i + 1}页内容测试")
+    doc.save(pdf); doc.close()
+    od = str(tmp_path / "prev")
+    r = dc.pdf_visual_check(pdf, out_dir=od)
+    assert "疑似空白页" in r, "第2页空应被标出"
+    imgs = [l.strip().lstrip('- ').strip() for l in r.split("\n") if ".png" in l]
+    assert len(imgs) == 3, "应渲染 3 页缩略图"
+    assert all(os.path.exists(x) for x in imgs), "缩略图文件应存在"

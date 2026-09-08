@@ -1603,6 +1603,86 @@ def pdf_create(content="", source_path="", output="", title=""):
         {
             "type": "function",
             "function": {
+                "name": "pdf_visual_check",
+                "description": "PDF 视觉自检：每页渲染缩略 PNG，报页数/文本量并标疑似空白页，返回图路径供 image_understand 复核分页、溢出后据此修正",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": ".pdf 文件绝对路径"},
+                        "out_dir": {"type": "string", "description": "可选：缩略图输出目录（默认在 PDF 同目录建 .pdf_preview）"},
+                        "max_pages": {"type": "integer", "description": "可选：最多渲染页数（默认 20，防超大 PDF）"},
+                        "dpi": {"type": "integer", "description": "可选：渲染分辨率（默认 90）"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='PDF 预览检查',
+    preactivate=(('ppt', 'pptx', '演示文稿', '读ppt'),),
+)
+def pdf_visual_check(path, out_dir="", max_pages=20, dpi=90):
+    """PDF 每页渲染缩略图 + 页数/空白页检测，供 AI 视觉自检排版。"""
+    if not str(path or "").strip():
+        return "错误：path 必填"
+    p = permissions.resolve(path)
+    if not p or not os.path.isfile(p):
+        return f"错误：文件不存在：{path}"
+    ok, reason = permissions.check_filesystem(p, write=False)
+    if not ok:
+        return reason
+    try:
+        import pymupdf
+    except Exception:
+        import fitz as pymupdf
+    try:
+        max_pages = max(1, min(int(max_pages or 20), 100))
+        dpi = max(30, min(int(dpi or 90), 300))
+        # 输出目录
+        if str(out_dir or "").strip():
+            od = permissions.resolve(out_dir)
+            if not od:
+                return "错误：输出目录无效"
+            okd, rd = permissions.check_filesystem(od, write=True)
+            if not okd:
+                return rd
+        else:
+            od = os.path.join(os.path.dirname(p), ".pdf_preview")
+        os.makedirs(od, exist_ok=True)
+        zoom = dpi / 72.0
+        doc = pymupdf.open(p)
+        total = doc.page_count
+        lines = [f"PDF: {p}（{total} 页）"]
+        renders = []
+        for i in range(min(total, max_pages)):
+            page = doc[i]
+            txt = (page.get_text() or "").strip()
+            nchar = len(txt)
+            # 图片像素是否接近空白(可选：仅文本判断足够)
+            blank_hint = nchar < 5
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+            fn = os.path.join(od, f"p{i + 1:02d}.png")
+            pix.save(fn)
+            renders.append(fn)
+            flag = "  ⚠ 疑似空白页" if blank_hint else ""
+            lines.append(f"第{i + 1}页: {pix.width}x{pix.height}px 文本{nchar}字{flag}")
+        doc.close()
+        if total > max_pages:
+            lines.append(f"… 仅渲染前 {max_pages} 页（共 {total} 页）")
+        lines.append(f"缩略图目录: {od}")
+        # 供视觉模型逐张查看
+        lines.append("请用 image_understand 依次查看以下缩略图复核版式/分页/溢出：")
+        lines += [f"  - {f}" for f in renders]
+        permissions.audit("pdf_visual_check", p, f"{total} 页→{len(renders)} 图")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"错误：PDF 视觉检查失败: {e}（需已安装 PyMuPDF）"
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
                 "name": "docx_read",
                 "description": "读取 Word .docx 文档为 Markdown 结构（标题层级/段落/列表/表格），旧版 .doc 会提示转换",
                 "parameters": {
@@ -3135,19 +3215,76 @@ def _html_render_lock():
     return _HTML_RENDER_LOCK
 
 
+def _prep_html_doc(content):
+    """HTML 片段/整页 → 补全成可渲染文档；返回 (html_doc, data_uri)。"""
+    html_doc = str(content or "")
+    if not html_doc.strip():
+        return "", ""
+    if not html_doc.lstrip().lower().startswith("<!doctype") and not html_doc.lstrip().lower().startswith("<html"):
+        html_doc = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
+                    "<style>html,body{margin:0;padding:0}*{box-sizing:border-box}</style></head>"
+                    f"<body>{html_doc}</body></html>")
+    import base64
+    data_uri = "data:text/html;base64," + base64.b64encode(html_doc.encode("utf-8")).decode("ascii")
+    return html_doc, data_uri
+
+
+def _html_to_pngs(items, w, h, sc, full_page):
+    """批量渲染 HTML→PNG（共享一个浏览器上下文，避免每页起停浏览器，显著提速）。
+    items: [(html, out_path), ...]。成功返回 None，失败返回错误串。"""
+    try:
+        import base64
+        from playwright.sync_api import sync_playwright
+        todo = []
+        for html_s, out_path in items:
+            hdoc, _ = _prep_html_doc(html_s)
+            if not hdoc:
+                continue
+            uri = "data:text/html;base64," + base64.b64encode(hdoc.encode("utf-8")).decode("ascii")
+            todo.append((uri, out_path))
+        if not todo:
+            return "无有效 HTML 内容"
+        w, h, sc = int(w), int(h), max(1, min(int(sc or 1), 3))
+        with _html_render_lock():
+            with sync_playwright() as p:
+                browser = None
+                try:
+                    try:
+                        browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
+                    except Exception:
+                        browser = p.chromium.launch(args=["--no-sandbox"])
+                    for uri, out_path in todo:
+                        pg = browser.new_page(viewport={"width": w * sc, "height": h * sc},
+                                              device_scale_factor=sc)
+                        try:
+                            pg.goto(uri, wait_until="load")
+                            pg.wait_for_timeout(300)
+                            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+                            pg.screenshot(path=out_path, full_page=bool(full_page))
+                        finally:
+                            try:
+                                pg.close()
+                            except Exception:
+                                pass
+                finally:
+                    if browser is not None:
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
+        return None
+    except Exception as e:
+        return f"批量 HTML 渲染失败: {e}（需已装 playwright，系统有 Edge 最佳）"
+
+
 def _html_to_png(content, out_path, w, h, sc, full_page):
     """渲染 HTML 字符串到 PNG（共用内核，html_render/html_to_ppt 复用）。
     自动补全 HTML、data URI 注入、优先系统 Edge channel。成功返回 None，失败返回错误串。"""
     try:
-        html_doc = str(content or "")
-        if not html_doc.strip():
+        html_doc, data_uri = _prep_html_doc(content)
+        if not html_doc:
             return "HTML 内容为空"
-        if not html_doc.lstrip().lower().startswith("<!doctype") and not html_doc.lstrip().lower().startswith("<html"):
-            html_doc = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
-                        "<style>html,body{margin:0;padding:0}*{box-sizing:border-box}</style></head>"
-                        f"<body>{html_doc}</body></html>")
         import base64
-        data_uri = "data:text/html;base64," + base64.b64encode(html_doc.encode("utf-8")).decode("ascii")
         from playwright.sync_api import sync_playwright
         with _html_render_lock():
             with sync_playwright() as p:
@@ -3179,7 +3316,7 @@ def _html_to_png(content, out_path, w, h, sc, full_page):
             "type": "function",
             "function": {
                 "name": "html_render",
-                "description": "把一段 HTML/CSS 渲染成高清 PNG 图片（本地无头浏览器，优先系统 Edge）。适合用 HTML/CSS 做专业版式设计后出图：设定 viewport 即生成该尺寸整页截图。产出 PNG 可作为 PPT 页面素材或演示图。CSS 支持 flex/grid/渐变/圆角/阴影/中文字体",
+                "description": "HTML/CSS 渲染成 PNG（本地 Edge，免 chromium）：设 width/height 出该尺寸整页图，可作 PPT 页素材/演示图，支持 flex/grid/渐变/中文",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3251,7 +3388,7 @@ def html_render(html="", source_path="", output="", width=1280, height=720,
             "type": "function",
             "function": {
                 "name": "html_to_ppt",
-                "description": "把若干段 HTML/CSS 设计稿渲染成一份整页 .pptx（HTML→整份 PPT 闭环）：每段 HTML 渲染成 16:9 高清 PNG，各占一整页，无页边距。AI 可用擅长的 HTML/CSS 设计整套演示页再转 PPT，实现真正专业排版。CSS 支持 flex/grid/渐变/圆角/中文字体",
+                "description": "把多段 HTML 渲染成整页 PPT：每段 16:9 高清 PNG 各占一页（无模板感），用 HTML/CSS 设计整套演示页再转 PPT，支持 flex/grid/渐变/中文",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3295,14 +3432,29 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
         prs.slide_width = _In(13.333)
         prs.slide_height = _In(7.5)
         added = 0
+        jobs = []  # (html, png_path) 批量渲染用同一浏览器上下文
+        png_paths = {}
         for idx, page_html in enumerate(pages, 1):
             html_s = str(page_html or "").strip()
             if not html_s:
                 continue
             png_path = os.path.join(cache_dir, f"slide_{idx:02d}.png")
-            err = _html_to_png(html_s, png_path, w, h, sc, False)
-            if err:
-                return f"错误：第{idx}页 HTML 渲染失败: {err}"
+            jobs.append((html_s, png_path))
+            png_paths[idx] = png_path
+        if jobs:
+            berr = _html_to_pngs(jobs, w, h, sc, False)
+            if berr:
+                return f"错误：HTML 渲染失败: {berr}"
+        # 已渲染到缓存，逐页插入（失败则逐页回退单页渲染兜底）
+        for idx, page_html in enumerate(pages, 1):
+            html_s = str(page_html or "").strip()
+            if not html_s:
+                continue
+            png_path = png_paths.get(idx)
+            if png_path and not os.path.isfile(png_path):
+                err = _html_to_png(html_s, png_path, w, h, sc, False)
+                if err:
+                    return f"错误：第{idx}页 HTML 渲染失败: {err}"
             if not os.path.isfile(png_path):
                 return f"错误：第{idx}页未生成图片"
             slide = prs.slides.add_slide(prs.slide_layouts[6])  # 空白版式
@@ -3328,7 +3480,7 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
             "type": "function",
             "function": {
                 "name": "html_to_pdf",
-                "description": "把 HTML/CSS 渲染成印刷级 PDF（HTML 排版 → PDF，支持分页/页边距/页眉页脚）。AI 可用擅长的 CSS（@page 分页、字号行距、配色、图片）排出比代码排印美观的 PDF。依赖 playwright（优先系统 Edge，免下载 chromium）",
+                "description": "HTML/CSS 渲染成印刷级 PDF（支持 @page 分页/页边距/横向），用 CSS 排版比代码排印美观；走系统 Edge 免 chromium",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3420,7 +3572,7 @@ def html_to_pdf(html="", source_path="", output="", size="A4", margin="1cm", lan
             "type": "function",
             "function": {
                 "name": "ppt_layout_check",
-                "description": "对生成的 .pptx 做版面自检（美学自检回路·几何层）：逐页检查每个形状是否越出画布、元素是否相互重叠、文本框是否可能溢出。返回每页诊断（含元素 id/坐标/问题），供你据以修正后再生成。注意：这是几何/布局层面的定量自检；视觉观感(配色/留白节奏)建议另用 html_render 渲染成图 + image_understand 看图评估",
+                "description": "PPT 版面几何自检：逐页报越界/元素重叠/贴边并给坐标，供修正；视觉观感另用 html_render 渲染 + image_understand 评估",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3516,4 +3668,4 @@ def ppt_layout_check(path, margin=0.05):
         return f"错误：版面检查失败: {e}"
 
 
-__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check', 'secret_store', 'kv_store', 'create_doc']
+__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'pdf_visual_check', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check', 'secret_store', 'kv_store', 'create_doc']

@@ -9,7 +9,7 @@ OPTIONAL_DEPS = [
     ("PIL", "Pillow", "图片处理/应用内图片预览/OCR/图表/图标", "pip install pillow"),
     ("pyautogui", "pyautogui", "桌面 RPA（鼠标/键盘/屏幕坐标）", "pip install pyautogui"),
     ("pystray", "pystray", "系统托盘常驻", "pip install pystray"),
-    ("playwright", "playwright", "浏览器操作/网页截图", "pip install playwright && playwright install chromium"),
+    ("playwright", "playwright", "浏览器内核(chromium)供 browser_navigate 访问任意站；pip 已随核心自动装，html 渲染工具走系统 Edge 无需内核", "playwright install chromium"),
     ("faster_whisper", "faster-whisper", "语音转文字", "pip install faster-whisper"),
     ("sounddevice", "sounddevice", "实时语音对话录音（voice_chat_loop）", "pip install sounddevice numpy"),
     ("edge_tts", "edge-tts", "在线神经网络音色/更自然朗读（缺失自动回退 SAPI）", "pip install edge-tts"),
@@ -76,11 +76,11 @@ AUTO_INSTALL_DEPS = [
 HEAVY_DEPS = [
     {
         "import": "playwright",
-        "label": "浏览器自动化 / 网页截图",
-        "desc": "控制浏览器、抓取网页、页面截图",
+        "label": "浏览器自动化 / 网页截图（含内核）",
+        "desc": "控制浏览器、抓取网页、页面截图（完整 chromium 内核，可访问任意站点）",
         "pip": "playwright",
         "post_cmd": ["playwright", "install", "chromium"],
-        "note": "会额外下载 Chromium（约 150 MB）",
+        "note": "playwright pip 已随核心自动安装；此处仅额外下载 Chromium（约 150MB）供 browser_navigate 访问任意站。html_render/html_to_ppt/html_to_pdf 走系统 Edge，无需此项",
     },
     {
         "import": "piper",

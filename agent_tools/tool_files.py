@@ -1248,7 +1248,9 @@ def find_images(dir, keyword="", ext=None, limit=30, recurse=True,
     if not out:
         return f"未在 {p} 找到匹配图片（keyword={keyword or '任意'}）"
     note = f"（递归）" if recurse else ""
-    return f"在 {p}{note} 找到 {len(out)} 张候选：\n" + "\n".join(out)
+    head = f"在 {p}{note} 找到 {len(out)} 张候选：\n" + "\n".join(out)
+    head += "\n提示：用 image_understand 逐张查看候选确认内容贴合主题后再选用（文件名常是 hash，别只看名字判断）。"
+    return head
 
 
 __all__ = ['read_file', 'write_file', 'edit_file', 'list_dir', 'search_local', 'find_images', 'clipboard_get', 'clipboard_set', 'delete_file', 'archive_files', 'extract_archive', 'list_snapshots', 'restore_snapshot', 'batch_rename', 'start_process', 'stop_process', 'list_processes', 'environment_info']

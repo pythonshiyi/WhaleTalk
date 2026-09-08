@@ -162,6 +162,7 @@ __all__ = [
     'database_execute',
     'pdf_extract',
     'pdf_create',
+    'pdf_visual_check',
     'docx_read',
     'docx_edit',
     'pptx_read',
