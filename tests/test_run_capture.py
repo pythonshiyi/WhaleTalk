@@ -94,8 +94,21 @@ def test_run_python_error_traceback():
 
 
 def test_run_python_timeout_text():
-    r = run_python("import time; time.sleep(30)")
-    assert "超时" in r
+    """超时 → 进程被 kill + 返回引导文案（含 start_process 后台提示）。
+
+    run_python 默认同步超时 60s（shared.RUN_PY_TIMEOUT）；若真 sleep 60s 会让单测太慢。
+    此处临时把 tool_code 模块级 RUN_PY_TIMEOUT 调小，用 sleep(30) 快速稳定触发超时路径。"""
+    import agent_tools.tool_code as tc
+    orig = tc.RUN_PY_TIMEOUT
+    try:
+        tc.RUN_PY_TIMEOUT = 2  # 2s 超时，sleep(30) 必触发，且 30s 内被 kill 不等满
+        t0 = time.time()
+        r = run_python("import time; time.sleep(30)")
+        assert "超时" in r, r[:200]
+        assert "start_process" in r and "后台" in r, "超时文案应引导用 start_process 后台跑长任务"
+        assert time.time() - t0 < 10, "超时应 kill 进程，不能真等满 30s"
+    finally:
+        tc.RUN_PY_TIMEOUT = orig
 
 
 def test_run_python_oversize_blocked():

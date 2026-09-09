@@ -90,7 +90,7 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
             "type": "function",
             "function": {
                 "name": "run_python",
-                "description": "在 Python 子进程中执行代码（无限制：可加载全部已安装第三方库、可访问网络、可调用系统能力）；需要新库时先调用 pip_install 安装",
+                "description": "在 Python 子进程中执行代码（无限制：可加载全部已安装第三方库、可访问网络、可调用系统能力）；需要新库时先调用 pip_install 安装。同步执行 60 秒超时；若任务需长时间运行（装包/下载/起服务/跑测试），请改用 start_process 后台启动而非此处等待",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -114,7 +114,12 @@ def run_python(code):
             rc, out_data = _run_capture(argv, RUN_PY_TIMEOUT, RUN_PY_MAX_OUTPUT,
                                         cwd=permissions.WORKSPACE_DIR or None)
         except TimeoutError:
-            return f"错误：执行超时（>{RUN_PY_TIMEOUT}秒）"
+            return (
+                f"错误：执行超时（>{RUN_PY_TIMEOUT}秒，进程已终止）。"
+                f"若任务确需长时间运行（装包/下载/起服务/跑测试/长循环），请不要用 run_python"
+                f"同步等待——改用 start_process 后台启动（无超时），再用 list_processes 查询进度、"
+                f"stop_process 停止。"
+            )
         if not out_data.strip():
             return f"执行成功（无输出），工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}"
         permissions.audit("run_python", f"python -c <code>", f"{len(code)} 字符, rc={rc}")

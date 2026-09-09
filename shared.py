@@ -328,7 +328,11 @@ WEATHER_TIMEOUT = 5
 # run_python 与直接运行 python -c 等价——不隔离、不静态拦截，可加载全部
 # 已安装库、访问网络、调用系统能力。信任用户与模型，不再内置任何拦截。
 
-RUN_PY_TIMEOUT = 10
+# 同步执行超时（秒）。10s 只够"片段计算"，装包/下载/跑测试/启浏览器等真实
+# 编程主体都会超时被 kill。调大到 60s 覆盖多数交互需求（< 并行批总超时 300s 留余量）；
+# 更长的任务不应靠调大同步超时（会占线程/撞总超时），而应走后台通道：
+# 用 start_process 无超时启动 + list_processes 轮询 / stop_process 停止。
+RUN_PY_TIMEOUT = 60
 
 RUN_PY_MAX_CHARS = 8000
 
