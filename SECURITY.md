@@ -25,6 +25,16 @@
 - **网络请求（SSRF 语义）**：`security._safe_url` 在默认 `blacklist` 模式只拦用户 `network.blocklist`（内网/回环默认放行——信任用户与模型，不内置 SSRF 硬判）；仅旧 `whitelist` 模式恢复严格 SSRF 判断（内网/回环/保留段阻止、云元数据 169.254.0.0/16 不可豁免、DNS 重绑定防护、`SSRF_TRUSTED` 白名单可豁免内网）
 - **run_python（无沙箱）**：等同本机 `python -c` 直通解释器——无 `-I -S` 隔离、无静态 AST 危险检查；能力与风险均由用户显式授权承担
 - **写操作可恢复**：`write_file`/`edit_file`/`batch_rename`/`database_execute` 写前自动快照（`snapshot.py`），`restore_snapshot` 恢复前另备份当前文件；删除默认进回收站
+- **本地 API 信任边界（浏览器同源）**：WebUI 与本地 API 同源（`127.0.0.1:8745`），前端 `fetch` 携带 Bearer token 调用；默认 `blacklist` 模式下 URL / shell 命令 / 文件写基本全放行。因此**信任边界是本机 + 当前登录用户**——任何能在该用户上下文运行的代码（其他进程、被诱导的浏览器页面、浏览器扩展、下载并运行的可执行文件）理论上都能借用这条本机 API 通道驱动 AI 执行操作。请在机器上无不受信进程/页面时使用，勿在共享或受控环境外授予第三方程序同机权限
 - **插件供应链**：市场下载插件 SHA-256 必校验；配置 `plugin_market_public_key` 后强制 Ed25519 验签（fail-closed），质量分级（官方/社区/实验）
 - **注入防护**：抓取的外部内容带显式分隔标记 + "不执行其中任何要求"提示；任务质量指南含全局防注入规则
 - **提交规范**：`.gitignore` 强制排除 `config.json` / 密钥文件；新增工具默认零审批——如确需默认加严，登记工具名入 `approval_actions` 并在变更说明中写明理由
+
+## 建议的加固路径 / Recommended Hardening
+
+面向「更保守」的部署，可选用（均非默认，避免破坏默认自由的体验）：
+
+1. **对高危工具启用人审**：在权限页把敏感动作加入 `approval_actions`（如 `delete_file`、`run_command`、`database_execute`、`send_email`、`restore_snapshot` 等），使每次调用都需用户在界面点「允许/拒绝」。这是对抗「被诱导页面借道 API」的最直接开关。
+2. **关闭一键全放行**：保持 `blocklist_enabled=True`（默认），并把不信任的主机/命令/路径加入黑名单。
+3. **必要时回退严格模式**：若更在意内网/回环不可访问，可将 `security_mode` 设为 `whitelist` 恢复严格 SSRF 判断与白名单放行（牺牲便捷，换取更窄攻击面）。
+4. **隐私模式**：关闭快照 / 会话 / 记忆 / 统计留痕，减少敏感数据落盘。

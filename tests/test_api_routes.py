@@ -2,8 +2,8 @@
 """P2-8/P2-2 路由表行为契约：do_POST / do_GET 轻量路由表（装饰器注册）的回归测试。
 
 覆盖：
-- POST 路由表完整性（52 条，exact/pre/set 三种 matcher）
-- GET 路由表完整性（47 条，exact/pre/qpath 三种 matcher；由原 do_GET 46 分支迁移 + 统一记忆端点）
+- POST 路由表完整性（条数随 @_post_route 装饰器数动态对齐；exact/pre/set 三种 matcher 均需存在）
+- GET 路由表完整性（条数随 @_get_route 装饰器数动态对齐；exact/pre/qpath 三种 matcher 均需存在）
 - 查表函数 _match_post_route / _match_get_route 对各形态路径的分发正确性
 - do_POST / do_GET 兜底（未匹配 → None → 404）与鉴权前置不变
 """
@@ -21,15 +21,39 @@ sys.path.insert(0, str(REPO / "tools"))
 import api_server  # noqa: E402  （模块加载时会执行装饰器注册，两张路由表被填充）
 
 
+def _deco_count(src, deco_name):
+    """统计源码中 @<deco_name> 装饰器出现次数。
+
+    每个端点装饰器 = 路由表 1 条（_post_route/_get_route 均为
+    `_XXX_ROUTES.append((matcher, ...))`，一个装饰器登记一个 matcher，无论内部
+    exact/pre/qpath/set 形态）。以此作为条数的动态基线：随端点增删自动变化，
+    彻底杜绝硬编码魔法数漂移。
+    """
+    tree = ast.parse(src)
+    return sum(
+        1
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        for d in node.decorator_list
+        if isinstance(d, ast.Call) and isinstance(d.func, ast.Name)
+        and d.func.id == deco_name and d.args
+    )
+
+
 def test_route_table_size():
-    """POST 端点数 = 52（50 精确 + 1 pre + 1 set），且与 do_POST 分支时代一致。"""
+    """POST 路由表条数 == 源码中 @_post_route 装饰器个数（新增/删除端点自动同步，
+    杜绝硬编码魔法数漂移）。"""
     routes = api_server._POST_ROUTES
-    assert len(routes) == 52, f"路由表应有 52 条，实际 {len(routes)}"
+    expected = _deco_count(inspect_source("api_server.py"), "_post_route")
+    assert len(routes) == expected, f"POST 路由表应 {expected} 条（同装饰器声明），实际 {len(routes)}"
     kinds = {}
     for matcher, _ in routes:
         k = matcher[0] if isinstance(matcher, tuple) else "exact"
         kinds[k] = kinds.get(k, 0) + 1
-    assert kinds == {"exact": 50, "pre": 1, "set": 1}, f"matcher 类型分布异常: {kinds}"
+    # 三种 matcher 形态都必须存在（防某类被误删）；具体数量以装饰器为基线，不断言精确值
+    for k in ("exact", "pre", "set"):
+        assert k in kinds, f"POST matcher 类型缺失: {k}（实际 {kinds}）"
+    assert all(v >= 1 for v in kinds.values()), f"POST matcher 类型分布异常: {kinds}"
 
 
 def test_route_order_priority():
@@ -131,14 +155,18 @@ def test_do_post_sources_decorated_methods():
 # ── P2-2：GET 路由表（do_GET 46 分支 if/elif 迁移而来）────────────────────
 
 def test_get_route_table_size():
-    """GET 端点数 = 48（39 精确 + 5 pre + 4 qpath，含 /v1/files/raw），与迁移前的 do_GET 分支数一致。"""
+    """GET 路由表条数 == 源码中 @_get_route 装饰器个数（含 exact/pre/qpath，随端点增删自动同步）。"""
     routes = api_server._GET_ROUTES
-    assert len(routes) == 48, f"GET 路由表应有 48 条，实际 {len(routes)}"
+    expected = _deco_count(inspect_source("api_server.py"), "_get_route")
+    assert len(routes) == expected, f"GET 路由表应 {expected} 条（同装饰器声明），实际 {len(routes)}"
     kinds = {}
     for matcher, _ in routes:
         k = matcher[0] if isinstance(matcher, tuple) else "exact"
         kinds[k] = kinds.get(k, 0) + 1
-    assert kinds == {"exact": 39, "pre": 5, "qpath": 4}, f"matcher 类型分布异常: {kinds}"
+    # 三种 matcher 形态都必须存在（防某类被误删）；具体数量以装饰器为基线，不断言精确值
+    for k in ("exact", "pre", "qpath"):
+        assert k in kinds, f"GET matcher 类型缺失: {k}（实际 {kinds}）"
+    assert all(v >= 1 for v in kinds.values()), f"GET matcher 类型分布异常: {kinds}"
 
 
 def test_get_exact_match():

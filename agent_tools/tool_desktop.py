@@ -814,6 +814,7 @@ def voice_chat_loop(rounds=3, model="base", max_seconds=15, speak=True, rate=0):
     依赖：sounddevice+numpy（录音）、faster-whisper（转写）、pywin32 SAPI（朗读）。
     说「再见/拜拜/结束对话」即挂断。适合不想打字的快速问答节奏。
     """
+    from shared import clamp_int
     rounds_n = 3
     try:
         rounds_n = clamp_int(rounds, 3, lo=1, hi=20)

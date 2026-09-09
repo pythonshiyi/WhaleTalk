@@ -43,10 +43,13 @@ from deepseek_client import (
     _safe_stream,
     _save_rss_sources,
     _save_watch_state,
+    _search_bing,
     _search_dedup,
+    _search_duckduckgo,
     _search_healthy,
     _search_report,
     _search_safe,
+    _search_so360,
     _webdav_request,
     _wrap_external,
 )
@@ -285,7 +288,13 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
         name, _weight = entry
         fn = globals().get("_search_" + name)  # 动态查找：支持测试 mock 替换
         if fn is None:
-            return name, [], None
+            # 引擎函数在 tool_web 命名空间缺失 = 代码级 Bug（拆分漏 import / 注册表漂移），
+            # 绝非"源不可用"。必须显式抛错而非静默当作失败——否则会重复触发健康电路
+            # 冷却，最终误报"可用搜索源均不可用"，掩盖真实根因（历史教训：P0-1 拆分漏 import）。
+            raise RuntimeError(
+                f"[search_web] 引擎 {name} 无实现：tool_web 命名空间缺 _search_{name}。"
+                f"请在 agent_tools/tool_web.py 顶部 from deepseek_client import _search_{name}"
+            )
         try:
             kw = {"num": max(num + offset, 10)}
             if name == "bing":
