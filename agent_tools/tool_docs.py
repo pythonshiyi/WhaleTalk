@@ -680,8 +680,12 @@ def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None,
                     ws.cell(row=cur_r, column=start_c + j, value=colname)
                 header_written_rows.append((ws, cur_r))
                 cur_r += 1
-            # 写数据（dict 行按 cols 取字段，缺键补空；数组行保留类型与位置）
-            if cols is not None:
+            # 写数据：按「行的实际类型」分发，而非按 cols 是否非空。
+            # 修复 Bug：数组行 + 显式 headers 时，cols 被 headers 填成非 None → 原代码误走
+            # dict 分支 → 数组行被当非 dict 填全空串 → 报"已写入 N 行"却丢数据（假成功）。
+            # 现改为看数据首行：dict 行按 cols 取字段（缺键补空），数组/tuple 行按位置写入。
+            first = next((r for r in rows if r is not None), None)
+            if isinstance(first, dict):
                 for row in rows:
                     vals = [row.get(c, "") for c in cols] if isinstance(row, dict) else [""] * len(cols)
                     for j, v in enumerate(vals):

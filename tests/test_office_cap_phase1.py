@@ -43,6 +43,41 @@ def test_s2_write_excel_overwrite_backs_up(tmp_path):
     assert load_workbook(p).sheetnames == ["new"], "overwrite 重建仅含新 sheet"
 
 
+def test_s2b_write_excel_array_rows_with_headers_preserves_data(tmp_path):
+    """回归：write_excel「数组行 + 显式 headers」必须真实写入数据，不得假成功丢数据。
+
+    原 Bug：数组行 + headers 时，cols 被 headers 填成非 None → 误走 dict 分支 →
+    数组行被当非 dict 填全空串 → 返回"已写入 N 行"但底层数据行全空（静默丢数据）。
+    此用例直接调用 + openpyxl 回读，锁死"数据行必须非空"。
+    """
+    _perm(tmp_path)
+    from openpyxl import load_workbook
+
+    p = str(tmp_path / "arr.xlsx")
+    data = [["1月", 120, 80, 40], ["2月", 150, 95, 55]]
+    r = dc.write_excel(p, data=data, headers=["月份", "销售", "成本", "利润"])
+    assert "已写入" in r
+    ws = load_workbook(p).active
+    # 表头
+    assert [c.value for c in ws[1]] == ["月份", "销售", "成本", "利润"]
+    # 数据行必须真实存在（防假成功丢数据）
+    assert [c.value for c in ws[2]] == ["1月", 120, 80, 40], f"第2行丢失: {[c.value for c in ws[2]]}"
+    assert [c.value for c in ws[3]] == ["2月", 150, 95, 55], f"第3行丢失: {[c.value for c in ws[3]]}"
+
+
+def test_s2c_write_excel_object_rows_with_headers(tmp_path):
+    """对象数组 + headers 也必须正常（原有路径不回归）。"""
+    _perm(tmp_path)
+    from openpyxl import load_workbook
+
+    p = str(tmp_path / "obj.xlsx")
+    r = dc.write_excel(p, data=[{"月份": "1月", "销售": 120}], headers=["月份", "销售"])
+    assert "已写入" in r
+    ws = load_workbook(p).active
+    assert [c.value for c in ws[1]] == ["月份", "销售"]
+    assert [c.value for c in ws[2]] == ["1月", 120]
+
+
 def test_s3_read_csv_gbk_fallback(tmp_path):
     _perm(tmp_path)
     p = str(tmp_path / "gbk.csv")
