@@ -421,6 +421,10 @@ DOWNLOAD_MAX_BYTES = 200 * 1024 * 1024  # 单文件 200MB 上限（与 WebDAV �
 
 SEARCH_MAX_RESULTS = 5
 
+# 搜索聚合整体软超时（秒）：并行等引擎时，慢引擎（如 DDG 挂起）不得拖垮整次
+# 搜索——到点即返回已返回的引擎结果，未返回的按超时记入健康电路。
+SEARCH_SOFT_DEADLINE = 5.0
+
 # 搜索引擎注册表：(名称, 质量权重)。调用方经 globals() 动态查找 _search_<名称>；
 # 权重决定聚合输出顺序（数值大的优先展示）。bing/so360 国内稳定；duckduckgo
 # 时好时坏（健康度机制自动跳过）；baidu/sogou/yandex 反爬；google 不可达。

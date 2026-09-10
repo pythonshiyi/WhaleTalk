@@ -17,7 +17,7 @@ import permissions
 
 from security import _safe_url
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
-from shared import DOWNLOAD_MAX_BYTES, SEARCH_MAX_RESULTS, _SEARCH_ENGINES, CALL_API_MAX_BYTES, CALL_API_METHODS, CALL_API_MAX_HEADERS, RSS_FETCH_TIMEOUT, RSS_MAX_ITEMS, RSS_SUMMARY_MAX, RSS_PRESET_SOURCES, WEBDAV_MAX_SIZE  # P1-3: 阈值常量下沉 shared
+from shared import DOWNLOAD_MAX_BYTES, SEARCH_MAX_RESULTS, SEARCH_SOFT_DEADLINE, _SEARCH_ENGINES, CALL_API_MAX_BYTES, CALL_API_METHODS, CALL_API_MAX_HEADERS, RSS_FETCH_TIMEOUT, RSS_MAX_ITEMS, RSS_SUMMARY_MAX, RSS_PRESET_SOURCES, WEBDAV_MAX_SIZE  # P1-3: 阈值常量下沉 shared
 from deepseek_client import (
     _BROWSER_LOCK,
     _browser_run,
@@ -263,6 +263,10 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
     if not query or not str(query).strip():
         return "错误：搜索词为空"
     try:
+        requested_num = max(1, int(num))
+    except (TypeError, ValueError):
+        requested_num = SEARCH_MAX_RESULTS
+    try:
         num = max(1, min(20, int(num)))
         offset = max(0, min(200, int(offset)))
     except (TypeError, ValueError):
@@ -307,19 +311,35 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
             return name, [], e
 
     engines = [e for e in _SEARCH_ENGINES if _search_healthy(e[0])]
-    with _cf.ThreadPoolExecutor(max_workers=len(engines) or 1) as ex:
-        outcomes = list(ex.map(_run, engines))
+    # 软超时聚合：慢引擎不拖垮整次搜索（as_completed 到点即停，未返回的记超时）
+    outcomes = {}
+    ex = _cf.ThreadPoolExecutor(max_workers=len(engines) or 1)
+    try:
+        futs = {ex.submit(_run, e): e[0] for e in engines}
+        deadline = time.time() + SEARCH_SOFT_DEADLINE
+        for fut in _cf.as_completed(futs, timeout=max(0.05, deadline - time.time())):
+            outcomes[futs[fut]] = fut.result()
+    except _cf.TimeoutError:
+        pass  # 软超时：慢引擎（如 DDG 挂起）不等待，用已返回的引擎结果
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+    for name, _w in engines:
+        if name not in outcomes:
+            outcomes[name] = (name, [], _cf.TimeoutError("软超时"))
 
     merged, last_err = [], None
-    for name, results, err in outcomes:
+    for name, results, err in outcomes.values():
         if err is not None or not results:
-            _search_report(name, False)
+            # 超时 vs 其他失败分档冷却：永久不可用的源别每 10 分钟重试一次拖慢搜索
+            reason = "timeout" if err is not None and "timeout" in type(err).__name__.lower() else "error"
+            _search_report(name, False, reason=reason)
             if err is not None:
                 last_err = err
             continue
         _search_report(name, True)
         merged.extend(_search_safe(results))
     merged = _search_dedup(merged)
+    total_avail = len(merged)
     # site 硬过滤：搜索引擎可能忽略 site: 语法，聚合后按域名兜底保证生效
     pre_site = merged
     if site:
@@ -332,13 +352,47 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
     merged = merged[offset:offset + num]
     if merged:
         lines = [f"搜索结果（{len(merged)} 条）:"]
+        if requested_num > len(merged):
+            hint = f"（注：期望 {requested_num} 条，实返 {len(merged)} 条"
+            hint += "——num 上限 20" if requested_num > 20 else ""
+            hint += "；聚合去重/站点过滤后不足）"
+            lines.append(hint)
         for i, r in enumerate(merged, 1):
             lines.append(f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}".rstrip())
         return "\n\n".join(lines)
-    if site and pre_site:
-        return f"未找到限定站点 {site} 的结果（搜索引擎未返回该站点内容，可尝试去掉 site 参数）"
+    # 结果为空：区分「site 过滤后无结果」vs「翻页越界」vs「引擎真失败」
+    if site:
+        if pre_site:
+            return (f"未找到限定站点 {site} 的结果。\n"
+                    f"（说明：搜索引擎对 site: 语法支持有限，聚合结果里没有该站点的条目——"
+                    f"这不代表该站无相关内容，可去掉 site 参数或改用 search_realtime）")
+        return (f"未找到限定站点 {site} 的结果（本次搜索引擎无任何命中，可尝试去掉 site 参数）")
+    if offset and total_avail:
+        return (f"错误：翻页超出范围——本次共搜到 {total_avail} 条去重结果，"
+                f"offset={offset} 已超出可用范围（可用 offset ≤ {max(0, total_avail - num)}）")
     detail = f": {last_err}" if last_err is not None else ""
     return f"错误：搜索失败（可用搜索源均不可用{detail}）"
+
+
+def _gh_rate_hint(resp):
+    """读取 GitHub 搜索 API 额度，低额度时返回预警串（否则空串）。
+
+    未认证搜索 API 限流 10 次/分钟（非 60/小时——那是 core API），额度极紧张，
+    几次调用即耗尽，必须给调用方预警。
+    """
+    try:
+        remaining = int(resp.headers.get("x-ratelimit-remaining", ""))
+    except (TypeError, ValueError):
+        return ""
+    if remaining > 2:
+        return ""
+    reset = ""
+    try:
+        from datetime import datetime as _dt
+        reset = _dt.fromtimestamp(int(resp.headers.get("x-ratelimit-reset", "0"))).strftime("%H:%M:%S")
+    except Exception:
+        pass
+    return f"⚠️ GitHub 搜索额度告急：剩余 {remaining} 次（未认证 10 次/分钟" + (f"，{reset} 重置" if reset else "") + "）"
 
 
 @tool(
@@ -346,7 +400,7 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
             "type": "function",
             "function": {
                 "name": "search_github",
-                "description": "搜索 GitHub 开源仓库（按 Star 排序）。支持 GitHub 原生搜索语法：org:（组织）、topic:、language:、stars:、in:readme 等，例如 org:deepseek-ai 精确查官方组织",
+                "description": "搜索 GitHub 开源仓库（按 Star 排序）。支持 GitHub 原生搜索语法：org:（组织）、topic:、language:、stars:、in:readme 等，例如 org:deepseek-ai 精确查官方组织。注意：未认证搜索 API 限流 10 次/分钟，额度告急时结果会附带预警",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -365,7 +419,7 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
 def search_github(query, num=5, language=""):
     """GitHub 仓库搜索（代码/开源项目垂直源，实测国内可达）。
 
-    GitHub API 未认证限流 60 次/小时，适合低频垂直检索。
+    GitHub 未认证搜索 API 限流 10 次/分钟（很紧张），低额度时结果附预警。
     """
     if not query or not str(query).strip():
         return "错误：搜索词为空"
@@ -388,8 +442,9 @@ def search_github(query, num=5, language=""):
             headers={"Accept": "application/vnd.github+json", "User-Agent": _SEARCH_UA},
             timeout=10,
         )
+        rate_hint = _gh_rate_hint(resp)
         if resp.status_code == 403:
-            return "错误：GitHub API 限流（每小时 60 次），请稍后再试"
+            return "错误：GitHub 搜索 API 限流（未认证 10 次/分钟），请稍后再试"
         resp.raise_for_status()
         items = (resp.json() or {}).get("items") or []
     except Exception as e:
@@ -397,6 +452,8 @@ def search_github(query, num=5, language=""):
     if not items:
         return "未找到相关仓库"
     lines = [f"GitHub 仓库（{len(items)} 个，按 Star 排序）:"]
+    if rate_hint:
+        lines.append(rate_hint)
     for i, it in enumerate(items, 1):
         desc = (it.get("description") or "").strip()[:120]
         stars = it.get("stargazers_count", 0)

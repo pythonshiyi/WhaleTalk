@@ -272,6 +272,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 14. **"工具存在"≠"机制生效"**：`task_checkpoint_save` 有 `auto` 参数、注释写着自动写入，但 Web 版从未调用（`has_checkpoint` 恒 false）；`docs/evolutions/*.md` 有正文但列表/详情只读一层目录。排查"某能力为何没起作用"时，先查**调用点**，别只看实现是否存在（G15/G17）
 15. **被 .gitignore 排除的目录里，删除必须可逆**：`evolutions/` 在 .gitignore 且 `_evolution_ignore` 用 rmtree → 一次"忽略"永久吃掉 4 份提案，最后靠会话记录里 create_evolution 的入参才救回。凡 `.gitignore` 里的"产物目录"，删除操作要么软删除、要么确保可重建（G19）
 16. **"杀进程失败"不能静默吞掉**：`kill_tree` 曾吞异常无返回值，`stop_process` 无条件 `pop` → 进程成孤儿（端口占着、工具报"运行中：无"、再也停不掉）。凡"终止/删除"类操作，都要**确认结果后再清理注册表/状态**（G20）
+17. **多源聚合别让最慢的源拖垮整体**：`search_web` 曾用 `ex.map` 等所有引擎返回——DDG 挂起 20s+，每次搜索都被拖到超时上限。修法是**引擎独立短超时 + `as_completed` 软超时**（到点返回已就绪的结果，未返回的按超时记入健康电路）。同理，"翻页越界""site 过滤后为空"这类**空结果必须如实说明原因**，不能笼统报"失败"或让用户误以为"该站无内容"（G21）
 
 ## 19. 演进建议
 

@@ -1229,6 +1229,11 @@ PIP_ALLOWLIST = None
 
 
 SEARCH_TIMEOUT = 8
+# 各引擎独立超时（秒）：DDG 直连不稳定常挂起，给它更短超时，避免拖垮聚合；
+# 兜底仍用 SEARCH_TIMEOUT。压测实测 DDG 挂起 20s+，是整次搜索延迟的唯一元凶。
+SEARCH_ENGINE_TIMEOUT = {"bing": 6, "so360": 6, "duckduckgo": 4}
+
+
 def _search_bing(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until=""):
     url = (
         f"https://www.bing.com/search?q={quote(query)}"
@@ -1241,7 +1246,7 @@ def _search_bing(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until=""):
     resp = _http_client().get(
         url,
         headers={"User-Agent": _SEARCH_UA, "Accept-Language": "zh-CN,zh;q=0.9"},
-        timeout=SEARCH_TIMEOUT,
+        timeout=SEARCH_ENGINE_TIMEOUT.get("bing", SEARCH_TIMEOUT),
     )
     resp.raise_for_status()
     results = []
@@ -1265,7 +1270,7 @@ def _search_duckduckgo(query, num=SEARCH_MAX_RESULTS, since=""):
     resp = _http_client().get(
         url,
         headers={"User-Agent": _SEARCH_UA},
-        timeout=SEARCH_TIMEOUT,
+        timeout=SEARCH_ENGINE_TIMEOUT.get("duckduckgo", SEARCH_TIMEOUT),
     )
     resp.raise_for_status()
     results = []
@@ -1292,7 +1297,7 @@ def _search_so360(query, num=SEARCH_MAX_RESULTS):
     resp = _http_client().get(
         url,
         headers={"User-Agent": _SEARCH_UA, "Accept-Language": "zh-CN,zh;q=0.9"},
-        timeout=SEARCH_TIMEOUT,
+        timeout=SEARCH_ENGINE_TIMEOUT.get("so360", SEARCH_TIMEOUT),
     )
     resp.raise_for_status()
     results = []
@@ -1305,16 +1310,21 @@ def _search_so360(query, num=SEARCH_MAX_RESULTS):
             continue
         if link.startswith("/"):
             link = "https://www.so.com" + link  # /link?m= 加密跳转补全
-        results.append({"title": title, "url": link, "snippet": ""})
+        snippet = ""
+        if "/link?m=" in link:
+            # 360 的加密跳转链接无法直接看出真实域名，标注以免污染域名判断
+            snippet = "（360 跳转链接，真实域名未解析）"
+        results.append({"title": title, "url": link, "snippet": snippet})
         if len(results) >= num:
             break
     return results
 
 
-# 引擎健康度：连续失败 3 次暂停 10 分钟，成功一次即恢复
+# 引擎健康度：连续失败 3 次暂停；超时类失败给更长冷却（永久不可用 vs 偶发）
 _SEARCH_HEALTH = {}  # name -> {"fails": int, "skip_until": float}
 _SEARCH_HEALTH_FAIL_LIMIT = 3
-_SEARCH_HEALTH_COOLDOWN = 600.0
+_SEARCH_HEALTH_COOLDOWN = 600.0        # 普通失败（解析 0 条等）：10 分钟
+_SEARCH_HEALTH_COOLDOWN_TIMEOUT = 1800.0  # 超时类失败（源不可达/挂起）：30 分钟
 _SEARCH_HEALTH_LOCK = threading.Lock()
 
 
@@ -1331,7 +1341,12 @@ def _search_healthy(name):
         return True
 
 
-def _search_report(name, ok):
+def _search_report(name, ok, reason=""):
+    """引擎健康度记账。reason 区分失败类型：timeout → 更长冷却。
+
+    历史教训：DDG 这类「永久不可用」的源，若按统一短冷却（10 分钟）会反复
+    重试、每次拖慢整次搜索。超时给 30 分钟冷却，减少无谓重试。
+    """
     with _SEARCH_HEALTH_LOCK:
         h = _SEARCH_HEALTH.setdefault(name, {"fails": 0, "skip_until": 0.0})
         if ok:
@@ -1339,9 +1354,13 @@ def _search_report(name, ok):
         else:
             h["fails"] += 1
             if h["fails"] >= _SEARCH_HEALTH_FAIL_LIMIT:
-                h["skip_until"] = time.time() + _SEARCH_HEALTH_COOLDOWN
-                logger.warning("搜索源 %s 连续 %d 次失败，暂停 %d 分钟", name,
-                               _SEARCH_HEALTH_FAIL_LIMIT, _SEARCH_HEALTH_COOLDOWN // 60)
+                cooldown = (
+                    _SEARCH_HEALTH_COOLDOWN_TIMEOUT
+                    if reason == "timeout" else _SEARCH_HEALTH_COOLDOWN
+                )
+                h["skip_until"] = time.time() + cooldown
+                logger.warning("搜索源 %s 连续 %d 次失败(%s)，暂停 %d 分钟", name,
+                               _SEARCH_HEALTH_FAIL_LIMIT, reason or "其他", cooldown // 60)
 
 
 # 无限制模式（v3.9+）：call_api 不设主机白名单、不拦内网/回环，任何地址均可访问。
