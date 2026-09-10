@@ -63,7 +63,7 @@
 - **说得出**：💬 对话/思考模式/语音合成（TTS：Piper 本地离线 / Edge 在线 / SAPI，**自动朗读可逐句流式跟读**）/朗读
 
 > 🎙 **Piper 本地语音**：设置 → 🔌 可选能力 →「Piper 本地语音」一键安装——自动装齐依赖并下载中文语音模型（官方源超时自动回退国内镜像），完成后**断网也能本地离线朗读**，全程无需手工配置。
-- **做得了**：⚡ 147 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理/快照恢复），默认自由权限模型（黑名单为唯一限制来源）
+- **做得了**：⚡ 148 项 Agent 工具（文件/代码/数据库/浏览器/邮件/媒体/桌面 RPA/应用管理/快照恢复），默认自由权限模型（黑名单为唯一限制来源）
 - **会进化**：🧬 自我进化（提案分支、失败模式库、成功模式复用）
 - **自疗**：🔁 失败模式沉淀 + 已知坑注入，AI 越用越聪明
 
@@ -94,7 +94,7 @@
 - **📋 指令库（独立栏目）**：提示词资产中心——新建/编辑/删除/分类/标签/图标/短命令，内置 24 条模板可一键复制到我的指令；支持搜索、排序、导入导出、恢复内置、禁用与「应用」试跑；输入框打 `/` 即可模糊搜索调用，支持 `{{TEXT}}`（选中文本）/`{{DATE}}`/`{ASK:}` 变量与「调用后自动发送」；插件技能作为只读来源统一纳管（可复制）
 - **🪄 自主（独立栏目）**：AI 自主能力的观察与管理窗口——进化管理（create_evolution 提案一键采纳/忽略 + self_evolve 分支查看 diff/确认合并/删除，合入权在用户）、审批与询问历史（时间/工具/参数/结果/理由）、行为日志（任务链 tasklog + 工具审计 audit）、自我状态（self_profile 跨会话连续自我 + 失败模式库）
 
-### ⚡ Agent 工具链（147 项）
+### ⚡ Agent 工具链（148 项）
 
 - **信息**：搜索（多引擎/分页/过滤/健康降级）、GitHub、实时热点（Hacker News）、网页抓取（含被墙站点代理通道）、RSS
 - **执行**：Python（`run_python` 直通本机解释器）、终端/进程、pip 安装、浏览器自动化
@@ -236,7 +236,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 鲸语 WhaleTalk 是一个**独立开发的个人作品**，关注「本地 AI 智能体」体验——
 
 - **目标**：让 Windows 用户拥有一个真正"看得见、做得了、能进化"的 AI 助手，而非只是一个聊天窗口
-- **理念**：本地优先（数据不出本机）、能力为王（147 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
+- **理念**：本地优先（数据不出本机）、能力为王（148 工具）、自我进化（提案/失败沉淀）、成本透明（峰谷定价/缓存命中）
 - **联系**：
   - 官网：https://whaletalk.top/
   - GitHub Issues：https://github.com/pythonshiyi/WhaleTalk/issues
@@ -252,7 +252,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 - **默认自由**：默认任务模式（`full_auto`）零审批、零白名单——AI 可调用全部 147 项工具；`run_python`/`run_command` 等同本机直接执行（无沙箱/无静态拦截）
 - **黑名单（唯一限制来源）**：用户在权限页添加 shell 命令 / 文件路径 / 网络主机黑名单；出厂默认仅预置云元数据地址 `169.254.169.254` 一项；`blocklist_enabled` 一键全放行开关（关闭连黑名单也不拦）；旧 `whitelist` 严格模式与高危审批清单（`approval_actions`）保留为可选回退/加严路径，均非默认
 - **网络底线（唯一程序内置项）**：SSRF 硬底线默认开启——私网段（`10/8`、`172.16/12`、`192.168/16`）、链路本地（`169.254.0.0/16`，含云元数据）、保留段一律拦截，域名先做 DNS 解析（防重绑定）；回环默认放行（本地开发需要），可置 `network.allow_loopback=false` 加严。理由：模型可自主抓取任意 URL 且抓取内容会回灌上下文，仅靠用户黑名单盖不住「注入 → 诱导访问内网」这条链路
-- **硬限额（防误伤兜底）**：读取/下载/响应体大小与工具超时上限（如单文件下载 ≤200MB、API 响应 ≤500KB、`run_python` ≤10s）；写操作自动快照可恢复；删除默认进回收站
+- **硬限额（防误伤兜底）**：读取/下载/响应体大小与工具超时上限（如单文件下载 ≤200MB、API 响应 ≤500KB、`run_python` ≤60s / 输出 ≤20000 字符 / 进程树内存 ≤2048MB）；写操作自动快照可恢复；删除默认进回收站
 - **数据不出本机**：仅 127.0.0.1 监听 + Bearer token；API Key DPAPI 加密存储；隐私模式可关快照/会话/记忆/统计
 - 详见 [SECURITY.md](SECURITY.md)
 
@@ -272,7 +272,7 @@ WhaleTalk v3.10.0 is a Windows AI agent on the unified DeepSeek V4.1 Flash — r
 
 - **v3.10**: unified DeepSeek V4.1 Flash model (native multimodal, no mode switching), auto-migration of legacy model names, new peak/off-peak pricing
 - **v3.0 highlights**: 3 themes (starfield/deepsea/arctic), console sidebar (model/thinking/scene/appearance), artifact one-click access, unified `web_app.py` entry (desktop/browser/headless)
-- **Capabilities**: 147 Agent tools (files/browser/DB/mail/media/desktop RPA/snapshots), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
+- **Capabilities**: 148 Agent tools (files/browser/DB/mail/media/desktop RPA/snapshots), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
 - **Stack**: Python 3.9+ + React (Vite) + local API (openai/httpx) · Windows 10/11
 
 ### Quick Start

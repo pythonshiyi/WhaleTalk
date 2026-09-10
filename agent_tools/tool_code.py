@@ -10,11 +10,12 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 import permissions
 
-from shared import clamp_int, RUN_PY_TIMEOUT, RUN_PY_MAX_CHARS, RUN_PY_MAX_OUTPUT, TOOL_RESULT_FAIL_PREFIXES, _SEARCH_SKIP_DIRS  # D4: 参数校验辅助
+from shared import clamp_int, RUN_PY_TIMEOUT, RUN_PY_MAX_CHARS, RUN_PY_MAX_OUTPUT, RUN_PY_MEMORY_MB, RUN_MEM_POLL_SEC, TOOL_RESULT_FAIL_PREFIXES, _SEARCH_SKIP_DIRS  # D4: 参数校验辅助
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
@@ -31,13 +32,44 @@ from deepseek_client import (
 )
 
 
-def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
+class MemoryLimitError(RuntimeError):
+    """子进程内存超限（已被终止）。"""
+
+    def __init__(self, limit_mb, seen_mb=None):
+        super().__init__(f"内存超限 >{limit_mb}MB")
+        self.limit_mb = limit_mb
+        self.seen_mb = seen_mb
+
+
+def _proc_tree_rss_mb(pid):
+    """进程树常驻内存合计（MB）；psutil 缺失/进程已退出返回 None。"""
+    try:
+        import psutil
+    except Exception:
+        return None
+    try:
+        root = psutil.Process(pid)
+        procs = [root] + root.children(recursive=True)
+    except Exception:
+        return None
+    total = 0
+    for x in procs:
+        try:
+            total += x.memory_info().rss
+        except Exception:
+            continue
+    return total / (1024.0 * 1024.0)
+
+
+def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
     """A6: 公共进程执行辅助——spool 输出防刷屏 OOM、超时 kill 进程树、截断读取。
 
     返回 (returncode, output)。超时抛 TimeoutError(timeout)，调用方按需格式化。
     与旧内联实现的差异：统一 creationflags（Windows 不弹窗）、cwd 可传、错误一致。
     shell=True 时按系统 shell 执行整串命令（Windows=cmd /c，POSIX=/bin/sh -c），
     支持管道 |、重定向 > 等原生 shell 语法。
+    memory_mb > 0 时启用内存看门狗（psutil 轮询进程树 RSS，超限杀树并抛
+    MemoryLimitError）——防误伤兜底，不是沙箱。
     """
     import tempfile
 
@@ -67,6 +99,22 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
             env=env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        stop_watch = threading.Event()
+        peak = {"mb": 0.0, "over": False}
+        watch = None
+        if memory_mb and memory_mb > 0:
+            def _watch():
+                while not stop_watch.wait(RUN_MEM_POLL_SEC):
+                    mb = _proc_tree_rss_mb(proc.pid)
+                    if mb is None:
+                        return
+                    peak["mb"] = max(peak["mb"], mb)
+                    if mb > memory_mb:
+                        peak["over"] = True
+                        _kill_tree(proc)
+                        return
+            watch = threading.Thread(target=_watch, name="run-mem-watch", daemon=True)
+            watch.start()
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -76,6 +124,13 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
             except Exception:
                 pass
             raise TimeoutError(timeout)
+        finally:
+            stop_watch.set()
+            if watch is not None:
+                watch.join(timeout=2)
+        # 被内存看门狗杀掉时进程正常"退出"（rc 非 0），在这里如实转成明确错误
+        if peak["over"]:
+            raise MemoryLimitError(memory_mb, round(peak["mb"]))
         out.seek(0)
         data = out.read(max_output)
         out.seek(0, os.SEEK_END)
@@ -90,7 +145,7 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
             "type": "function",
             "function": {
                 "name": "run_python",
-                "description": "在 Python 子进程中执行代码（无限制：可加载全部已安装第三方库、可访问网络、可调用系统能力）；需要新库时先调用 pip_install 安装。同步执行 60 秒超时；若任务需长时间运行（装包/下载/起服务/跑测试），请改用 start_process 后台启动而非此处等待。不支持交互式输入（input/阻塞等待）",
+                "description": "在 Python 子进程中执行代码（无限制：可加载全部已安装第三方库、可访问网络、可调用系统能力）；需要新库时先调用 pip_install 安装。同步执行 60 秒超时、输出上限 20000 字符、进程树内存上限 2048MB（超限即杀并报错，防失控分配拖垮整机）；若任务需长时间运行或大内存（装包/下载/起服务/跑测试/大文件整体读入），请改用 start_process 后台启动而非此处等待。不支持交互式输入（input/阻塞等待）",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -112,7 +167,16 @@ def run_python(code):
         argv = [sys.executable, "-c", code]
         try:
             rc, out_data = _run_capture(argv, RUN_PY_TIMEOUT, RUN_PY_MAX_OUTPUT,
-                                        cwd=permissions.WORKSPACE_DIR or None)
+                                        cwd=permissions.WORKSPACE_DIR or None,
+                                        memory_mb=RUN_PY_MEMORY_MB)
+        except MemoryLimitError as me:
+            permissions.audit("run_python", "python -c <code>",
+                              f"memory_limit {me.seen_mb}MB > {me.limit_mb}MB")
+            return (
+                f"错误：内存超限（峰值约 {me.seen_mb or '?'}MB，上限 {me.limit_mb}MB，进程树已终止）。"
+                f"多为死循环里累积数据或把超大文件整体读进内存——请改为流式/分块处理，"
+                f"或把重任务交给 start_process 后台通道（不受此上限约束，且不阻塞对话）。"
+            )
         except TimeoutError:
             return (
                 f"错误：执行超时（>{RUN_PY_TIMEOUT}秒，进程已终止）。"

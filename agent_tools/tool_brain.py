@@ -16,6 +16,7 @@ import time
 from datetime import datetime
 
 import permissions
+import stores
 
 from shared import clamp_int, cron_field_ok, MEMORY_MAX_ITEMS, MEMORY_MAX_TEXT, _MEMORY_LOCK, SELF_PROFILE_LOCK, _SELF_PROFILE_LIST_FIELDS, SCHEDULES_LOCK, _WORKFLOW_LOCK
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
@@ -1020,4 +1021,93 @@ def run_workflow(name):
         return f"错误：读取流程失败: {e}"
 
 
-__all__ = ['write_memory', 'self_profile', 'delete_memory', 'update_memory', 'read_memory', 'query_memory_graph', 'knowledge_index', 'knowledge_search', 'schedule_task', 'list_schedules', 'cancel_schedule', 'task_checkpoint_save', 'task_checkpoint_load', 'run_workflow']
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "failure_memory",
+                "description": "失败模式生命周期管理：查看/消解(标记已修复)/重开/移除失败记录。工具失败时自动记录，同一类错误按指纹归并并累计复现次数；该工具后续调用成功后自动消解，已消解记录不再注入上下文。用途：① 怀疑自己被过期失败结论误导时先 list 核实 ② 修复后主动 resolve（附修复说明）③ 确认是误报时 forget。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "list=查看(默认) / stats=统计 / resolve=标记已修复 / reopen=撤销消解 / forget=彻底移除"},
+                        "fingerprint": {"type": "string", "description": "精确命中一条记录（list 输出里的 fingerprint 字段）"},
+                        "tool": {"type": "string", "description": "按工具名批量操作（resolve/reopen/forget 时生效）"},
+                        "note": {"type": "string", "description": "resolve 时的修复说明：怎么修的、怎么验证的"},
+                        "unresolved_only": {"type": "boolean", "description": "list 时只看未消解项（默认 true）"},
+                    },
+                },
+            },
+        },
+    groups=['🧠 记忆与知识'],
+    phrases='失败记忆查看/消解/移除',
+    preactivate=(('失败模式', '失败记忆', '老是报错', '已修复', '消解'),),
+)
+def failure_memory(action="list", fingerprint="", tool="", note="", unresolved_only=True):
+    """失败记忆生命周期管理（查看/消解/重开/移除）。
+
+    失败记忆必须有生命周期，否则过期结论会被持续注入上下文反过来误导判断
+    （历史事故：evolutions 目录当时不存在被记下，目录补建后该条仍在注入）。
+    """
+    path = _dc.FAILURES_FILE
+    if not path:
+        return "错误：失败模式库路径未注入（FAILURES_FILE 为空），无法读取失败记忆"
+    arch = _dc.FAILURES_ARCHIVE_FILE
+    act = str(action or "list").strip().lower()
+    fp = str(fingerprint or "").strip()
+    tl = str(tool or "").strip()
+    only = not (unresolved_only is False or str(unresolved_only).strip().lower() in ("0", "false", "no", "none"))
+    try:
+        if act in ("stats", "stat", "统计"):
+            st = stores.failure_stats(path)
+            return (
+                f"失败模式库：活跃 {st['total']} 条"
+                f"（未消解 {st['unresolved']} · 已消解 {st['resolved']}）"
+                f"，其中复现 >1 次的 {st['recurring']} 条。"
+                f"\n（已消解项不再注入上下文；活跃上限 {stores.FAILURES_MAX} 条，溢出优先归档已消解项）"
+            )
+        if act in ("resolve", "reopen", "forget"):
+            if not fp and not tl:
+                return "错误：resolve/reopen/forget 需要 fingerprint 或 tool 之一"
+            if act == "resolve":
+                n, items = stores.resolve_failures(path, fingerprint=fp or None, tool=tl or None,
+                                                  note=note, archive_path=arch)
+                verb = "已标记为修复"
+            elif act == "reopen":
+                n, items = stores.reopen_failures(path, fingerprint=fp or None, tool=tl or None)
+                verb = "已撤销消解（重新视为未修复）"
+            else:
+                n, items = stores.forget_failures(path, fingerprint=fp or None, tool=tl or None)
+                verb = "已彻底移除"
+            if not n:
+                return f"{verb}：0 条（未匹配到记录，先用 action=list 确认 fingerprint/tool）"
+            live = [it for it in items if not it.get("resolved")]
+            return (f"{verb}：{n} 条。当前未消解 {len(live)} 条，"
+                    + ("遇到同类情况时这些记录才会被注入上下文。" if live else "失败记忆已清空，后续不会再注入失败提示。"))
+        # 默认 list
+        items = [x for x in (stores.normalize_failure(i) for i in stores.load_failures(path)) if x]
+        if only:
+            items = [it for it in items if not it.get("resolved")]
+        items.sort(key=lambda x: str(x.get("last_ts") or ""), reverse=True)
+        st = stores.failure_stats(path)
+        if not items:
+            return (f"没有{'未消解的' if only else ''}失败记录（活跃 {st['total']} 条："
+                    f"未消解 {st['unresolved']} · 已消解 {st['resolved']}）。")
+        lines = [f"失败记录 {len(items)} 条（活跃 {st['total']} · 未消解 {st['unresolved']} · 已消解 {st['resolved']}）："]
+        for it in items[:30]:
+            flag = "已消解" if it.get("resolved") else "未消解"
+            lines.append(
+                f"- [{flag}] {it.get('tool')} × {int(it.get('hits') or 1)} 次"
+                f"（最近 {str(it.get('last_ts') or '')[:16]}）\n"
+                f"  fingerprint: {it.get('fingerprint')}\n"
+                f"  错误：{str(it.get('error') or '')[:100]}"
+                + (f"\n  备注：{it.get('note')}" if it.get("note") else "")
+            )
+        if only:
+            lines.append("提示：确认某条不再适用时，用 action=resolve（附 note 说明）或 forget 移除。")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"错误：失败记忆操作失败: {e}"
+
+
+__all__ = ['write_memory', 'self_profile', 'delete_memory', 'update_memory', 'read_memory', 'query_memory_graph', 'knowledge_index', 'knowledge_search', 'schedule_task', 'list_schedules', 'cancel_schedule', 'task_checkpoint_save', 'task_checkpoint_load', 'run_workflow', 'failure_memory']

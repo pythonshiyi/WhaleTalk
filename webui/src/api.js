@@ -689,6 +689,15 @@ export async function getSelfProfile() {
 export async function getFailures() {
   return api("/v1/failures");
 }
+/**
+ * 失败记忆生命周期动作（G18）：resolve=标记已修复 / reopen=撤销消解 / forget=彻底移除。
+ * @param {{fingerprint?: string, tool?: string, note?: string}} body
+ * @param {"resolve"|"reopen"|"forget"} [action]
+ * @returns {Promise<Object>} {ok, affected, failures, stats}
+ */
+export async function resolveFailure(body, action = "resolve") {
+  return api(`/v1/failures/${action}`, { method: "POST", body: JSON.stringify(body || {}) });
+}
 /** @returns {Promise<Object>} 任务链日志 */
 export async function getTasklog() {
   return api("/v1/tasklog");

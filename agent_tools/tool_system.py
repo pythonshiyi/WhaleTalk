@@ -7,6 +7,7 @@
 """
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -275,6 +276,54 @@ def read_project_file(path, offset=0, limit=0):
         return f"错误：读取失败: {e}"
 
 
+def _evo_first_line(text):
+    """取首个「有实质内容」的行（跳标题/列表/引用/围栏/占位符）。"""
+    for line in str(text or "").splitlines():
+        s = line.strip()
+        if not s or s.startswith(("-", ">", "|", "```", "#!")):
+            continue
+        if s.startswith("#"):
+            continue
+        if "（鲸语补充" in s:
+            continue
+        return s[:140]
+    return ""
+
+
+def _evolve_stub(name, contents):
+    """自动生成提案入口页：从实际交付内容提炼，杜绝空壳索引页。
+
+    索引页是决策者唯一会点开的东西——它空着，方案就等于不存在
+    （历史事故：正文写在 docs/evolutions/*.md，入口页只有「（鲸语补充：…）」，
+    人点进「自主」栏目看到空壳，提案被静默丢弃）。
+    """
+    lines = [f"# 进化提案：{name}", "", f"- 时间：{datetime.now():%Y-%m-%d %H:%M:%S}", ""]
+    py = [r for r in contents if r.endswith(".py")]
+    body_md = [r for r in contents if r.endswith(".md") and r != "EVOLUTION.md"]
+    lines.append("## 影响范围")
+    lines.append(f"- 代码模块：{', '.join(py) if py else '（无，纯方案文档，采纳时不覆盖工程文件）'}")
+    lines.append(f"- 交付文件：{', '.join(contents)}")
+    lines.append("")
+    lines.append("## 方案要点（自动提取自交付内容）")
+    for rel, content in contents.items():
+        head = ""
+        for line in str(content or "").splitlines():
+            if line.strip().startswith("#"):
+                head = line.lstrip("#").strip()[:80]
+                break
+        body = _evo_first_line(content)
+        if head or body:
+            lines.append(f"- `{rel}`：{head or '（未写标题）'}" + (f" — {body}" if body else ""))
+    lines.append("")
+    lines.append("## 待人工确认")
+    lines.append("- 风险与回滚：采纳前确认；采纳会备份原文件为 `*.evobak`，失败整体回滚")
+    lines.append("- 验证方式：采纳后跑 `tools/audit_tools.py --strict` + `pytest tests/`")
+    lines.append("")
+    lines.append("## 正文")
+    lines.append(f"- 完整方案见：{', '.join(body_md)}" if body_md else "- 本页即完整方案")
+    return "\n".join(lines) + "\n"
+
+
 @tool(
         {
             "type": "function",
@@ -340,6 +389,7 @@ def create_evolution(name, files):
     except Exception as e:
         return f"错误：创建分支失败: {e}"
     written = []
+    contents = {}
     has_md = False
     for f in files[:20]:
         rel = str(f.get("path") or "").strip().replace("\\", "/")
@@ -350,25 +400,35 @@ def create_evolution(name, files):
             with open(full, "w", encoding="utf-8") as fh:
                 fh.write(content)
             written.append(rel)
+            contents[rel] = content
             if rel == "EVOLUTION.md":
                 has_md = True
         except Exception as e:
             return f"错误：写入 {rel} 失败: {e}"
-    if not has_md:
-        try:
-            with open(os.path.join(branch, "EVOLUTION.md"), "w", encoding="utf-8") as fh:
-                fh.write(
-                    f"# 进化提案：{name}\n\n"
-                    f"- 时间：{datetime.now():%Y-%m-%d %H:%M:%S}\n"
-                    f"- 修改文件：{', '.join(written)}\n\n"
-                    "## 说明\n（鲸语补充：改动内容、原因、风险与验证方式）\n"
-                )
-        except Exception:
-            pass
+    # 入口页必须有实质内容：缺失则生成；给了但留占位符则补一节自动摘要
+    # （正文可以另置 docs/，但索引页空着等于方案不存在）
+    index_path = os.path.join(branch, "EVOLUTION.md")
+    try:
+        if not has_md:
+            with open(index_path, "w", encoding="utf-8") as fh:
+                fh.write(_evolve_stub(name, contents))
+            written.append("EVOLUTION.md(自动生成)")
+        elif "（鲸语补充" in str(contents.get("EVOLUTION.md") or ""):
+            with open(index_path, "a", encoding="utf-8") as fh:
+                fh.write("\n---\n\n" + _evolve_stub(name, contents))
+    except Exception as e:
+        logging.warning("生成提案入口页失败（提案本身已写入）: %s", e)
     permissions.audit("create_evolution", name, ", ".join(written))
+    index_hint = (
+        "入口页 EVOLUTION.md 已自动生成方案要点（含影响范围/摘要/正文位置）——"
+        "它决定人在「自主」栏目能否看懂你的方案，建议再补风险与验证方式。"
+        if "EVOLUTION.md(自动生成)" in written
+        else "入口页 EVOLUTION.md 已包含方案要点。"
+    )
     return (
         f"自我进化提案已创建：{branch}\n"
         f"文件：{', '.join(written)}\n"
+        f"{index_hint}\n"
         "请在「工具 → 自我进化」中查看差异、采纳或忽略。"
     )
 

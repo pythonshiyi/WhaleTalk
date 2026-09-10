@@ -257,10 +257,16 @@ export default function PromptsPage({ onApply }) {
                     <b className="pm-name">{p.name}</b>
                     {p.builtin && <span className="pm-badge">内置</span>}
                     {p.fromPlugin && <span className="pm-badge">插件</span>}
+                    {p.auto_skill && <span className="pm-badge">自动结晶草稿</span>}
                     {off && <span className="pm-badge pm-badge-off">已禁用</span>}
                     <span className="pm-cat">{p.category || "未分类"}</span>
                     {p.shortcut && <code className="pm-sc">{p.shortcut}</code>}
                   </div>
+                  {p.auto_skill && (
+                    <div className="pm-desc">
+                      由成功工具链自动结晶{p.hits ? `（历史成功 ${p.hits} 次）` : ""}：确认步骤无误后启用即可复用；不需要就删除。
+                    </div>
+                  )}
                   {p.desc && <div className="pm-desc">{p.desc}</div>}
                   <div className="pm-text">{String(p.text || "").slice(0, 90)}</div>
                   <div className="pm-foot">

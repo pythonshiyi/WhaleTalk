@@ -2132,6 +2132,8 @@ WORKFLOWS_FILE = None        # DATA_DIR/workflows.json
 CHECKPOINT_FILE = None       # DATA_DIR/task_checkpoint.json
 STATS_FILE = None            # DATA_DIR/stats.json
 PATTERNS_FILE = None         # DATA_DIR/patterns.json（成功模式配方，run_workflow 的 recipe 步骤用）
+FAILURES_FILE = None         # DATA_DIR/failures.json（失败模式库，failure_memory 工具用）
+FAILURES_ARCHIVE_FILE = None  # DATA_DIR/failures_archive.json（失败模式溢出归档）
 IMAGE_GEN_BASE = None        # 图片生成端点（默认 = base_url）
 IMAGE_GEN_KEY = None         # 图片生成 API Key（默认 = api_key）
 IMAGE_GEN_MODEL = "gpt-image-1"
@@ -3309,7 +3311,7 @@ from agent_tools import *  # noqa: F401,F403
 
 _TOOL_ORDER = [
     'get_date', 'ask_user', 'request_permission', 'write_memory', 'self_profile', 'read_memory', 'delete_memory', 'update_memory',
-    'query_memory_graph', 'get_weather', 'run_python', 'read_file', 'fetch_url', 'fetch_blocked', 'search_web', 'search_github',
+    'query_memory_graph', 'failure_memory', 'get_weather', 'run_python', 'read_file', 'fetch_url', 'fetch_blocked', 'search_web', 'search_github',
     'search_realtime', 'call_api', 'get_status', 'git', 'project_map', 'find_symbol', 'run_lint', 'verify_project',
     'project_scaffold', 'dev_plan', 'database_query', 'send_email', 'pip_install', 'write_file', 'edit_file', 'list_dir', 'find_images', 'asset_import', 'asset_list', 'asset_organize',
     'watch_files', 'track_web', 'recall_session', 'run_command', 'search_local', 'code_lookup', 'create_doc', 'write_code_project',
@@ -3362,7 +3364,7 @@ _HINT_ORDER = [
     ('每日简报', '今日简报', '晨报', '简报生成'), ('坚果云', 'nextcloud', 'webdav', '云盘同步'), ('批量看图', '批量分析图片', '批量识别', '整理图库'),
     ('建索引', '知识库索引', '语义检索', '知识库搜索'), ('剪贴板', '复制到剪贴板', '粘贴出来', '读剪贴板'), ('批量改名', '批量重命名'),
     ('查看定时', '我的定时任务', '取消定时', '列出定时'), ('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'), ('朗读', '语音播报', '文字转语音', '读给我听', '停止朗读', 'tts'),
-    ('执行流程', '运行工作流', '跑流程', '流程模板'),
+    ('执行流程', '运行工作流', '跑流程', '流程模板'), ('失败模式', '失败记忆', '老是报错', '已修复', '消解'),
 ]
 
 TOOLS = build_tool_list(_TOOL_ORDER)

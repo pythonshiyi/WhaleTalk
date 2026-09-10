@@ -57,6 +57,9 @@ _PENDING_LOCK = threading.Lock()
 _APPROVAL_LOCK = threading.Lock()
 _TOOL_CHAIN_LOCK = threading.Lock()  # 保护 _LAST_TOOL_CHAIN（多会话并发读写）
 _LAST_TOOL_CHAIN = []
+_CURRENT_TASK_LOCK = threading.Lock()  # 保护 _CURRENT_TASK（当前任务标题，供自动断点命名）
+_CURRENT_TASK = {"title": ""}
+_LAST_AUTO_CHECKPOINT = 0  # 本会话已自动打点的链长（防每步写盘）
 
 ASK_TIMEOUT = 180.0
 
@@ -314,6 +317,7 @@ _TOOL_DOMAIN = {
     "query_memory_graph": "记忆与知识", "knowledge_index": "记忆与知识",
     "knowledge_search": "记忆与知识", "delete_memory": "记忆与知识",
     "update_memory": "记忆与知识", "self_profile": "记忆与知识",
+    "failure_memory": "记忆与知识",
     "ask_user": "AI 与智能", "request_permission": "AI 与智能",
     "run_wechat_writer": "AI 与智能", "publish_draft": "AI 与智能",
     "subagent_run": "AI 与智能", "team_run": "AI 与智能",
@@ -1059,8 +1063,78 @@ def _tasks():
         return {"templates": [], "playground": []}
 
 
+_EVO_PLACEHOLDER = "（鲸语补充"
+
+
+def _evo_read_head(path, limit=6000):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read(limit)
+    except Exception:
+        return ""
+
+
+def _evo_summary_from_md(text):
+    """抽出提案摘要：先剥代码块，再取首个有实质内容的**整段**。
+
+    两个刻意的取舍：
+      - 段落级而非单行：提案正文常按行折行，只取一行会读成半句话；
+      - 跳过以冒号结尾的引导句（"xx 当前实现："）：那是引子不是结论。
+    """
+    src = re.sub(r"```[\s\S]*?```", "", str(text or ""))
+    src = re.sub(r"```[\s\S]*$", "", src)  # 流式/未闭合围栏
+    lines = src.splitlines()
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s or s.startswith(("#", "-", ">", "|", "```")):
+            continue
+        if _EVO_PLACEHOLDER in s or s.endswith(("：", ":")):
+            continue
+        para = [s]
+        for nxt in lines[i + 1:]:
+            t = nxt.strip()
+            if not t or t.startswith(("#", "-", ">", "|", "```")):
+                break
+            para.append(t)
+        return " ".join(para)[:200]
+    return ""
+
+
+def _evolution_meta(name):
+    """提案元信息：标题 / 摘要 / 正文文件 / 是否空壳。
+
+    G17：索引页与正文分离后，只看目录列表等于看不到方案——必须把正文摘要
+    提到列表层，否则提案会被人静默丢弃。
+    """
+    branch = os.path.join(EVOLUTIONS_DIR, name)
+    index_md = _evo_read_head(os.path.join(branch, "EVOLUTION.md"))
+    title = ""
+    for line in index_md.splitlines():
+        if line.startswith("#"):
+            title = line.lstrip("#").strip()
+            break
+    body_files = []
+    body_text = ""
+    for dp, _dn, fns in os.walk(branch):
+        for fn in sorted(fns):
+            if not fn.endswith(".md") or fn == "EVOLUTION.md":
+                continue
+            rel = os.path.relpath(os.path.join(dp, fn), branch).replace("\\", "/")
+            body_files.append(rel)
+            if not body_text:
+                body_text = _evo_read_head(os.path.join(dp, fn))
+    summary = _evo_summary_from_md(body_text) or _evo_summary_from_md(index_md)
+    return {
+        "title": title or name,
+        "summary": summary,
+        "body_files": body_files[:10],
+        "has_body": bool(summary),
+        "placeholder": (not summary) or (not body_files and _EVO_PLACEHOLDER in index_md),
+    }
+
+
 def _evolutions():
-    """自我进化：evolutions/ 提案分支列表。"""
+    """自我进化：evolutions/ 提案分支列表（含摘要与状态，供「自主」栏目直接展示）。"""
     out = []
     if os.path.isdir(EVOLUTIONS_DIR):
         for d in sorted(os.listdir(EVOLUTIONS_DIR), reverse=True):
@@ -1072,13 +1146,53 @@ def _evolutions():
                 files = [f for f in os.listdir(p) if os.path.isfile(os.path.join(p, f))]
             except Exception:
                 pass
-            out.append({
+            item = {
                 "name": d,
                 "applied": d.endswith("_applied"),
+                "status": "applied" if d.endswith("_applied") else "proposed",
                 "files": files[:20],
                 "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(p))),
-            })
+            }
+            try:
+                item.update(_evolution_meta(d))
+            except Exception:
+                item.setdefault("summary", "")
+            out.append(item)
     return {"evolutions": out[:40]}
+
+
+def _failures_action(body, action):
+    """失败模式生命周期动作（resolve/reopen/forget）。
+
+    resolve/reopen 支持 fingerprint 精确命中或 tool 批量命中（该工具全部记录）；
+    forget 彻底移除。返回 (结果, 错误)。
+    """
+    import stores
+    fp = str((body or {}).get("fingerprint") or "").strip()
+    tool = str((body or {}).get("tool") or "").strip()
+    if not fp and not tool:
+        return None, "需要 fingerprint 或 tool 之一"
+    note = str((body or {}).get("note") or "")[:200]
+    if action == "resolve":
+        n, items = stores.resolve_failures(FAILURES_PATH, fingerprint=fp or None,
+                                          tool=tool or None, note=note,
+                                          archive_path=FAILURES_ARCHIVE_PATH)
+        _audit("failure_resolved", fp or tool, f"manual x{n}")
+    elif action == "reopen":
+        n, items = stores.reopen_failures(FAILURES_PATH, fingerprint=fp or None, tool=tool or None)
+        _audit("failure_reopened", fp or tool, f"manual x{n}")
+    elif action == "forget":
+        n, items = stores.forget_failures(FAILURES_PATH, fingerprint=fp or None, tool=tool or None)
+        _audit("failure_forgotten", fp or tool, f"manual x{n}")
+    else:
+        return None, f"未知动作：{action}"
+    return {
+        "ok": True,
+        "action": action,
+        "affected": n,
+        "failures": items,
+        "stats": stores.failure_stats(FAILURES_PATH),
+    }, None
 
 
 # ── 指令库（prompts.json：用户指令 + 内置指令，统一管理与调用）──────────
@@ -1121,6 +1235,10 @@ def _prompt_normalize(p):
         "created": str(p.get("created") or ""),
         "updated": str(p.get("updated") or ""),
     }
+    # 技能结晶（G14）来源标记：normalize 是白名单式重建，不透传会被静默丢弃
+    for extra in ("auto_skill", "source_chain", "source_sig", "hits"):
+        if extra in p:
+            item[extra] = p[extra]
     from datetime import datetime
     now = datetime.now().isoformat(timespec="seconds")
     if not item["created"]:
@@ -2025,6 +2143,8 @@ def _dc_wiring_table():
         ("CHECKPOINT_FILE", CHECKPOINT_PATH),
         ("STATS_FILE", STATS_PATH),
         ("PATTERNS_FILE", PATTERNS_PATH),
+        ("FAILURES_FILE", FAILURES_PATH),
+        ("FAILURES_ARCHIVE_FILE", FAILURES_ARCHIVE_PATH),
         ("RSS_SOURCES_FILE", os.path.join(DATA_DIR, "rss_sources.json")),
         ("KV_CACHE_DIR", os.path.join(DATA_DIR, "kv_cache")),
         ("WEBDAV_CONFIG_FILE", os.path.join(DATA_DIR, "webdav_config.json")),
@@ -2110,24 +2230,116 @@ def _init_dc_paths():
         logger.exception("memory_store 路径注入失败（可降级）：记忆统一读取层不可用，工具将回退各自独立实现")
 
 
+def _msg_text(msg):
+    """取消息的可读文本（兼容多模态 content 数组）。"""
+    if not isinstance(msg, dict):
+        return ""
+    c = msg.get("content")
+    if isinstance(c, str):
+        return c.strip()
+    if isinstance(c, list):
+        for x in c:
+            if isinstance(x, dict) and x.get("type") == "text" and str(x.get("text") or "").strip():
+                return str(x["text"]).strip()
+    return ""
+
+
+def _set_current_task(title):
+    """记录当前任务标题（供自动断点命名）。会话开始/结束时设置与清理。"""
+    with _CURRENT_TASK_LOCK:
+        _CURRENT_TASK["title"] = str(title or "")[:60]
+
+
+def _auto_checkpoint(name):
+    """长任务自动打点（G15）：工具链够长就落一个断点，别让结论只活在对话里。
+
+    断点工具一直存在却从未被自动调用（has_checkpoint 恒为 false），长任务一旦
+    崩溃/断电，进度与结论全丢。这里补上自动触发：首次越过 AUTO_CHECKPOINT_TOOLS
+    打一次，之后每 AUTO_CHECKPOINT_EVERY 步补一次（阈值内不写盘，避免每步 IO）。
+    返回本次是否写入（1/0）。
+    """
+    global _LAST_AUTO_CHECKPOINT
+    with _TOOL_CHAIN_LOCK:
+        n = len(_LAST_TOOL_CHAIN)
+        chain = list(_LAST_TOOL_CHAIN[:20])
+    if n < shared.AUTO_CHECKPOINT_TOOLS:
+        return 0
+    if _LAST_AUTO_CHECKPOINT and (n - _LAST_AUTO_CHECKPOINT) < shared.AUTO_CHECKPOINT_EVERY:
+        return 0
+    with _CURRENT_TASK_LOCK:
+        title = str(_CURRENT_TASK.get("title") or "")
+    data = {
+        "name": (title or f"长任务（自动断点 · {n} 步）")[:60],
+        "status": "进行中",
+        "pending": [],
+        "notes": f"自动断点：已执行 {n} 步工具链\n" + " → ".join(chain),
+        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "auto": True,
+        "steps": n,
+        "chain": chain,
+    }
+    try:
+        os.makedirs(os.path.dirname(CHECKPOINT_PATH) or ".", exist_ok=True)
+        tmp = CHECKPOINT_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, CHECKPOINT_PATH)
+        _LAST_AUTO_CHECKPOINT = n
+        _audit("auto_checkpoint", data["name"], f"{n} 步")
+        return 1
+    except Exception:
+        logger.exception("自动断点写入失败（不影响本次任务）")
+        return 0
+
+
+def _clear_auto_checkpoint():
+    """清除「自动」断点（用户手动保存的断点不动）。返回是否清除。"""
+    try:
+        if not os.path.exists(CHECKPOINT_PATH):
+            return False
+        with open(CHECKPOINT_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or not data.get("auto"):
+            return False
+        os.remove(CHECKPOINT_PATH)
+        return True
+    except Exception:
+        logger.exception("清理自动断点失败（不影响本次任务）")
+        return False
+
+
 def _record_failure(name, result):
-    """工具失败记录（failures.json：去重 + 上限 50，对齐原程序）。"""
+    """工具失败记录（failures.json：指纹归并 + 复现计数 + 溢出归档）。
+
+    生命周期见 stores：记录 → 复现计数 → 修复验证（同工具后续成功自动消解）
+    → 归档。已消解项不再注入上下文，避免过期结论持续误导判断。
+    """
     try:
         import stores
-        items = stores.load_failures(FAILURES_PATH)
-        err = str(result or "")[:120]
-        key = (str(name), err[:50])
-        for old in items:
-            if (str(old.get("tool") or ""), str(old.get("error") or "")[:50]) == key:
-                old["ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                break
-        else:
-            items.append({"tool": str(name), "error": err, "ts": time.strftime("%Y-%m-%d %H:%M:%S")})
-        if len(items) > 50:
-            del items[: len(items) - 50]
-        stores.save_failures(FAILURES_PATH, items)
+        stores.record_failures(
+            FAILURES_PATH,
+            [{"tool": str(name), "error": str(result or "")}],
+            archive_path=FAILURES_ARCHIVE_PATH,
+        )
     except Exception:
         pass
+
+
+def _auto_resolve_failure(name):
+    """修复验证：工具本次调用成功 → 该工具未消解的失败记录视为已修复。
+
+    AI 不必记得回收——"能用了"本身就是证据。
+    """
+    try:
+        import stores
+        n = stores.auto_resolve_on_success(
+            FAILURES_PATH, str(name), archive_path=FAILURES_ARCHIVE_PATH
+        )
+        if n:
+            _audit("failure_resolved", str(name), f"auto:success x{n}")
+        return n
+    except Exception:
+        return 0
 
 
 def _record_success_pattern(name, args, result):
@@ -2162,7 +2374,10 @@ def _audit(action, target, detail=""):
 
 
 def _record_tasklog(title, chain):
-    """任务记录写入（工作目录 .whaletalk/tasklog.json，上限 20）。"""
+    """任务记录写入（工作目录 .whaletalk/tasklog.json，上限 20）。
+
+    写入后顺带跑一次技能结晶：重复出现的成功工具链固化为指令库草稿（G14）。
+    """
     try:
         import stores
         active_dir = _status()["active_dir"]
@@ -2175,6 +2390,32 @@ def _record_tasklog(title, chain):
         stores.save_tasklog(path, data)
     except Exception:
         pass
+    try:
+        _crystallize_skills()
+    except Exception:
+        pass
+
+
+def _crystallize_skills():
+    """技能结晶（G14）：把重复出现的成功工具链固化为指令库草稿。返回新增条数。
+
+    原料已有（tasklog 的链 + patterns 的成功调用），这里补上"工厂"：
+    链 → 参数化技能模板（category=自动技能，enabled=False 草稿态，待审阅启用）。
+    """
+    import skill_factory
+    import stores
+    active_dir = _status()["active_dir"]
+    tasklog = stores.load_tasklog(os.path.join(active_dir, ".whaletalk", "tasklog.json"))
+    patterns = stores.load_patterns(PATTERNS_PATH)
+    existing = _prompts_load_user()
+    drafts = skill_factory.crystallize(tasklog.get("tasks") or [], patterns, existing)
+    if not drafts:
+        return 0
+    items = [p for p in stores.load_patterns(PROMPTS_PATH) if isinstance(p, dict)]
+    items.extend(drafts)
+    stores.save_patterns(PROMPTS_PATH, items)
+    _audit("skill_crystallized", ", ".join(d["name"] for d in drafts), f"{len(drafts)} 条草稿")
+    return len(drafts)
 
 
 def _record_recent_output(result):
@@ -2734,7 +2975,7 @@ def _evolution_ignore(name):
 
 
 def _evolution_detail(name):
-    """提案详情：分支文件全文 + 原文件是否存在（供差异预览）。"""
+    """提案详情：分支文件全文（含 docs/ 下正文）+ 原文件是否存在（供差异预览）。"""
     name = str(name or "")
     if not name or name.startswith(".") or "\\" in name or "/" in name:
         return None
@@ -2742,18 +2983,31 @@ def _evolution_detail(name):
     if not os.path.isdir(branch):
         return None
     files = []
-    for fn in sorted(os.listdir(branch)):
-        p = os.path.join(branch, fn)
-        if not os.path.isfile(p):
-            continue
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                content = f.read(20000)
-        except Exception:
-            continue
-        original_exists = os.path.exists(os.path.join(_ORIG_DIR, fn))
-        files.append({"name": fn, "content": content, "original_exists": original_exists})
-    return {"name": name, "files": files}
+    for dp, _dn, fns in os.walk(branch):
+        for fn in sorted(fns):
+            p = os.path.join(dp, fn)
+            rel = os.path.relpath(p, branch).replace("\\", "/")
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    content = f.read(20000)
+            except Exception:
+                continue
+            # 原文件比对只对「分支根目录下的文件」有意义（采纳时按根名覆盖工程文件）
+            is_root = "/" not in rel
+            files.append({
+                "name": rel,
+                "rel": rel,
+                "nested": not is_root,
+                "apply_target": rel if is_root else "（正文/附件，采纳时不覆盖工程文件）",
+                "content": content,
+                "original_exists": is_root and os.path.exists(os.path.join(_ORIG_DIR, rel)),
+            })
+    detail = {"name": name, "files": files}
+    try:
+        detail.update(_evolution_meta(name))
+    except Exception:
+        pass
+    return detail
 
 
 def _schedule_next_run(item, now=None):
@@ -4344,6 +4598,11 @@ def _tool_bookkeeping(name, args, result):
             _LAST_TOOL_CHAIN.append(str(name))
     except Exception:
         pass
+    # 长任务自动打点（G15）：链够长就落断点，崩溃/断电不至于全丢
+    try:
+        _auto_checkpoint(name)
+    except Exception:
+        pass
     rs = str(result or "")
     fail_prefixes = ("错误", "权限拒绝", "超时", "（用户停止", "工具执行失败", "工具参数错误")
     failed = rs.startswith(fail_prefixes)
@@ -4351,6 +4610,8 @@ def _tool_bookkeeping(name, args, result):
         _record_failure(name, rs)
     else:
         _record_recent_output(rs)
+        # 修复验证：工具本次成功 → 该工具的失败记录自动消解（失败记忆能过期）
+        _auto_resolve_failure(name)
         try:
             _record_success_pattern(name, args, rs)
         except Exception:
@@ -4678,6 +4939,7 @@ WORKSPACE_DIR = os.path.join(DATA_DIR, "workspace")
 EVOLUTIONS_DIR = os.path.join(_ORIG_DIR, "evolutions")
 ARCHIVES_DIR = os.path.join(DATA_DIR, "archives")
 FAILURES_PATH = os.path.join(DATA_DIR, "failures.json")
+FAILURES_ARCHIVE_PATH = os.path.join(DATA_DIR, "failures_archive.json")  # 溢出归档（G18）
 APPROVALS_PATH = os.path.join(DATA_DIR, "approvals.json")  # 审批/询问历史（上限 200 条）
 PATTERNS_PATH = os.path.join(DATA_DIR, "patterns.json")
 WORKFLOWS_PATH = os.path.join(DATA_DIR, "workflows.json")
@@ -5533,16 +5795,27 @@ class _Handler(BaseHTTPRequestHandler):
 
     @_get_route("/v1/failures")
     def _g_v1_failures(self):
-        items = []
-        if os.path.exists(FAILURES_PATH):
-            try:
-                with open(FAILURES_PATH, "r", encoding="utf-8") as f:
-                    items = json.load(f)
-            except Exception:
-                items = []
-        if not isinstance(items, list):
-            items = []
-        self._json(200, {"failures": items[-100:]})
+        """失败模式列表（含生命周期状态）。
+
+        查询参数：unresolved=1 只返回未消解项；tool=<名> 过滤工具。
+        """
+        import app_utils
+        import stores
+        import urllib.parse
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        items = [x for x in (stores.normalize_failure(i) for i in stores.load_failures(FAILURES_PATH)) if x]
+        if app_utils.as_bool((qs.get("unresolved") or ["0"])[0]):
+            items = [it for it in items if not it.get("resolved")]
+        tool = str((qs.get("tool") or [""])[0] or "").strip()
+        if tool:
+            items = [it for it in items if it.get("tool") == tool]
+        items.sort(key=lambda x: str(x.get("last_ts") or ""), reverse=True)
+        self._json(200, {
+            "failures": items[:100],
+            "stats": stores.failure_stats(FAILURES_PATH),
+            "active_path": FAILURES_PATH,
+            "archive_path": FAILURES_ARCHIVE_PATH,
+        })
 
 
     @_get_route("/v1/schedules")
@@ -6217,6 +6490,56 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid json or body too large"})
             return
         result, err = _evolution_ignore(body.get("name") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/skills/crystallize")
+    def _p_v1_skills_crystallize(self):
+        """技能结晶（G14）：立即把重复出现的成功工具链固化为指令库草稿。"""
+        n = _crystallize_skills()
+        self._json(200, {
+            "ok": True,
+            "created": n,
+            "skills": [p for p in _prompts_load_user() if p.get("auto_skill")],
+        })
+
+
+    @_post_route("/v1/failures/resolve")
+    def _p_v1_failures_resolve(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _failures_action(body, "resolve")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/failures/reopen")
+    def _p_v1_failures_reopen(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _failures_action(body, "reopen")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/failures/forget")
+    def _p_v1_failures_forget(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _failures_action(body, "forget")
         if err:
             self._json(400, {"error": err})
         else:
@@ -7154,6 +7477,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         sid = str(body.get("session_id") or "").strip()  # 已有会话继续对话时由前端携带，用于完成后自动落盘
         _sync_request_full_auto(body)
+        # 新一轮对话：重置自动断点计数并记录任务标题（供自动断点命名，G15）
+        global _LAST_AUTO_CHECKPOINT
+        _LAST_AUTO_CHECKPOINT = 0
+        try:
+            _um = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
+            _set_current_task(_msg_text(_um[-1])[:60] if _um else "")
+        except Exception:
+            _set_current_task("")
 
         self._sse_start()
         stop_event = threading.Event()
@@ -7228,6 +7559,10 @@ class _Handler(BaseHTTPRequestHandler):
                 pass
             with _TOOL_CHAIN_LOCK:
                 _LAST_TOOL_CHAIN.clear()
+            # 任务正常结束 → 清掉本轮自动断点（避免留下过期断点干扰）；
+            # 中断/异常则保留，正是"崩溃后还能续"的价值所在。
+            if not stop_event.is_set():
+                _clear_auto_checkpoint()
             _notify_completed(ok=not stop_event.is_set())
             send("done", {})
         except Exception as e:

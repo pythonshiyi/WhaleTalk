@@ -6,6 +6,7 @@ function EvTab({ onToast }) {
   const [evs, setEvs] = React.useState(null);
   const [branches, setBranches] = React.useState(null);
   const [detail, setDetail] = React.useState(null); // {name, stat, diff}
+  const [evoDetail, setEvoDetail] = React.useState(null); // 提案方案全文
   const [loading, setLoading] = React.useState(false);
 
   const load = React.useCallback(async () => {
@@ -43,6 +44,20 @@ function EvTab({ onToast }) {
       }
     } catch {
       onToast && onToast("读取 diff 失败");
+    }
+  };
+
+  const showProposal = async (name) => {
+    setEvoDetail(null);
+    try {
+      const d = await api.getEvolutionDetail(name);
+      if (d && d.files) {
+        setEvoDetail({ ...d, name });
+      } else if (d && d.error) {
+        onToast && onToast(d.error);
+      }
+    } catch {
+      onToast && onToast("读取方案失败");
     }
   };
 
@@ -91,15 +106,31 @@ function EvTab({ onToast }) {
             {evs.map((e) => (
               <div className="au-item" key={e.name}>
                 <div className="au-item-main">
-                  <b>{e.name}</b>
+                  <b>{e.title || e.name}</b>
                   <span className="pm-cat">
-                    {e.mtime} · {e.files.length} 个文件{e.applied ? " · 已采纳" : ""}
+                    {e.mtime} · {e.files.length} 个文件
+                    {(e.body_files || []).length > 0 ? ` + ${e.body_files.length} 篇正文` : ""}
+                    {e.applied ? " · 已采纳" : ""}
                   </span>
-                  {e.files.length > 0 && (
-                    <div className="au-files">{e.files.slice(0, 10).map((f) => <code key={f}>{f}</code>)}</div>
+                  {/* 摘要直接展示在列表层：入口页空着等于方案不存在（G17） */}
+                  {e.summary ? (
+                    <div className="au-subject">📄 {e.summary}</div>
+                  ) : (
+                    <div className="au-subject">
+                      ⚠️ 未读到方案摘要（入口页可能是占位模板或尚无正文）——点「查看方案」确认，必要时让 AI 重写入口页。
+                    </div>
                   )}
+                  {(e.body_files || []).length > 0 && (
+                    <div className="au-files">
+                      {(e.body_files || []).slice(0, 6).map((f) => <code key={f}>{f}</code>)}
+                    </div>
+                  )}
+                  <div className="au-files">
+                    {e.files.slice(0, 10).map((f) => <code key={f}>{f}</code>)}
+                  </div>
                 </div>
                 <div className="au-item-ops">
+                  <button className="pm-op" onClick={() => showProposal(e.name)}>查看方案</button>
                   {!e.applied && (
                     <>
                       <button className="pm-op" onClick={() => act(() => api.applyEvolution(e.name), `已采纳 ${e.name}`)}>采纳</button>
@@ -141,6 +172,31 @@ function EvTab({ onToast }) {
           </div>
         )}
       </div>
+
+      {evoDetail && (
+        <div className="au-detail-overlay" onClick={() => setEvoDetail(null)}>
+          <div className="au-detail" onClick={(e) => e.stopPropagation()}>
+            <div className="au-detail-head">
+              <b>方案 · {evoDetail.title || evoDetail.name}</b>
+              <button className="pm-op" onClick={() => setEvoDetail(null)}>✕</button>
+            </div>
+            {evoDetail.placeholder && (
+              <div className="au-subject">
+                ⚠️ 这份提案的入口页仍是占位模板，尚无实质方案内容——可让 AI 用 create_evolution 重写。
+              </div>
+            )}
+            {(evoDetail.files || []).map((f) => (
+              <div key={f.rel || f.name}>
+                <div className="au-subject">
+                  <code>{f.rel || f.name}</code>
+                  {f.nested ? "（正文/附件，采纳时不覆盖工程文件）" : ""}
+                </div>
+                <pre className="au-diff">{f.content}</pre>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {detail && (
         <div className="au-detail-overlay" onClick={() => setDetail(null)}>
@@ -241,12 +297,37 @@ function ActivityTab({ onToast }) {
 function SelfTab({ onToast }) {
   const [profile, setProfile] = React.useState(null);
   const [failures, setFailures] = React.useState(null);
+  const [fstats, setFstats] = React.useState(null);
+  const [showResolved, setShowResolved] = React.useState(false);
+
+  const loadFailures = React.useCallback(async () => {
+    try {
+      const f = await api.getFailures();
+      setFailures(f && f.failures ? f.failures : []);
+      setFstats(f && f.stats ? f.stats : null);
+    } catch {
+      setFailures([]);
+    }
+  }, []);
+
   React.useEffect(() => {
     Promise.all([api.getSelfProfile().catch(() => null), api.getFailures().catch(() => null)]).then(([p, f]) => {
       setProfile(p && p.text ? p.text : "（自我状态为空）");
       setFailures(f && f.failures ? f.failures : []);
+      setFstats(f && f.stats ? f.stats : null);
     });
   }, []);
+
+  const resolveOne = async (fp) => {
+    try {
+      const r = await api.resolveFailure({ fingerprint: fp });
+      if (r && r.ok) await loadFailures();
+    } catch {
+      /* 失败静默：下拉刷新即可重试 */
+    }
+  };
+
+  const shown = (failures || []).filter((f) => showResolved || !f.resolved);
   return (
     <div className="au-col">
       <div className="au-card">
@@ -259,19 +340,38 @@ function SelfTab({ onToast }) {
       </div>
       <div className="au-card">
         <div className="au-card-title">💥 失败模式库（AI 犯过的错 · 下次自动规避）</div>
+        {fstats && (
+          <div className="pm-cat" style={{ marginBottom: 8 }}>
+            未消解 {fstats.unresolved} · 已消解 {fstats.resolved} · 复现多次 {fstats.recurring}
+            （同一工具连续成功 2 次即自动消解；已消解项不再注入 AI 上下文）
+            <button className="pm-op" style={{ marginLeft: 8 }} onClick={() => setShowResolved((v) => !v)}>
+              {showResolved ? "只看未消解" : "显示已消解"}
+            </button>
+          </div>
+        )}
         {failures === null ? (
           <div className="empty-tip is-loading">加载中…</div>
-        ) : failures.length === 0 ? (
-          <div className="empty-tip">暂无失败记录</div>
+        ) : shown.length === 0 ? (
+          <div className="empty-tip">暂无{showResolved ? "" : "未消解的"}失败记录</div>
         ) : (
           <div className="au-list">
-            {failures.map((f, i) => (
-              <div className="au-item" key={i}>
+            {shown.map((f, i) => (
+              <div className="au-item" key={f.fingerprint || i}>
                 <div className="au-item-main">
                   <b>{f.tool || "工具"}</b>
-                  <span className="pm-cat">{f.ts || ""}</span>
-                  <div className="au-subject">{f.error || f}</div>
+                  <span className="pm-cat">
+                    {f.resolved ? "已消解 · " : ""}
+                    复现 {f.hits || 1} 次 · 最近 {String(f.last_ts || "").slice(0, 16)}
+                    {f.resolved_by ? ` · ${f.resolved_by}` : ""}
+                  </span>
+                  <div className="au-subject">{f.error || ""}</div>
+                  {f.note && <div className="au-files"><code>{f.note}</code></div>}
                 </div>
+                {!f.resolved && f.fingerprint && (
+                  <div className="au-item-ops">
+                    <button className="pm-op" onClick={() => resolveOne(f.fingerprint)}>标记已修复</button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
