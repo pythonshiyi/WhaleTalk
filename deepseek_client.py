@@ -1562,6 +1562,7 @@ def cleanup_idle_processes(max_idle_seconds=3600, force_all=False):
     返回终止的进程名列表。
     """
     killed = []
+    failed = []
     now = time.time()
     for name, entry in snapshot_processes():
         if entry.get("exited"):
@@ -1573,18 +1574,18 @@ def cleanup_idle_processes(max_idle_seconds=3600, force_all=False):
         else:
             idle = (now - float(entry.get("started_ts") or now)) > max_idle_seconds
         if idle:
-            try:
-                _kill_tree(entry["proc"])
-                try:
-                    entry["proc"].wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    pass
-            except Exception:
-                pass
+            # 只有确认退出才摘除条目：杀失败就摘 = 进程孤儿化（端口占着、
+            # stop/list 都看不见、再也停不掉）。失败时保留条目并如实提示。
+            if not _kill_tree(entry["proc"]):
+                failed.append(name)
+                _emit_process(name, "── 清理失败：进程未退出，条目保留 ──")
+                continue
             with _PROCESSES_LOCK:
                 PROCESSES.pop(name, None)
             _emit_process(name, "── 已清理（空闲超时/服务停止）──")
             killed.append(name)
+    if failed:
+        logging.warning("清理后台进程失败（条目保留，可重试）: %s", ", ".join(failed))
     return killed
 
 

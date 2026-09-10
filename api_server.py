@@ -1064,6 +1064,41 @@ def _tasks():
 
 
 _EVO_PLACEHOLDER = "（鲸语补充"
+_EVO_IGNORED_DIR = "_ignored"   # 忽略提案的归档箱（软删除，可恢复）
+
+
+def _evo_ignored_box():
+    return os.path.join(EVOLUTIONS_DIR, _EVO_IGNORED_DIR)
+
+
+def _valid_evo_name(name):
+    """提案名校验：拒绝空/路径穿越/隐藏目录/归档箱/已采纳。
+
+    与旧的 `startswith(".")` 相比多拒 `_` 前缀：`_ignored` 是归档箱，
+    不能被当成提案采纳、忽略或查看，否则归档箱会被自己吃掉。
+    """
+    name = str(name or "")
+    if (not name or name.startswith(".") or name.startswith("_")
+            or "\\" in name or "/" in name or name.endswith("_applied")):
+        return None
+    return name
+
+
+def _evo_ignored_list(limit=40):
+    """已忽略（软删除）的提案列表，供「恢复」。"""
+    box = _evo_ignored_box()
+    out = []
+    if os.path.isdir(box):
+        for d in sorted(os.listdir(box), reverse=True):
+            p = os.path.join(box, d)
+            if not os.path.isdir(p):
+                continue
+            out.append({
+                "archived": d,
+                "origin": re.sub(r"__\d{8}_\d{6}$", "", d),
+                "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(p))),
+            })
+    return out[:limit]
 
 
 def _evo_read_head(path, limit=6000):
@@ -1138,6 +1173,9 @@ def _evolutions():
     out = []
     if os.path.isdir(EVOLUTIONS_DIR):
         for d in sorted(os.listdir(EVOLUTIONS_DIR), reverse=True):
+            # 归档箱（_ignored）与隐藏目录不是提案，不参与列表
+            if d.startswith("_") or d.startswith("."):
+                continue
             p = os.path.join(EVOLUTIONS_DIR, d)
             if not os.path.isdir(p):
                 continue
@@ -1158,7 +1196,9 @@ def _evolutions():
             except Exception:
                 item.setdefault("summary", "")
             out.append(item)
-    return {"evolutions": out[:40]}
+    # 已忽略（软删除）的提案一并返回，供「自主」栏目展示与一键恢复——
+    # 归档若不暴露，就只是换个地方丢失（历史事故的教训）
+    return {"evolutions": out[:40], "ignored": _evo_ignored_list()}
 
 
 def _failures_action(body, action):
@@ -1757,12 +1797,16 @@ def _processes():
 
 def _stop_process(body):
     import deepseek_client as dc
-    name = str(body.get("name") or "")
-    if not name:
-        return None, "缺少 name"
+    target = str(body.get("name") or body.get("target") or body.get("pid") or "")
+    if not target:
+        return None, "缺少 name/target/pid"
     try:
-        result = dc.stop_process(name)
-        return {"ok": True, "result": str(result)[:500]}, None
+        result = str(dc.stop_process(target))[:500]
+        ok = not result.startswith(shared.TOOL_RESULT_FAIL_PREFIXES)
+        payload = {"ok": ok, "result": result}
+        if not ok:
+            payload["error"] = result  # 让前端错误分支能显示真实原因
+        return payload, None
     except Exception as e:
         return None, str(e)
 
@@ -1771,11 +1815,16 @@ def _start_process(body):
     import deepseek_client as dc
     command = str(body.get("command") or "")
     name = str(body.get("name") or "")
+    cwd = str(body.get("cwd") or "")
     if not command:
         return None, "缺少 command"
     try:
-        result = dc.start_process(command, name=name)
-        return {"ok": True, "result": str(result)[:500]}, None
+        result = str(dc.start_process(command, name=name, cwd=cwd))[:500]
+        ok = not result.startswith(shared.TOOL_RESULT_FAIL_PREFIXES)
+        payload = {"ok": ok, "result": result}
+        if not ok:
+            payload["error"] = result
+        return payload, None
     except Exception as e:
         return None, str(e)
 
@@ -2917,8 +2966,8 @@ def _global_search(query, filters=None):
 def _evolution_apply(name):
     """采纳进化提案：备份原文件 .evobak → 覆盖；失败整体回滚；成功改名 _applied。"""
     import shutil as _shutil
-    name = str(name or "")
-    if not name or name.startswith(".") or "\\" in name or "/" in name or name.endswith("_applied"):
+    name = _valid_evo_name(name)
+    if not name:
         return None, "非法提案名"
     branch = os.path.join(EVOLUTIONS_DIR, name)
     if not os.path.isdir(branch):
@@ -2962,22 +3011,67 @@ def _evolution_apply(name):
 
 
 def _evolution_ignore(name):
-    """忽略提案：删除分支目录。"""
-    import shutil as _shutil
-    name = str(name or "")
-    if not name or name.startswith(".") or "\\" in name or "/" in name or name.endswith("_applied"):
+    """忽略提案：**软删除**到 evolutions/_ignored/（可恢复 + 留审计）。
+
+    为什么不能硬删：历史事故——此函数原为 `shutil.rmtree`，叠加 `evolutions/`
+    在 `.gitignore` 中，一次「忽略」即永久丢失，曾一口气吃掉 4 份提案（靠会话
+    记录里 create_evolution 的入参才恢复回来，见 evolutions/_RESTORED.md）。
+    "忽略"是决策，不是销毁；决策应当可撤回。
+    """
+    name = _valid_evo_name(name)
+    if not name:
         return None, "非法提案名"
     branch = os.path.join(EVOLUTIONS_DIR, name)
     if not os.path.isdir(branch):
         return None, "提案不存在"
-    _shutil.rmtree(branch)
-    return {"ok": True}, None
+    box = _evo_ignored_box()
+    dest = os.path.join(box, f"{name}__{time.strftime('%Y%m%d_%H%M%S')}")
+    try:
+        os.makedirs(box, exist_ok=True)
+        os.replace(branch, dest)  # 同盘改名：原子且可逆
+    except Exception:
+        # 跨盘/句柄占用回退：复制后清理（失败则如实报错，绝不静默丢数据）
+        try:
+            import shutil as _shutil
+            _shutil.copytree(branch, dest)
+            _shutil.rmtree(branch, ignore_errors=True)
+        except Exception as e:
+            return None, f"归档失败（提案未动）: {e}"
+    _audit("evolution_ignored", name, os.path.basename(dest))
+    return {"ok": True, "archived": os.path.basename(dest), "recoverable": True}, None
+
+
+def _evolution_restore(archived):
+    """从 _ignored 恢复被忽略的提案（软删除的反向操作）。"""
+    key = str(archived or "").strip()
+    if not key or key.startswith(".") or "\\" in key or "/" in key:
+        return None, "非法归档名"
+    box = _evo_ignored_box()
+    src = os.path.join(box, key)
+    if not os.path.isdir(src):
+        return None, "归档不存在"
+    origin = _valid_evo_name(re.sub(r"__\d{8}_\d{6}$", "", key)) or key
+    dest = os.path.join(EVOLUTIONS_DIR, origin)
+    if os.path.exists(dest):
+        # 原位置已被占用：另起一个明确标记的名字，不覆盖任何东西
+        dest = os.path.join(EVOLUTIONS_DIR, f"{origin}__restored_{time.strftime('%Y%m%d_%H%M%S')}")
+    try:
+        os.replace(src, dest)
+    except Exception:
+        try:
+            import shutil as _shutil
+            _shutil.copytree(src, dest)
+            _shutil.rmtree(src, ignore_errors=True)
+        except Exception as e:
+            return None, f"恢复失败（归档未动）: {e}"
+    _audit("evolution_restored", os.path.basename(dest), key)
+    return {"ok": True, "name": os.path.basename(dest)}, None
 
 
 def _evolution_detail(name):
     """提案详情：分支文件全文（含 docs/ 下正文）+ 原文件是否存在（供差异预览）。"""
-    name = str(name or "")
-    if not name or name.startswith(".") or "\\" in name or "/" in name:
+    name = _valid_evo_name(name)
+    if not name:
         return None
     branch = os.path.join(EVOLUTIONS_DIR, name)
     if not os.path.isdir(branch):
@@ -6505,6 +6599,20 @@ class _Handler(BaseHTTPRequestHandler):
             "created": n,
             "skills": [p for p in _prompts_load_user() if p.get("auto_skill")],
         })
+
+
+    @_post_route("/v1/evolutions/restore")
+    def _p_v1_evolutions_restore(self):
+        """恢复被忽略（软删除）的提案。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _evolution_restore(body.get("archived") or body.get("name") or "")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
 
 
     @_post_route("/v1/failures/resolve")

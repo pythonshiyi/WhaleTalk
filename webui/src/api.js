@@ -645,9 +645,18 @@ export async function fimComplete(prompt, suffix = "") {
 
 // ── 自主能力（进化/审批/行为/自我） ──────────────────
 
-/** @returns {Promise<Object>} 进化提案列表 */
+/** @returns {Promise<Object>} 进化提案列表（含已忽略归档 ignored） */
 export async function getEvolutions() {
   return api("/v1/evolutions");
+}
+
+/**
+ * 恢复被忽略（软删除）的提案。
+ * @param {string} archived 归档目录名（来自 getEvolutions().ignored[].archived）
+ * @returns {Promise<Object>} {ok, name}
+ */
+export async function restoreEvolution(archived) {
+  return api("/v1/evolutions/restore", { method: "POST", body: JSON.stringify({ archived }) });
 }
 /** @param {string} name @returns {Promise<any>} */
 export async function applyEvolution(name) {

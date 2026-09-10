@@ -4,6 +4,7 @@ import EmptyState from "./EmptyState.jsx";
 
 function EvTab({ onToast }) {
   const [evs, setEvs] = React.useState(null);
+  const [ignored, setIgnored] = React.useState([]);
   const [branches, setBranches] = React.useState(null);
   const [detail, setDetail] = React.useState(null); // {name, stat, diff}
   const [evoDetail, setEvoDetail] = React.useState(null); // 提案方案全文
@@ -12,6 +13,7 @@ function EvTab({ onToast }) {
   const load = React.useCallback(async () => {
     const [e, b] = await Promise.all([api.getEvolutions().catch(() => null), api.getEvolveBranches().catch(() => null)]);
     setEvs(e && e.evolutions ? e.evolutions : []);
+    setIgnored(e && e.ignored ? e.ignored : []);
     setBranches(b && b.branches ? b.branches : []);
   }, []);
 
@@ -59,6 +61,11 @@ function EvTab({ onToast }) {
     } catch {
       onToast && onToast("读取方案失败");
     }
+  };
+
+  const confirmIgnore = async (name) => {
+    if (!window.confirm(`忽略提案 ${name}？\n\n它会被归档到下方「已忽略的提案」，随时可以一键恢复——不会删除。`)) return;
+    act(() => api.ignoreEvolution(name), `已忽略 ${name}（可在「已忽略的提案」恢复）`);
   };
 
   const confirmMerge = async (name) => {
@@ -134,10 +141,33 @@ function EvTab({ onToast }) {
                   {!e.applied && (
                     <>
                       <button className="pm-op" onClick={() => act(() => api.applyEvolution(e.name), `已采纳 ${e.name}`)}>采纳</button>
-                      <button className="pm-op pm-op-danger" onClick={() => act(() => api.ignoreEvolution(e.name), `已忽略 ${e.name}`)}>忽略</button>
+                      <button className="pm-op pm-op-danger" onClick={() => confirmIgnore(e.name)}>忽略</button>
                     </>
                   )}
                   {e.applied && <span className="pm-badge">已采纳</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="au-card">
+        <div className="au-card-title">🗄 已忽略的提案（软删除 · 可恢复）</div>
+        {ignored.length === 0 ? (
+          <div className="empty-tip">
+            没有被忽略的提案。忽略只会归档到「已忽略」，不再删除——历史上一次「忽略」曾永久吃掉 4 份提案。
+          </div>
+        ) : (
+          <div className="au-list">
+            {ignored.map((g) => (
+              <div className="au-item" key={g.archived}>
+                <div className="au-item-main">
+                  <b>{g.origin}</b>
+                  <span className="pm-cat">忽略于 {g.mtime} · 内容完整保留</span>
+                </div>
+                <div className="au-item-ops">
+                  <button className="pm-op" onClick={() => act(() => api.restoreEvolution(g.archived), `已恢复 ${g.origin}`)}>恢复</button>
                 </div>
               </div>
             ))}

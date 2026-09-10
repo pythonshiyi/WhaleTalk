@@ -31,7 +31,7 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 ```
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
-├── api_server.py           # 本地 HTTP API（REST + SSE，92+ /v1 端点）
+├── api_server.py           # 本地 HTTP API（REST + SSE，93+ /v1 端点）
 ├── deepseek_client.py      # 能力引擎：DeepSeekClient + 148 工具 + smart_tools（4,735 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
 ├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop 共 11 模块 117 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
@@ -270,6 +270,8 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 12. **停止语义**：停止后副作用已发生的工具（发信/写文件/启进程）要拿真实结果写回历史，写"已中断"会让模型下轮重试同参数造成重复执行
 13. **过期记忆比没有记忆更危险**：失败模式库只追加不消解时，一条历史失败会**永久**注入上下文，而它所描述的条件可能早已不存在（目录补建/服务恢复/依赖装好）。AI 会据此做出错误判断，且这类错误极难自查——因为"记忆"本身被当作事实。**任何注入上下文的"事实"都必须有生命周期与消解通道**（G18）。同理，成功模式/任务链若不结晶也是死数据（G14）
 14. **"工具存在"≠"机制生效"**：`task_checkpoint_save` 有 `auto` 参数、注释写着自动写入，但 Web 版从未调用（`has_checkpoint` 恒 false）；`docs/evolutions/*.md` 有正文但列表/详情只读一层目录。排查"某能力为何没起作用"时，先查**调用点**，别只看实现是否存在（G15/G17）
+15. **被 .gitignore 排除的目录里，删除必须可逆**：`evolutions/` 在 .gitignore 且 `_evolution_ignore` 用 rmtree → 一次"忽略"永久吃掉 4 份提案，最后靠会话记录里 create_evolution 的入参才救回。凡 `.gitignore` 里的"产物目录"，删除操作要么软删除、要么确保可重建（G19）
+16. **"杀进程失败"不能静默吞掉**：`kill_tree` 曾吞异常无返回值，`stop_process` 无条件 `pop` → 进程成孤儿（端口占着、工具报"运行中：无"、再也停不掉）。凡"终止/删除"类操作，都要**确认结果后再清理注册表/状态**（G20）
 
 ## 19. 演进建议
 
@@ -334,3 +336,12 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 `test_failure_lifecycle.py`（12 · 存储层生命周期）/ `test_failure_lifecycle_api.py`（9 · API+工具+记账接线）/ `test_evolution_last_mile.py`（7 · 入口页与摘要）/ `test_skill_factory.py`（12 · 结晶纯函数+接线）/ `test_auto_checkpoint.py`（7 · 打点阈值与节流）/ `test_run_memory_guard.py`（7 · 内存看门狗）。
 **注意**：`import agent_tools.tool_code` 前必须先 `import deepseek_client`（否则 `agent_tools/__init__` 循环导入导致 `TOOLS` 顺序表未注册报错）——新增测试须遵守此顺序。
+
+### 21.7 数据安全与进程契约（G19 / G20）
+
+**G19 提案「忽略」必须是软删除。** "忽略"是决策，不是销毁；决策应当可撤回。历史事故：`_evolution_ignore` 用 `shutil.rmtree` + `evolutions/` 在 `.gitignore` → 一次忽略即永久丢失（曾吃掉 4 份提案）。修复：`os.replace` 到 `evolutions/_ignored/<name>__<ts>` + `POST /v1/evolutions/restore` + 前端「已忽略」卡片。**最后的恢复手段**：提案全文同时存在于会话记录（`create_evolution` 入参 `files[].content`）——`tools/_restore_proposals.py` 正是据此把 4 份提案救回来的。**教训：凡是被 .gitignore 排除的目录里放"产物"，删除操作就必须可逆或可重建。**
+
+**G20 进程契约。** 三个同根源问题：
+1. **孤儿进程**：`kill_tree` 吞异常无返回值，`stop_process`/`cleanup_idle_processes` 无条件 `pop` 条目 → 杀失败后进程成孤儿（端口占着、工具却说"运行中：无"、再也停不掉）。修复：`kill_tree` 返回 bool（`proc.wait` 后 `poll() is not None` 才 True），**只有确认退出才摘条目**。
+2. **契约错位**：`stop_process(target)` 与 `start_process(name=)` 参数名不一致，是模型最高频调用错误。修复：`stop_process` 接受 `target/name/process_id/pid` 别名。
+3. **API 不诚实**：`_stop_process`/`_start_process` 恒 `ok:True`；`stop_process` 的"未找到进程"缺"错误"前缀（被误判成功）。修复：据 `shared.TOOL_RESULT_FAIL_PREFIXES` 判定，失败带 `error`。

@@ -2,6 +2,23 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.10.0（未发版追加·数据安全与进程契约批次）—— 🗄 忽略=软删除 · 进程孤儿修复 · 契约别名
+
+**版本号不变**。一次端到端压测暴露的两类「会伤真实数据/误导判断」的缺陷。
+
+### 🗄 进化提案「忽略」改为软删除（G19 · P0 数据丢失）
+- **事故**：`_evolution_ignore` 原用 `shutil.rmtree` 硬删，叠加 `evolutions/` 在 `.gitignore` 中 → 一次「忽略」即永久丢失，曾吃掉 4 份提案。已从会话记录（`create_evolution` 的调用入参含全文）**完整恢复** 4 份提案，并留 `evolutions/_RESTORED.md` 溯源
+- **修复**：忽略改为 `os.replace` 到 `evolutions/_ignored/<name>__<ts>`（原子、可逆），失败回退 `copytree` 且**绝不静默丢数据**
+- **可恢复**：`_evolutions()` 返回 `ignored` 列表；新增 `POST /v1/evolutions/restore`（原名恢复，冲突时 `__restored_` 后缀，绝不覆盖）；前端「自主」新增「已忽略的提案」卡片 + 一键恢复；忽略按钮加确认
+- **归档箱自保**：`_valid_evo_name` 拒绝 `_` 前缀名，`_ignored` 不能被当成提案采纳/忽略/查看（否则会把自己吃掉）；列表过滤 `_`/`.` 前缀目录
+- **救援脚本**：`tools/_restore_proposals.py` 从会话记录批量恢复误删提案（`--dry-run` 可预览）
+
+### 🔧 进程契约与孤儿进程修复（G20）
+- **孤儿进程（真 bug）**：`stop_process` / `cleanup_idle_processes` 曾「杀失败照样摘除条目」——`kill_tree` 吞异常无返回值，条目被无条件 `pop`，进程沦为孤儿：端口还占着，`stop`/`list` 却都看不见、再也停不掉（压测实测复现）。现 `proc_utils.kill_tree` **返回 bool**（已确认退出才 True），只有确认退出才摘条目，失败则保留条目 + 如实报错并给 `taskkill /F /T /PID` 下一步
+- **契约别名（消高频错误）**：`stop_process` 现同时接受 `target`/`name`/`process_id`/`pid`（历史名 target 与 start_process 的 name 错位曾是模型最高频调用错误）；`start_process` 新增 `cwd`（在指定目录起服务）
+- **API 诚实**：`_stop_process`/`_start_process` 的 `ok` 不再恒为 True，据结果判定并在失败时带 `error`；`stop_process` 的「未找到进程」改为「错误：未找到进程」（此前缺失败前缀，会被误判为成功）
+- **测试**：新增 `test_evolution_soft_delete.py`(8) + `test_process_contract.py`(11)，全量 **391 passed / 0 failed**
+
 ## v3.10.0（未发版追加・认知质量收敛批次）—— 🧠 失败记忆生命周期 · 提案可见性 · 技能结晶 · 长任务打点
 
 **版本号不变**。一次「AI 自我能力诊断」的结论：缺的不是能力宽度（148 工具 / 92 端点已够宽），而是**让已有能力收敛闭环的机制**。四处修复的共性是——原料/工具早就在，缺的是"自动触发那一环"。

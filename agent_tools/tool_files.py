@@ -956,6 +956,7 @@ def batch_rename(directory, pattern, replacement, dry_run=False):
                     "properties": {
                         "command": {"type": "string", "description": "完整命令行，如 python -m http.server 8000 或 uvicorn app:app"},
                         "name": {"type": "string", "description": "可选：进程名（便于后续停止/查询）"},
+                        "cwd": {"type": "string", "description": "可选：工作目录（在指定目录启动服务/脚本，缺省为工作区目录）"},
                     },
                     "required": ["command"],
                 },
@@ -965,11 +966,12 @@ def batch_rename(directory, pattern, replacement, dry_run=False):
     phrases='启动后台进程（服务器/长驻任务）',
     preactivate=(('后台进程', '启动服务', '启动服务器', '停止进程', '看进程', '进程列表'),),
 )
-def start_process(command, name=""):
+def start_process(command, name="", cwd=""):
     """后台启动长驻进程（服务器等），输出实时推送终端面板。
 
     无限制模式：支持完整 shell 语法（管道/重定向/变量）；若在权限页配置了
     「禁命令」（shell.blocklist），命中同样拒绝（与 run_command 同一入口）。
+    cwd 可选：在指定目录启动（缺省为工作区目录）；目录不存在会明确报错。
     """
     cmd = str(command or "").strip()
     if not cmd:
@@ -978,6 +980,9 @@ def start_process(command, name=""):
     if not ok:
         permissions.audit("start_process", cmd[:200], f"denied: {reason[:120]}")
         return reason
+    workdir = str(cwd or "").strip()
+    if workdir and not os.path.isdir(workdir):
+        return f"错误：工作目录不存在：{workdir}"
     with _PROCESSES_LOCK:
         for k in [k for k, v in PROCESSES.items() if v.get("exited")]:
             PROCESSES.pop(k, None)
@@ -1006,7 +1011,7 @@ def start_process(command, name=""):
                 else 0
             ),
             # 与 run_command 一致：在工作目录启动（服务器/脚本的相对路径引用落地）
-            cwd=_dc.WORKING_DIR or permissions.WORKSPACE_DIR or None,
+            cwd=workdir or _dc.WORKING_DIR or permissions.WORKSPACE_DIR or None,
         )
     except Exception as e:
         return f"错误：进程启动失败: {e}"
@@ -1053,9 +1058,11 @@ def start_process(command, name=""):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "target": {"type": "string", "description": "进程名或 pid，如 http.server 或 12345"},
+                        "target": {"type": "string", "description": "进程名或 pid（如 http.server 或 12345）"},
+                        "name": {"type": "string", "description": "进程名（别名，等价 target）"},
+                        "process_id": {"type": "string", "description": "pid（别名，等价 target）"},
+                        "pid": {"type": "string", "description": "pid（别名，等价 target）"},
                     },
-                    "required": ["target"],
                 },
             },
         },
@@ -1063,22 +1070,25 @@ def start_process(command, name=""):
     phrases='停止后台进程',
     preactivate=(('后台进程', '启动服务', '启动服务器', '停止进程', '看进程', '进程列表'),),
 )
-def stop_process(target):
-    """停止后台进程（按名称或 pid 定位并终止，进程由 start_process 启动）。"""
-    target = str(target or "").strip()
+def stop_process(target="", name="", process_id="", pid=""):
+    """停止后台进程（按名称或 pid 定位并终止，进程由 start_process 启动）。
+
+    参数别名：`target` 是历史名；`name` / `process_id` / `pid` 为等价别名。
+    契约错位（start_process 用 name、这里用 target）曾是模型最高频的调用错误，
+    故这里全部接受、任一命中即可。
+    """
+    target = str(target or name or process_id or pid or "").strip()
     if not target:
-        return "错误：需要进程名或 pid"
+        return "错误：需要进程名或 pid（target/name/process_id/pid 任一）"
     for name, entry in snapshot_processes():
         if name == target or str(entry["pid"]) == target:
             if not entry["exited"]:
-                try:
-                    _kill_tree(entry["proc"])
-                    try:
-                        entry["proc"].wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        pass
-                except Exception:
-                    pass
+                # 只有确认退出才摘除条目：杀失败就摘 = 进程孤儿化（端口占着、
+                # stop/list 都看不见、再也停不掉——历史事故，实测复现过）。
+                if not _kill_tree(entry["proc"]):
+                    return (f"错误：进程「{name}」（pid={entry['pid']}）未能终止，"
+                            f"条目已保留可重试；若需强制终止请用 run_command 执行 "
+                            f"`taskkill /F /T /PID {entry['pid']}`。")
                 with _PROCESSES_LOCK:
                     entry["exited"] = True
                     PROCESSES.pop(name, None)  # 立即回收条目，防失管/重复 stop
@@ -1088,7 +1098,7 @@ def stop_process(target):
                 PROCESSES.pop(name, None)
             return f"进程「{name}」已退出（code={entry['code']}）"
     running = [f"{n}({e['pid']})" for n, e in snapshot_processes()]
-    return f"未找到进程：{target}（运行中：{running or '无'}）"
+    return f"错误：未找到进程：{target}（运行中：{running or '无'}）"
 
 
 @tool(
