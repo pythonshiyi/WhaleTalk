@@ -25,6 +25,19 @@ TECH = REPO_ROOT / "TECH_NOTES.md"
 MODULES = REPO_ROOT / "MODULES.md"
 
 
+# ── 输出编码加固 ───────────────────────────────────────────────────
+# Windows 控制台与 CI 的默认码页（cp1252 / cp936 等）无法编码中文提示，print 时
+# 直接抛 UnicodeEncodeError 并退出 1 —— 会让这些门禁在 CI 上恒红，而本地终端
+# 通常是 UTF-8 所以看不到（本项目 CI 的 gate-tools 正是因此长期失败）。
+# 与 web_app._harden_stdio 同款处理：强制 UTF-8 输出，不可编码字符降级替换。
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 def _top_assign(tree, target):
     for node in tree.body:
         if isinstance(node, ast.Assign):
