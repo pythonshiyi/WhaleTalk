@@ -240,13 +240,18 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 - **打包**：`build_exe.bat` → PyInstaller（WhaleTalk.spec：webui/dist + sample_plugins 内置；playwright/faster-whisper/PyMuPDF 等大型依赖排除）
 - **备份**：`backup.py` 源码快照（compresslevel=1；排除 .venv/dist/backups/.git 等）
 - **更新**：GitHub Releases 检测；Ed25519 签名（`update_public_key`）+ SHA-256 校验；更新前自动备份可回滚
-- **Git 推送（给维护 AI 的操作指引）**：
-  - 远程 `github.com/pythonshiyi/WhaleTalk`，分支 `main`。origin 建议 **fetch 走 https、push 走 ssh**：`git remote set-url origin https://github.com/pythonshiyi/WhaleTalk.git` + `git remote set-url --push origin git@github.com:pythonshiyi/WhaleTalk.git`
-  - **坑**：本机设了环境代理 `HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:4890`，`git push`/`fetch` 走 **https** 会卡死在 SSL 握手（`schannel: failed to receive handshake`）且数分钟无输出。**遇到 `git push` 无输出/握手失败：停掉该进程，改走 ssh**（实测 8s 完成，不受代理影响）
-  - 推送：`GIT_SSH_COMMAND="ssh -o ConnectTimeout=20 -o BatchMode=yes" git push git@github.com:pythonshiyi/WhaleTalk.git main:main`（或配置好 push URL 后 `git push origin main`）
-  - **核验**：用显式 ssh URL push 后本地 `origin/main` 引用不自动更新，`git log origin/main..HEAD` 会误报"领先 N 提交"。以远程真实 HEAD 为准：`GIT_SSH_COMMAND="ssh -o ConnectTimeout=20" git ls-remote git@github.com:pythonshiyi/WhaleTalk.git refs/heads/main` 与 `git rev-parse HEAD` 一致 = 已同步
+- **Git 推送（给维护 AI 的操作指引 · 2026-09-10 实测更新）**：
+  - 远程 `github.com/pythonshiyi/WhaleTalk`，分支 `main`；origin 的 fetch/push **都是 https，不必改 ssh**
+  - **首选 https**：`git push origin main` —— 凭据由 `credential.helper=wincred`（Windows 凭据管理器）自动提供，实测一次成功、无需交互
+  - 旧记录里「本机代理 `HTTP_PROXY/HTTPS_PROXY` 导致 https 卡死在 SSL 握手」在 2026-09-10 **复现不了**（当时环境无代理变量）。若将来真遇到 `git push` 无输出/握手失败：先 `env | grep -i proxy` 确认代理是否真的存在；确认后停掉卡住的进程再谈改道（ssh URL 为 `git@github.com:pythonshiyi/WhaleTalk.git`，但**本机未必有可用 ssh key，不要盲配**）
+  - 核验同步：`git ls-remote origin refs/heads/main` 与 `git rev-parse HEAD` 一致 = 已同步（比 `git log origin/main..HEAD` 可靠）
   - commit 报 SIGTERM 时先 `git log --oneline -1` 确认是否已落（常已成功，仅收尾被打断）
   - 本地不入库产物：`能力差距分析_*.md` / `*能力报告_*.md` / `*阅读报告_*.md` 等分析文档历来不入库（只提交代码/前端/测试/依赖），push 前不必 `git add`
+- **行尾（提交前必读，否则一次提交凭空膨胀上千行）**：`.gitattributes` 声明 `eol=lf`（`.bat`/`.ps1` 为 `crlf`），但**历史 blob 是混合的**——`api_server.py` / `deepseek_client.py` / `MODULES.md` / `AutonomyPage.jsx` 存的是 CRLF，README / TECH_NOTES / CHANGELOG / stores / api.js 是 LF，从未 renormalize。对策：
+  - `git add` 会按属性把 CRLF 归一成 LF → **只改了 375 行的 `api_server.py` 会显示成 7728 行整文件差异**。提交前先抑制归一化（`.git/info/attributes` 优先级高于仓库 `.gitattributes`，且不进仓库）：
+    `printf '* -text\n' > .git/info/attributes` → `git add -A` → `rm -f .git/info/attributes` → commit
+  - 判断"是否真有改动"永远用 `git diff --ignore-cr-at-eol`；判断暂存内容是否干净用 `git diff --cached HEAD~1 --numstat`（**别用 `git diff --cached HEAD`**，那是跟自己的中间提交比，会误报全文件差异）
+  - `tools/check_docs.py --fix` 旧版用 `Path.write_text` 写回，Windows 默认换行转换会把 LF 文件改写成 CRLF（README/TECH_NOTES 真实踩过）→ 已修为 `_write_preserving_eol`（按原文件行尾风格写回）；见到莫名整文件差异时，先查行尾再查逻辑
 - **AI 素材空间（asset_library）**：AI 做 PPT/文档时的素材管理范式——**不直接改用户原素材**，而是从本地任意目录（如 `E:/主图`）**复制**进一个固定的素材库，在库内自行按理解命名/分类后调用。blacklist 模式下读原素材+写库内天然允许，无需用户单独授权，且绝不破坏原始文件。默认库目录 `<workspace>/素材库`（可用环境变量 `WHALETALK_ASSET_LIB` 覆盖）。工具：`find_images`(扫原素材找候选) → `asset_import`(复制入库+命名/分类) → `asset_list`(列库) → `asset_organize`(库内重命名/归类)。做 PPT/文档应**优先从素材库取图**，缺素材才 asset_import 导入新素材
 
 ## 18. 踩坑记录（Web 版）

@@ -135,6 +135,11 @@ CLAIMS = [
     (MODULES, r"(\d+)\s*工具 \+ smart_tools", "tools", "能力引擎工具数"),
     (TECH,   r"(\d+)\+\s*/v1 端点",     "endpoints",  "/v1 端点数量(带+)"),
     (MODULES, r"(\d+)\s*/v1 端点",      "endpoints",  "/v1 端点数量"),
+    # 补充规则（原为盲区，靠人工发现）：README 的「全部 N 项工具」是当前状态表述，
+    # 与历史版本段落（如「v3.9 大版本新增（147 项）」）不同，必须随源码更新。
+    (README, r"全部\s*(\d+)\s*项工具",  "tools",      "可用工具总数(全部N项工具)"),
+    # MODULES 端点清单的另一种写法（此前改数字靠手工）
+    (MODULES, r"等\s*(\d+)\s*端点",     "endpoints",  "/v1 端点数量(等N端点写法)"),
 ]
 
 # ── 文本断言：文档不应再包含的过期表述 ──
@@ -157,6 +162,26 @@ STALE_TEXT = [
     (TECH, "沙箱 Python：AST 静态检查", "run_python 无沙箱（等同本机 python -c）"),
     (TECH, "zip 炸弹防护",            "无对应代码（已随白名单时代移除）"),
 ]
+
+
+def _write_preserving_eol(path, text):
+    """写回文本，并**保留原文件的行尾风格**。
+
+    Windows 上 `Path.write_text` 默认做换行转换（\\n → \\r\\n）：原文件是 LF 时
+    一次 --fix 就会把整文件重写成 CRLF，制造上千行的伪 diff（本项目真实踩过——
+    README.md / TECH_NOTES.md 被 --fix 从 LF 改成了 CRLF）。这里先看原文件实际
+    行尾，再决定写回风格，让 --fix 只改数字、不改字节风格。
+    """
+    try:
+        raw = path.read_bytes()
+    except Exception:
+        raw = b""
+    n_lf = raw.count(b"\n")
+    if n_lf and raw.count(b"\r\n") == n_lf:
+        data = text.replace("\r\n", "\n").replace("\n", "\r\n")  # 原为 CRLF
+    else:
+        data = text.replace("\r\n", "\n")                        # 原为 LF
+    path.write_bytes(data.encode("utf-8"))
 
 
 def main(argv=None):
@@ -192,7 +217,7 @@ def main(argv=None):
                     return m.group(0).replace(m.group(1), str(exp), 1)
                 return m.group(0)
             new_text, _ = re.subn(pattern, repl, text)
-            path.write_text(new_text, encoding="utf-8")
+            _write_preserving_eol(path, new_text)
             print(f"       已修正为 {exp}（仅替换数字，不动组外文本）")
 
     for path, frag, why in STALE_TEXT:
@@ -214,7 +239,7 @@ def main(argv=None):
             if fix:
                 new_sec = sec_text.replace(
                     sec_ver.group(1) + ".x", mm + ".x", 1)
-                SECURITY.write_text(new_sec, encoding="utf-8")
+                _write_preserving_eol(SECURITY, new_sec)
                 print(f"       已修正支持版本表为 {mm}.x")
     else:
         problems += 1
