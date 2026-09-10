@@ -5,8 +5,11 @@
 """
 
 # 应用版本号（统一来源：deepseek_client / backup 引用此处）
-VERSION = "3.9.0"
+VERSION = "3.10.0"
 
+# 统一模型能力说明（v3.10.0）：DeepSeek 已把「快速模式 / 专家模式 / 识图模式」
+# 合并为统一的智能模式——V4.1 Flash 原生多模态，自行判断任务复杂度并在检测到
+# 图片输入时激活视觉能力，用户无需再手动切换模型或模式。
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个强大的AI助手，具备以下核心能力：\n"
     "1. 任务拆解：将复杂问题分解为可执行的子任务\n"
@@ -14,6 +17,9 @@ DEFAULT_SYSTEM_PROMPT = (
     "3. 代码执行：编写、调试、优化代码\n"
     "4. 错误恢复：遇到错误时自主修正并继续执行\n"
     "5. 长上下文管理：在长达100万Token的上下文中保持任务状态一致性\n"
+    "6. 原生多模态：可直接理解用户发来的图片、截图、图表与扫描件，"
+    "无需调用工具、无需用户切换模式；只有需要 OCR 取字、放大看细节或"
+    "分析工具生成的文件图片时才调用相应的图像工具。\n"
     "请使用中文回答。"
 )
 
@@ -231,7 +237,8 @@ SCENARIO_DEFAULT_THINKING = {
 DEFAULT_CONFIG = {
     "api_key": "",
     "base_url": "https://api.deepseek.com",
-    "model": "deepseek-v4-flash",
+    # 统一模型（v3.10.0）：V4.1 Flash 原生多模态，视觉/推理无需切换模式
+    "model": "deepseek-flash",
     "voice_config": {"auto_mode": "off", "rate": 0, "volume": 100, "voice": "",
                      "engine": "auto", "piper_voice": "zh_CN-chaowen-medium"},
     "scenario": "通用",
@@ -281,7 +288,7 @@ DEFAULT_CONFIG = {
     "image_api_key": "",      # 图片生成 API Key
     "image_base_url": "",     # 图片生成端点（默认 = base_url）
     "image_model": "gpt-image-1",
-    "vision_self_review": False,  # 视觉自审：工具产出图片时自动调用视觉模型审图（需视觉模型；默认关控成本）
+    "vision_self_review": False,  # 视觉自审：工具产出图片后自动审图并迭代（统一模型原生多模态，能力恒可用；默认关以控成本）
     "autostart": True,          # 初始开机自启（注册表 Run 键；失败自动回滚）
     "strict_tools": False,    # strict 工具模式（Beta）：模型严格遵循工具 JSON Schema
     "update_url": "",         # 更新检查源（latest.json，如 https://example.com/latest.json）

@@ -1234,7 +1234,7 @@ def database_query(db_path, sql, max_rows=20):
                     "properties": {
                         "db_type": {"type": "string", "description": "sqlite / mysql / postgres"},
                         "connection": {"type": "string", "description": "sqlite=数据库文件绝对路径；mysql/postgres=连接名（默认 default）"},
-                        "sql": {"type": "string", "description": "写操作 SQL 语句"},
+                        "sql": {"type": "string", "description": "写操作 SQL（UPDATE/INSERT/DELETE/DDL）。UPDATE/DELETE 必须带 WHERE 条件，否则直接拒绝执行（防全表误操作）；需清空整表请分步删除并确认"},
                         "backup": {"type": "boolean", "description": "可选：变更前备份（默认 true）"},
                     },
                     "required": ["db_type", "sql", "connection"],

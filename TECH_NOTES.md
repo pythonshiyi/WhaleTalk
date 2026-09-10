@@ -1,11 +1,21 @@
-# 鲸语 WhaleTalk 技术文档（Web 版 · v3.9.0）
+# 鲸语 WhaleTalk 技术文档（Web 版 · v3.10.0）
 
 本文档面向后续维护/开发的 AI 智能体，描述 Web 架构（v3.0+）下的系统结构、数据流、核心约定与踩坑记录。符号名为准，行号随代码演化漂移，本文档不承诺行号。
 
 ## 0. 品牌与版本
 
+### 统一模型（v3.10.0）
+
+DeepSeek 已把全部模型升级为**单一原生多模态模型**，本产品收敛为只集成一个模型：
+
+- **`MODEL_ID = "deepseek-flash"`**（DeepSeek V4.1 Flash）：552B 非对称 MoE（Causal-Encoder-Decoder，输入激活 8B / 输出激活 16B），原生多模态视觉，KV Cache 压缩（HBM 需求降至上代 1/4）。`DEFAULT_MODEL` / `VISION_MODEL` 均指向它。
+- **旧名别名归一**：`LEGACY_MODEL_ALIASES` 把 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` / `deepseek-v4.1-flash-expires-on-0910` / `deepseek-v4-pro` 映射到 `MODEL_ID`（官方已下线前两者，`v4-pro` 自 2026-09-14 12:00 起同样路由）。`resolve_model()` 只映射这四个官方旧名，**绝不改写自定义网关的模型名**；`is_legacy_model()` 供迁移提示。
+- **配置迁移**：`config_utils` 在 `base_url` 为官方端点时把旧名就地归一（自定义端点不动），使历史 config 无感升级。
+- **计费**：新价自 2026-09-10 12:00 生效——高峰（缓存命中/未命中/输出）**0.04 / 2.0 / 8.0** 元每百万 tokens，空闲减半。`stats.price_for(model, day)` 按「用量发生日」选价（分界 `PRICE_ERA_CURRENT = "2026-09-10"`），历史记录不被追溯改价；未收录的模型名回落到 `DEFAULT_PRICE`（即当前价），与官方「旧名按 V4.1 Flash 单价计费」一致。
+- **能力归一**：`is_vision_model()` 先经 `resolve_model` 再看 `MODELS` 元数据——统一模型恒为支持视觉；未知/自定义模型沿用名称启发式（含 `vision` 视为支持）。
+
 - 品牌：鲸语 WhaleTalk（独立产品，与 DeepSeek 官方无关联）。对外展示一律使用品牌名，技术描述可写"基于 DeepSeek API"。
-- **版本单一源**：`config_defaults.VERSION`（当前 3.9.0）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
+- **版本单一源**：`config_defaults.VERSION`（当前 3.10.0）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
 - 入口形态：**纯 Web + 托盘常驻**。浏览器是唯一界面；无 pywebview 原生窗口（desktop.py 已废弃）。
 
 ## 1. 项目概览
@@ -21,8 +31,8 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 ```
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
-├── api_server.py           # 本地 HTTP API（REST + SSE，87+ /v1 端点）
-├── deepseek_client.py      # 能力引擎：DeepSeekClient + 147 工具 + smart_tools（4,484 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
+├── api_server.py           # 本地 HTTP API（REST + SSE，88+ /v1 端点）
+├── deepseek_client.py      # 能力引擎：DeepSeekClient + 147 工具 + smart_tools（4,735 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
 ├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop 共 11 模块 117 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
 ├── security.py             # SSRF 防护（云元数据永远拦截）
@@ -127,13 +137,13 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 
 **关键约定**：
 - `_sanitize_messages`：过滤空 content assistant、**悬空 tool_calls**、**孤立 tool 消息**（DeepSeek API 以 400 拒绝，最高频踩坑点）；历史保存/压缩/中断都可能产生
-- 图片内联：会话带图而当前模型非视觉 → 本次请求自动切 `VISION_MODEL`；注入「图片须知」避免模型找路径
+- 图片内联：统一模型 V4.1 Flash **原生多模态**，默认即可看图；仅自定义端点且模型名明确不支持图片时，本次请求自动切 `VISION_MODEL` 兜底（`VISION_MODEL` 已与默认模型同为 `deepseek-flash`）；注入「图片须知」避免模型找路径
 - thinking 档位：none/low/medium/high/max/auto；`none` 走 temperature/top_p，其余走 `reasoning_effort`；auto 按消息复杂度估算（简单任务自动关思考）
 - 工具轮上限 `MAX_TOOL_ROUNDS`=100；空响应重试 1 次；同参数连续调用 3 次触发循环防护；计划连续拒绝 3 次终止；工具总超时 300s；停止后 1.5s 宽限期收已提交工具真实结果（防副作用重复执行）
 - 工具并行：普通池 4 worker + 长任务池 2 worker（`_LONG_TOOL_NAMES` 36 个长工具走独立池）；交互工具（ask_user/request_permission）串行
 - 工具结果 >4 万字符自动落盘（`_persist_long_result`），上下文只留路径 + 摘要
 - `strict_tools`：工具 schema 严格模式（`_strictify_tools`）
-- 视觉自审：`vision_self_review` 开启时图片产出工具自动调视觉模型审图，意见附回结果
+- 视觉自审：`vision_self_review` 开启时图片产出工具自动调模型审图，意见附回结果（统一模型原生多模态，能力恒可用）
 
 **FIM 补全**：`fim_complete` 走 `/beta` 端点（按 base_url 缓存 client）。
 
@@ -143,7 +153,7 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 1. 常驻注入「能力地图」（`build_tool_index`：11 组分类 + 工具名 + 核心动作短语）
 2. `activate_tools` 点菜工具（支持**按组激活**，`_TOOL_GROUP_NAME_MAP`）
 3. chat 层关键词预激活（`_PREACTIVATE_HINTS` 25 组意图词，扫描最近一条 user 消息）
-4. 激活后下一轮注入**压缩版 schema**（`compact_tools_list`：剥冗余括号、参数描述截断 40 字符）
+4. 激活后下一轮注入已激活工具的 schema（`normalize_tools_list`：**无损**规范化——只折叠空白，不删括号、不截断；描述是能力的一部分，详见 `normalize_tool_schema` 的说明）
 
 **六层数据必须一致**（tools/audit_tools.py 审计）：`TOOLS` schema ↔ 函数签名 ↔ `TOOL_CALL_MAP` ↔ `_TOOL_ACTION_PHRASES` ↔ `TOOL_GROUPS` ↔ `_PREACTIVATE_HINTS` + `permissions.ACTION_TOOLS`。演进目标：`@tool()` 装饰器统一声明。
 
@@ -157,8 +167,11 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 
 **安全纵深**：
 - API Key DPAPI 加密（`crypto.py`）：加密失败 fail-closed（磁盘保留原密文，绝不写明文）
-- 网络请求（`security._safe_url`）：默认 `blacklist` 模式只拦用户 `network.blocklist`（内网/回环默认放行——信任用户与模型）；仅旧 `whitelist` 模式恢复严格 SSRF 判断（内网/回环/保留段阻止、**云元数据 169.254.0.0/16 永远拦截、白名单不可豁免**、DNS 重绑定防护）
-- CORS 白名单 + Bearer token + 仅 127.0.0.1 监听 + 请求体上限
+- 网络请求（`security._safe_url`）：默认 `blacklist` 模式 = ① 用户 `network.blocklist`；② **SSRF 硬底线 `_hard_floor_reason`（默认开）**——私网段（10/172.16/192.168）、链路本地（169.254.0.0/16）、保留段一律拦截，**域名先做 DNS 解析（默认模式也防重绑定）**；回环默认放行（本机单用户软件 + 本地开发高频），`network.allow_loopback=false` 加严，`network.block_private=false` 或 `blocklist_enabled=false` 关闭。旧 `whitelist` 模式保留更严的 `_is_private_host` 判断（云元数据不可豁免、`SSRF_TRUSTED` 可豁免内网）
+  - 理由：模型可自主抓取任意 URL 且抓取内容回灌上下文（prompt injection 面），仅靠用户黑名单盖不住「注入 → 诱导访问内网/云元数据」
+- **错误信息脱敏**：API 异常只回泛化/脱敏文案（`_fail`/`_fail_soft` + `_sanitize_error_text`），绝对路径与文件行号仅落服务端日志；前端 `_errMessage` 依次读 `detail`/`error`
+- **配置读写的副本语义**：`config_utils.load_config()` 返回进程级共享对象（**只读**），任何「读—改—写」必须用 `mutable_config()` 取深拷贝，否则并发读者会看到半更新配置
+- CORS 白名单（含 SSE 响应头）+ Bearer token（`hmac.compare_digest` 常量时间比较）+ 仅 127.0.0.1 监听 + 请求体上限 + 路径片段 `_valid_name` 校验
 - `run_python` 等同本机 `python -c` 直通解释器（无 `-I -S` 隔离、无静态 AST 危险检查）——能力与风险均由用户显式授权承担
 - 进程：`kill_tree`（taskkill /T）防孙进程残留；服务停止清理全部子进程
 - 文件：写操作自动快照可恢复（`snapshot.py`）；删除默认进回收站；各工具带大小/超时上限兜底
@@ -197,6 +210,7 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 - token 获取链：localStorage → URL `?token=` → `/v1/token` 自取；后端不可用明确报错（**无假数据兜底**）
 - 断连感知：`watchBackend` 5s 心跳探测，状态翻转回调；BackendBanner + 手动重连
 - 消息链构造 `buildMessageChain`：tools 模式必须完整回传 assistant(reasoning_content + tool_calls) → tool 结果（官方规范）
+- **消息更新必须不可变**（`msgUpdates.js`：`makePatchLast`/`findLastToolCard`）：禁止原地改已入 state 的消息对象（`msg.text += …` / `msg.tools.push(…)` / `card.status = …`）——否则加上 `Message` 的 `React.memo` 后流式内容会静默停更，且每帧要重渲染整条列表。落盘用 `currentMsg()` 从实时镜像取终态，不要用闭包里的局部变量
 - TTS：`ttsUtil.js`（合成 + 朗读 + barge-in 说话即打断，权限门控默认关闭）
 
 ### 16.1 Markdown 渲染管线（v3.8.0 世界级渲染器）
@@ -221,7 +235,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 ## 17. 工程实践
 
 - **CI**（.github/workflows/ci.yml）：`check`（ruff 关键规则 E9/F63/F7/F82 + 入口 py_compile）· `test-backend`（`pytest tests/`，28 用例，依赖 `requirements-dev.txt` 锁 pytest 版本）· `webui`（npm ci + build + `npm test` 三个 node 套件）· 门禁 job（`tools/audit_tools.py --strict` / `tools/validate_tools.py` / `tools/island_check.py` / `tools/check_docs.py`）。pytest 的 `addopts=-p no:asyncio` 在 `pyproject.toml` 固化，本地与 CI 行为一致
-- **本地门禁**：`tools/audit_tools.py`（六层一致性，error 级 `--strict` 返回非 0；warn 级仅提示）· `tools/validate_tools.py`（smart_tools 全链路：能力地图/compact/schema 可序列化/描述 ≤130 字/数组参数带 items）· `tools/island_check.py`（九层孤岛对账）· `tools/check_docs.py`（README/TECH_NOTES/MODULES 数字与源码一致，`--fix` 自动修正）
+- **本地门禁**：`tools/audit_tools.py`（六层一致性，error 级 `--strict` 返回非 0；warn 级仅提示）· `tools/validate_tools.py`（smart_tools 全链路：能力地图 / compact **无损**校验（描述不得被删减）/ schema 可序列化 / 描述保真与参数覆盖 / 数组参数带 items）· `tools/island_check.py`（九层孤岛对账）· `tools/check_docs.py`（README/TECH_NOTES/MODULES 数字与源码一致，`--fix` 自动修正）
 - **依赖**：`deps.py` 分层（硬依赖同步安装 / 自动安装后台 / 重型可选）；清华源镜像（`WHALETALK_PIP_MIRROR` 可覆盖）
 - **打包**：`build_exe.bat` → PyInstaller（WhaleTalk.spec：webui/dist + sample_plugins 内置；playwright/faster-whisper/PyMuPDF 等大型依赖排除）
 - **备份**：`backup.py` 源码快照（compresslevel=1；排除 .venv/dist/backups/.git 等）
@@ -252,7 +266,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 ## 19. 演进建议
 
-1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**已完成（v3.8.3 收官）**：共 11 域模块 117 工具迁出（tool_basic 2 / tool_data 2 / tool_media 10 / tool_docs 19 / tool_web 14 / tool_code 15 / tool_files 17 / tool_brain 14 / tool_msg 10 / tool_system 12 / tool_desktop 18），主文件 13,115 → **4,484 行**，工具定义清零（AST 断言）；关键经验：① 域模块对运行时注入配置（WORKING_DIR/KV_CACHE_DIR/MEMORY_FILE/EVOLUTIONS_DIR 等 36 个）不可值绑定 import，须 `import deepseek_client as _dc` 动态访问，否则 main/测试注入失效；② `fetch_blocked` 因保留字冲突实现名 `_run_fetch_blocked`，audit/migrate 门禁内置别名映射；③ 每批迁移后跑 pytest + 四门禁 + 前端三套件，`test_tool_split.py` 现有 17 用例覆盖全量 re-export/归属/六层
+1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**已完成（v3.8.3 收官）**：共 11 域模块 117 工具迁出（tool_basic 2 / tool_data 2 / tool_media 10 / tool_docs 19 / tool_web 14 / tool_code 15 / tool_files 17 / tool_brain 14 / tool_msg 10 / tool_system 12 / tool_desktop 18），主文件 13,115 → **4,735 行**，工具定义清零（AST 断言）；关键经验：① 域模块对运行时注入配置（WORKING_DIR/KV_CACHE_DIR/MEMORY_FILE/EVOLUTIONS_DIR 等 36 个）不可值绑定 import，须 `import deepseek_client as _dc` 动态访问，否则 main/测试注入失效；② `fetch_blocked` 因保留字冲突实现名 `_run_fetch_blocked`，audit/migrate 门禁内置别名映射；③ 每批迁移后跑 pytest + 四门禁 + 前端三套件，`test_tool_split.py` 现有 17 用例覆盖全量 re-export/归属/六层
 2. `@tool()` 装饰器统一六层声明（消除手工漂移）
 3. ~~补齐 pytest 测试资产并接入 CI~~ 已完成（v3.8.3 起 CI 跑 `pytest tests/` 28 用例 + 前端 3 套件 + 四道门禁）；下一步是**按领域扩充分子级 pytest 用例**（工具/权限/存储执行路径，当前覆盖集中在注册表与进化闸）
 4. 进化闭环补门禁：`self_evolve` 合并前强制跑 audit/validate/测试；进化账本（效果回流）；评审 AI 前置

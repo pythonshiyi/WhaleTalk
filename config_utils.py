@@ -109,7 +109,18 @@ def normalize_config(cfg):
         base_url = DEFAULT_BASE_URL
     cfg["base_url"] = base_url
 
-    cfg["model"] = str(cfg.get("model", "deepseek-v4-flash")).strip() or "deepseek-v4-flash"
+    # 模型名归一：官方已下线旧模型并统一为 V4.1 Flash（原生多模态），旧模型名
+    # 由其服务端路由到 V4.1 Flash、按 V4.1 Flash 单价计费。这里对**官方端点**
+    # 做一次性别名迁移（含 deepseek-v4-pro：自 2026-09-14 12:00 起同样路由）。
+    # 仅限官方端点——自定义网关可能恰好重名，不擅自改写；用户仍可手填任意模型名。
+    _default_model = getattr(_dc, "DEFAULT_MODEL", "deepseek-flash")
+    _model = str(cfg.get("model") or "").strip() or _default_model
+    if cfg.get("base_url") == getattr(_dc, "DEFAULT_BASE_URL", "") and hasattr(_dc, "is_legacy_model"):
+        if _dc.is_legacy_model(_model):
+            _new = _dc.resolve_model(_model)
+            logging.info("模型名归一：%s → %s（官方已统一为 V4.1 Flash）", _model, _new)
+            _model = _new
+    cfg["model"] = _model
     # 支持任意 OpenAI 兼容模型名（Profile 自定义端点场景），不再强制回退内置列表
     api_key = cfg.get("api_key")
     cfg["api_key"] = "" if api_key is None else str(api_key).strip()
@@ -234,6 +245,13 @@ def normalize_config(cfg):
 
 
 def load_config(config_path=None):
+    """加载配置（进程内缓存，mtime+size 签名失效）。
+
+    ⚠️ **返回的是进程级共享对象本身**（v3.8.5 性能优化的直接结果：热点路径
+    不再每次深拷贝）。调用方必须视为**只读**——原地修改会污染缓存，让并发线程
+    读到「改了一半」的配置（例如 full_auto 已改、pure_chat 还没改）。
+    需要「读—改—写」时请用 `mutable_config()` 取副本。
+    """
     if config_path is None:
         config_path = DEFAULT_CONFIG_PATH
     sig = None
@@ -254,6 +272,16 @@ def load_config(config_path=None):
         # 避免缓存「缺席」状态导致文件创建后仍读旧默认（首次启动/向导场景）。
         _config_cache_put(key, sig, cfg)
     return cfg
+
+
+def mutable_config(config_path=None):
+    """取一份**可安全修改**的配置副本（深拷贝），供「读—改—写」流程使用。
+
+    背景：`load_config` 返回共享缓存对象，直接 `cfg[k] = v` 会污染缓存，并发
+    读取端可能观察到半更新的配置。所有「改配置再 save_config」的路径都应改用本
+    函数；save_config 会在 finally 里失效缓存，所以保存后不需要手动同步。
+    """
+    return copy.deepcopy(load_config(config_path))
 
 
 def _load_config_uncached(config_path):

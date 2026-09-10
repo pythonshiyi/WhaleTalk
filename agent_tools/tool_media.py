@@ -220,10 +220,11 @@ def ocr_image(path):
     preactivate=(('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'),),
 )
 def image_understand(path, question=""):
-    """用多模态模型理解图片（本地文件或 http(s) 图片 URL）。
+    """用统一多模态模型理解图片（本地文件或 http(s) 图片 URL）。
 
-    自动适配视觉模型：当前客户端模型不支持图片时，自动改用
-    deepseek-v4-flash-vision-exp（同一 API Key / 端点），无需手动切换。
+    统一模型 DeepSeek V4.1 Flash 原生多模态，默认即可看图，无需切换模式。
+    仅当使用自定义 OpenAI 兼容端点且当前模型名明确不支持图片时，才自适应改用
+    VISION_MODEL（同一 API Key / 端点）兜底。
     """
     if not str(path or "").strip():
         return "错误：path 必填"
@@ -317,7 +318,7 @@ def image_understand(path, question=""):
         if not out:
             return "模型未返回有效内容（图片过大或上游暂未响应），请重试或换小图"
         if switched:
-            out += f"\n\n（注：当前模型不支持图片，已自动改用视觉模型 {VISION_MODEL}）"
+            out += f"\n\n（注：当前模型名不支持图片输入，已自动改用统一多模态模型 {VISION_MODEL}）"
         return out
     except Exception as e:
         return f"错误：图片理解失败: {e}"

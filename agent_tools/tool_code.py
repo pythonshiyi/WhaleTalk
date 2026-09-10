@@ -90,11 +90,11 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False):
             "type": "function",
             "function": {
                 "name": "run_python",
-                "description": "在 Python 子进程中执行代码（无限制：可加载全部已安装第三方库、可访问网络、可调用系统能力）；需要新库时先调用 pip_install 安装。同步执行 60 秒超时；若任务需长时间运行（装包/下载/起服务/跑测试），请改用 start_process 后台启动而非此处等待",
+                "description": "在 Python 子进程中执行代码（无限制：可加载全部已安装第三方库、可访问网络、可调用系统能力）；需要新库时先调用 pip_install 安装。同步执行 60 秒超时；若任务需长时间运行（装包/下载/起服务/跑测试），请改用 start_process 后台启动而非此处等待。不支持交互式输入（input/阻塞等待）",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "Python 代码"},
+                        "code": {"type": "string", "description": "完整可执行的 Python 代码（上限 8000 字符）；用 print 输出结果；可 import 任何已安装库；不要写需要交互输入的语句（input），需要交互改用 start_process"},
                     },
                     "required": ["code"],
                 },

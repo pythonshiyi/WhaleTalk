@@ -10,6 +10,11 @@ import time
 
 logger = logging.getLogger("wechat_writer.llm")
 
+# 统一模型（v3.10.0）：DeepSeek V4.1 Flash 原生多模态。此处保留字面量而非 import
+# deepseek_client，是为了维持本模块「可独立运行、不拖累主程序依赖」的定位；
+# 取值与 deepseek_client.DEFAULT_MODEL 保持一致（改一处需同步）。
+_FALLBACK_MODEL = "deepseek-flash"
+
 
 def _find_whaletalk_config():
     """定位鲸语 config.json（项目根 / Documents/WhaleTalk 数据目录）。"""
@@ -56,7 +61,7 @@ def load_api_config(config_path=None):
             return {
                 "api_key": api_key,
                 "base_url": str(full.get("base_url") or "https://api.deepseek.com").strip(),
-                "model": str(full.get("model") or "deepseek-v4-flash").strip(),
+                "model": str(full.get("model") or _FALLBACK_MODEL).strip(),
             }
     except Exception:
         logger.exception("经 config_utils 读取鲸语配置失败，回退直读文件")
@@ -67,11 +72,11 @@ def load_api_config(config_path=None):
                 cfg = json.load(f)
             api_key = str(cfg.get("api_key") or cfg.get("API_KEY") or "").strip()
             base_url = str(cfg.get("base_url") or cfg.get("BASE_URL") or "https://api.deepseek.com").strip()
-            model = str(cfg.get("model") or cfg.get("MODEL") or "deepseek-v4-flash").strip()
+            model = str(cfg.get("model") or cfg.get("MODEL") or _FALLBACK_MODEL).strip()
             return {
                 "api_key": _decrypt(api_key),
                 "base_url": base_url,
-                "model": model or "deepseek-v4-flash",
+                "model": model or _FALLBACK_MODEL,
             }
         except Exception:
             logger.exception("读取鲸语配置失败，回退环境变量")
@@ -79,7 +84,7 @@ def load_api_config(config_path=None):
     return {
         "api_key": os.environ.get("DEEPSEEK_API_KEY", "").strip(),
         "base_url": os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip(),
-        "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash").strip(),
+        "model": os.environ.get("DEEPSEEK_MODEL", _FALLBACK_MODEL).strip(),
     }
 
 

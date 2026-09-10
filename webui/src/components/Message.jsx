@@ -108,7 +108,14 @@ function ThinkBlock({ text, streaming }) {
 }
 
 // 悬停操作条：收藏/固定/引用/分叉/编辑/重新生成（对齐原程序右键菜单）
-export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRegenerate, onContinue }) {
+// 长会话性能（P1-5）：只在 msg 对象变化时重渲染。
+// 流式更新已改为不可变（见 ChatPage.makePatchLast），未变化的消息保持同一对象
+// 引用，因此本 memo 能让每帧增量只重渲染真正变化的最后一条，而不是整条消息列表。
+// 为什么用自定义比较器而非默认浅比较：下面这些回调都是渲染时新建的内联箭头函数，
+// 浅比较会永远判定「变了」而使 memo 失效。只比 msg 是安全的——其余 props 要么由
+// msg 派生（onRegenerate/onContinue 取决于 msg.role / msg.streaming），要么与渲染
+// 无关；回调闭包捕获的索引就是列表 key，msg 引用变化即意味着位置或内容变化。
+function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRegenerate, onContinue }) {
   const [copied, setCopied] = React.useState(false);
 
   const copy = async () => {
@@ -234,3 +241,4 @@ export default function Message({ msg, onResend, onStar, onPin, onQuote, onFork,
     </div>
   );
 }
+export default React.memo(Message, (a, b) => a.msg === b.msg);

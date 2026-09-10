@@ -22,17 +22,19 @@ function useBlockFilter(keys) {
 }
 
 // ── 一键预设（新手懒人）──────────────────────────────
+// 统一模型（v3.10.0）：DeepSeek 已把快速/专家/识图模式合并为统一的智能模式，
+// V4.1 Flash 原生多模态——预设之间只差「思考档 / 输出上限 / 温度」，不再切换模型。
 const PRESETS = [
-  { id: "balanced", name: "🎯 均衡", desc: "Pro + 高思考，全能平衡，日常推荐", cfg: { model: "deepseek-v4-pro", thinking: "high", max_tokens: 16384, temperature: 1.0, top_p: 1.0, json_output: false } },
-  { id: "save", name: "💰 省钱", desc: "Flash + 低思考，token 最省", cfg: { model: "deepseek-v4-flash", thinking: "low", max_tokens: 8192, temperature: 1.0, top_p: 1.0 } },
-  { id: "power", name: "🚀 性能", desc: "Pro + 最大思考，最强推理输出", cfg: { model: "deepseek-v4-pro", thinking: "max", max_tokens: 32768 } },
-  { id: "creative", name: "✍️ 创作", desc: "无思考 + 高温度，写作与创意", cfg: { model: "deepseek-v4-flash", thinking: "none", max_tokens: 16384, temperature: 1.3, top_p: 0.95 } },
+  { id: "balanced", name: "🎯 均衡", desc: "高思考，全能平衡，日常推荐（原生视觉内含）", cfg: { model: "deepseek-flash", thinking: "high", max_tokens: 16384, temperature: 1.0, top_p: 1.0, json_output: false } },
+  { id: "save", name: "💰 省钱", desc: "低思考，token 最省（新价已下调 + KV 缓存更省）", cfg: { model: "deepseek-flash", thinking: "low", max_tokens: 8192, temperature: 1.0, top_p: 1.0 } },
+  { id: "power", name: "🚀 性能", desc: "最大思考，最强推理输出", cfg: { model: "deepseek-flash", thinking: "max", max_tokens: 32768 } },
+  { id: "creative", name: "✍️ 创作", desc: "无思考 + 高温度，写作与创意", cfg: { model: "deepseek-flash", thinking: "none", max_tokens: 16384, temperature: 1.3, top_p: 0.95 } },
 ];
 
 // ── 供应商预设（模型无关：一键切 OpenAI 兼容网关 / 本地 Ollama）──────
 // 只填 base_url + 推荐 model（api_key 由用户自填）。点选即切网关。
 const PROVIDER_PRESETS = [
-  { id: "deepseek", name: "🧬 DeepSeek", base: "https://api.deepseek.com", model: "deepseek-v4-flash", desc: "官方默认 · 深度优化" },
+  { id: "deepseek", name: "🧬 DeepSeek", base: "https://api.deepseek.com", model: "deepseek-flash", desc: "官方统一模型 V4.1 Flash · 深度优化" },
   { id: "openai", name: "🟢 OpenAI", base: "https://api.openai.com/v1", model: "gpt-4o", desc: "填自己的 sk-… Key" },
   { id: "ollama", name: "🦙 Ollama 本地", base: "http://localhost:11434/v1", model: "qwen2.5", desc: "本地免费离线 · 无需 Key" },
   { id: "kimi", name: "🔴 Kimi(月之暗面)", base: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k", desc: "填 Kimi Key" },
@@ -1027,7 +1029,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
             <Row label="API Key" desc={cfg.has_key ? `✅ 已配置 ${cfg.key_hint || ""}（加密存储）· 输入新 Key 可覆盖` : "⚠️ 未配置，粘贴后回车或失焦保存"}>
               <input className="set-select set-combo" type="password" placeholder="sk-…" value={apiKeyDraft ?? ""} onChange={(e) => setApiKeyDraft(e.target.value)} onBlur={(e) => commitApiKey(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
             </Row>
-            <Row label="输出上限" desc={`V4 最大 ${activeModelMeta?.max_output_tokens || 393216}`}>
+            <Row label="输出上限" desc={`模型最大 ${activeModelMeta?.max_output_tokens || 393216}`}>
               <NumInput min={1024} max={393216} step={1024} value={cfg.max_tokens} onChange={(v) => saveField({ max_tokens: v })} />
             </Row>
           </div>

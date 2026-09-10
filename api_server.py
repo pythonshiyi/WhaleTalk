@@ -676,7 +676,9 @@ def _monthly_cost():
         for day, models in data.items():
             if day.startswith(month_key):
                 for model, usage in models.items():
-                    cost += stats_mod.estimate_cost(usage, model)
+                    # 传 day：按用量发生日的价目回算，历史记录不被追溯改价
+                    # （V4.1 Flash 新价自 2026-09-10 12:00 生效）
+                    cost += stats_mod.estimate_cost(usage, model, day=day)
         return round(cost, 2)
     except Exception:
         return 0.0
@@ -1327,7 +1329,7 @@ def _set_dir(body):
     p = os.path.abspath(os.path.expanduser(path))
     if not os.path.isdir(p):
         return None, f"目录不存在：{p}"
-    cfg = config_utils.load_config()
+    cfg = config_utils.mutable_config()   # 读—改—写：必须用副本，勿污染共享缓存
     cfg["active_dir"] = p
     config_utils.save_config(cfg)
     try:
@@ -1917,7 +1919,7 @@ def _record_usage(usage, cfg, body):
 
 
 def _models():
-    """模型详情（官方能力：上下文/输出上限/版本）。"""
+    """模型详情（官方能力：上下文/输出上限/版本/原生视觉）。"""
     import deepseek_client as dc
     out = []
     for name, meta in (dc.MODELS or {}).items():
@@ -1927,12 +1929,54 @@ def _models():
             "version": str(meta.get("version") or ""),
             "max_context_tokens": int(meta.get("max_context_tokens") or 1000000),
             "max_output_tokens": int(meta.get("max_output_tokens") or 393216),
+            # 统一模型 V4.1 Flash 原生多模态：前端可据此提示"可直接传图"
+            "vision": bool(meta.get("vision")),
         })
     return {"models": out}
 
 
+# ── 错误文本脱敏（P0-3）──────────────────────────────────────────
+# 回传前端的错误文案不得含绝对路径 / 文件名行号 / 异常类型全名——这些属内部实现
+# 细节，会泄漏目录结构（如 C:\Users\<你>\Documents\WhaleTalk\… 或站点包路径）。
+# 原文完整保留在服务端日志（logger.exception），排障能力不受影响。
+_ERR_LOC_RE = re.compile(r'File\s+"[^"]*",\s*line\s*\d+', re.I)
+_ERR_PATH_RE = re.compile(
+    r"(?:[A-Za-z]:[\\/]|\\\\)[^\s\"'，。；、）)]+"                       # Windows 盘符 / UNC
+    r"|/(?:home|Users|root|tmp|var|etc|opt|mnt|media|private|srv)"
+    r"(?:/[^\s\"'，。；、）)]*)*",                                        # POSIX 常见绝对路径
+    re.I,
+)
+
+# 路径片段里禁止出现的字符（P2-1）：目录分隔符 / 空字节 / 换行。
+# 不做 ASCII 白名单——插件名可能是中文（如「小红书文案助手」）。
+_NAME_BAD_CHARS = ("/", "\\", "\x00", "\r", "\n")
+
+
+def _valid_name(raw, limit=120):
+    """路径片段消毒（P2-1）：合法返回清洗后的名字，非法返回 None。
+
+    用于「把 URL 片段当注册表键」的端点（工具名 / 插件名 / 进化分支名）。这些
+    下游都是按名字查注册表、**不直接拼路径**，因此不存在真实穿越；此处做统一入口
+    校验：拒绝路径穿越与控制字符、限制长度，避免异常查表与日志注入。
+    """
+    s = str(raw or "").strip()
+    if not s or len(s) > limit:
+        return None
+    if any(ch in s for ch in _NAME_BAD_CHARS) or ".." in s:
+        return None
+    return s
+
+
+def _sanitize_error_text(s, limit=200):
+    """错误文本脱敏：抹掉文件行号与绝对路径，压缩空白，截断到 limit 字。"""
+    t = _ERR_LOC_RE.sub("<内部位置>", str(s or ""))
+    t = _ERR_PATH_RE.sub("<路径>", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t if len(t) <= limit else t[:limit] + "…"
+
+
 def _friendly_error(e):
-    """官方错误码 → 中文可操作提示。"""
+    """官方错误码 → 中文可操作提示；未映射的异常脱敏后回传。"""
     s = str(e)
     low = s.lower()
     if "429" in low or "rate limit" in low or "too many requests" in low:
@@ -1942,7 +1986,8 @@ def _friendly_error(e):
     if "403" in low or "forbidden" in low:
         return "访问被拒绝（403）——检查账户权限或配额"
     if "model does not support image" in low or "does not support image" in low:
-        return "当前模型不支持图片输入——请切换视觉模型 deepseek-v4-flash-vision-exp"
+        return ("当前模型不支持图片输入——请改用统一多模态模型 deepseek-flash"
+                "（官方已把旧模型名路由到它），或在设置中换成支持视觉的模型")
     if "model not found" in low or "invalid model" in low or "model does not exist" in low:
         return "模型不存在或不可用——请检查设置中的模型名（可输入任意 OpenAI 兼容模型）"
     if "reasoning_content" in low and "400" in low:
@@ -1951,7 +1996,9 @@ def _friendly_error(e):
         return "系统推理资源不足，生成被打断——请稍后重试"
     if "content_filter" in low:
         return "输出触发内容过滤策略——请调整表述后重试"
-    return s
+    # 未映射：脱敏后回传（保留可读信息，抹掉路径/文件行号），原文只落服务端日志
+    logger.warning("服务端错误（未映射，原文仅记录日志）: %s", s)
+    return _sanitize_error_text(s)
 
 
 def _dc_wiring_table():
@@ -2287,7 +2334,7 @@ def _services_save(body):
                 em["imap"] = imap
             _atomic_write_json(os.path.join(DATA_DIR, "email_config.json"), em)
         # ── config.json 项（Agent Mail / 图片生成 / 接收端）──
-        cfg = config_utils.load_config()
+        cfg = config_utils.mutable_config()   # 读—改—写：必须用副本
         patch = {}
         if isinstance(body.get("agent_mail"), dict):
             am = body["agent_mail"]
@@ -3002,9 +3049,12 @@ def _start_process_watchdog(interval=180, max_idle=3600):
     interval 最低 30s，防过频；max_idle 可经 config 的 process_max_idle_seconds 覆盖。
     """
     global _process_watchdog_started
-    if _process_watchdog_started:
-        return
-    _process_watchdog_started = True
+    # 并发守卫：/v1/status、服务启动、health 探测等多路径都会走到这里，裸布尔
+    # 检查存在「两个线程同时通过检查 → 起两个守卫循环」的竞态，故用锁包裹。
+    with _PROCESS_WATCHDOG_LOCK:
+        if _process_watchdog_started:
+            return
+        _process_watchdog_started = True
     try:
         import config_utils
         mid = int(config_utils.load_config().get("process_max_idle_seconds") or 0)
@@ -3831,7 +3881,7 @@ def _profiles_post(body):
         p = profiles.get(name)
         if not isinstance(p, dict):
             return None, f"方案不存在：{name}"
-        cfg = config_utils.load_config()
+        cfg = config_utils.mutable_config()   # 读—改—写：必须用副本
         for k in ("api_key", "base_url", "model"):
             v = str(p.get(k) or "").strip()
             if v:
@@ -4066,7 +4116,9 @@ def _update_check():
             return {"has_update": True, "current": cur, "latest": ver, "notes": str(data.get("body") or data.get("notes") or "")[:500]}
         return {"has_update": False, "current": cur, "latest": ver or cur}
     except Exception as e:
-        return {"has_update": False, "current": backup_mod.current_version(), "error": str(e)[:120]}
+        logger.warning("检查更新失败: %s", e)
+        return {"has_update": False, "current": backup_mod.current_version(),
+                "error": _friendly_error(e)}
 
 
 def _ver_gt(a, b):
@@ -4571,7 +4623,9 @@ try:
     import config_utils as _cu
     _cu.DEFAULT_CONFIG_PATH = CONFIG_PATH
 except Exception:
-    pass
+    # 不静默：接线失败会让配置读写落到默认路径（可能不是用户预期的那份），
+    # 属「数据读错地方」级别的问题，必须可观测。
+    logger.exception("接线 config_utils.DEFAULT_CONFIG_PATH 失败，配置可能读写到非预期路径")
 
 
 def _writable_dir(path):
@@ -4637,7 +4691,9 @@ try:
     import user_tools as _user_tools_mod
     _user_tools_mod.DEFAULT_USER_TOOLS_PATH = USER_TOOLS_PATH
 except Exception:
-    pass
+    # 不静默：接线失败会让 Profile / 自定义工具读写到默认路径，用户切换的方案
+    # 与自定义工具可能看起来像是丢了，排障时必须能从日志定位。
+    logger.exception("接线 profiles/user_tools 数据路径失败，方案与自定义工具可能读写到非预期路径")
 
 _MIME = {
     ".html": "text/html; charset=utf-8",
@@ -5023,6 +5079,24 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _fail(self, code, exc, error_key="error", **extra):
+        """统一错误出口（P0-3）：异常详情只落服务端日志，前端拿脱敏文案。
+
+        此前多处直接回 `{"error": str(e)}`，会把绝对路径、模块名、文件名行号
+        暴露给浏览器；改用本方法后，排障靠日志、泄漏靠脱敏。
+        """
+        logger.exception("请求处理失败 (HTTP %s)", code)
+        payload = {error_key: _friendly_error(exc)}
+        payload.update(extra)
+        self._json(code, payload)
+
+    def _fail_soft(self, exc, **extra):
+        """软失败（HTTP 200 + ok:False，如大脑/记忆读取）：同样只回脱敏文案。"""
+        logger.exception("请求处理失败（软失败）")
+        payload = {"ok": False, "error": _friendly_error(exc)}
+        payload.update(extra)
+        self._json(200, payload)
+
     def _read_body(self, max_len=None):
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
@@ -5046,6 +5120,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.send_header("Transfer-Encoding", "chunked")
+        # 与 _json 保持同一 CORS 策略：此前 SSE 漏发 CORS 头，跨源调试场景下
+        # 浏览器会拦掉整个流（同源自洽所以线上没暴露，但策略应统一）。
+        self._cors_headers()
         self.end_headers()
 
     def _sse_send(self, event, data):
@@ -5103,12 +5180,16 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         except Exception as e:
             logger.exception("静态文件服务失败: %s", full)
-            self._json(500, {"error": str(e)})
+            self._fail(500, e)
 
     # ── 会话读取 ─────────────────────────────────
     def _safe_sid(self, sid):
         import re
         return re.sub(r"[^0-9a-zA-Z_-]", "", str(sid or ""))[:64]
+
+    def _safe_name(self, raw, limit=120):
+        """路径片段消毒（P2-1）：非法返回 None。逻辑见模块级 `_valid_name`。"""
+        return _valid_name(raw, limit)
 
     def _list_sessions(self):
         _ensure_session_index()
@@ -5358,7 +5439,7 @@ class _Handler(BaseHTTPRequestHandler):
                 getattr(self, handler)()
             except Exception as e:
                 logger.exception("GET %s 失败", self.path)
-                self._json(500, {"error": _friendly_error(e), "code": 500, "detail": str(e)})
+                self._fail(500, e, code=500)
         else:
             # 静态资源（WebUI dist/）
             self._serve_static(self.path)
@@ -5506,7 +5587,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     @_get_route(("pre", "/v1/tools/", ""))
     def _g_v1_tools_item(self):
-        name = self.path[len("/v1/tools/"):]
+        name = self._safe_name(self.path[len("/v1/tools/"):])
+        if name is None:
+            self._json(400, {"error": "非法的工具名"})
+            return
         schema = _tool_schema(name)
         if schema is None:
             self._json(404, {"error": "tool not found"})
@@ -5547,7 +5631,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             size = os.path.getsize(path)
         except OSError as e:
-            self._json(500, {"error": str(e)})
+            self._fail(500, e)
             return
         max_bytes = 60 * 1024 * 1024  # 60MB 上限（防止超大文件撑爆内存）
         if size > max_bytes:
@@ -5571,7 +5655,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         except Exception as e:
             logger.exception("raw 文件返回失败: %s", path)
-            self._json(500, {"error": str(e)})
+            self._fail(500, e)
 
 
     @_get_route("/v1/tasks")
@@ -5586,7 +5670,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     @_get_route(("pre", "/v1/evolutions/", ""))
     def _g_v1_evolutions_item(self):
-        name = self.path[len("/v1/evolutions/"):]
+        name = self._safe_name(self.path[len("/v1/evolutions/"):])
+        if name is None:
+            self._json(400, {"error": "非法的进化分支名"})
+            return
         detail = _evolution_detail(name)
         if detail is None:
             self._json(404, {"error": "evolution not found"})
@@ -5605,7 +5692,7 @@ class _Handler(BaseHTTPRequestHandler):
             import brain_api
             self._json(200, {"ok": True, "brain": brain_api.brain_status()})
         except Exception as e:  # noqa: BLE001
-            self._json(200, {"ok": False, "brain": None, "error": str(e)})
+            self._fail_soft(e, brain=None)
 
 
     @_get_route(("qpath", "/v1/brain/memories"))
@@ -5626,7 +5713,7 @@ class _Handler(BaseHTTPRequestHandler):
             items.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
             self._json(200, {"ok": True, "items": items[:limit], "total": len(bk.load_memories())})
         except Exception as e:  # noqa: BLE001
-            self._json(200, {"ok": False, "error": str(e)})
+            self._fail_soft(e)
 
     @_get_route(("qpath", "/v1/brain/unified-memories"))
     def _g_v1_brain_unified_memories(self):
@@ -5652,7 +5739,7 @@ class _Handler(BaseHTTPRequestHandler):
                 items = ms.search_all(q, limit) if q else ms.unified_entries()[:limit]
             self._json(200, {"ok": True, "query": q, "items": items, "count": len(items)})
         except Exception as e:  # noqa: BLE001
-            self._json(200, {"ok": False, "error": str(e)})
+            self._fail_soft(e)
 
 
     @_get_route("/v1/situation")
@@ -5688,7 +5775,10 @@ class _Handler(BaseHTTPRequestHandler):
     @_get_route(("pre", "/v1/plugins/", ""))
     def _g_v1_plugins_item(self):
         import urllib.parse as _up
-        name = _up.unquote(self.path[len("/v1/plugins/"):])
+        name = self._safe_name(_up.unquote(self.path[len("/v1/plugins/"):]))
+        if name is None:
+            self._json(400, {"error": "非法的插件名"})
+            return
         detail = _plugin_detail(name)
         if detail is None:
             self._json(404, {"error": "plugin not found"})
@@ -5827,7 +5917,7 @@ class _Handler(BaseHTTPRequestHandler):
             result = brain_api.brain_action(action, body)
             self._json(200, result)
         except Exception as e:  # noqa: BLE001
-            self._json(500, {"error": str(e)})
+            self._fail(500, e)
 
 
     @_post_route("/v1/brain/memory")
@@ -5865,7 +5955,7 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._json(400, {"error": f"未知 action: {act}"})
         except Exception as e:  # noqa: BLE001
-            self._json(500, {"error": str(e)})
+            self._fail(500, e)
 
 
     @_post_route("/v1/deps/install")
@@ -5960,7 +6050,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     @_post_route(("pre", "/v1/tools/", "/invoke"))
     def _p_v1_tools_invoke(self):
-        name = self.path[len("/v1/tools/"):-len("/invoke")]
+        name = self._safe_name(self.path[len("/v1/tools/"):-len("/invoke")])
+        if name is None:
+            self._json(400, {"error": "非法的工具名"})
+            return
         body = self._read_body()
         if body is None:
             self._json(400, {"error": "invalid json or body too large"})
@@ -5996,7 +6089,7 @@ class _Handler(BaseHTTPRequestHandler):
             )
             self._json(200, {"result": str(result)})
         except Exception as e:
-            self._json(500, {"error": str(e)})
+            self._fail(500, e)
 
 
     @_post_route("/v1/cleanup")
@@ -6320,10 +6413,10 @@ class _Handler(BaseHTTPRequestHandler):
                 detail = (sapi_err or "合成失败")
                 if not edge_err and "语音包" in detail:
                     detail = "本机无中文离线语音包且在线音色不可用，请安装 edge-tts、piper-tts 或中文语音包后重试"
-            self._json(500, {"error": detail})
+            self._json(500, {"error": _sanitize_error_text(detail)})
         except Exception as e:
             logger.exception("TTS 合成失败")
-            self._json(500, {"error": str(e)})
+            self._fail(500, e)
 
 
     @_post_route("/v1/tts/download_piper")
@@ -6374,7 +6467,7 @@ class _Handler(BaseHTTPRequestHandler):
             if mode not in ("task", "dialog"):
                 self._json(400, {"error": "mode 必须是 task 或 dialog"})
                 return
-            cfg = config_utils.load_config()
+            cfg = config_utils.mutable_config()   # 读—改—写：必须用副本
             cfg["full_auto"] = mode == "task"
             cfg["pure_chat"] = mode == "dialog"
             config_utils.save_config(cfg)
@@ -6383,7 +6476,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "mode": mode})
         except Exception as e:
             logger.exception("POST /v1/mode 失败")
-            self._json(500, {"error": str(e)})
+            self._fail(500, e)
 
 
     @_post_route("/v1/respond")
@@ -6407,7 +6500,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             import config_utils
-            cfg = config_utils.load_config()
+            cfg = config_utils.mutable_config()   # 读—改—写：必须用副本（勿污染共享缓存）
             for k, typ in (("model", str), ("thinking", str), ("scenario", str), ("max_tokens", int),
                    ("tools_enabled", bool), ("privacy_mode", bool), ("system_prompt", str),
                    ("temperature", float), ("top_p", float), ("seed", int), ("json_output", bool),
@@ -6496,7 +6589,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True})
         except Exception as e:
             logger.exception("POST /v1/config 失败")
-            self._json(500, {"error": str(e)})
+            self._fail(500, e)
 
 
     @_post_route("/v1/config/reset")
@@ -6776,7 +6869,7 @@ class _Handler(BaseHTTPRequestHandler):
             getattr(self, handler)()
         except Exception as e:
             logger.exception("POST %s 失败", self.path)
-            self._json(500, {"error": _friendly_error(e), "code": 500, "detail": str(e)})
+            self._fail(500, e, code=500)
 
     def _valid_messages(self, body):
         messages = body.get("messages") or []
@@ -7271,7 +7364,7 @@ if __name__ == "__main__":
     import secrets
     try:
         import config_utils
-        cfg = config_utils.load_config()
+        cfg = config_utils.mutable_config()   # 读—改—写：必须用副本
         tok = str(cfg.get("inbound_token") or "").strip()
         if not tok:
             tok = "wt_" + secrets.token_hex(16)
@@ -7288,7 +7381,9 @@ if __name__ == "__main__":
         with open(os.path.join(DATA_DIR, ".api_token"), "w", encoding="utf-8") as f:
             f.write(token)
     except Exception:
-        pass
+        # 不静默：.api_token 是同机其它进程（启动器/CLI）发现本服务的凭据来源，
+        # 写失败会表现为「服务在跑但别的组件连不上」，需在日志里留痕。
+        logger.exception("写入 .api_token 失败，同机其它组件可能无法自动发现本服务凭据")
     print(f"WhaleTalk API 已启动: http://127.0.0.1:{port}")
     print(f"Token: {token}")
     try:

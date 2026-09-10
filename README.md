@@ -8,9 +8,9 @@
 
 > **中文为主 · English follows**（中文完整介绍 + 英文简版）
 
-**鲸语 WhaleTalk v3.9.0** 是一个为 DeepSeek V4 API 深度优化的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
+**鲸语 WhaleTalk v3.10.0** 是一个集成 DeepSeek V4.1 Flash（原生多模态统一模型）的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
 
-*WhaleTalk v3.9.0 is a Windows AI agent deeply optimized for the DeepSeek V4 API — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
+*WhaleTalk v3.10.0 is a Windows AI agent built on the unified DeepSeek V4.1 Flash model — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
 
 > 🌐 **官网 / Website：**https://whaletalk.top/
 
@@ -31,6 +31,18 @@
 
 ---
 
+## 🆕 v3.10.0 更新：接入 DeepSeek V4.1 Flash 统一模型
+
+**DeepSeek 已将全部模型升级为单一原生多模态模型，本版完成全面适配：**
+
+- **统一模型集成**：默认模型改为 `deepseek-flash`（DeepSeek V4.1 Flash）——官方把「快速模式 / 专家模式 / 识图模式」合并为统一的智能模式，模型自行判断任务复杂度、检测到图片输入时激活视觉能力，**用户无需再手动切换模型或模式**
+- **视觉能力归一**：视觉不再是"另一个模型"——看图、截屏自查、图表理解、视觉定位点击全部走同一模型；`is_vision_model` 恒为真，原先的"自动切换到视觉模型"降级为自定义端点兜底
+- **旧模型名自动迁移**：`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` / `deepseek-v4.1-flash-expires-on-0910` / `deepseek-v4-pro` 启动时自动归一到 `deepseek-flash`（仅官方端点；自定义网关的模型名一律不动）
+- **定价同步下调**：按新价表计费（高峰 命中 **0.04** / 未命中 **2.0** / 输出 **8.0** 元每百万 tokens，空闲减半）；历史用量按**发生日价目**回算，不被追溯改价
+- **提示词与前端适配**：系统提示词新增"原生多模态"能力条目；设置页一键预设改为只差「思考档 / 输出上限 / 温度」，不再切换模型
+
+---
+
 ## 🎉 v3.0 重大更新
 
 **从 Tkinter 桌面版重构为 Web 架构（重大版本）：**
@@ -45,9 +57,9 @@
 
 ## 🧠 产品介绍
 
-以「**Windows 本地 + DeepSeek V4 云推理**」为设计原点，把 V4 的 Agent 能力、多模态视觉、1M 长上下文、峰谷定价、前缀缓存优势转化为「开箱即用」的桌面体验：
+以「**Windows 本地 + DeepSeek V4.1 Flash 云推理**」为设计原点，把统一模型的 Agent 能力、**原生多模态视觉**、1M 长上下文、峰谷定价、前缀缓存优势转化为「开箱即用」的桌面体验：
 
-- **看得见**：🖼 多模态视觉（图片理解/图表阅读/截图修复/OCR/扫码、屏幕截图）
+- **看得见**：🖼 原生多模态视觉（图片理解/图表阅读/截图修复/OCR/扫码、屏幕截图）——无需切换模型或模式
 - **说得出**：💬 对话/思考模式/语音合成（TTS：Piper 本地离线 / Edge 在线 / SAPI，**自动朗读可逐句流式跟读**）/朗读
 
 > 🎙 **Piper 本地语音**：设置 → 🔌 可选能力 →「Piper 本地语音」一键安装——自动装齐依赖并下载中文语音模型（官方源超时自动回退国内镜像），完成后**断网也能本地离线朗读**，全程无需手工配置。
@@ -59,13 +71,16 @@
 
 ## 🖥 核心功能
 
-### 🖼 多模态视觉 Agent
+### 🖼 原生多模态视觉 Agent
 
-- **视觉模型支持**：`deepseek-v4-flash-vision-exp`（图片输入，自动切换/返回）· **`deepseek-v4.1-flash-expires-on-0910`**（DeepSeek V4.1 Flash 内测：**原生多模态**，聊天模型直接看图，更快更省）
+- **统一模型 `deepseek-flash`**：即 **DeepSeek V4.1 Flash**——全新 Causal-Encoder-Decoder 非对称 MoE（552B 总参数 / 输入激活 8B / 输出激活 16B），**原生多模态视觉理解**，聊天模型直接看图，无需切换模式；KV Cache 显著压缩（成本更低、更快）
+- **旧模型名自动归一**：官方已下线 V4 Flash / V4 Flash Vision Exp，并把 `deepseek-v4-pro` 一并路由到 V4.1 Flash——本产品启动时会把历史配置里的旧模型名自动迁移到 `deepseek-flash`，费用口径同步（旧名按 V4.1 Flash 单价计费）
 - **拖拽/粘贴/按钮三方传图**（JPEG/PNG/GIF/WebP，≤32MB）
 - **屏幕视觉闭环**：`screen_see` 截图 + 图表理解，AI"看屏幕-自查-修正"
 - **图像理解**：`image_understand` / `chart_read` / `screenshot_to_html` / `scan_read` / `debug_screenshot` / `image_batch`
 - **视觉自审**：生成图片/图表后自动"看图审阅"，默认关节约成本
+
+> 💰 **定价（2026-09-10 12:00 起）**：元/百万 tokens，峰谷定价（空闲时段为高峰价的一半）。高峰：缓存命中输入 **0.04** · 未命中输入 **2.0** · 输出 **8.0**；空闲：**0.02 / 1.0 / 4.0**。高峰时段为工作日 9:00-12:00 与 14:00-18:00，其余（含周末）均为空闲时段。
 
 ### 🖥 Web 界面（v3.0 新）
 
@@ -203,7 +218,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 
 1. 在 https://platform.deepseek.com 申请 API Key
 2. 启动后在设置页「API Key」粘贴保存（或编辑 `config.json`）
-3. 选择 `deepseek-v4-flash-vision-exp` 启用图像输入；「strict 工具模式（Beta）」自动启用 `/beta`
+3. 模型填 `deepseek-flash`（默认值，原生支持图像输入，无需切换模式）；「strict 工具模式（Beta）」自动启用 `/beta`
 
 ## 🕘 更新策略
 
@@ -232,10 +247,11 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 
 ## 🔒 安全与隐私
 
-安全模型分层——**默认自由**，限制全部来自用户配置而非程序默认强加：
+安全模型分层——**默认自由**，限制基本来自用户配置；程序只内置一条网络底线（见下）：
 
 - **默认自由**：默认任务模式（`full_auto`）零审批、零白名单——AI 可调用全部 147 项工具；`run_python`/`run_command` 等同本机直接执行（无沙箱/无静态拦截）
 - **黑名单（唯一限制来源）**：用户在权限页添加 shell 命令 / 文件路径 / 网络主机黑名单；出厂默认仅预置云元数据地址 `169.254.169.254` 一项；`blocklist_enabled` 一键全放行开关（关闭连黑名单也不拦）；旧 `whitelist` 严格模式与高危审批清单（`approval_actions`）保留为可选回退/加严路径，均非默认
+- **网络底线（唯一程序内置项）**：SSRF 硬底线默认开启——私网段（`10/8`、`172.16/12`、`192.168/16`）、链路本地（`169.254.0.0/16`，含云元数据）、保留段一律拦截，域名先做 DNS 解析（防重绑定）；回环默认放行（本地开发需要），可置 `network.allow_loopback=false` 加严。理由：模型可自主抓取任意 URL 且抓取内容会回灌上下文，仅靠用户黑名单盖不住「注入 → 诱导访问内网」这条链路
 - **硬限额（防误伤兜底）**：读取/下载/响应体大小与工具超时上限（如单文件下载 ≤200MB、API 响应 ≤500KB、`run_python` ≤10s）；写操作自动快照可恢复；删除默认进回收站
 - **数据不出本机**：仅 127.0.0.1 监听 + Bearer token；API Key DPAPI 加密存储；隐私模式可关快照/会话/记忆/统计
 - 详见 [SECURITY.md](SECURITY.md)
@@ -252,8 +268,9 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 
 ## English Introduction
 
-WhaleTalk v3.9.0 is a Windows AI agent optimized for DeepSeek V4 — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745), served from the browser with a system tray resident process.
+WhaleTalk v3.10.0 is a Windows AI agent on the unified DeepSeek V4.1 Flash — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745), served from the browser with a system tray resident process.
 
+- **v3.10**: unified DeepSeek V4.1 Flash model (native multimodal, no mode switching), auto-migration of legacy model names, new peak/off-peak pricing
 - **v3.0 highlights**: 3 themes (starfield/deepsea/arctic), console sidebar (model/thinking/scene/appearance), artifact one-click access, unified `web_app.py` entry (desktop/browser/headless)
 - **Capabilities**: 147 Agent tools (files/browser/DB/mail/media/desktop RPA/snapshots), vision (image/OCR/screenshots), speech (whisper/TTS), self-evolution (proposals/failure patterns), WeChat article writer
 - **Stack**: Python 3.9+ + React (Vite) + local API (openai/httpx) · Windows 10/11
@@ -266,7 +283,7 @@ python web_app.py          # Browser + tray resident (default)
 python web_app.py --server # Headless API at http://127.0.0.1:8745/
 ```
 
-Get an API Key at https://platform.deepseek.com. Select `deepseek-v4-flash-vision-exp` for image input.
+Get an API Key at https://platform.deepseek.com. The default model `deepseek-flash` (V4.1 Flash) handles image input natively.
 
 **Updates**: GitHub Releases (auto-check in-app); backups before update; migration old configs.
 

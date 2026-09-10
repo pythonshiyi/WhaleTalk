@@ -1,5 +1,6 @@
 import React from "react";
 import Message from "./Message.jsx";
+import { findLastToolCard, makePatchLast } from "../msgUpdates.js";
 import Composer from "./Composer.jsx";
 import SessionList from "./SessionList.jsx";
 import ContextPanel from "./ContextPanel.jsx";
@@ -146,13 +147,26 @@ function useBackendChat({
     const isContinue = continueRef && continueRef.current && continueRef.current.active;
     const continueIdx = isContinue ? continueRef.current.idx : -1;
 
-    let msg = null;
+    // 非续写分支统一走不可变更新（见 makePatchLast 的说明）
+    const patchLast = makePatchLast(updateMsgs);
+
+    // 取「当前流式消息」的最新快照。
+    // 改用不可变更新后，闭包里的 msg 永远停在初始对象（内容为空），不能再拿它
+    // 去落盘；而 updateMsgs 会同步更新 msgsRef 镜像，故从镜像取最后一条即为终态。
+    const currentMsg = () => {
+      const arr = msgsRef.current || [];
+      return arr.length ? arr[arr.length - 1] : null;
+    };
+
     if (isContinue) {
       updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, streaming: true } : x)));
     } else {
       const t0 = nowClock();
-      msg = { role: "assistant", think: "", tools: [], text: "", streaming: true, time: t0 };
-      updateMsgs((m) => [...m, { role: "user", text: userText, time: t0 }, msg]);
+      // 不再保留局部 msg 变量：后续一律经 patchLast 不可变更新，
+      // 落盘用 currentMsg() 从实时镜像取终态（见上）。
+      updateMsgs((m) => [...m,
+        { role: "user", text: userText, time: t0 },
+        { role: "assistant", think: "", tools: [], text: "", streaming: true, time: t0 }]);
     }
     if (!stopSignalRef.current || stopSignalRef.current.signal.aborted) stopSignalRef.current = new AbortController();
 
@@ -167,9 +181,11 @@ function useBackendChat({
       if (isContinue) {
         updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, think: (x.think || "") + b.think, text: (x.text || "") + b.text } : x)));
       } else {
-        msg.think += b.think;
-        msg.text += b.text;
-        updateMsgs((m) => [...m]);
+        patchLast((x) => ({
+          ...x,
+          think: (x.think || "") + b.think,
+          text: (x.text || "") + b.text,
+        }));
       }
       if (b.gen) setGenState({ on: true, text: b.gen });
     };
@@ -213,7 +229,8 @@ function useBackendChat({
         try {
           maybeAutoReadOnce();
         } catch (e) { silentWarn(e, "ChatPage"); }
-        onFinished && onFinished({ userText, msg, ok, isContinue });
+        // msg 传实时镜像的最后一条（不可变更新后闭包 msg 已非终态）
+        onFinished && onFinished({ userText, msg: currentMsg(), ok, isContinue });
       };
       try {
         const history = isContinue
@@ -253,56 +270,49 @@ function useBackendChat({
               if (isContinue) {
                 updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, tools: [...(x.tools || []), { tool: name, args: parsed, status: "running" }] } : x)));
               } else {
-                msg.tools.push({ tool: name, args: parsed, status: "running" });
-                updateMsgs((m) => [...m]);
+                patchLast((x) => ({ ...x, tools: [...(x.tools || []), { tool: name, args: parsed, status: "running" }] }));
               }
               setGenState({ on: true, text: "⚙ 正在执行「" + name + "」…" });
             },
             onTool: ({ name, result }) => {
               if (!alive || stopRef.current) return;
+              // 工具完成：把「最后一张 running 卡片」替换为 done。
+              // 注意必须替换对象而非改 card.status——card 是 state 内 tools 数组里
+              // 的共享对象，原地改会污染旧快照（isContinue 分支此前即如此）。
+              const finishTools = (tools) => {
+                const out = [...(tools || [])];
+                const res = formatToolResult(result).slice(0, 8000);
+                const idx = findLastToolCard(out, name, "running");
+                if (idx >= 0) out[idx] = { ...out[idx], status: "done", result: res };
+                else out.push({ tool: name, result: res, status: "done" });
+                return out;
+              };
               if (isContinue) {
-                updateMsgs((m) => m.map((x, i) => {
-                  if (i !== continueIdx) return x;
-                  const tools = [...(x.tools || [])];
-                  const card = [...tools].reverse().find((t) => t.tool === name && t.status === "running");
-                  if (card) {
-                    card.status = "done";
-                    card.result = formatToolResult(result).slice(0, 8000);
-                  } else {
-                    tools.push({ tool: name, result: formatToolResult(result).slice(0, 8000), status: "done" });
-                  }
-                  return { ...x, tools };
-                }));
+                updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, tools: finishTools(x.tools) } : x)));
               } else {
-                const card = [...msg.tools].reverse().find((t) => t.tool === name && t.status === "running");
-                if (card) {
-                  card.status = "done";
-                  card.result = formatToolResult(result).slice(0, 8000);
-                } else {
-                  msg.tools.push({ tool: name, result: formatToolResult(result).slice(0, 8000), status: "done" });
-                }
-                updateMsgs((m) => [...m]);
+                patchLast((x) => ({ ...x, tools: finishTools(x.tools) }));
               }
             },
             onToolDuration: ({ name, duration }) => {
               if (!alive || stopRef.current) return;
+              // 补写耗时：同样替换对象，不原地改卡片（非续写分支此前甚至不触发更新，
+              // 耗时只能等下一次重渲染才出现——现改为立即不可变落地）
+              const withDuration = (tools) => {
+                const out = [...(tools || [])];
+                const idx = findLastToolCard(out, name, "done");
+                if (idx >= 0) out[idx] = { ...out[idx], duration };
+                return out;
+              };
               if (isContinue) {
-                updateMsgs((m) => m.map((x, i) => {
-                  if (i !== continueIdx) return x;
-                  const tools = [...(x.tools || [])];
-                  const card = [...tools].reverse().find((t) => t.tool === name && t.status === "done");
-                  if (card) card.duration = duration;
-                  return { ...x, tools };
-                }));
+                updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, tools: withDuration(x.tools) } : x)));
               } else {
-                const card = [...msg.tools].reverse().find((t) => t.tool === name && t.status === "done");
-                if (card) card.duration = duration;
+                patchLast((x) => ({ ...x, tools: withDuration(x.tools) }));
               }
             },
             onUsage: (u) => {
               if (alive) {
                 if (isContinue) updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, usage: u } : x)));
-                else msg.usage = u;
+                else patchLast((x) => ({ ...x, usage: u }));
               }
             },
             onCompressed: (ev) => {
@@ -337,7 +347,7 @@ function useBackendChat({
               setBusy(false);
               setGenState({ on: false, text: "" });
               try {
-                onFinished?.({ userText, msg, ok: false, isContinue, error: String(e) });
+                onFinished?.({ userText, msg: currentMsg(), ok: false, isContinue, error: String(e) });
               } catch (err2) { silentWarn(err2, "ChatPage"); }
             },
           },
@@ -747,7 +757,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         continueRef.current = { active: false, idx: -1 };
         return;
       }
-      // 用实参 msg（流式引用对象，内容完整）而非闭包 msgs（陈旧/可能为空）保存会话
+      // 用实参 msg（由 currentMsg() 从实时镜像取的流式终态）而非闭包 msgs（陈旧/可能为空）保存会话
       if (!msg || msg.role !== "assistant" || !msg.text) return;
       try {
         const calls = msg.tools.map((t, i) => ({

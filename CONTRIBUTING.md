@@ -47,7 +47,7 @@ python tools/validate_tools.py         # smart_tools 全链路回归（能力地
 
 - 新增工具必须同步维护六层数据（或引入 `@tool()` 装饰器后只写一处）：`TOOLS` schema、实现函数、`TOOL_CALL_MAP`、`_TOOL_ACTION_PHRASES`、`TOOL_GROUPS`、`_PREACTIVATE_HINTS`
 - 新增工具默认**零审批**（blacklist 主导，`approval_actions` 默认空）。仅当设计上确需让用户可选加严时，才把工具名登记入 `permissions` 的 `approval_actions`（blacklist 模式）或 `ACTION_TOOLS`（旧 whitelist 模式），并在变更说明中写明理由；否则不要登记
-- 工具描述 ≤130 字符（smart 模式 compact 会截断超长描述）、数组参数必须带 `items`（缺则 API 400）
+- 工具描述要完整说清「做什么 + 关键约束」，**没有长度上限**——smart 模式已不再截断描述（描述是工具能力的一部分，不得为省 token 删减）；参数描述必须 100% 覆盖；数组参数必须带 `items`（缺则 API 400）
 - 当前 CI（`.github/workflows/ci.yml`）执行 ruff 关键规则 + 入口编译检查 + WebUI 构建；仓库暂未包含 pytest 测试资产，**欢迎补充 `tests/` 回归套件并接入 CI**
 
 ## 提交信息 / Commit Messages

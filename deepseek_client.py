@@ -228,7 +228,43 @@ def _tool_executor_for(name):
     return _LONG_TOOL_EXECUTOR if name in _LONG_TOOL_NAMES else _TOOL_EXECUTOR
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
-DEFAULT_MODEL = "deepseek-v4-flash"
+
+# ── 统一模型（v3.10.0）──────────────────────────────────────────────
+# 2026-09-10 DeepSeek 发布 V4.1 Flash：全新 Causal-Encoder-Decoder 非对称 MoE
+# 结构（552B 总参数 / 输入激活 8B / 输出激活 16B），具备**原生多模态视觉理解**，
+# 在基准测试中全面超越 V4 Pro，且 KV Cache 大幅压缩（对 HBM 需求降至上代 1/4）。
+# 官方同时把「快速模式 / 专家模式 / 识图模式」合并为统一的智能模式——模型自行
+# 判断任务复杂度并激活视觉能力，用户无需再手动切换。
+# 因此本产品收敛为**单一模型集成**：deepseek-flash。
+MODEL_ID = "deepseek-flash"
+
+DEFAULT_MODEL = MODEL_ID
+
+# 官方已下线旧模型名并临时路由到 V4.1 Flash（deepseek-v4-pro 自 2026-09-14 12:00
+# 起同样路由，并按 V4.1 Flash 单价计费）。这里做**本地等价归一**，使历史配置、
+# 存量会话与直调代码传入旧名时，元数据 / 视觉判定 / 计费口径与新模型完全一致。
+LEGACY_MODEL_ALIASES = {
+    "deepseek-v4-flash": MODEL_ID,
+    "deepseek-v4-flash-vision-exp": MODEL_ID,
+    "deepseek-v4.1-flash-expires-on-0910": MODEL_ID,
+    "deepseek-v4-pro": MODEL_ID,
+}
+
+
+def resolve_model(model):
+    """把旧模型名归一到当前统一模型；未知/自定义模型名原样返回。
+
+    只映射官方已声明路由到 V4.1 Flash 的旧名，**绝不改写**用户自定义的
+    OpenAI 兼容模型（Ollama / Kimi / 智谱 / 通义 等自填模型名）。
+    """
+    name = str(model or "").strip()
+    return LEGACY_MODEL_ALIASES.get(name, name)
+
+
+def is_legacy_model(model):
+    """是否为已被官方路由到 V4.1 Flash 的旧模型名（用于提示与迁移）。"""
+    return str(model or "").strip() in LEGACY_MODEL_ALIASES
+
 
 SCENARIOS = {
     "通用": {"temperature": 1.0, "top_p": 1.0, "reasoning_effort": "high"},
@@ -245,38 +281,20 @@ SCENARIOS = {
 }
 
 MODELS = {
-    "deepseek-v4-flash": {
-        "label": "DeepSeek V4 Flash",
-        "version": "DeepSeek-V4-Flash-0731",
+    MODEL_ID: {
+        "label": "DeepSeek V4.1 Flash",
+        "version": "DeepSeek-V4.1-Flash",
         "max_context_tokens": 1_000_000,
         "max_output_tokens": 384 * 1024,
-    },
-    "deepseek-v4-pro": {
-        "label": "DeepSeek V4 Pro",
-        "version": "DeepSeek-V4-Pro-0813",
-        "max_context_tokens": 1_000_000,
-        "max_output_tokens": 384 * 1024,
-    },
-    "deepseek-v4-flash-vision-exp": {
-        "label": "DeepSeek V4 Flash Vision (实验)",
-        "version": "DeepSeek-V4-Flash-Vision-Exp",
-        "max_context_tokens": 1_000_000,
-        "max_output_tokens": 384 * 1024,
+        # 原生多模态：图片输入无需切换专用视觉模型
         "vision": True,
-    },
-    # DeepSeek V4.1 Flash 内测中间版：新模型结构 · 原生多模态 · 更快更省
-    # base_url 不变，仅设模型名即可；计费与 deepseek-v4-flash 相同
-    "deepseek-v4.1-flash-expires-on-0910": {
-        "label": "DeepSeek V4.1 Flash (内测 09-10)",
-        "version": "DeepSeek-V4.1-Flash-Beta",
-        "max_context_tokens": 1_000_000,
-        "max_output_tokens": 384 * 1024,
-        "vision": True,  # 原生多模态：图片输入无需切换专用视觉模型
         "v41": True,
     },
 }
 
-VISION_MODEL = "deepseek-v4-flash-vision-exp"
+# 统一模型原生多模态，故「视觉模型」与默认模型是同一个。
+# 保留该常量名以兼容历史调用方（tool_media / chat 的自适应兜底）。
+VISION_MODEL = MODEL_ID
 
 # 图片内联限制（官方图像理解文档）：单张 ≤ 32 MiB，请求体 ≤ 48 MiB。
 # base64 开销 4/3，留出文本/工具 schema 余量后按 40 MiB 计入。
@@ -297,12 +315,19 @@ IMAGE_INLINE_HINT = (
 
 
 def is_vision_model(model):
-    """判断模型是否支持图片输入（视觉模型）。"""
-    if not model:
+    """判断模型是否支持图片输入。
+
+    统一模型 V4.1 Flash **原生多模态** → 恒为支持。旧模型名经别名归一后同样为
+    支持（官方已把它们路由到 V4.1 Flash）。未收录的自定义 OpenAI 兼容模型沿用
+    名称启发式：含 "vision" 视为支持，否则视为不支持（由调用方走自适应兜底）。
+    """
+    name = str(model or "").strip()
+    if not name:
         return False
-    if "vision" in str(model).lower():
-        return True
-    return bool((MODELS.get(model) or {}).get("vision"))
+    meta = MODELS.get(resolve_model(name))
+    if meta is not None:
+        return bool(meta.get("vision"))
+    return "vision" in name.lower()
 
 
 def _detect_image_mime(buf):
@@ -345,7 +370,7 @@ def embed_message_images(messages, model, _log=None, detail="auto"):
             return messages
         if not is_vision_model(model):
             raise ValueError(
-                f"当前模型 {model} 不支持图片输入，请切换到视觉模型 {VISION_MODEL}"
+                f"当前模型 {model} 不支持图片输入，请改用统一多模态模型 {VISION_MODEL}"
             )
         out = []
         total_b64 = 0
@@ -430,9 +455,10 @@ THINKING_MODES = {
 }
 
 EFFORT_BY_THINKING = {
-    # 官方 effort 映射表（deepseek-v4-flash / pro 一致）：
+    # 官方 effort 映射表（统一模型 DeepSeek V4.1 Flash）：
     #   low→low · medium→high · high→high · xhigh→high · max→max
     # 全部档位 API 均接受；UI 如实展示档位与映射结果。
+    # V4.1 Flash 自身会按任务难度自适应调整处理能力，本表用于显式指定上限。
     "low": "low",
     "medium": "high",
     "high": "high",
@@ -3555,44 +3581,65 @@ def build_smart_hint(loaded=None, tools=None):
     )
 
 
-def compact_tool_schema(tool):
-    """压缩工具 schema 描述（省 token）：去掉兜底废话、截断长描述。
+def _normalize_desc(text):
+    """描述的无损空白归一：折叠连续空白为单空格并去首尾空白。
 
-    只压缩 description；name / type / required / enum / properties 结构一律保留，
-    保证 strict 模式与工具解析不受影响。
+    只动空白字符，不删除任何实义内容——不做括号剔除、不做长度截断。
+    非字符串原样返回（防御自定义/插件工具传入异常 schema）。
+    """
+    if not isinstance(text, str):
+        return text
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def normalize_tool_schema(tool):
+    """工具 schema 的无损规范化（**不删除、不截断任何描述**）。
+
+    历史教训（v3.9.x 修正，勿回退）：本函数此前会对描述做两类破坏性处理——
+      ① 用 12 条正则删除工具描述里的中文括号内容，并按 130 字硬截断；
+      ② 参数级更粗暴——无差别删除全部「（…）」后再按 40 字硬截断。
+
+    实测该做法的收益小到可以忽略（147 个工具描述合计只省 9 字 ≈ 全量 schema
+    的 0.01%），代价却是真实的**能力损失**：累计删除/截断 4,984 字，其中参数级
+    占 4,667 字。被删掉的恰恰是模型正确调用工具所必需的信息，例如：
+      - edit_file.replacements：整个 JSON 格式示例被删 → 模型不知如何构造该参数
+      - pdf_extract.mode：「（文本，默认）/（表格）/（元数据）」被删 → 取值清单丢失
+      - read_file.max_lines：「（默认 200，最大 2000）」被删 → 上限不可知
+      - search_web.num / offset：「（1-20，默认 5）」被删 → 取值范围不可知
+      - web_screenshot：「（依赖 playwright）」被删 → 依赖缺失时不再有预期
+      - ask_user.multi：「（可多选时置 true…）」被删 → 语义契约丢失
+
+    结论：**描述是工具能力的一部分，不能以「省 token」的名义损失**。
+    控制上下文应依靠 smart_tools 的子集注入（只加载相关工具的定义），
+    而不是削描述——后者既省不到 token，又让模型用错工具。
+
+    现仅做无损处理：空白归一；name / type / required / enum / properties
+    结构一律原样保留，strict 模式与工具解析不受影响。
     """
     t = json.loads(json.dumps(tool))
     fn = t["function"]
-    desc = fn.get("description", "")
-    # 兜底废话正则：更多冗余括号模式（重复短语/许可性/依赖提示等）
-    for pat in (
-        r"（[^）]*可能不严格[^）]*）", r"（[^）]*依赖[^）]*）",
-        r"（[^）]*可选[^）]*）", r"（[^）]*保证生效[^）]*）",
-        r"（[^）]*默认为[^）]*）", r"（[^）]*默认 [^）]*）",
-        r"（[^）]*需审批[^）]*）", r"（[^）]*需用户[^）]*）",
-        r"（[^）]*敏感[^）]*）", r"（[^）]*Beta[^）]*）",
-        r"（[^）]*可选依赖[^）]*）", r"（[^）]*需安装[^）]*）",
-    ):
-        desc = re.sub(pat, "", desc)
-    desc = re.sub(r"\s+", " ", desc).strip()
-    if len(desc) > 130:
-        desc = desc[:130].rstrip("，。；;:：, ") + "…"
-    fn["description"] = desc
+    fn["description"] = _normalize_desc(fn.get("description", ""))
     for p in (fn.get("parameters", {}).get("properties") or {}).values():
         if isinstance(p, dict) and "description" in p:
-            d = p["description"]
-            d = re.sub(r"^可选[：:]\s*", "", d)
-            d = re.sub(r"（[^）]*）", "", d)
-            d = re.sub(r"\s+", " ", d).strip()
-            if len(d) > 40:
-                d = d[:40].rstrip("，。；;:：, ") + "…"
-            p["description"] = d
+            p["description"] = _normalize_desc(p["description"])
     return t
 
 
-def compact_tools_list(tools):
-    """批量压缩工具 schema（保持顺序，安全返回原列表）。"""
-    return [compact_tool_schema(t) for t in tools]
+def normalize_tools_list(tools):
+    """批量无损规范化工具 schema（保持顺序，安全返回原列表）。
+
+    函数名与调用点保持不变以兼容历史调用方，但语义已从「压缩（有损）」
+    改为「无损规范化」——见 normalize_tool_schema 的说明；
+    旧名 compact_tool_schema / compact_tools_list 保留为兼容别名。
+    """
+    return [normalize_tool_schema(t) for t in tools]
+
+
+# 兼容别名：本对函数在 v3.9 及之前名为 compact_tool_schema / compact_tools_list，
+# 语义已从「有损压缩」改为「无损规范化」，名字随之更新。保留旧名以免外部脚本、
+# 插件或用户自定义工具 `from deepseek_client import compact_tool_schema` 报错。
+compact_tool_schema = normalize_tool_schema
+compact_tools_list = normalize_tools_list
 
 
 def check_balance(api_key, base_url=DEFAULT_BASE_URL, timeout=10.0):
@@ -3877,13 +3924,15 @@ class DeepSeekClient:
         messages[:] = self._sanitize_messages(messages)
         # 图片内联：仅替换受影响的 user 消息副本；原始消息对象（content 文本 +
         # images 路径）不受影响，chat() 结束时再同步回调用方（含新增 assistant/tool 消息）。
-        # 会话带图而当前模型非视觉：本请求自动改用视觉模型（优雅切换，不抛错、不改全局配置）。
+        # 统一模型（V4.1 Flash）原生多模态，默认路径不会走到下面的兜底；此处仅对
+        # 「自定义 OpenAI 兼容端点 + 明确不支持图片的模型名」保留优雅降级，不抛错、
+        # 不改全局配置（VISION_MODEL 已与默认模型同为 deepseek-flash）。
         if any(
             isinstance(m, dict) and m.get("images") and m.get("role") == "user"
             for m in messages
         ) and not is_vision_model(self.model):
             eff_model = VISION_MODEL
-            logger.info("会话包含图片输入：本次请求自动改用视觉模型 %s（全局配置不变）", VISION_MODEL)
+            logger.info("会话包含图片输入：本次请求自动改用多模态模型 %s（全局配置不变）", VISION_MODEL)
         else:
             eff_model = self.model
         work = embed_message_images(messages, eff_model)
@@ -4051,12 +4100,12 @@ class DeepSeekClient:
                     if smart_round:
                         # 点菜阶段：点菜工具 + 已预激活工具（AI 可直接用，也可补充点菜）
                         preset_specs = [t for t in all_tools if t["function"]["name"] in activated]
-                        kw_tools = [ACTIVATE_TOOL] + compact_tools_list(preset_specs)
+                        kw_tools = [ACTIVATE_TOOL] + normalize_tools_list(preset_specs)
                     else:
                         # 已激活阶段：保留 activate_tools，用户中途提出新意图时可继续补激活
                         # （此前此处会移除点菜工具，模型再用不到的能力只能谎报「我没有」）
                         sel = [t for t in all_tools if t["function"]["name"] in activated]
-                        kw_tools = [ACTIVATE_TOOL] + (compact_tools_list(sel) if sel else [])
+                        kw_tools = [ACTIVATE_TOOL] + (normalize_tools_list(sel) if sel else [])
                     if kw_tools:
                         kwargs["tools"] = _strictify_tools(kw_tools) if strict_tools else kw_tools
                     else:

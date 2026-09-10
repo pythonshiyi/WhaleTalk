@@ -7,15 +7,30 @@ from datetime import date
 from shared import is_peak_hour
 import persistence
 
-# 元 / 百万 tokens（2026-08-17 起生效的 V4 正式版峰谷定价——此处为高峰时段价格，
-# 空闲时段价格为高峰的一半，estimate_cost 按当前时段自动打折）
-# 官方价格：缓存命中输入 / 缓存未命中输入 / 输出
+# 元 / 百万 tokens。此处均为**高峰时段价格**，空闲时段为高峰的一半，
+# estimate_cost 按「用量发生日 + 当前时段」自动处理。
+# 官方价格三项：缓存命中输入 / 缓存未命中输入 / 输出。
+#
+# 分界：北京时间 2026-09-10 12:00 起执行 DeepSeek V4.1 Flash 新价。
+# V4.1 Flash 是**统一模型**：官方已下线 V4 Flash / V4 Flash Vision Exp 并将其
+# 模型名路由到 V4.1 Flash；V4 Pro 自 2026-09-14 12:00 起同样路由，并按 V4.1
+# Flash 单价计费。故当前价表只需一项，其余模型名统一回落到 DEFAULT_PRICE。
 PRICING = {
+    "deepseek-flash": {"prompt": 2.0, "completion": 8.0, "cache_hit": 0.04},
+}
+
+# ── 历史价（V4 正式版，2026-08-17 ~ 2026-09-10 12:00）──
+# 仅用于回算该分界之前已产生的用量：价格随官方调整变化，历史记录不应被追溯改价。
+# 注意 V4.1 Flash 新价对比：flash 输出 9.0 → 8.0、未命中输入 3.0 → 2.0；
+# pro 输出 27.0 → 8.0（降幅最大，官方按其新价路由计费）。
+PRICE_ERA_CURRENT = "2026-09-10"
+_V4_PRICING = {
     "deepseek-v4-flash": {"prompt": 3.0, "completion": 9.0, "cache_hit": 0.10},
     "deepseek-v4-pro": {"prompt": 9.0, "completion": 27.0, "cache_hit": 0.30},
 }
+_V4_DEFAULT = {"prompt": 3.0, "completion": 9.0, "cache_hit": 0.10}
 
-DEFAULT_PRICE = {"prompt": 3.0, "completion": 9.0, "cache_hit": 0.10}
+DEFAULT_PRICE = {"prompt": 2.0, "completion": 8.0, "cache_hit": 0.04}
 
 _EMPTY_DAY = {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0}
 _LOCK = threading.Lock()
@@ -120,12 +135,28 @@ def model_total(data, model):
     return total
 
 
-def estimate_cost(usage, model):
+def price_for(model, day=None):
+    """取单价（元/百万 tokens，高峰价）。
+
+    统一模型后只有一项当前价；未收录的模型名（含旧名 deepseek-v4-flash /
+    deepseek-v4-pro）一律回落到当前价——与官方「旧名路由到 V4.1 Flash 并按
+    V4.1 Flash 单价计费」的口径一致。
+
+    day 用于历史回算：分界日（2026-09-10，V4.1 Flash 新价生效）之前的用量按
+    当时的 V4 价表计算，避免历史记录被追溯改价。
+    """
+    if day and str(day) < PRICE_ERA_CURRENT:
+        return _V4_PRICING.get(str(model), _V4_DEFAULT)
+    return PRICING.get(str(model), DEFAULT_PRICE)
+
+
+def estimate_cost(usage, model, day=None):
     """按定价估算费用（元）。高峰时段按表价，空闲时段（9:00 前/12-14/18:00 后）打 5 折。
 
     PRICING 存高峰价：官方峰谷定价规定「空闲时段价格为高峰时段价格的一半」。
+    day 传入用量发生日时按当时价目回算（历史记录不追溯改价）。
     """
-    price = PRICING.get(model, DEFAULT_PRICE)
+    price = price_for(model, day)
     miss = usage.get("prompt", 0) - usage.get("cache_hit", 0)
     miss = max(0, miss)
     cost = (

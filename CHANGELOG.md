@@ -2,6 +2,52 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.10.0（2026-09-10）—— 🤖 接入 DeepSeek V4.1 Flash 统一模型 · 原生多模态 · 新价表
+
+DeepSeek 当日发布 **V4.1 Flash** 并将全部模型升级为**单一原生多模态模型**（原「快速模式 / 专家模式 / 识图模式」合并为统一的智能模式）。本版完成全面集成与适配。
+
+### 🤖 统一模型集成
+- **单一模型**：`MODEL_ID = "deepseek-flash"`（DeepSeek V4.1 Flash）——全新 Causal-Encoder-Decoder 非对称 MoE（552B 总参数 / 输入激活 8B / 输出激活 16B），原生多模态视觉，KV Cache 大幅压缩（HBM 需求降至上代 1/4）。`MODELS` 收敛为一项，`DEFAULT_MODEL` 与 `VISION_MODEL` 同时指向它
+- **旧名别名归一**：新增 `LEGACY_MODEL_ALIASES` + `resolve_model()` + `is_legacy_model()`——`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp`（官方已下线）/ `deepseek-v4.1-flash-expires-on-0910` / `deepseek-v4-pro`（2026-09-14 12:00 起官方路由）统一映射到 `deepseek-flash`；**只映射这四个官方旧名，绝不改写自定义网关模型名**
+- **配置无感迁移**：`config_utils` 在 `base_url` 为官方端点时把历史配置中的旧模型名就地归一（自定义端点不动），存量用户升级后无需手工改配置
+
+### 🖼 视觉能力归一（不再需要"切换视觉模型"）
+- `is_vision_model()` 改为「先经 `resolve_model` 再读 `MODELS` 元数据」：统一模型恒为支持视觉，旧模型名同样为真
+- 原先「会话带图 → 自动切到视觉模型」的路径降级为**自定义端点兜底**（VISION_MODEL 已与默认模型同名，官方端点下永不触发）
+- `image_understand` / `screen_see` / `vision_loop` / `screen_find_click` 等视觉工具无需改动即随统一模型工作（它们取 `client.model`）
+
+### 💰 定价同步下调（2026-09-10 12:00 起生效）
+- 新价（元/百万 tokens，**高峰价**）：缓存命中输入 **0.04** · 未命中输入 **2.0** · 输出 **8.0**；空闲时段减半（**0.02 / 1.0 / 4.0**）
+- **历史用量不被追溯改价**：新增 `stats.price_for(model, day)`，按「用量发生日」选价（分界 `PRICE_ERA_CURRENT = "2026-09-10"`）；`estimate_cost` 与 `usage_report` / 月度成本均已传入 day 逐日累加
+- 未收录模型名回落到 `DEFAULT_PRICE`（=当前价），与官方「旧名路由到 V4.1 Flash 并按 V4.1 Flash 单价计费」口径一致
+
+### 📝 提示词与前端适配
+- 系统提示词新增第 6 条能力「原生多模态」：明确"可直接看用户发来的图片，无需调用工具、无需切换模式"，仅 OCR/细节/工具产出图才调图像工具
+- 设置页一键预设（均衡/省钱/性能/创作）统一为 `deepseek-flash`，只差「思考档 / 输出上限 / 温度」；供应商预设 DeepSeek 项更新为统一模型；「输出上限」文案去掉硬编码的 "V4"
+- 公众号写作模块（`wechat_writer`）默认模型同步为统一模型（保留字面量以维持"可独立运行"定位）
+- API 错误提示、`tool_media` 文案中的"切换视觉模型"改为"改用统一多模态模型"
+
+### 🛠 其它
+- 版本统一 v3.9.0 → v3.10.0（README / TECH_NOTES / MODULES / SECURITY 同步）
+- 新增回归测试 `tests/test_model_unified.py`（单一模型注册表 / 别名归一不动自定义模型 / 视觉判定 / 峰谷新价与历史回算）
+
+### 🛡 评审整改（同日完成，一并并入 v3.10.0）
+代码评审报告中的 P0/P1/P2 问题集中修复：
+
+- **错误信息脱敏（P0）**：`api_server` 原有多处把 `str(e)` 原文回传前端（含绝对路径、文件名行号、模块名）。新增 `_sanitize_error_text()` + `_fail()/_fail_soft()` 统一错误出口，异常详情只落服务端日志；**14 处** 直传全部收敛，前端仍拿到可读文案
+- **SSRF 硬底线（P0）**：`security._safe_url` 在默认模式下只查用户黑名单，出厂仅 1 条 `169.254.169.254` → 内网段与**整段**链路本地实际放行，且 DNS 重绑定校验压根不执行。新增 `_hard_floor_reason()`：私网 / 链路本地 / 保留段一律拦截并做域名解析（默认开，可 `network.block_private=false` 关闭）；回环默认放行以保留本地开发，可 `network.allow_loopback=false` 加严
+- **并发竞态（P1）**：看门狗启动守卫改用已定义却未使用的 `_PROCESS_WATCHDOG_LOCK`（原裸布尔存在双起竞态）；`config_utils.load_config()` 返回**共享缓存对象**，6 处端点却直接原地改它（并发读会看到半更新配置）→ 新增 `config_utils.mutable_config()` 取副本，6 处「读—改—写」全部改用副本
+- **模块级静默异常（P1）**：3 处 `except: pass` 改为 `logger.exception`——`config_utils`/`profiles`/`user_tools` 数据路径接线失败、`.api_token` 落盘失败，都属「数据读写错地方 / 别的组件连不上」级别，必须可观测
+- **协议与输入校验（P2）**：SSE 响应补 `_cors_headers()`（此前漏发，与其余端点策略不一致）；4 个「按名字查注册表」的路径片段端点新增 `_valid_name()` 入口校验（拒绝穿越字符/控制字符/超长，保留中文名）；`db_utils.readonly_stmt` 的危险函数改为「名字 + 可选空白 + 左括号」正则匹配（防 `SLEEP (1)` 插空格绕过），并扩充 `pg_ls_dir`/`pg_stat_file`/`pg_terminate_backend`/`LOAD DATA` 等条目
+- **前端长会话渲染（P1）**：`ChatPage` 流式热路径此前**原地修改已进入 state 的消息对象**（`msg.think += …`、`msg.tools.push(…)`、`card.status = "done"`）再靠复制数组触发重渲染——既违反 React 不可变约定（加 memo 后流式内容会静默停更），也是每帧全量重渲染的根因。抽出纯函数模块 `webui/src/msgUpdates.js`（`makePatchLast`/`findLastToolCard`）统一不可变更新，落盘改用实时镜像取终态；`Message` 随之可安全 `React.memo`（按 `msg` 引用比较），每帧只重渲染真正变化的最后一条
+- **函数改名（清理语义漂移）**：`compact_tool_schema`/`compact_tools_list` 早已不压缩（改为无损规范化），更名 `normalize_tool_schema`/`normalize_tools_list`，保留旧名兼容别名
+
+### ✅ 测试
+- 新增 `tests/test_hardening.py`（52 用例：脱敏/SSRF 底线/名字校验/SQL 函数绕过/配置副本）
+- 新增 `webui/tests/msgUpdates.test.mjs`（8 用例：不可变更新语义与工具卡片定位）
+- 新增 `tests/test_tool_schema_lossless.py` 的旧名兼容别名用例
+- 全套 **319 用例通过**（后端 + 前端），四门禁 + CI lint + 前端构建全绿
+
 ## v3.9.0（2026-09-08）—— 🚀 工具 135→147 · MCP 出口 · 素材空间 · 模型无关 · HTML 设计 · 创世化初始
 
 本版本在文档能力（文件·表格·PPT·HTML）、开放生态、模型可迁移性与身份深度四个方向集中增强，并做版本统一与文档全面同步。

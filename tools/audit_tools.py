@@ -12,7 +12,8 @@
 
 用途：
   - 新增/删除/修改工具后运行，快速发现结构性断链（孤儿工具、参数缺失、required 错误等）；
-  - 描述质量扫描（过短、可疑表述、超 130 字会被 smart 模式 compact 截断的关键信息丢失）。
+  - 描述质量扫描（过短、可疑表述、超长仅提示——描述**不再被截断**，
+    长度只作可读性建议，不构成能力损失）。
 
 严重度分级（v3.8.3 起）：
   - **error（拦截）**：结构性断链——工具不可达、schema 与实现不匹配、参数/分组/审批清单缺口。
@@ -76,8 +77,10 @@ SUSPECT_PATTERNS = [
     r"尽量",
 ]
 _SUSPECT_RE = [re.compile(p) for p in SUSPECT_PATTERNS]
-DESC_MIN_LEN = 30          # 短于视为"描述过短"
-DESC_MAX_LEN = 130         # 超过则 smart 模式 compact 会截断（关键信息可能丢失）
+DESC_MIN_LEN = 20          # 短于视为"描述不足以指导调用"
+DESC_HINT_LEN = 300        # 超过仅提示可读性——描述已不被截断，长度不构成能力损失
+                           # （历史：曾以 130 为界并真的截断，已废止；见
+                           #  deepseek_client.normalize_tool_schema 的说明）
 
 # ── 严重度分类 ──
 # error：结构性断链，会让工具真的不可用/不可达，--strict 必须拦截
@@ -91,7 +94,7 @@ ERROR_KINDS = {
 # warn：描述质量提示（描述过短/过长/含依赖门槛语），需人工甄别，不拦截 CI。
 # 实现别名不在此列：登记进 KNOWN_ALIASES 即豁免（有意为之，静默接受），
 # 未登记的 schema↔实现名差异一律按 error「实现名不一致」拦截（--strict 可挡）。
-WARN_KINDS = {"描述过短", "描述超长将截断", "可疑表述"}
+WARN_KINDS = {"描述过短", "描述偏长（仅可读性提示）", "可疑表述"}
 
 # 已知且无害的实现别名：schema 名与实现函数名不同，但函数确实存在（非缺陷）。
 # 登记后审计静默接受（不再产生 warn）；新增别名时在此登记，避免每次审计都产生噪声。
@@ -205,8 +208,9 @@ def main(argv=None):
                 flag(name, "required未定义参数", f"required 含 {rn} 但 properties 无")
         if len(d) < DESC_MIN_LEN:
             flag(name, "描述过短", f"{len(d)}字: {d}")
-        if len(d) > DESC_MAX_LEN:
-            flag(name, "描述超长将截断", f"{len(d)}字（smart 模式 compact 截到 {DESC_MAX_LEN}）")
+        if len(d) > DESC_HINT_LEN:
+            flag(name, "描述偏长（仅可读性提示）",
+                 f"{len(d)}字（描述不会被截断，此提示仅供人工判断是否表述冗余）")
         for rx in _SUSPECT_RE:
             m = rx.search(d)
             if m:

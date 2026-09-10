@@ -1206,6 +1206,7 @@ def usage_report(days=7):
         data = stats_mod.load_stats(_dc.STATS_FILE)
         totals = stats_mod.empty_day()
         model_usage = {}
+        model_cost = {}
         per_day = []
         for i in range(days - 1, -1, -1):
             d = (_date.today() - timedelta(days=i)).isoformat()
@@ -1225,6 +1226,11 @@ def usage_report(days=7):
                 acc = model_usage.setdefault(model, stats_mod.empty_day())
                 for k in acc:
                     acc[k] += usage.get(k, 0)
+                # 按用量发生日选价（V4.1 Flash 新价自 2026-09-10 12:00 生效），
+                # 逐日累加可避免历史记录被追溯改价
+                model_cost[model] = model_cost.get(model, 0.0) + stats_mod.estimate_cost(
+                    usage, model, day=d
+                )
         if not any(totals.values()):
             return f"近 {days} 天没有使用记录"
         hit_ratio = totals["cache_hit"] / max(1, totals["prompt"])
@@ -1234,7 +1240,7 @@ def usage_report(days=7):
             f"缓存命中 {totals['cache_hit']:,}（{hit_ratio:.0%}）",
         ]
         for model, u in model_usage.items():
-            lines.append(f"模型 {model}: 输入 {u['prompt']:,} / 输出 {u['completion']:,} / 费用约 ¥{stats_mod.estimate_cost(u, model):.2f}")
+            lines.append(f"模型 {model}: 输入 {u['prompt']:,} / 输出 {u['completion']:,} / 费用约 ¥{model_cost.get(model, 0.0):.2f}")
         if per_day:
             lines.append("逐日明细：\n" + "\n".join(per_day))
         return "\n".join(lines)

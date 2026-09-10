@@ -108,7 +108,16 @@ def main(argv=None):
     as_tree = _parse(AS)
     domain = set(_collect_dict(_get_assign(as_tree, "_TOOL_DOMAIN")))
 
-    enabled = set(json.loads(CFG.read_text(encoding="utf-8")).get("enabled_tools") or [])
+    # config.json 被 .gitignore 排除（内含 DPAPI 加密的密钥），**全新检出 / CI 下并不存在**。
+    # 此前直接 read_text 会让本门禁在 CI 上恒抛 FileNotFoundError（本地因开发目录里有
+    # config.json 而"假绿"，门禁形同虚设）。缺失或损坏时按「无用户配置」处理：第 7 项
+    # 无输入可查（本来就只剩代码侧校验），而 BUILTIN 幽灵校验不受影响。
+    try:
+        enabled = set(json.loads(CFG.read_text(encoding="utf-8")).get("enabled_tools") or [])
+    except (OSError, ValueError) as e:
+        print(f"[提示] 未读到 config.json（{type(e).__name__}）——"
+              f"跳过「enabled_tools 幽灵启用」检查（全新检出/CI 的正常情况）")
+        enabled = set()
     builtin = set(ast.literal_eval(_get_assign(_parse(CD), "BUILTIN_TOOL_NAMES")))
 
     gaps = {}

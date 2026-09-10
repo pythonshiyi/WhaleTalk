@@ -146,13 +146,49 @@ def _is_private_host(host, allow_loopback=True):
     return False
 
 
+def _hard_floor_reason(host):
+    """blacklist 模式下的 SSRF 硬底线：私网 / 链路本地 / 保留段一律拦截。
+
+    为什么需要它：默认自由模式下 `_safe_url` 只查用户黑名单，而出厂黑名单仅一条
+    `169.254.169.254` —— 结果是内网段（10/172.16/192.168）、**整段**链路本地
+    （169.254.0.0/16，云元数据不止一个地址）实际处于放行状态，且
+    `_is_private_host` 里的 DNS 重绑定校验（域名解析分支）在默认模式下压根不执行。
+    模型可自主抓取任意 URL，而抓取内容会回灌上下文（prompt injection 面），
+    故补一道不依赖用户配置的硬底线。
+
+    回环（localhost / 127.0.0.1）默认**放行**：本产品是「本机单用户软件」，
+    本地开发服务器验证（localhost:3000 等）是高频正当场景；且工具层默认本就
+    允许 run_command/run_python（本机任意执行），把回环当作最后一道闸并无实际
+    收益。需要加严时把 network.allow_loopback 置 false 即可。
+
+    返回 "" 表示放行，否则返回拒绝原因。开关：
+      - blocklist_enabled=false（一键全放行）→ 整体跳过；
+      - network.block_private=false → 单独关闭本底线。
+    配置读取失败时放行（保持与其它判定一致的 fail-open，避免误杀可用功能）。
+    """
+    try:
+        import permissions
+        data = permissions.get_data() or {}
+        if not bool(data.get("blocklist_enabled", True)):
+            return ""
+        net = data.get("network") or {}
+        if not bool(net.get("block_private", True)):
+            return ""
+        allow_loop = bool(net.get("allow_loopback", True))
+    except Exception:
+        return ""
+    if not _is_private_host(host, allow_loopback=allow_loop):
+        return ""
+    return ("已阻止访问内网/链路本地/保留地址（SSRF 硬底线）；"
+            "确需访问内网服务可在权限页调整 network 配置")
+
+
 def _safe_url(url, allow_loopback=True):
     """URL 安全校验。
 
-    无限制模式（v3.8.3+ 起默认，blacklist）：只按用户配置的 network.blocklist 拦截，
-    内网/回环/云元数据等一律放行——信任用户与模型，不内置 SSRF 硬判。
-    - permissions.security_mode() == "blacklist"（默认）：只拦 network.blocklist。
-    - permissions.security_mode() == "whitelist"（旧模式）：保持旧 SSRF 严格判断。
+    blacklist 模式（默认）：拦用户 network.blocklist + **SSRF 硬底线**
+    （私网/链路本地/保留段，见 `_hard_floor_reason`；回环默认放行）。
+    whitelist 模式：保持旧 SSRF 严格判断。
     """
     if not url or not str(url).startswith(("http://", "https://")):
         return "URL 必须以 http:// 或 https:// 开头"
@@ -165,6 +201,9 @@ def _safe_url(url, allow_loopback=True):
             ok, reason = permissions.check_network_host(host)
             if not ok:
                 return f"{reason}：{url[:80]}"
+            hard = _hard_floor_reason(host)
+            if hard:
+                return f"{hard}：{url[:80]}"
             return ""
     except Exception:
         pass

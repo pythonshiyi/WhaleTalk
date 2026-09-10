@@ -37,9 +37,9 @@ from deepseek_client import (
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "to": {"type": "string", "description": "收件人邮箱"},
-                        "subject": {"type": "string", "description": "邮件主题"},
-                        "body": {"type": "string", "description": "邮件正文"},
+                        "to": {"type": "string", "description": "收件人邮箱，多个收件人用英文逗号分隔（每个都会做格式与换行注入校验）"},
+                        "subject": {"type": "string", "description": "邮件主题（单行，不可含换行）"},
+                        "body": {"type": "string", "description": "邮件正文（纯文本）"},
                     },
                     "required": ["to", "subject", "body"],
                 },

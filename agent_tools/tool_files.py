@@ -166,7 +166,7 @@ def read_file(path, start_line=None, max_lines=None):
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "目标文件绝对路径（须在允许目录内）"},
-                        "content": {"type": "string", "description": "文件完整内容"},
+                        "content": {"type": "string", "description": "文件完整内容（整体覆盖写入，写入前自动生成 .bak 备份；超过大小上限会被拒绝）"},
                     },
                     "required": ["path", "content"],
                 },
@@ -216,7 +216,7 @@ def write_file(path, content):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "文件绝对路径"},
+                        "path": {"type": "string", "description": "文件绝对路径（须在允许目录内，且文件必须已存在；不存在请改用 write_file）"},
                         "old": {"type": "string", "description": "要替换的原文（与 regex 二选一，至少提供一个）"},
                         "new": {"type": "string", "description": "替换后的新文本"},
                         "regex": {"type": "string", "description": "可选：正则表达式模式（Python re 语法）"},
@@ -890,10 +890,10 @@ def restore_snapshot(id):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "directory": {"type": "string", "description": "目录绝对路径"},
-                        "pattern": {"type": "string", "description": "要替换的字符串"},
-                        "replacement": {"type": "string", "description": "替换后的字符串"},
-                        "dry_run": {"type": "boolean", "description": "可选：true 仅预览"},
+                        "directory": {"type": "string", "description": "目录绝对路径（须在允许目录内）"},
+                        "pattern": {"type": "string", "description": "要替换的原字符串（字面匹配，非正则；文件名含扩展名部分也会被替换）"},
+                        "replacement": {"type": "string", "description": "替换为的新字符串（传空字符串表示删除匹配到的片段）"},
+                        "dry_run": {"type": "boolean", "description": "可选：true 仅预览改名结果不实际执行（默认 false）"},
                     },
                     "required": ["directory", "pattern", "replacement"],
                 },

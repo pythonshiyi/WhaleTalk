@@ -12,23 +12,45 @@ TABLE_CELL_MAX = 100
 DB_EXECUTE_MAX_ROWS = 10000
 
 # 只读查询禁止的服务器端功能关键字（前缀白名单可被其绕过，读写服务器文件 / DoS）：
-# MySQL: SELECT ... INTO OUTFILE/DUMPFILE、LOAD_FILE、SLEEP
-# PostgreSQL: lo_export / pg_read_file / pg_write_file / pg_sleep
+# MySQL: SELECT ... INTO OUTFILE/DUMPFILE、LOAD_FILE、LOAD DATA、SLEEP、BENCHMARK
+# PostgreSQL: lo_export / lo_import、pg_read_file / pg_write_file、pg_ls_dir /
+#             pg_stat_file（列目录/读文件）、pg_terminate_backend / pg_cancel_backend（杀会话）
+# 说明：标识类关键字走子串匹配（SQL 已归一为 upper）；**函数调用类**另见
+# DB_FORBIDDEN_CALLS——用「名字 + 可选空白 + 左括号」的正则匹配，防 `SLEEP (1)`
+# 这类插空格绕过子串匹配的写法。
 DB_FORBIDDEN_KEYWORDS = (
     "INTO OUTFILE",
     "INTO DUMPFILE",
     "LOAD_FILE",
+    "LOAD DATA",
     "LO_EXPORT",
     "LO_IMPORT",
     "PG_READ_FILE",
     "PG_WRITE_FILE",
     "PG_READ_BINARY_FILE",
-    "PG_SLEEP",
-    "SLEEP(",
-    "BENCHMARK(",
+    "PG_READ_SERVER_FILES",
+    "PG_WRITE_SERVER_FILES",
+    "PG_LS_DIR",
+    "PG_STAT_FILE",
+    "PG_TERMINATE_BACKEND",
+    "PG_CANCEL_BACKEND",
     "PG_DATABASE_SIZE",
     "DEFAULT_TABLESPACE",
 )
+
+# 函数调用类禁止项（名字后允许任意空白再跟左括号）
+DB_FORBIDDEN_CALLS = (
+    "SLEEP",
+    "BENCHMARK",
+    "PG_SLEEP",
+    "PG_READ_FILE",
+    "PG_WRITE_FILE",
+    "PG_READ_BINARY_FILE",
+    "PG_LS_DIR",
+    "PG_STAT_FILE",
+)
+_DB_FORBIDDEN_CALL_RE = re.compile(
+    r"\b(?:" + "|".join(DB_FORBIDDEN_CALLS) + r")\s*\(", re.I)
 
 
 def readonly_stmt(sql):
@@ -45,6 +67,9 @@ def readonly_stmt(sql):
     for kw in DB_FORBIDDEN_KEYWORDS:
         if kw in upper:
             return False
+    # 函数调用类：名字与左括号间允许任意空白（防 `SLEEP (1)` 绕过子串匹配）
+    if _DB_FORBIDDEN_CALL_RE.search(upper):
+        return False
     return True
 
 

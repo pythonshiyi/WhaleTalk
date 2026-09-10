@@ -4,10 +4,12 @@
 用 AST 提取 deepseek_client.py 的真实源码块执行（不导入模块、无副作用），
 验证 smart_tools 全链路可运行：
   1. build_tool_index 能力地图可生成
-  2. compact_tool_schema 对全部工具可执行且结果合法（smart 激活注入）
+  2. normalize_tool_schema 对全部工具可执行、结果合法，且**无损**
+     （只允许空白归一，不得删除/截断任何描述——见 deepseek_client 中的说明）
   3. _patch_array_items 能兜底补齐缺失的 items
   4. TOOLS 整体 JSON 可序列化、无重名
-  5. 全部描述 ≤130 字（smart 模式不截断关键信息）
+  5. 描述保真：工具描述足以指导调用、参数描述 100% 覆盖
+     （**不校验长度上限**——描述是工具能力的一部分，不以省 token 为由删减）
   6. 全部数组参数带 items
   7. activate_tools 描述自包含（组名 + 反「能力错觉」约束）
   8. build_smart_hint 精简能力提示可生成且含能力总数
@@ -27,6 +29,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "deepseek_client.py"
 TOOL_DIR = REPO_ROOT / "agent_tools"
+
+# 描述低于此长度视为"不足以指导模型调用"（硬拦截）。
+# 注意：这里**没有**描述长度上限——历史上曾有"≤130 字"的硬门禁，
+# 理由是"smart 模式 compact 会截断"，但该截断本身已被移除（有损且收益≈0），
+# 上限随之取消。详见 deepseek_client.normalize_tool_schema 的说明。
+DESC_MIN_LEN = 20
 
 # P1-3 迁移后 TOOLS/TOOL_GROUPS/_TOOL_ACTION_PHRASES 由构建调用生成，
 # 不能直接 exec；经 toolkit.rebuild_layers() AST 重建后预置进命名空间
@@ -73,8 +81,9 @@ def main():
     block += get_assign_nodes(src, tree, ["_TOOL_INDEX_CACHE", "_TOOL_INDEX_KEY", "ACTIVATE_TOOL",
                                           "_GROUP_NAMES_TEXT"])
     block += get_assign_nodes(src, tree, ["_TOOL_GROUP_NAME_MAP"])
-    block += get_func_src(src, tree, ["build_tool_index", "compact_tool_schema",
-                                      "compact_tools_list", "_patch_array_items",
+    block += get_func_src(src, tree, ["build_tool_index", "_normalize_desc",
+                                      "normalize_tool_schema",
+                                      "normalize_tools_list", "_patch_array_items",
                                       "_finalize_activate_tool", "build_smart_hint"])
     layers = toolkit.rebuild_layers(src, *tool_sources())
     ns = {"re": re, "json": json, "__name__": "validate_block",
@@ -94,16 +103,28 @@ def main():
     except Exception as e:
         fails.append(f"能力地图生成异常: {e}")
 
-    # 2. compact 全量
+    # 2. 规范化（原 compact）全量：必须**无损**——只允许空白归一，不得删除或截断任何内容。
+    #    这条取代了旧的「compact 后 ≤130 字」检查（旧检查既允许有损截断，
+    #    又因 [[:130] + "…"] 的 off-by-one 恒产出 131 字而自相矛盾）。
+    def _sq(s):
+        """去空白指纹：判定 compact 是否改动了实义内容。"""
+        return re.sub(r"\s+", "", str(s or ""))
+
     for t in tools:
         try:
-            c = ns["compact_tool_schema"](t)
+            c = ns["normalize_tool_schema"](t)
             json.dumps(c, ensure_ascii=False)
-            if len(c["function"]["description"]) > 130:
-                fails.append(f"{t['function']['name']}: compact 后描述仍超 130")
-            for pn, pv in (c["function"].get("parameters", {}).get("properties") or {}).items():
+            name = t["function"]["name"]
+            if _sq(t["function"].get("description")) != _sq(c["function"].get("description")):
+                fails.append(f"{name}: compact 改动了工具描述内容（应为无损）")
+            src_props = t["function"].get("parameters", {}).get("properties") or {}
+            dst_props = c["function"].get("parameters", {}).get("properties") or {}
+            for pn, pv in src_props.items():
+                if _sq(pv.get("description")) != _sq((dst_props.get(pn) or {}).get("description")):
+                    fails.append(f"{name}.{pn}: compact 改动了参数描述内容（应为无损）")
+            for pn, pv in dst_props.items():
                 if pv.get("type") == "array" and "items" not in pv:
-                    fails.append(f"{t['function']['name']}: {pn} 缺 items")
+                    fails.append(f"{name}: {pn} 缺 items")
         except Exception as e:
             fails.append(f"{t['function']['name']}: compact 异常 {e}")
 
@@ -135,11 +156,17 @@ def main():
     if len(names) != len(set(names)):
         fails.append("存在重名工具")
 
-    # 5. 描述长度
+    # 5. 描述保真与覆盖：**不设长度上限**（描述是工具能力的一部分，不以省 token
+    #    为由删减）——只要求「工具描述足以指导调用」+「参数描述 100% 覆盖」，
+    #    后者是模型能否正确填参的前提，此前完全无门禁。
     for t in tools:
-        d = t["function"]["description"]
-        if len(d) > 130:
-            fails.append(f"{t['function']['name']}: 描述 {len(d)} 字超 130")
+        name = t["function"]["name"]
+        d = str(t["function"].get("description") or "").strip()
+        if len(d) < DESC_MIN_LEN:
+            fails.append(f"{name}: 描述过短（{len(d)} 字 < {DESC_MIN_LEN}），不足以指导模型调用")
+        for pn, pv in (t["function"].get("parameters", {}).get("properties") or {}).items():
+            if not str(pv.get("description") or "").strip():
+                fails.append(f"{name}.{pn}: 参数缺描述（模型无法知道如何填该参数）")
 
     # 6. 数组参数 items
     for t in tools:
