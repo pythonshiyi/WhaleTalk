@@ -61,7 +61,7 @@ def _register(name, schema, fn, groups, phrases, preactivate_keys, executor):
 
 def tool(schema: dict, *, groups: Optional[Sequence[str]] = None,
          phrases: Optional[str] = None, preactivate: Optional[Sequence[Sequence[str]]] = None,
-         executor: Any = _UNSET) -> Callable:
+         executor: Any = _UNSET, hooks: Optional[Sequence[str]] = None) -> Callable:
     """装饰器：把工具 schema 绑定到执行函数上，注册进单一来源注册表。
 
     参数：
@@ -71,6 +71,14 @@ def tool(schema: dict, *, groups: Optional[Sequence[str]] = None,
       preactivate  预激活提示参与声明，每个元素是一组口语关键词
                    （默认 None=不参与 _PREACTIVATE_HINTS）
       executor     显式执行函数（默认=被装饰函数；传 None 表示特殊回调处理）
+      hooks        本工具额外声明的横切钩子名（见 tool_hooks.py），如 ("snapshot",)。
+                   trust_declare / trust_commit 是全局钩子，无需声明。
+
+    横切关注的收口（P0-1）：注册时统一用 tool_hooks.wrap 包装执行体——
+      - 返回包装体作为模块级名字，**任何调用路径**（分发/HTTP invoke/工作流/
+        测试直调）都拿得到钩子，而不是只有分发点那一条路；
+      - `functools.wraps` 保证 __name__/__doc__/inspect.signature 对调用方不变。
+    为什么不放分发处：execute_tool 只是众多调用路径之一，包装在注册处才关得住。
     """
     fn = schema.get("function", {})
     name = fn.get("name") if isinstance(fn, dict) else None
@@ -78,21 +86,37 @@ def tool(schema: dict, *, groups: Optional[Sequence[str]] = None,
         raise ValueError(f"[toolkit] schema 缺少 function.name: {schema!r}")
 
     def deco(f):
-        _register(name, schema, f, groups or (), phrases, preactivate or (), executor)
-        return f
+        import tool_hooks
+        declared = tuple(hooks or ())
+        if executor is not _UNSET:
+            # 显式执行体（被装饰函数不是执行体的场景）：包装执行体，函数名保持原样
+            wrapped_exec = tool_hooks.wrap(name, executor, declared)
+            _register(name, schema, f, groups or (), phrases, preactivate or (), wrapped_exec)
+            return f
+        wrapped = tool_hooks.wrap(name, f, declared)
+        _register(name, schema, wrapped, groups or (), phrases, preactivate or (), wrapped)
+        return wrapped
 
     return deco
 
 
 def register_tool(schema: dict, *, groups: Optional[Sequence[str]] = None,
                   phrases: Optional[str] = None, preactivate: Optional[Sequence[Sequence[str]]] = None,
-                  executor: Any = _UNSET) -> None:
-    """命令式注册（无函数定义处可用，如 ask_user 走回调、无独立执行函数）。"""
+                  executor: Any = _UNSET, hooks: Optional[Sequence[str]] = None) -> None:
+    """命令式注册（无函数定义处可用，如 ask_user 走回调、无独立执行函数）。
+
+    executor 为可调用对象时同样过 tool_hooks 包装；字符串（AST 重建模式）与
+    None 原样保留——AST 门禁不执行函数，不需要钩子。
+    """
     fn = schema.get("function", {})
     name = fn.get("name") if isinstance(fn, dict) else None
     if not name:
         raise ValueError(f"[toolkit] schema 缺少 function.name: {schema!r}")
-    _register(name, schema, None, groups or (), phrases, preactivate or (), executor)
+    exec_ = None if executor is _UNSET else executor
+    if callable(exec_):
+        import tool_hooks
+        exec_ = tool_hooks.wrap(name, exec_, hooks or ())
+    _register(name, schema, None, groups or (), phrases, preactivate or (), exec_)
 
 
 # ---------------------------------------------------------------------------

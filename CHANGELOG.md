@@ -2,6 +2,60 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.10.0（未发版追加·架构收口批次 P0）—— 🧭 上下文装配 · 退化日志 · 工具钩子管线
+
+**版本号不变**。一次架构评审的结论：缺的不是能力宽度，而是**横切关注点没有收口**——
+每加一个保障要改 N 个文件，出了问题没有信号。取证：`except …: pass` **326 处**；
+`_inject_system_messages` 单方法 **128 行**串 9 个来源全在静默 `pass` 里；`snapshot_before`
+散在 2 文件 4 处、`clamp_int` 散在 6 模块 17 处。详见 [docs/架构收口-P0.md](docs/架构收口-P0.md)。
+
+### 🧾 P0-3 `degrade.py` — 退化日志（静默降级的唯一出口）
+
+- `degrade(component, exc, impact, critical=)`：按 key 归并计数 + 节流日志 +
+  原子落盘 `DATA_DIR/degradations.json`；**永不抛出**（记录自身出问题不得反噬主流程）
+- **critical 分级**：只有影响回答质量的降级才进注入文本——326 处无害降级不该占 token，
+  也不该让模型以为自己随时在坏掉
+- `critical_notice()` 是**自我状态**而非错误日志：让 AI 知道自己的能力状况并**如实告知用户**
+
+### 🧩 P0-2 `context_providers.py` — 上下文装配 Provider 化
+
+- 9 个来源 → `Provider(name/priority/budget/critical/enabled/provide)` 表 + 统一排序 +
+  预算截断 + **回执**（谁注入了/各占多少字符/谁被跳过/谁失败了）
+- 失败逐个隔离并走 `degrade`（带影响说明），取代原先 9 个 `try/except: pass`
+- **行为等价是硬约束**：注入内容与顺序与改造前完全一致，`tests/test_quiet_mode.py` 原样通过
+- 回执经既有 `GET /v1/context` 暴露（**不新增路由**，避免端点数漂移）
+
+### 🪝 P0-1 `tool_hooks.py` — 工具钩子管线（横切关注点收口）
+
+- 在 **`toolkit` 注册处**统一包装执行体：`execute_tool` 只是众多调用路径之一
+  （HTTP invoke / 工作流 / 子智能体 / 测试直调都绕得过去），包装在注册处才关得住
+- 内置 `trust_declare`/`trust_commit`（全局，按路径参数自动判定内核文件；结果追加
+  "已登记"给模型看——透明性对所有 148 工具通用）+ `snapshot`（声明式
+  `@tool(hooks=("snapshot",))`，一行声明即接入）
+- 硬约束：钩子抛错一律吞掉 + degrade；工具异常**原样上抛**；`functools.wraps` 保证
+  `__name__`/`inspect.signature` 对调用方不变
+- 迁移：信任声明与快照从 `tool_files.py` 逐个手接改为钩子/声明，工具函数只剩业务逻辑
+
+### 🐛 过程中被测试抓出的自身缺陷（均已加回归）
+
+- **死锁**：`_ensure_builtins()` 持锁期间调用 `hook()`，同一把非重入锁 → 首次工具调用即挂住（改 `RLock`）
+- **快照钩子漏判 `ctx.declared`**：会对所有带 `path` 参数的工具无差别快照
+- `brain_api` thunk 漏调用 → 竟拿到函数而非模块，`test_quiet_mode` 立刻失败
+- **`return` 在 `finally` 之前求值** → post 钩子改不动返回值（信任声明回执挂不上）
+- `api_server.py` 实为 LF，替换脚本误插 75 行 CR → 已统一
+
+### 🧪 测试与验证
+
+新增 `tests/test_degrade.py`(9) + `tests/test_context_providers.py`(11) +
+`tests/test_tool_hooks.py`(13)，全量 **465 passed / 0 failed**；`audit_tools --strict`
+0 error、`validate_tools` 148 工具全链路、`island_check` 无孤岛、`check_docs` 数字一致、
+ruff（CI 关键规则）通过；前端 typecheck/build/test 全通过；实机起 API 验证
+`/v1/status`（trust/degrade 摘要）与 `/v1/context`（回执 + 降级明细）。
+
+> `tests/test_search_engines_resolvable.py` 的 `__globals__` 自省改为
+> `inspect.unwrap` 穿透装饰器——**运行时行为不受影响**（包装体内部调用的仍是原函数，
+> 函数体内 `globals()` 依旧是 `tool_web` 命名空间），仅白盒检查方式需随装饰器更新。
+
 ## v3.10.0（未发版追加·自我完整性批次）—— 🛡 信任内核：自我修改可声明 · 可见 · 可回滚
 
 **版本号不变**。一次「以智能体视角审视自身设计」的审查发现：决定「能做什么」的

@@ -25,6 +25,8 @@ def sandbox(tmp_path, monkeypatch):
         (root / name).write_text(f"# v1 {name}\n", encoding="utf-8")
     monkeypatch.setattr(tk, "PROJECT_DIR", str(root))
     monkeypatch.setattr(tk, "TRUST_DIR", str(root / "trust"))
+    import tool_hooks
+    tool_hooks.clear_kernel_cache()
     tk.init()
     yield tk, root
 
@@ -240,6 +242,10 @@ def _enable_extra(sandbox, root, name):
         encoding="utf-8")
     tk_.init()
     tk_.accept(name)
+    # 工具钩子对内核文件名做了 30s TTL 缓存（避免每次工具调用读 config.json），
+    # 测试里必须清掉，否则读到的还是上一个用例的清单。
+    import tool_hooks
+    tool_hooks.clear_kernel_cache()
     return root / name
 
 

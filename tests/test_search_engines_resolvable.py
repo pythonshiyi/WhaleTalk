@@ -48,10 +48,17 @@ def test_search_web_no_silent_engine_missing():
     """search_web 内部对每个健康引擎的 globals().get 必须命中（不因 None 静默空跑）。
 
     直接调用 search_web 需要网络，故此处校验其源码分发逻辑依赖的解析目标都就绪；
-    避免引入真实网络的用例。"""
-    # 复现 search_web 的动态查表：globals().get("_search_"+name)
+    避免引入真实网络的用例。
+
+    注意：P0-1 工具钩子管线后，模块级的 `tool_web.search_web` 是 tool_hooks 的包装体，
+    其 __globals__ 指向 tool_hooks 而非 tool_web——**运行时不受影响**（包装体内部调用的
+    仍是原函数，函数体内的 globals() 依旧是 tool_web 命名空间），但白盒自省必须先用
+    inspect.unwrap 穿透装饰器，否则检查的是包装体所在的模块。"""
+    import inspect
+
+    raw = inspect.unwrap(tw.search_web)
     for name in _ENGINE_NAMES:
-        assert tw.search_web.__globals__.get("_search_" + name) is not None, (
+        assert raw.__globals__.get("_search_" + name) is not None, (
             f"search_web 的 __globals__ 查不到 _search_{name}（真实调用会空结果）"
         )
 

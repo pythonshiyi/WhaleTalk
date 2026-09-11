@@ -15,6 +15,9 @@ deepseek_client.py（能力引擎：DeepSeekClient + 148 工具 + smart_tools）
     │
     ├─ 基础设施：permissions / security / crypto / stores / stats / tokens / persistence
     │              ＋ trust_kernel（信任内核：自我修改的声明 / 核对 / 回滚）
+    │              ＋ degrade（退化日志：静默降级收口）
+    │              ＋ context_providers（上下文装配 Provider 表）
+    │              ＋ tool_hooks（工具钩子管线：横切关注点收口）
     ├─ 工具底座：net_utils / search_utils / db_utils / pdf_utils / proc_utils / mdparse
     ├─ 配置体系：config_defaults / config_utils / profiles / themes / roles / templates / deps
     ├─ 扩展体系：plugins / user_tools / fetch_blocked（按需）
@@ -52,7 +55,10 @@ deepseek_client.py（能力引擎：DeepSeekClient + 148 工具 + smart_tools）
 | `tokens.py` | token 估算（tiktoken o200k_base，缺省回退 1.5 字符/token，对象身份缓存） |
 | `persistence.py` | 原子 JSON 写入（mkstemp 唯一临时文件 + os.replace） |
 | `snapshot.py` | 文件/数据库写操作自动快照（P2）：写/编辑/重命名/数据库写前备份原内容到 `DATA_DIR/undo/`，可列出/恢复（`list_snapshots`/`restore_snapshot` 工具）；上限 200 条自动清理 |
-| `trust_kernel.py` | 信任内核（自我完整性）：让智能体对**自身授权代码**（permissions / security / crypto / snapshot / 自身）的改动**可声明 · 可见 · 可回滚**——`trust/baseline/` 可信副本（永不裁剪）+ `manifest.json` 索引 + `ledger.jsonl` 追加账本 + `incidents/` 未声明事件 + `history/` 已声明历史 + `quarantine/`（guard 模式隔离）；启动核对 `boot_check()`（基线优先、manifest 丢失也检出）、工具层 `declare/commit`（write_file/edit_file，绝不阻断写入）、CLI `status/verify/diff/restore/accept/log`。**刻意不加限制**：能力一条不减，只让改动不可能悄悄发生（详见 [docs/信任内核.md](docs/信任内核.md)） |
+| `trust_kernel.py` | 信任内核（自我完整性）：让智能体对**自身授权代码**（permissions / security / crypto / snapshot / 自身）的改动**可声明 · 可见 · 可回滚**——`trust/baseline/` 可信副本（永不裁剪）+ `manifest.json` 索引 + `ledger.jsonl` 追加账本 + `incidents/` 未声明事件 + `history/` 已声明历史 + `quarantine/`（guard 模式隔离）；启动核对 `boot_check()`（基线优先、manifest 丢失也检出）、工具层 `declare/commit`（经 tool_hooks 全局钩子，绝不阻断写入）、CLI `status/verify/diff/restore/accept/log`。**刻意不加限制**：能力一条不减，只让改动不可能悄悄发生（详见 [docs/信任内核.md](docs/信任内核.md)） |
+| `degrade.py` | 退化日志（P0-3）：全项目 326 处 `except …: pass` 的**唯一收口**——`degrade(component, exc, impact, critical=)` 按 key 归并计数 + 节流日志 + 原子落盘 `DATA_DIR/degradations.json`；`snapshot/summary/critical_notice/reset`。**critical 分级**：只有影响回答质量的降级才进注入文本（`critical_notice()` 让 AI 知道自己的状况并如实告知用户），其余只留痕不打扰。**永不抛出**（记录自身出问题也不得反噬主流程） |
+| `context_providers.py` | 上下文装配（P0-2）：把「往系统提示里塞什么」从 `_inject_system_messages` 的 128 行内联代码 + 9 个 `try/except: pass` 变成**可枚举、可预算、可回执**的 Provider 表（name/priority/budget/critical/enabled/provide）。装配器统一排序、限预算截断、输出回执（谁注入了/各占多少字符/谁被跳过/谁失败了）；失败走 `degrade` 而非静默。**注入内容与顺序与改造前完全一致**（仅新增 `context.degrade_status` 一项）；回执经 `last_receipt()` 由 `GET /v1/context` 暴露 |
+| `tool_hooks.py` | 工具钩子管线（P0-1）：横切关注点的收口接缝——pre/post 钩子表 + `wrap()` 包装器，在 `toolkit` **注册处**统一包装执行体，使**任何调用路径**（分发 / `/v1/tools/x/invoke` / 工作流 / 子智能体 / 测试直调）都逃不掉钩子。内置：`trust_declare`/`trust_commit`（全局，按路径参数自动判定内核文件）、`snapshot`（声明式，`@tool(hooks=("snapshot",))`）。钩子抛错一律吞掉 + `degrade` 留痕，工具自身异常原样上抛；`functools.wraps` 保证 `__name__`/`inspect.signature` 对调用方不变 |
 | `app_utils.py` | 布尔转换、空壳目录判断、清理、干净退出标记、隐私日志 |
 | `proc_utils.py` | 进程树终止（Windows taskkill /T，防孙进程残留） |
 | `shared.py` | cron 5 字段引擎（校验/匹配/错峰顺延）、峰谷定价判定、预算感知思考降档、本地路径正则、Windows OCR/Toast PowerShell 脚本、跨进程文件锁 `file_lock`、参数钳制 `clamp_*`、**工具域阈值与锁**（P1-3 下沉：49 个工具阈值常量/锁统一归口于此，deepseek_client 顶部 re-export 保旧路径，域模块 from shared 导入） |
@@ -140,7 +146,28 @@ deepseek_client.py（能力引擎：DeepSeekClient + 148 工具 + smart_tools）
 
 ## 演进建议
 
-1. **拆分 `deepseek_client.py`（进行中）**：按领域拆为 `agent_tools/` 包，主文件保留共享基建 + `_TOOL_ORDER` 等顺序常量 + 六层构建 + 薄 facade（`from agent_tools import *` re-export，`TOOLS`/`TOOL_CALL_MAP` 等引用不变）。**首批已落地**（get_date/get_weather/read_csv/write_csv，−187 行）；**第二批已落地**（🎨 媒体与图像 10 工具 → `tool_media.py`，−588 行；主文件保留 `_capture_screen_png`/`_extract_image_path`/`_IMAGE_PRODUCING_TOOLS` 等视觉闭环辅助，域模块 from-import 复用）；配套改造：`toolkit.rebuild_layers` 支持多文件 AST、三门禁（audit/validate/island）多文件扫描、`WhaleTalk.spec` 用 `collect_submodules('agent_tools')`、`tests/test_tool_split.py`（10 用例）。每拆一批跑 `tools/audit_tools.py --strict` + `tools/validate_tools.py` + `python -m pytest -q`。
-2. **工具声明单一源**：引入 `@tool()` 装饰器统一声明 schema/实现/分组/动作短语/预激活关键字/审批级别，消除六层手工维护漂移（`audit_tools.py` 降级为兜底）。
-3. **测试资产**：`tests/` 自举回归套件已建立（v3.7.2，28 用例：注册表一致性/进化闸/代码定位）；建议按领域扩充分子级 pytest 用例（工具/权限/存储），并将 `pytest tests/` 接入 CI 与 `self_evolve` 验证链（后者已自动回退全量）。
-4. 保持"先纯函数/工具模块，再业务模块"的顺序。
+### 已完成（保留记录，勿重复立项）
+
+- ~~**工具声明单一源**~~ ✅ `@tool()` 装饰器 + `register_tool()` 已统一 schema/实现/分组/动作短语/预激活关键字（六层由注册表生成，`audit_tools.py` 转为兜底门禁）。
+- ~~**P0-1 工具执行管线**~~ ✅ `tool_hooks.py`：横切关注点在 **`toolkit` 注册处**统一包装执行体，任何调用路径都逃不掉钩子；信任声明与快照已从逐个工具手接改为钩子/声明。
+- ~~**P0-2 上下文装配 Provider 化**~~ ✅ `context_providers.py`：9 个来源变成 Provider 表 + 预算 + 回执，失败走 degrade 而非静默。
+- ~~**P0-3 退化日志**~~ ✅ `degrade.py`：326 处静默降级的统一出口，critical 分级 + 自我状态提示。
+
+### 待做（按杠杆排序）
+
+1. **剩余横切关注点迁移进钩子（P0-1 第二步）**：`clamp_int` 参数钳制仍散在 6 个工具域模块 17 处，可改为 `@tool(clamp={...})` 声明 + pre 钩子；`batch_rename`/`database_execute` 的快照仍内联，可按需声明 `hooks=("snapshot",)`。**验收口径：工具函数体内不再出现横切调用。**
+2. **出网账本（安全模型对称化）**：`send_email`/`im_send`/`send_webhook`/`publish_draft` 内部审批与审计调用为 **0**，而出网闸口不该缺位。建议照信任内核的哲学做——**不阻断，但每次带内容的出网记 ledger（目的地/大小/摘要）**并在「自主」面板可见。入网有 SSRF 底线、出网全裸，是当前最大的模型不对称。
+3. **记忆单一门面**：写入方散在 `tool_brain.py`(7+)/`api_server.py`/`brain_api.py`/`deepseek_client.py`，`_memory_full` 仍需兼容 `{text}` 与 `{key,value}` 两种结构。建议一个 `MemoryStore` 接口，带 **provenance（user/agent/web）+ confidence + supersede 语义**——可同时消掉两类已发生的 bug（失败记忆过期仍注入 G18、"外部网页→自动提炼→持久记忆"注入链）。
+4. **显式 Runtime 对象**：工具域经 `import deepseek_client as _dc` 在调用时读可变全局，模块边界靠约定维持（`import agent_tools.tool_files` 直连会触发重复注册）。建议启动时构造一次 Runtime（路径/配置/锁），工具从 `runtime()` 取——测试可并行、无导入顺序陷阱。
+5. **路由分层**：`api_server.py` 7870 行 / 94 端点在单个 `_Handler` 内；`_match_routes` 已是路由表，可正式化为 `api/` 包（`test_api_routes.py` 护航）。
+6. **拆分 `deepseek_client.py`（进行中）**：主文件仍有 4,793 行，保留共享基建 + `_TOOL_ORDER` 等顺序常量 + 六层构建 + 薄 facade 即可，其余按领域继续迁入 `agent_tools/`。已落地批次：基础四工具（−187 行）、🎨 媒体与图像 10 工具（−588 行）；配套能力已就绪（`toolkit.rebuild_layers` 多文件 AST、三门禁多文件扫描、`WhaleTalk.spec` 的 `collect_submodules`、`tests/test_tool_split.py`）。每拆一批跑 `tools/audit_tools.py --strict` + `tools/validate_tools.py` + `python -m pytest -q`。
+   > 注：本文件此前记录的"4,735 行"已过时（实测 4,793）；`check_docs.py` 未监控该类行数声明，改动后请手动校准。
+7. **版本与发布纪律**：现在有 git 了，把 CHANGELOG 里多批"未发版追加"收敛为真实 tag，并让 `check_docs.py` 校验 `VERSION` 与最新 CHANGELOG 标题一致——彻底消灭"构建与源码对不上"。
+8. **前端 e2e**：`npm test` 覆盖解析器/渲染器/工具函数（11 个 .mjs），无组件交互与端到端；项目已依赖 Playwright，加一个冒烟（起服务 → 发一条 → 断言 SSE 与产物条）成本很低。
+9. **测试资产**：按领域扩充分子级用例；`pytest tests/` 已接入 CI 与 `self_evolve` 验证链。
+
+### 明确不做
+
+- **不为"优雅"合并那 94 个端点**：CRUD 端点薄是特性不是缺陷。
+- **不给 `write_file`/`run_python` 加拦截**：`run_python` 本就绕得过，工具层设卡只挡君子（详见 [docs/信任内核.md](docs/信任内核.md) 第 8 节）。
+- **不合并 `snapshot.py` 与 `trust_kernel.py`**：两者生命周期语义不同（200 条轮转 vs 永不裁剪）。

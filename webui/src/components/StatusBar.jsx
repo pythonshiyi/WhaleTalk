@@ -64,6 +64,17 @@ export default function StatusBar({ mode, onSwitchMode, generating, generatingTe
           {` | 🛡 内核 ${status.trust.pending + status.trust.alerts} 项待确认`}
         </span>
       )}
+      {status?.degrade && status.degrade.critical > 0 && (
+        <span
+          className="st-budget-over"
+          title={
+            `⚠ 本次会话有 ${status.degrade.critical} 项关键能力降级（共 ${status.degrade.count} 条降级记录）。\n` +
+            "AI 的回答可能因此不完整；明细见「上下文」或 GET /v1/context 的 degradations。"
+          }
+        >
+          {` | ⚠ 降级 ${status.degrade.critical}`}
+        </span>
+      )}
     </span>
   ));
 

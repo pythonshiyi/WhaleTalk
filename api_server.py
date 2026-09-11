@@ -651,6 +651,35 @@ def _memory_full():
     return {"enabled": bool(d.get("enabled")), "facts": out}
 
 
+# ── 上下文装配依赖入口（P0-2）──────────────────────────────────────────
+# 刻意做成函数而非直接传对象：Provider 在调用时才解析模块属性，使测试可以用
+# 「桩 module 属性」的方式验证注入行为（tests/test_quiet_mode.py 就依赖这一点）。
+
+def _context_self_profile():
+    """核心自我状态（跨会话连续自我）。"""
+    import deepseek_client as dc
+    return dc.self_profile("get")
+
+
+def _context_brain_api():
+    """返回 brain_api 模块对象本身（供 Provider 调用 brain_context(…)）。"""
+    import brain_api
+    return brain_api
+
+
+def _context_trust_notice():
+    """信任内核自我完整性提示（干净时为空串）。"""
+    import trust_kernel
+    return trust_kernel.integrity_notice()
+
+
+def _context_degrade_notice():
+    """本次会话的关键降级提示（无关键降级时为空串）。"""
+    import degrade
+    return degrade.critical_notice()
+
+
+
 def _role_name(prompt):
     """识别当前角色名（内置 + 用户角色），匹配失败返回「自定义」。"""
     import roles as roles_mod
@@ -775,7 +804,19 @@ def _status():
         "thinking": cfg.get("thinking") or "high",
         # 信任内核摘要：仅暴露状态与文件名，详情走 GET /v1/trust（避免状态栏每次刷新都读账本）
         "trust": _trust_brief(),
+        # 降级摘要（P0-3）：让「AI 为什么变差」在状态栏就有信号；明细走 GET /v1/context
+        "degrade": _degrade_brief(),
     }
+
+
+def _degrade_brief():
+    """状态栏用的降级摘要（内存内计数，零 IO）。"""
+    try:
+        import degrade
+        s = degrade.summary()
+        return {"count": s.get("count", 0), "critical": s.get("critical", 0)}
+    except Exception:
+        return {"count": 0, "critical": 0}
 
 
 def _trust_state():
@@ -6229,12 +6270,29 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:
             costv = None
         prompt_n, completion_n, cached = _usage_month_summary()
+        # 上次上下文装配回执 + 降级明细（P0-2/P0-3 可观测性）：
+        # 复用本端点而不新增路由——既避免 check_docs 的端点数漂移，也让
+        # 「这一轮注入了什么 / 哪个来源坏了」和工具/记忆摘要在一处可查。
+        try:
+            import context_providers as _cp
+            last_injection = _cp.last_receipt()
+        except Exception as e:
+            import degrade as _dg
+            _dg.degrade("api.context.receipt", e, "无法读取上下文装配回执")
+            last_injection = {}
+        try:
+            import degrade as _dg2
+            degradations = _dg2.snapshot(limit=30)
+        except Exception:
+            degradations = []
         self._json(200, {
             "tools": tools,
             "memory": self._memory_summary(),
             # 本月真实累计 token（stats.json）+ 缓存命中率 + 本月成本
             "usage": {"prompt": prompt_n, "completion": completion_n,
                       "cached": cached, "cost": costv},
+            "last_injection": last_injection,
+            "degradations": degradations,
         })
 
 
@@ -7470,133 +7528,51 @@ class _Handler(BaseHTTPRequestHandler):
         }
 
     def _inject_system_messages(self, messages, cfg, pure_chat, quiet_mode=False):
+        """系统提示与上下文装配（Provider 表驱动，见 context_providers.py）。
+
+        返回 (messages, memory_text) 二元组——**契约不变**（tests/test_quiet_mode.py
+        直接解包 2 个值）。装配回执另存于 context_providers.last_receipt()，
+        由 GET /v1/context 暴露：谁注入了、各占多少字符、谁被跳过、谁失败了。
+
+        改造前这里是 128 行内联代码 + 9 个 `try/except: pass`——某个来源坏掉时
+        上下文静默变少、AI 变差却没有任何信号。现在每个来源是一个 Provider，
+        失败经 degrade() 记录（含影响说明）并出现在回执里。
+        """
         import config_defaults
         import stores as stores_mod
         if any(isinstance(m, dict) and m.get("role") == "system" for m in messages):
             return messages, None
-        if pure_chat:
-            prompt = config_defaults.DIALOG_SYSTEM_PROMPT
-            parts = []
-        else:
-            prompt = str(cfg.get("system_prompt") or config_defaults.DEFAULT_SYSTEM_PROMPT)
-            parts = [config_defaults.TASK_QUALITY_GUIDE]
-        # 纯净对话总开关：开启后跳过以下全部个性上下文（长期记忆/核心自我/大脑），AI 只带基础提示
-        if not quiet_mode:
-            try:
-                mem = _memory_full()
-                # 记忆开关：config.memory_enabled 关闭时完全不注入（省 token + 稳定前缀缓存）
-                if cfg.get("memory_enabled", True):
-                    facts = [f["text"] for f in mem.get("facts", []) if f.get("text")]
-                    if facts:
-                        parts.append("[长期记忆]\n" + "\n".join("- " + t for t in facts[-6:]))
-            except Exception:
-                pass
-            # 核心自我状态注入（跨会话连续自我；有实质内容才注入，空则不占 token）
-            try:
-                import deepseek_client as dc
-                sp = dc.self_profile("get")
-                if sp and sp.strip() and "核心自我状态]" in sp and "为空" not in sp:
-                    parts.append(sp)
-            except Exception:
-                pass
-            # 鲸语大脑上下文注入（挂载大脑后，AI 对话自动携带身份/断点/自我认知/相关记忆）
-            # 以最近一条用户消息尾部文本作 query 走语义检索——接通闲置的
-            # brain_context(query) 通道，让记忆注入跟随当前话题而非固定 top-N
-            try:
-                import brain_api
-                _q = ""
-                for _m in reversed(messages):
-                    if not isinstance(_m, dict) or _m.get("role") != "user":
-                        continue
-                    _c = _m.get("content")
-                    if isinstance(_c, str) and str(_c).strip():
-                        _q = str(_c).strip()[-60:]
-                    elif isinstance(_c, list):
-                        _txt = "".join(
-                            str(x.get("text") or "").strip()
-                            for x in _c if isinstance(x, dict) and x.get("type") == "text"
-                            and str(x.get("text") or "").strip())
-                        _q = _txt[-60:] if _txt else ""
-                    break
-                try:
-                    # L1 预算：大脑上下文控制在 ~1500 字符（不挤占其他注入段）；
-                    # 话题 query 优先（语义相关记忆），否则给同等的空 query 衰减注入
-                    _budget = int(cfg.get("brain_context_budget") or 1500) or 0
-                    if _budget <= 0:
-                        bc = brain_api.brain_context(query=_q) if _q else brain_api.brain_context()
-                    else:
-                        bc = brain_api.brain_context(query=_q, budget_chars=_budget) if _q \
-                            else brain_api.brain_context(budget_chars=_budget)
-                except TypeError:  # 兼容旧签名/外部桩（无 query/budget_chars 参数）
-                    bc = brain_api.brain_context()
-                if bc:
-                    parts.append(bc)
-            except Exception:
-                pass
-        # 当前工作目录注入（仅任务模式）：与 _status() 同口径兜底（active_dir 空/失效 → <DATA_DIR>/workspace），
-        # 保证 AI 每次都能看到明确的工作区根，避免瞎猜路径/乱放桌面。
-        # 对话/纯净模式(pure_chat)无工具、不写文件，故不注入——避免纯聊天也收到"去写产物"的指令。
-        if not pure_chat:
-            active_dir = str(cfg.get("active_dir") or "").strip()
-            if not active_dir or not os.path.isdir(active_dir):
-                active_dir = os.path.join(DATA_DIR, "workspace")
-                os.makedirs(active_dir, exist_ok=True)
-            parts.append(
-                "[工作区目录] " + active_dir
-                + "\n所有新任务的产物都写入该目录下的独立子目录（按任务名新建子目录并写入其中），"
-                + "不要写到桌面/临时/系统目录；"
-                + "文档/PPT/PDF/图片等给用户看的交付物可放在该子目录或用户指定位置。"
-            )
-        # 自我完整性：存在未声明的信任内核改动/告警时才注入（干净时零 token、不扰动缓存）。
-        # 这不是「禁止」，而是「不得隐瞒」——把改动摊到对话里，由用户决定保留或回滚。
-        if not pure_chat:
-            try:
-                import trust_kernel as _tkmod
-                _tn = _tkmod.integrity_notice()
-                if _tn:
-                    parts.append(_tn)
-            except Exception:
-                pass
-        if not pure_chat:
-            try:
-                fpm = stores_mod.failure_patterns_text(FAILURES_PATH)
-                if fpm:
-                    parts.append(fpm)
-            except Exception:
-                pass
-            try:
-                pats = stores_mod.load_patterns(PATTERNS_PATH)
-                if pats:
-                    p_lines = ["[已验证工具链] 以下调用曾成功（同类任务优先复用）："]
-                    for p in pats[-3:]:
-                        if isinstance(p, dict) and (p.get("tool") or p.get("recipe")):
-                            p_lines.append("- " + str(p.get("tool") or p.get("recipe")))
-                    if len(p_lines) > 1:
-                        parts.append("\n".join(p_lines))
-            except Exception:
-                pass
-            try:
-                hint = _installed_plugins_hint()
-                if hint:
-                    parts.append(hint)
-            except Exception:
-                pass
-            try:
-                tasklog_path = os.path.join(active_dir or WORKSPACE_DIR, ".whaletalk", "tasklog.json")
-                tl = stores_mod.load_tasklog(tasklog_path)
-                tasks = tl.get("tasks") or []
-                if tasks:
-                    tl_lines = ["[项目任务记录] 跨会话交接参考："]
-                    for t in tasks[-3:]:
-                        if isinstance(t, dict) and t.get("title"):
-                            tl_lines.append("- " + str(t["title"])[:60])
-                    if len(tl_lines) > 1:
-                        parts.append("\n".join(tl_lines))
-            except Exception:
-                pass
-        sys_msg = {"role": "system", "content": prompt}
-        memory_text = "\n\n".join(parts) if parts else None
-        return [sys_msg] + [dict(m) for m in messages], memory_text
+        import context_providers as _cp
+        # 工作区口径与 _status() 一致（active_dir 空/失效 → <DATA_DIR>/workspace）
+        active_dir = str(cfg.get("active_dir") or "").strip()
+        if not active_dir or not os.path.isdir(active_dir):
+            active_dir = os.path.join(DATA_DIR, "workspace")
+        ctx = _cp.Context(
+            messages=messages,
+            cfg=cfg,
+            pure_chat=pure_chat,
+            quiet_mode=quiet_mode,
+            deps={
+                "task_quality_guide": config_defaults.TASK_QUALITY_GUIDE,
+                "default_prompt": config_defaults.DEFAULT_SYSTEM_PROMPT,
+                "dialog_prompt": config_defaults.DIALOG_SYSTEM_PROMPT,
+                "data_dir": DATA_DIR,
+                "active_dir": active_dir,
+                # 以下依赖刻意做成「调用时按名字解析」的入口函数：模块属性可被
+                # 测试打桩（见 tests/test_quiet_mode.py），提前缓存函数对象会让桩失效。
+                "memory_full": _memory_full,
+                "self_profile": _context_self_profile,
+                "brain_api": _context_brain_api,
+                "trust_notice": _context_trust_notice,
+                "degrade_notice": _context_degrade_notice,
+                "failures_text": lambda: stores_mod.failure_patterns_text(FAILURES_PATH),
+                "patterns_load": lambda: stores_mod.load_patterns(PATTERNS_PATH),
+                "plugins_hint": _installed_plugins_hint,
+            },
+        )
+        out = _cp.assemble(ctx)
+        sys_msg = {"role": "system", "content": out["prompt"]}
+        return [sys_msg] + [dict(m) for m in messages], out["text"]
 
     def _handle_chat(self):
         body = self._read_body()
@@ -7810,6 +7786,12 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
         snapshot_mod.init(os.path.join(DATA_DIR, "undo"))
     except Exception:
         logger.warning("快照模块初始化失败（可降级）：写操作将不带自动快照，误操作无法一键恢复")
+    # 退化日志落盘（P0-3）：让「静默降级」跨会话可查——AI 变差时能定位到是哪个来源坏了。
+    try:
+        import degrade as _degrade_mod
+        _degrade_mod.init(os.path.join(DATA_DIR, "degradations.json"))
+    except Exception:
+        logger.warning("退化日志初始化失败（可降级）：降级记录只留在内存，重启后不可查")
     # 信任内核启动核对：检出「未声明的自我修改」并留痕。
     # 刻意不阻断启动、不回滚文件（默认 report 模式）——能力一条不减，改由
     # 状态端点 + 系统提示注入 + STATUS.md 让改动可见；处置权始终在用户。
