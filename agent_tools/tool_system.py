@@ -276,6 +276,98 @@ def read_project_file(path, offset=0, limit=0):
         return f"错误：读取失败: {e}"
 
 
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "list_my_capabilities",
+                "description": "列出你拥有的全部能力的权威清单（只读自省，直接取自六层工具注册表实时数据）。不带参数返回按组汇总的成员数与能力总数；传 group 返回该组全部工具名与动作短语；传 query 按工具名/动作短语模糊搜索。需要确认「我到底有哪些能力」时用它，不要凭记忆或猜测回答自己的能力范围",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "group": {"type": "string", "description": "可选：仅返回该组。组名可带或不带 emoji，如「数据与文档」或「📊 数据与文档」"},
+                        "query": {"type": "string", "description": "可选：按工具名/动作短语模糊匹配，如 pdf、截图、表格、邮件"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='列出全部能力/查我有哪些工具',
+    preactivate=(('有哪些能力', '有什么能力', '有什么工具', '能力清单', '我的能力', '会哪些能力'),),
+)
+def list_my_capabilities(group="", query=""):
+    """列出自身能力清单（只读自省）。
+
+    动机（v3.10.x）：能力地图只在 smart_tools 首轮注入、之后降级为精简提示，
+    模型要确认「我到底有多少项能力、某组有哪些」此前只能去读源码——自我认知是
+    外挂的。本工具让自省内生且可核验：total 直接取自注册表，与 activate_tools
+    的分组展开同源，不会出现「激活枚举 133 项 / 声明 148 项」这类对不上的情况。
+
+    返回策略（刻意不默认全量 dump）：无参时只给「分组 → 成员数 + 总数」，约百
+    token；看明细再按 group/query 下钻。默认全量输出会与能力地图等重（≈1.8k
+    token），等于把按需加载省下来的上下文又还回去。
+    """
+    tools = list(_dc.TOOLS or ())
+    groups = list(_dc.TOOL_GROUPS or ())
+    phrases = dict(_dc._TOOL_ACTION_PHRASES or {})
+    names = [t["function"]["name"] for t in tools]
+    total = len(names)
+    g = str(group or "").strip()
+    q = str(query or "").strip()
+
+    if q:
+        ql = q.lower()
+        hit = {}
+        for cat, members in groups:
+            for n in members:
+                ph = phrases.get(n) or ""
+                if ql in n.lower() or ql in ph.lower():
+                    hit.setdefault(n, []).append(cat)
+        if not hit:
+            return (
+                f"没有匹配「{q}」的能力（当前共 {total} 项）。"
+                "可用 list_my_capabilities() 看分组汇总，或换个词（如 pdf/表格/邮件/截图）。"
+            )
+        lines = [f"匹配「{q}」的能力 {len(hit)} 项（当前共 {total} 项）："]
+        for n in names:  # 按 TOOLS 顺序输出，结果稳定可复现
+            if n in hit:
+                ph = phrases.get(n) or ""
+                suffix = f"（{ph}）" if ph else ""
+                lines.append(f"- {n}{suffix}｜归属：{'、'.join(hit[n])}")
+        return "\n".join(lines)
+
+    if not g:
+        lines = [f"你共拥有 {total} 项能力，分 {len(groups)} 组："]
+        memberships = 0
+        for cat, members in groups:
+            memberships += len(members)
+            lines.append(f"- {cat}：{len(members)} 项")
+        dup = memberships - total
+        if dup:
+            lines.append(
+                f"（组内成员合计 {memberships} 项，比总数多 {dup} 项——差额来自跨组重复归属的工具，"
+                f"并非能力缺失；核对总数请以 {total} 为准。）"
+            )
+        lines.append(
+            '看某组明细：list_my_capabilities(group="数据与文档")；'
+            '按关键词搜索：list_my_capabilities(query="pdf")。'
+        )
+        return "\n".join(lines)
+
+    matched = [(cat, ms) for cat, ms in groups if g == cat or g in cat]
+    if not matched:
+        avail = "、".join((c.split(" ", 1)[-1] if " " in c else c) for c, _ in groups)
+        return f"没有名为「{g}」的能力组。可用组名：{avail}"
+    out = []
+    for cat, members in matched:
+        out.append(f"{cat}（{len(members)} 项）：")
+        for n in members:
+            ph = phrases.get(n) or ""
+            out.append(f"- {n}（{ph}）" if ph else f"- {n}")
+    return "\n".join(out)
+
+
 def _evo_first_line(text):
     """取首个「有实质内容」的行（跳标题/列表/引用/围栏/占位符）。"""
     for line in str(text or "").splitlines():
@@ -1235,6 +1327,38 @@ def app_manage(action="list", query="", source="auto"):
     return f"错误：未知 action={act}（支持 managers/list/search/install/uninstall/upgrade/bootstrap）"
 
 
+def _preactivate_hits_lines():
+    """预激活命中统计段（方案 C 出口）：让手工维护的 _HINT_ORDER 有数据可依。
+
+    动机：86 条关键词此前没有命中率数据，无从判断「该加/该删/从未生效」，长期只能
+    靠感觉增删。此处把累计命中 + 从未命中的条目摊开，供定期复盘（数据驱动优化）。
+    """
+    try:
+        snap = dict(_dc.hint_hits_snapshot() or {})
+    except Exception:
+        return ""
+    try:
+        all_keys = [ks[0] for ks, _ in (_dc._PREACTIVATE_HINTS or ()) if ks]
+    except Exception:
+        all_keys = []
+    if not all_keys:
+        return ""
+    lines = [
+        f"预激活关键词命中统计（累计 {sum(snap.values())} 次，{len(snap)}/{len(all_keys)} 条曾命中）："
+    ]
+    if snap:
+        top = sorted(snap.items(), key=lambda kv: (-kv[1], kv[0]))
+        lines.append("  命中最多：" + "、".join(f"{k} {v} 次" for k, v in top[:8]))
+    never = [k for k in all_keys if k not in snap]
+    if never:
+        lines.append(
+            f"  从未命中 {len(never)} 条（可考虑删改）："
+            + "、".join(never[:12])
+            + ("…" if len(never) > 12 else "")
+        )
+    return "\n".join(lines)
+
+
 @tool(
         {
             "type": "function",
@@ -1292,7 +1416,9 @@ def usage_report(days=7):
                     usage, model, day=d
                 )
         if not any(totals.values()):
-            return f"近 {days} 天没有使用记录"
+            empty = f"近 {days} 天没有使用记录"
+            hits = _preactivate_hits_lines()
+            return empty + ("\n" + hits if hits else "")
         hit_ratio = totals["cache_hit"] / max(1, totals["prompt"])
         lines = [
             f"近 {days} 天用量报告：",
@@ -1303,6 +1429,9 @@ def usage_report(days=7):
             lines.append(f"模型 {model}: 输入 {u['prompt']:,} / 输出 {u['completion']:,} / 费用约 ¥{model_cost.get(model, 0.0):.2f}")
         if per_day:
             lines.append("逐日明细：\n" + "\n".join(per_day))
+        hits = _preactivate_hits_lines()
+        if hits:
+            lines.append(hits)
         return "\n".join(lines)
     except Exception as e:
         return f"错误：生成报告失败: {e}"
@@ -1429,4 +1558,4 @@ def create_plugin(name, description="", tools=None, skills=None, workflows=None,
     )
 
 
-__all__ = ['create_plugin', 'watch_files', 'recall_session', 'project_info', 'read_project_file', 'create_evolution', 'self_evolve', 'verify_files', 'git_tool', 'notify_desktop', 'app_manage', 'usage_report']
+__all__ = ['create_plugin', 'watch_files', 'recall_session', 'project_info', 'read_project_file', 'list_my_capabilities', 'create_evolution', 'self_evolve', 'verify_files', 'git_tool', 'notify_desktop', 'app_manage', 'usage_report']

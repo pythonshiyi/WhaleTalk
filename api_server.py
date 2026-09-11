@@ -263,6 +263,7 @@ def _make_permission_cb(send, stop_event):
 # 工具 → 能力域 映射（能力中心 12 域展示用，不改动核心 TOOLS 定义）
 _TOOL_DOMAIN = {
     "get_date": "系统与基础", "get_weather": "系统与基础",
+    "list_my_capabilities": "系统与基础",
     "environment_info": "系统与基础", "call_api": "系统与基础", "usage_report": "系统与基础",
     "secret_store": "系统与基础", "kv_store": "系统与基础",
     "watch_files": "系统与基础", "track_web": "系统与基础", "recall_session": "系统与基础",
@@ -2334,6 +2335,7 @@ def _dc_wiring_table():
         ("PATTERNS_FILE", PATTERNS_PATH),
         ("FAILURES_FILE", FAILURES_PATH),
         ("FAILURES_ARCHIVE_FILE", FAILURES_ARCHIVE_PATH),
+        ("HINT_HITS_FILE", os.path.join(DATA_DIR, "preactivate_hits.json")),
         ("RSS_SOURCES_FILE", os.path.join(DATA_DIR, "rss_sources.json")),
         ("KV_CACHE_DIR", os.path.join(DATA_DIR, "kv_cache")),
         ("WEBDAV_CONFIG_FILE", os.path.join(DATA_DIR, "webdav_config.json")),

@@ -2154,6 +2154,7 @@ STATS_FILE = None            # DATA_DIR/stats.json
 PATTERNS_FILE = None         # DATA_DIR/patterns.json（成功模式配方，run_workflow 的 recipe 步骤用）
 FAILURES_FILE = None         # DATA_DIR/failures.json（失败模式库，failure_memory 工具用）
 FAILURES_ARCHIVE_FILE = None  # DATA_DIR/failures_archive.json（失败模式溢出归档）
+HINT_HITS_FILE = None        # DATA_DIR/preactivate_hits.json（预激活关键词命中计数，数据驱动维护 _HINT_ORDER）
 IMAGE_GEN_BASE = None        # 图片生成端点（默认 = base_url）
 IMAGE_GEN_KEY = None         # 图片生成 API Key（默认 = api_key）
 IMAGE_GEN_MODEL = "gpt-image-1"
@@ -3347,6 +3348,7 @@ _TOOL_ORDER = [
     'knowledge_search', 'database_execute', 'read_email', 'email_summary', 'agent_mail', 'task_checkpoint_save', 'task_checkpoint_load', 'run_workflow',
     'image_generate', 'usage_report', 'pdf_extract', 'pdf_create', 'pdf_visual_check', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'rss_fetch', 'qrcode',
     'secret_store', 'kv_store', 'media_ffmpeg', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_plugin', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check',
+    'list_my_capabilities',
 ]
 
 _GROUP_ORDER = [
@@ -3385,6 +3387,7 @@ _HINT_ORDER = [
     ('建索引', '知识库索引', '语义检索', '知识库搜索'), ('剪贴板', '复制到剪贴板', '粘贴出来', '读剪贴板'), ('批量改名', '批量重命名'),
     ('查看定时', '我的定时任务', '取消定时', '列出定时'), ('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'), ('朗读', '语音播报', '文字转语音', '读给我听', '停止朗读', 'tts'),
     ('执行流程', '运行工作流', '跑流程', '流程模板'), ('失败模式', '失败记忆', '老是报错', '已修复', '消解'),
+    ('有哪些能力', '有什么能力', '有什么工具', '能力清单', '我的能力', '会哪些能力'),
 ]
 
 TOOLS = build_tool_list(_TOOL_ORDER)
@@ -3519,6 +3522,66 @@ def _expand_activation(wanted, available_names, activated):
 # 关键词预激活（chat 层兜底）：扫描最近 user 消息，命中常见意图关键词时
 # 预激活对应工具，让常见任务免点菜直接可用（仅提前加载定义，不改变权限）。
 
+# 扫描窗口（条数）：只扫最近 1 条会让「继续」「然后呢」这类省略式追问丢失预激活
+# （追问句本身不含关键词）→ 模型需自行 activate_tools，多一次往返。改为扫最近 N 条
+# 取并集；N=3 是命中率与「误激活」之间的保守折中（旧话题关键词最多往回带 2 轮）。
+_PREACTIVATE_WINDOW = 3
+
+# 命中埋点（方案 C）：_HINT_ORDER 的 86 条关键词是手工维护的，没有命中率就无从
+# 判断「该加/该删/从未生效」。此处按关键词元组首词累加计数（首词即该条的稳定标识），
+# 惰性加载 + 命中后尽力落盘（落盘失败静默，埋点绝不干扰对话主流程），
+# 快照经 usage_report 暴露，供定期数据驱动复盘。
+_hint_hits = {}
+_hint_hits_loaded = False
+_hint_hits_lock = threading.Lock()
+
+
+def _load_hint_hits():
+    """惰性加载命中计数（文件缺失/损坏一律返回空，不影响主流程）。"""
+    global _hint_hits, _hint_hits_loaded
+    if _hint_hits_loaded:
+        return _hint_hits
+    _hint_hits_loaded = True
+    try:
+        if HINT_HITS_FILE and os.path.exists(HINT_HITS_FILE):
+            with open(HINT_HITS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                _hint_hits = {
+                    str(k): int(v) for k, v in data.items()
+                    if isinstance(v, (int, float)) and not isinstance(v, bool)
+                }
+    except Exception:
+        _hint_hits = {}
+    return _hint_hits
+
+
+def _save_hint_hits():
+    """尽力落盘命中计数：任何失败都静默（埋点不得影响对话）。"""
+    try:
+        if not HINT_HITS_FILE:
+            return
+        with _hint_hits_lock:
+            payload = json.dumps(_hint_hits, ensure_ascii=False, indent=0)
+        _atomic_write(HINT_HITS_FILE, payload)
+    except Exception:
+        pass
+
+
+def _record_hint_hit(key):
+    """记一次预激活命中（key = 关键词元组首词）。"""
+    _load_hint_hits()
+    with _hint_hits_lock:
+        _hint_hits[key] = _hint_hits.get(key, 0) + 1
+    _save_hint_hits()
+
+
+def hint_hits_snapshot():
+    """命中计数只读快照 {关键词: 次数}（供 usage_report 数据驱动复盘）。"""
+    _load_hint_hits()
+    with _hint_hits_lock:
+        return dict(_hint_hits)
+
 
 def _message_text(m):
     """提取消息的纯文本（兼容图片内联的内容块）。"""
@@ -3531,8 +3594,18 @@ def _message_text(m):
     return str(c or "")
 
 
-def _preactivate_from_messages(messages, activated):
-    """chat 层关键词预激活：扫描最近的 user 消息，命中意图词即预激活对应工具。"""
+def _preactivate_from_messages(messages, activated, window=_PREACTIVATE_WINDOW):
+    """chat 层关键词预激活：扫描最近 window 条 user 消息，命中意图词即预激活。
+
+    修改动机（v3.10.x）：原实现把 `return activated` 写在循环内，只扫最近 1 条
+    user 消息。用户用「继续」「然后呢」「再总结下」这类省略式追问时，句中不含任何
+    意图关键词 → 预激活整体失效 → 模型得额外一次 activate_tools 往返才发现能力。
+
+    现扫描最近 window 条（默认 3）并取并集：旧话题的关键词最多往回带 2 轮，
+    兼顾命中率与「误激活」成本（预激活只是提前加载定义，不改变权限、不影响
+    enabled_tools 之外的任何工具）。空文本消息（如纯图片）不占用窗口名额。
+    """
+    scanned = 0
     for m in reversed(messages):
         if not (isinstance(m, dict) and m.get("role") == "user"):
             continue
@@ -3542,7 +3615,10 @@ def _preactivate_from_messages(messages, activated):
         for kws, tools in _PREACTIVATE_HINTS:
             if any(kw in text for kw in kws):
                 activated.update(tools)
-        return activated  # 只扫最近一条 user 消息
+                _record_hint_hit(kws[0])
+        scanned += 1
+        if scanned >= window:
+            break
     return activated
 
 # 核心动作短语（能力感知关键：一行说清「能做什么」）

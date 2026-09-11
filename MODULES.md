@@ -11,7 +11,7 @@ web_app.py（唯一入口：浏览器 + 托盘 + 快捷方式 + 依赖自检）
 api_server.py（本地 HTTP API：REST + SSE，94 /v1 端点）
     │
     ▼
-deepseek_client.py（能力引擎：DeepSeekClient + 148 工具 + smart_tools）
+deepseek_client.py（能力引擎：DeepSeekClient + 149 工具 + smart_tools）
     │
     ├─ 基础设施：permissions / security / crypto / stores / stats / tokens / persistence
     │              ＋ trust_kernel（信任内核：自我修改的声明 / 核对 / 回滚）
@@ -40,7 +40,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 148 工具 + smart_tools）
 
 | 模块 | 职责 |
 |---|---|
-| `deepseek_client.py` | 单体能力引擎（约 1.3 万行）：**统一模型** `deepseek-flash`（DeepSeek V4.1 Flash，原生多模态）客户端（thinking/多模态/流式/重试）+ `MODEL_ID`/`MODELS`/`LEGACY_MODEL_ALIASES`/`resolve_model`/`is_vision_model` 模型层、148 个 Agent 工具实现、工具注册表（`TOOLS`/`TOOL_CALL_MAP`）、smart_tools 智能调取（能力地图 + `activate_tools` 点菜 + 关键词预激活）、上下文压缩辅助、自我进化工具（`create_evolution`/`self_evolve` 四层验证闸：语法编译→lint→导入冒烟→测试）、代码结构定位 `code_lookup`（AST）、对话记忆自动写/删/改与大脑双向同步、自动记忆提炼（`auto_memory`） |
+| `deepseek_client.py` | 单体能力引擎（约 1.3 万行）：**统一模型** `deepseek-flash`（DeepSeek V4.1 Flash，原生多模态）客户端（thinking/多模态/流式/重试）+ `MODEL_ID`/`MODELS`/`LEGACY_MODEL_ALIASES`/`resolve_model`/`is_vision_model` 模型层、149 个 Agent 工具实现、工具注册表（`TOOLS`/`TOOL_CALL_MAP`）、smart_tools 智能调取（能力地图 + `activate_tools` 点菜 + 关键词预激活）、上下文压缩辅助、自我进化工具（`create_evolution`/`self_evolve` 四层验证闸：语法编译→lint→导入冒烟→测试）、代码结构定位 `code_lookup`（AST）、对话记忆自动写/删/改与大脑双向同步、自动记忆提炼（`auto_memory`） |
 
 > 演进建议：`deepseek_client.py` 已按「工具实现 → 注册表 → 客户端类」分层组织，但仍是单文件。可按领域拆为 `tools/` 包（web/data/doc/media/system），保留顶层薄 facade 做 re-export 兼容，用 `tools/audit_tools.py` 门禁护航。
 
