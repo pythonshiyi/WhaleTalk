@@ -75,6 +75,18 @@ export default function StatusBar({ mode, onSwitchMode, generating, generatingTe
           {` | ⚠ 降级 ${status.degrade.critical}`}
         </span>
       )}
+      {status?.egress && status.egress.alert && (
+        <span
+          className="st-budget-over"
+          title={
+            `⇡ 本次会话已向外部发送 ${status.egress.count} 次数据（累计 ${status.egress.bytes} 字节）。\n` +
+            (status.egress.targets?.length ? `目的地：${status.egress.targets.join("、")}\n` : "") +
+            "如非有意发送请立即检查；明细见 GET /v1/context 的 egress。"
+          }
+        >
+          {` | ⇡ 出网 ${status.egress.count}`}
+        </span>
+      )}
     </span>
   ));
 

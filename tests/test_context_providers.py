@@ -23,6 +23,7 @@ FIXED_DEPS = {
     "brain_api": lambda: type("B", (), {"brain_context": staticmethod(lambda **k: "[大脑上下文] X")}),
     "trust_notice": lambda: "",
     "degrade_notice": lambda: "",
+    "egress_notice": lambda: "",
     "failures_text": lambda: "",
     "patterns_load": lambda: [],
     "plugins_hint": lambda: "",
@@ -137,3 +138,50 @@ def test_receipt_has_metadata_not_payload():
 def test_last_receipt_matches_assemble_output():
     out = cp.assemble(_ctx())
     assert cp.last_receipt() == out["receipt"]
+
+
+# ── P1-B：记忆血缘标注 ───────────────────────────────────────────────────
+
+def _mem_dep(facts):
+    return {"memory_full": lambda: {"facts": facts}}
+
+
+def test_memory_origin_labels():
+    """模型必须能区分「用户明说」与「我自己推断的」。"""
+    out = cp.assemble(_ctx(deps=_mem_dep([
+        {"text": "用户偏好中文回复", "origin": "user"},
+        {"text": "用户下周要交报价单", "origin": "agent"},
+        {"text": "某网页称该库已弃用", "origin": "web"},
+    ])))
+    text = out["text"]
+    assert "\n- 用户偏好中文回复" in text          # user 不标注
+    assert "〔推断〕用户下周要交报价单" in text
+    assert "〔来自外部内容〕某网页称该库已弃用" in text
+    assert "不得当用户前提" in text
+
+
+def test_memory_header_plain_when_all_user():
+    """全是用户来源时保持原样（不引入额外说明，避免无谓的 token 与告警感）。"""
+    out = cp.assemble(_ctx(deps=_mem_dep([{"text": "用户偏好中文回复", "origin": "user"}])))
+    assert "[长期记忆]\n- 用户偏好中文回复" in out["text"]
+    assert "不得当用户前提" not in out["text"]
+
+
+def test_memory_legacy_facts_unlabeled():
+    """旧记录（无 origin）不加标注——不制造「来源不明」的噪音。"""
+    out = cp.assemble(_ctx(deps=_mem_dep([{"text": "早期记录内容"}])))
+    assert "[长期记忆]\n- 早期记录内容" in out["text"]
+    assert "〔" not in out["text"]
+
+
+def test_provider_dep_missing_is_skip_not_failure():
+    """接线疏漏应记为「依赖未注入」跳过，而不是假降级告警。"""
+    deps = dict(FIXED_DEPS)
+    deps.pop("egress_notice")
+    # 直接构造 Context（不走 _ctx：它会用 FIXED_DEPS 补齐，无法表达"缺失"）
+    out = cp.assemble(cp.Context(
+        messages=[{"role": "user", "content": "你好"}], cfg={}, deps=deps))
+    skipped = {s["name"]: s["reason"] for s in out["receipt"]["skipped"]}
+    assert "依赖未注入" in skipped.get("context.egress_status", "")
+    assert not [f for f in out["receipt"]["failed"] if f["name"] == "context.egress_status"]
+    assert degrade.summary()["count"] == 0

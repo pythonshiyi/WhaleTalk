@@ -86,15 +86,18 @@ def _mem_entity_alias(e, known):
             "type": "function",
             "function": {
                 "name": "write_memory",
-                "description": "写入一条长期记忆（用户偏好、关键结论、重要事实），自动去重，最多 2000 条；可附带类型、实体与关系三元组形成知识图谱",
+                "description": "写入一条长期记忆（用户偏好、关键结论、重要事实），自动去重，最多 2000 条；可附带类型、实体与关系三元组形成知识图谱。写入时请如实声明 origin（血缘）：用户明确要求记住的内容用 user，你自己推断总结的用 agent（默认）——注入上下文时会对非 user 来源加标注",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "text": {"type": "string", "description": "要记住的内容"},
-                        "tags": {"type": "string", "description": "可选：逗号分隔的标签，便于检索"},
+                        "tags": {"type": "string", "description": "可选：逗号分隔的标签，便于检索；首项同时作为该记忆的 key（key 相同的写入会作废旧条目）"},
                         "type": {"type": "string", "description": "可选：记忆类型（偏好/事实/项目/联系/规则 等）"},
                         "entities": {"type": "string", "description": "可选：涉及的实体列表，逗号分隔，如 张三,项目A"},
                         "relations": {"type": "string", "description": "可选：关系三元组，分号分隔的 实体-关系-实体，如 张三-负责-项目A"},
+                        "origin": {"type": "string", "description": "可选：记忆血缘——user（用户明确要求记住）/ agent（你自己推断，默认）/ web（来自外部网页内容）/ system。请如实填写，这决定注入时是否被标注"},
+                        "confidence": {"type": "number", "description": "可选：0-1 置信度（默认按 origin：user/system=1.0、agent=0.5、web=0.3）"},
+                        "supersede_key": {"type": "string", "description": "可选：要取代的旧记忆（其 id / key / 完全相同文本）。只有显式传入才会作废旧条目；上一次写入若提示「已有相似记忆」，把其中的 id 传到这里即可完成取代"},
                     },
                     "required": ["text"],
                 },
@@ -104,12 +107,21 @@ def _mem_entity_alias(e, known):
     phrases='写入长期记忆',
     preactivate=(('记忆', '记住', '偏好', '忘记', '删除记忆', '修改记忆'),),
 )
-def write_memory(text, tags="", type="", entities="", relations=""):
-    """写入一条长期记忆（Agent 自动写入，与手动维护的 facts 同文件）。
+def write_memory(text, tags="", type="", entities="", relations="",
+                 origin="agent", confidence=None, supersede_key=""):
+    """写入一条长期记忆（统一走 memory_facade：去重 / 取代 / 血缘）。
 
     type：记忆类型（偏好/事实/项目/联系/规则 等，便于分类检索）；
     entities：涉及的实体列表（逗号分隔，如 张三,项目A），构成知识图谱节点；
-    relations：关系三元组（分号分隔的 "实体-关系-实体"，如 张三-负责-项目A）。
+    relations：关系三元组（分号分隔的 "实体-关系-实体"，如 张三-负责-项目A）；
+    origin：记忆**血缘**——这一项决定注入时是否被标注，请如实填写：
+        user（用户明确要求记住）/ agent（你自己推断总结，默认）/
+        web（来自外部网页等内容）/ system；
+    confidence：0-1 置信度（默认按 origin：user/system=1.0、agent=0.5、web=0.3）；
+    supersede_key：要**取代**的旧记忆（其 id / key / 完全相同文本）。**只有显式传入
+        才会作废旧条目**——绝不按相似度自动作废（实测证明词面相似度无法区分
+        「应作废」与「绝不能作废」）。若上一次写入提示了「已有相似记忆」，把其中的
+        id 传到这里即可完成取代。
     """
     if not _dc.MEMORY_ENABLED:
         return "记忆功能已关闭（可在设置中开启），未写入"
@@ -118,68 +130,37 @@ def write_memory(text, tags="", type="", entities="", relations=""):
         return "错误：记忆内容为空"
     if len(text) > MEMORY_MAX_TEXT:
         text = text[:MEMORY_MAX_TEXT] + "…"
-    with _MEMORY_LOCK:
-        data = _load_memory()
-        key = str(tags or "").strip().split(",")[0].strip() or "自动记忆"
-        facts = data.get("facts") or []
-        # 实体别名归并：新实体优先映射到既有图谱节点（避免 张三/张三2 双节点）
-        known_ents = set()
-        for f in facts:
-            known_ents.update(f.get("entities") or [])
-        ent = []
-        for e in str(entities or "").split(","):
-            e = e.strip()[:30]
-            if not e:
-                continue
-            ent.append(_mem_entity_alias(e, known_ents))
-        ent = list(dict.fromkeys(ent))  # 保序去重
-        rels = []
-        for r in str(relations or "").split(";"):
-            parts = [p.strip() for p in str(r).split("-") if p.strip()]
-            if len(parts) == 3:
-                rels.append({"rel": parts[1][:20], "to": parts[2][:30]})
-        for f in facts:
-            if f.get("value") == text:
-                return "该内容已存在，未重复写入"
-        # 近重复合并：轻微改写（高重合）不新增条目，而是并入 tags/type/entities/relations
-        for f in facts:
-            sim = _mem_similar(f.get("value", ""), text)
-            if sim < _MEM_SIM_MERGE:
-                continue
-            old_type = str(f.get("type") or "")
-            new_type = str(type or "").strip()[:20]
-            if new_type and new_type not in old_type:
-                f["type"] = (old_type + "|" + new_type)[:20] if old_type else new_type
-            merged_ents = list(dict.fromkeys(list(f.get("entities") or []) + ent))
-            if merged_ents:
-                f["entities"] = merged_ents
-            if rels:
-                exist_tri = {(r.get("rel"), r.get("to")) for r in f.get("relations") or []}
-                merged_rels = list(f.get("relations") or []) + [
-                    r for r in rels if (r.get("rel"), r.get("to")) not in exist_tri
-                ]
-                f["relations"] = merged_rels[:20]
-            f["ts"] = datetime.now().isoformat(timespec="seconds")
-            if _save_memory(data):
-                _brain_sync_memory(text, key, new_type, ent, rels)
-                return f"检测到近重复记忆（相似度 {sim:.0%}），已合并到现有条目"
-            return "错误：记忆写入失败"
-        entry = {"key": key[:40], "value": text}
-        if str(type or "").strip():
-            entry["type"] = str(type).strip()[:20]
-        if ent:
-            entry["entities"] = ent
-        if rels:
-            entry["relations"] = rels
-        entry["ts"] = datetime.now().isoformat(timespec="seconds")
-        facts.append(entry)
-        if len(facts) > MEMORY_MAX_ITEMS:
-            del facts[: len(facts) - MEMORY_MAX_ITEMS]
-        data["facts"] = facts
-        if _save_memory(data):
-            _brain_sync_memory(text, key, str(type or "").strip(), ent, rels)
-            return f"已写入记忆（当前共 {len(facts)} 条）"
-        return "错误：记忆写入失败"
+    import memory_facade as _mf
+    # 门面路径随主文件注入（测试会 monkeypatch dc.MEMORY_FILE，故每次调用都对齐）
+    _mf.init(_dc.MEMORY_FILE)
+    key = str(tags or "").strip().split(",")[0].strip() or "自动记忆"
+    # 实体别名归并：新实体优先映射到既有图谱节点（避免 张三/张三2 双节点）
+    known_ents = set()
+    for f in _mf.all_facts():
+        known_ents.update(f.get("entities") or [])
+    ent = []
+    for e in str(entities or "").split(","):
+        e = e.strip()[:30]
+        if not e:
+            continue
+        ent.append(_mem_entity_alias(e, known_ents))
+    ent = list(dict.fromkeys(ent))  # 保序去重
+    rels = []
+    for r in str(relations or "").split(";"):
+        parts = [p.strip() for p in str(r).split("-") if p.strip()]
+        if len(parts) == 3:
+            rels.append({"rel": parts[1][:20], "to": parts[2][:30]})
+    res = _mf.remember(text, origin=origin, type=type, tags=tags, key=key,
+                       confidence=confidence, entities=ent, relations=rels,
+                       supersede_key=supersede_key)
+    if not res.get("ok"):
+        return res.get("message") or "错误：记忆写入失败"
+    if res.get("action") == "duplicate":
+        return "该内容已存在，未重复写入"
+    _brain_sync_memory(text, key, str(type or "").strip(), ent, rels)
+    total = len(_mf.all_facts())
+    extra = ("；" + res["message"]) if res.get("message") else ""
+    return f"已写入记忆（当前共 {total} 条）{extra}"
 
 
 @tool(

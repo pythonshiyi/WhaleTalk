@@ -1232,6 +1232,7 @@ def rss_fetch(action="list", url="", limit=10, since_hours=24):
     groups=['🌐 浏览器与网页'],
     phrases='WebDAV 云盘（坚果云/Nextcloud）上传下载',
     preactivate=(('坚果云', 'nextcloud', 'webdav', '云盘同步'),),
+    hooks=('egress',),  # P1-A 出网账本：带内容的出网自动留痕（钩子见 tool_hooks.py）
 )
 def webdav(action="list", remote_path="/", local_path=""):
     """WebDAV 云盘操作：list / upload / download / delete。"""
@@ -1422,6 +1423,7 @@ def webdav(action="list", remote_path="/", local_path=""):
     groups=['🔧 系统与基础'],
     phrases='调用任意 HTTP API',
     preactivate=(('调用接口', 'api请求', '调接口', 'http请求'),),
+    hooks=('egress',),  # P1-A 出网账本：带内容的出网自动留痕（钩子见 tool_hooks.py）
 )
 def call_api(url, method="GET", params=None, json_body=None, data=None,
              headers=None, timeout=15):

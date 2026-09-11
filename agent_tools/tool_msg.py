@@ -48,6 +48,7 @@ from deepseek_client import (
     groups=['📧 邮件与消息'],
     phrases='发送邮件（SMTP）',
     preactivate=(('邮件', '发邮件', '收件箱'),),
+    hooks=('egress',),  # P1-A 出网账本：带内容的出网自动留痕（钩子见 tool_hooks.py）
 )
 def send_email(to, subject, body):
     """发送邮件：需要先配置 SMTP（email_config.json：smtp_host/smtp_port/user/password/from）。"""
@@ -134,6 +135,7 @@ def send_email(to, subject, body):
     groups=['📧 邮件与消息'],
     phrases='发布草稿',
     preactivate=(('公众号', '公众号文章', '自动写作', '写公众号'), ('草稿', '草稿箱', '存草稿')),
+    hooks=('egress',),  # P1-A 出网账本：带内容的出网自动留痕（钩子见 tool_hooks.py）
 )
 def publish_draft(platform, title, content):
     """保存发布草稿到本地草稿箱（只建草稿不发布，双确认由审批流保证）。"""
@@ -182,6 +184,7 @@ def publish_draft(platform, title, content):
     groups=['📧 邮件与消息'],
     phrases='Webhook 推送（钉钉/ServerChan/Slack）',
     preactivate=(('发微信', '发企微', '发telegram', '推送消息', '消息推送', '通知我'),),
+    hooks=('egress',),  # P1-A 出网账本：带内容的出网自动留痕（钩子见 tool_hooks.py）
 )
 def send_webhook(title="", text="", channel=""):
     """主动推送通知到配置的 Webhook（钉钉/ServerChan/Slack/通用）。"""
@@ -208,6 +211,7 @@ def send_webhook(title="", text="", channel=""):
     groups=['📧 邮件与消息'],
     phrases='IM 消息（Telegram/企业微信）',
     preactivate=(('发微信', '发企微', '发telegram', '推送消息', '消息推送', '通知我'),),
+    hooks=('egress',),  # P1-A 出网账本：带内容的出网自动留痕（钩子见 tool_hooks.py）
 )
 def im_send(text, title="", channel=""):
     """主动触达：发送消息到 Telegram / 企业微信群机器人（可同时推送多通道）。"""
@@ -467,6 +471,7 @@ def email_summary(limit=10, since_days=1):
     groups=['📧 邮件与消息'],
     phrases='Agent 邮箱（查看/列表/搜索/回复/转发）',
     preactivate=(('收件箱', '邮件助手', 'agent邮箱', '邮件列表', '邮件搜索'),),
+    hooks=('egress',),  # P1-A 出网账本：带内容的出网自动留痕（钩子见 tool_hooks.py）
 )
 def agent_mail(action="list", q="", id="", to="", subject="", body="", dir="",
                limit=10, cursor="", confirmation_token="", attachment="", msg="", att="", output=""):

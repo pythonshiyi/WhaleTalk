@@ -2,6 +2,79 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.10.0（未发版追加·边界收口批次 P1）—— ⇡ 出网账本 · 🧠 记忆单一门面
+
+**版本号不变**。P0 解决了"横切关注点没有收口"，P1 解决**两个最不对称的边界**：
+安全模型入强出弱，记忆体系有写无治。详见 [docs/出网账本与记忆门面.md](docs/出网账本与记忆门面.md)。
+
+### ⇡ P1-A `egress.py` — 出网账本（安全模型对称化）
+
+- **问题**：入网有 SSRF 硬底线，出网全裸——`send_email`/`im_send`/`send_webhook`/
+  `publish_draft` 内部审批与审计调用为 **0**（只有 agent_mail 有两阶段确认）。
+  一个能读全盘、能发邮件、默认零审批的执行体，"数据不出本机"只覆盖了存储与监听。
+- **不阻断**（与信任内核同构：不夺权，只可审计）：每次带内容出网留痕
+  通道/目的地/字节数/内容 sha256 摘要/结果；落盘 `DATA_DIR/egress.jsonl`
+- **默认不存明文内容**；目的地 URL 去 query（防 token 进账本）；`store_preview` 可选
+- **达阈值（3 次或 1MB）向模型注入「出网留痕」**：让它知道自己往外发了什么并如实告知用户
+- **接线只用了一个钩子 + 7 处声明，工具体零改动**——P0-1 钩子管线的价值兑现；
+  新增出网工具只需在 `EGRESS_SPECS` 加一行。读操作显式排除（agent_mail list /
+  call_api GET / 无 body / webdav list，均有测试锁定）
+
+### 🧠 P1-B `memory_facade.py` — 记忆单一门面（血缘 + 作废）
+
+- **问题一（无血缘→注入可持久化）**：`_chat_harvest` 自动提炼的记忆此后每轮注入，
+  而外部网页内容只靠文本标记隔离 → 「网页→我复述→提炼→永久记忆」成立。
+  **根本缺陷是模型无法区分「用户明说的」与「我自己推断的」**。
+  修法：每条记忆带 `origin`（user/agent/web/system），注入时对非 user 来源加
+  `〔推断〕`/`〔来自外部内容〕`标注；`_chat_harvest` 固定 `origin=agent, confidence=0.4`
+- **问题二（无作废→新事实被静默丢弃）**：原"近重复合并"只并 tags/type/entities，
+  **新的 value 被丢掉**。修法：`supersedes`/`superseded_by` 双向链接 + `status`，
+  可回溯、可 `restore`
+- **作废只认显式 key，绝不按相似度**——实测结论（固化成回归测试）：
+
+  | 记忆对 | 相似度 | 期望 |
+  |---|---|---|
+  | 偏好中文回复 ↔ 偏好英文回复 | 0.556 | 应作废 |
+  | 每周五备份 ↔ 每周五备份（改为周四） | 0.636 | 应作废 |
+  | 纯静态架构 ↔ 改用 Next.js 架构 | **0.154** | 应作废 |
+  | 项目**A**用 PG ↔ 项目**B**用 PG | **0.600** | **绝不能**作废 |
+
+  相似度无法区分「应作废」与「绝不能作废」——自动作废改走显式 `key`（tags 首项），
+  相似度仅用于**冲突提示**（把判断交还给具备判断能力的角色，而不是替它猜）
+
+### 兼容性与接线
+
+- 沿用 `{enabled, facts:[{key,value,type,ts,entities,relations}]}` 结构与既有字段名，
+  **只新增** `origin/confidence/status/supersedes/superseded_by/superseded_at/reason/id`；
+  旧数据读时补默认值、**不改写文件**（有测试断言磁盘未被改写）
+- 用 `origin` 而非 `source`：`memory_store.py` canonical schema 里 `source` 已是
+  「数据来源」（memory.json/brain/knowledge），不能占用
+- `write_memory` 新增 `origin`/`confidence` 参数（schema 同步，实体别名归并与
+  `_brain_sync_memory` 同步保持原样）；不接管大脑记忆（它已有 `source/importance/supersedes`）
+- 可观测性：`/v1/status` 加 `egress` 摘要（alert 阈值与注入一致）、`/v1/context` 加
+  `egress` 明细；`GET /v1/memory` 返回生效条目并带血缘；前端状态栏加 ⇡ 出网指示灯
+- **Provider 显式声明 `deps`**：依赖未注入记为「依赖未注入」跳过，不再计为假降级告警
+
+### 🐛 过程中被测试抓出的自身缺陷（均已加回归）
+
+- **相似度自动作废的假设是错的**：原设计「同 type 且 ≥0.75 自动作废」实测推翻——
+  0.556（应作废）低于 0.600（绝不能作废）→ 方案整体改为显式 key + 冲突提示
+- **缺依赖被当成失败报警**：Provider 依赖未注入按异常计入 degrade，会变成永远刷屏的
+  假降级告警 → 改为显式 `deps` 声明 + 如实记入回执
+- **按下标而非派生 id 定位条目**：条目被其它写入方改写后派生 id 会变，按 id 反查会
+  静默失配 → 改为按下标就地作废 + 固化 id
+- **`write_memory` 新增参数未同步 schema**：被 `audit_tools.py --strict` 抓出
+- **测试文件被重复追加**：`cat >>` 执行两次，重复的测试函数名会**静默覆盖**前者
+  （pytest 只跑最后一个）→ 已去重并加重复函数名检查
+
+### 🧪 测试与验证
+
+新增 `tests/test_egress.py`(16) + `tests/test_memory_facade.py`(15) + 接线用例，
+全量 **500 passed / 0 failed**；`audit_tools --strict` 0 error、`validate_tools`
+148 工具全链路、`island_check` 无孤岛、`check_docs` 数字一致、ruff 通过；
+前端 typecheck/build/test 全通过；实机起 API 验证 `/v1/status`（egress 摘要）、
+`/v1/context`（egress 明细 + 记忆血缘标注进入真实装配）。
+
 ## v3.10.0（未发版追加·架构收口批次 P0）—— 🧭 上下文装配 · 退化日志 · 工具钩子管线
 
 **版本号不变**。一次架构评审的结论：缺的不是能力宽度，而是**横切关注点没有收口**——

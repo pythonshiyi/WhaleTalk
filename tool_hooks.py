@@ -226,11 +226,37 @@ def _hook_snapshot(ctx: CallContext):
                 pass
 
 
+def _hook_egress(ctx: CallContext):
+    """出网账本：把每一次「带内容出网」留痕（P1-A）。
+
+    与信任内核同构的立场：**不阻断，但可审计**。判定与抽取都在 egress.py 的
+    EGRESS_SPECS 里（新增出网工具只需在那里加一行，不用碰这里）。
+
+    成败判定：本项目的工具约定是「失败返回 `错误：…` 字符串而非抛异常」，因此
+    `ctx.ok`（未抛异常）不等于「真的发出去了」。这里按结果前缀修正——
+    发送失败也照记（ok=False），账本如实反映「尝试过但没发出去」。
+    """
+    if "egress" not in (ctx.declared or ()):
+        return
+    try:
+        import egress as egress_mod
+        sent = bool(ctx.ok) and not str(ctx.result or "").startswith("错误")
+        egress_mod.record(ctx.tool, ctx.args, ok=sent,
+                          duration=ctx.duration, result=ctx.result)
+    except Exception as e:  # noqa: BLE001
+        try:
+            import degrade
+            degrade.degrade("toolhook.egress", e,
+                            "本次出网未留痕（审计链缺口）")
+        except Exception:
+            pass
+
+
 def _ensure_builtins():
     """惰性注册内置钩子（首次工具调用时）。
 
     惰性而非模块导入时：本模块在 toolkit 导入链最上游，此处的 `import
-    trust_kernel / snapshot / degrade` 若提前执行会带来导入顺序风险。
+    trust_kernel / snapshot / degrade / egress` 若提前执行会带来导入顺序风险。
     """
     global _builtins_done
     if _builtins_done:
@@ -241,6 +267,7 @@ def _ensure_builtins():
         hook("pre", "trust_declare", _hook_trust_declare, 20)
         hook("pre", "snapshot", _hook_snapshot, 30)
         hook("post", "trust_commit", _hook_trust_commit, 20)
+        hook("post", "egress", _hook_egress, 30)
         _builtins_done = True
 
 

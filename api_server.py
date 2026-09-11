@@ -632,22 +632,55 @@ def _plugin_market_install(body):
 
 
 def _memory_full():
-    """长期记忆全量（facts 列表）。兼容 {text,...} 与 {key,value,...} 两种存储结构。"""
+    """长期记忆全量（**只含生效条目**，带血缘）。
+
+    P1-B 起统一走 memory_facade：被 superseded 的记录不再出现在这里（否则
+    注入给模型的是已被取代的旧事实），并带上 origin/confidence 供调用方标注。
+    兼容 `{text,...}` 与 `{key,value,...}` 两种历史结构。
+    """
     import stores
     d = stores.load_memory(MEMORY_PATH)
-    facts = d.get("facts") or []
     out = []
-    for f in facts[-200:]:
+    seen = set()
+    try:
+        import memory_facade as _mf
+        _mf.init(MEMORY_PATH)
+        for f in _mf.active_facts():
+            text = str(f.get("value") or f.get("text") or "")[:300]
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            out.append({
+                "text": text,
+                "tags": str(f.get("tags") or f.get("key") or ""),
+                "type": str(f.get("type") or ""),
+                "ts": str(f.get("ts") or ""),
+                "origin": str(f.get("origin") or "unknown"),
+                "confidence": f.get("confidence", 0.5),
+                "id": str(f.get("id") or ""),
+            })
+        return {"enabled": bool(d.get("enabled")), "facts": out}
+    except Exception:
+        logger.exception("记忆门面读取失败，回落原始结构（不含血缘/作废语义）")
+    # 兜底：门面不可用时退回原结构，保证记忆注入不中断
+    for f in (d.get("facts") or [])[-200:]:
         if isinstance(f, dict):
             text = str(f.get("text") or f.get("value") or "")[:300]
+            if not text or text in seen:
+                continue
+            seen.add(text)
             out.append({
                 "text": text,
                 "tags": str(f.get("tags") or ""),
                 "type": str(f.get("type") or ""),
                 "ts": str(f.get("ts") or f.get("time") or ""),
+                "origin": str(f.get("origin") or "unknown"),
+                "confidence": f.get("confidence", 0.5),
+                "id": str(f.get("id") or ""),
             })
         elif isinstance(f, str):
-            out.append({"text": f[:300], "tags": "", "type": "", "ts": ""})
+            out.append({"text": f[:300], "tags": "", "type": "", "ts": "",
+                        "origin": "unknown", "confidence": 0.5, "id": ""})
     return {"enabled": bool(d.get("enabled")), "facts": out}
 
 
@@ -677,6 +710,12 @@ def _context_degrade_notice():
     """本次会话的关键降级提示（无关键降级时为空串）。"""
     import degrade
     return degrade.critical_notice()
+
+
+def _context_egress_notice():
+    """出网留痕提示（未达阈值时为空串，零 token）。"""
+    import egress
+    return egress.notice()
 
 
 
@@ -806,7 +845,24 @@ def _status():
         "trust": _trust_brief(),
         # 降级摘要（P0-3）：让「AI 为什么变差」在状态栏就有信号；明细走 GET /v1/context
         "degrade": _degrade_brief(),
+        # 出网摘要（P1-A）：入网有 SSRF 底线，出网同样要看得见；明细走 GET /v1/context
+        "egress": _egress_brief(),
     }
+
+
+def _egress_brief():
+    """状态栏用的出网摘要（内存内计数，零 IO）。
+
+    alert 用与「出网留痕」注入完全相同的阈值——避免状态栏提示与模型所见不一致。
+    """
+    try:
+        import egress
+        s = dict(egress.summary())
+        s["alert"] = bool(s.get("count", 0) >= egress.NOTICE_MIN_SENDS
+                          or s.get("bytes", 0) >= egress.NOTICE_MIN_BYTES)
+        return s
+    except Exception:
+        return {"count": 0, "failed": 0, "bytes": 0, "targets": [], "alert": False}
 
 
 def _degrade_brief():
@@ -5370,7 +5426,11 @@ def _chat_harvest(reply: str, user_text: str, cfg: dict):
             for line in str(out or "").splitlines():
                 s = line.strip().strip("-•*").strip()
                 if len(s) >= 8 and "无" not in s[:6] and not _harvest_is_low_value(s):
-                    dc.write_memory(s, tags="自动", type="对话")
+                    # 自动提炼的记忆一律标 origin="agent" + 低置信度（P1-B）：
+                    # 注入时会带〔推断〕标注，模型不得把它当作用户明说的前提——
+                    # 这正是打断「外部网页→自动提炼→持久记忆」注入链的一环。
+                    dc.write_memory(s, tags="自动", type="对话",
+                                    origin="agent", confidence=0.4)
         except Exception:
             pass
 
@@ -6285,6 +6345,12 @@ class _Handler(BaseHTTPRequestHandler):
             degradations = _dg2.snapshot(limit=30)
         except Exception:
             degradations = []
+        try:
+            import egress as _eg
+            egress_state = _eg.summary()
+            egress_recent = _eg.snapshot(limit=20)
+        except Exception:
+            egress_state, egress_recent = {}, []
         self._json(200, {
             "tools": tools,
             "memory": self._memory_summary(),
@@ -6293,6 +6359,8 @@ class _Handler(BaseHTTPRequestHandler):
                       "cached": cached, "cost": costv},
             "last_injection": last_injection,
             "degradations": degradations,
+            # 出网账本（P1-A）：本次会话的出网摘要 + 最近条目（默认不含明文内容）
+            "egress": {"summary": egress_state, "recent": egress_recent},
         })
 
 
@@ -7565,6 +7633,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "brain_api": _context_brain_api,
                 "trust_notice": _context_trust_notice,
                 "degrade_notice": _context_degrade_notice,
+                "egress_notice": _context_egress_notice,
                 "failures_text": lambda: stores_mod.failure_patterns_text(FAILURES_PATH),
                 "patterns_load": lambda: stores_mod.load_patterns(PATTERNS_PATH),
                 "plugins_hint": _installed_plugins_hint,
@@ -7792,6 +7861,18 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
         _degrade_mod.init(os.path.join(DATA_DIR, "degradations.json"))
     except Exception:
         logger.warning("退化日志初始化失败（可降级）：降级记录只留在内存，重启后不可查")
+    # 出网账本（P1-A）：入网有 SSRF 底线，出网同样要可审计。
+    try:
+        import egress as _egress_mod
+        _egress_mod.init(os.path.join(DATA_DIR, "egress.jsonl"))
+    except Exception:
+        logger.warning("出网账本初始化失败（可降级）：出网记录只留在内存，重启后不可查")
+    # 记忆门面（P1-B）：统一 memory.json 的写入方，为记忆补血缘与作废语义。
+    try:
+        import memory_facade as _mf
+        _mf.init(MEMORY_PATH)
+    except Exception:
+        logger.warning("记忆门面初始化失败（可降级）：记忆仍可读写，但无血缘/作废语义")
     # 信任内核启动核对：检出「未声明的自我修改」并留痕。
     # 刻意不阻断启动、不回滚文件（默认 report 模式）——能力一条不减，改由
     # 状态端点 + 系统提示注入 + STATUS.md 让改动可见；处置权始终在用户。

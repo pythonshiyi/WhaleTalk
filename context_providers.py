@@ -64,6 +64,8 @@ class Provider:
     enabled   (ctx) -> bool；False = 本次跳过（回执记原因）
     budget    字符上限（0 = 不限）；超出按预算截断并标记
     critical  失败是否属于「影响回答质量」的降级（会进模型自我状态提示）
+    deps      必需依赖名；缺失则按「依赖未注入」跳过（**不计为失败**）——
+              否则一次接线疏漏会变成一串永远刷屏的假降级告警
     """
 
     name: str
@@ -72,6 +74,7 @@ class Provider:
     enabled: Callable[[Context], bool] = lambda ctx: True
     budget: int = 0
     critical: bool = False
+    deps: tuple = ()
     # 被 enabled 否决时写入回执的原因（人类可读）
     skip_reason: str = "条件不满足"
 
@@ -109,16 +112,37 @@ def _provide_task_guide(ctx):
 register(Provider(
     name="base.task_quality_guide", priority=0, provide=_provide_task_guide,
     enabled=_not_pure, budget=8000, critical=False,
+    deps=("task_quality_guide", "default_prompt", "dialog_prompt"),
 ))
 
 
 def _provide_memory(ctx):
-    """长期记忆（近 6 条）。config.memory_enabled 关闭时完全不注入。"""
+    """长期记忆（近 6 条生效条目）。config.memory_enabled 关闭时完全不注入。
+
+    P1-B 起带**血缘标注**：只有 `user` 来源不加前缀（最高可信），其余加
+    `〔推断〕`/`〔来自外部内容〕`。这是打断
+    「外部网页 → 自动提炼 → 变成持久记忆 → 被当作用户前提」这条链的关键：
+    模型必须能区分「用户明说」与「我自己推断的」。
+    """
     mem = ctx.dep("memory_full")()
-    facts = [f["text"] for f in (mem or {}).get("facts", []) if f.get("text")]
+    facts = [f for f in (mem or {}).get("facts", []) if f.get("text")]
     if not facts:
         return None
-    return "[长期记忆]\n" + "\n".join("- " + t for t in facts[-6:])
+    picked = facts[-6:]
+    try:
+        from memory_facade import ORIGIN_LABEL
+    except Exception:
+        ORIGIN_LABEL = {}
+    has_non_user = any(
+        str(f.get("origin") or "") in ORIGIN_LABEL for f in picked)
+    header = "[长期记忆]"
+    if has_non_user:
+        header += "（无标注 = 用户明说或早期记录；〔推断〕= 你自己提炼的，不得当用户前提）"
+    lines = [header]
+    for f in picked:
+        label = ORIGIN_LABEL.get(str(f.get("origin") or ""), "")
+        lines.append(f"- {label}{f['text']}")
+    return "\n".join(lines)
 
 
 def _enabled_memory(ctx):
@@ -128,6 +152,7 @@ def _enabled_memory(ctx):
 register(Provider(
     name="context.memory", priority=10, provide=_provide_memory,
     enabled=_enabled_memory, budget=4000, critical=True,
+    deps=("memory_full",),
     skip_reason="纯净对话已开启，或 memory_enabled=False",
 ))
 
@@ -143,6 +168,7 @@ def _provide_self_profile(ctx):
 register(Provider(
     name="context.self_profile", priority=20, provide=_provide_self_profile,
     enabled=_not_quiet, budget=8000, critical=True,
+    deps=("self_profile",),
     skip_reason="纯净对话已开启",
 ))
 
@@ -185,6 +211,7 @@ def _provide_brain(ctx):
 register(Provider(
     name="context.brain", priority=30, provide=_provide_brain,
     enabled=_not_quiet, budget=1600, critical=True,
+    deps=("brain_api",),
     skip_reason="纯净对话已开启",
 ))
 
@@ -209,6 +236,7 @@ def _provide_workspace(ctx):
 register(Provider(
     name="context.workspace", priority=40, provide=_provide_workspace,
     enabled=_not_pure, budget=800, critical=False,
+    deps=("data_dir",),
     skip_reason="对话/纯净模式无工具、不写文件",
 ))
 
@@ -222,6 +250,7 @@ def _provide_trust(ctx):
 register(Provider(
     name="context.trust_integrity", priority=45, provide=_provide_trust,
     enabled=_not_pure, budget=2000, critical=False,
+    deps=("trust_notice",),
     skip_reason="对话模式不注入",
 ))
 
@@ -235,6 +264,21 @@ def _provide_degrade(ctx):
 register(Provider(
     name="context.degrade_status", priority=46, provide=_provide_degrade,
     enabled=_not_pure, budget=1500, critical=False,
+    deps=("degrade_notice",),
+    skip_reason="对话模式不注入",
+))
+
+
+def _provide_egress(ctx):
+    """出网留痕：仅达到阈值（次数/字节）时非空——让 AI 知道自己往外发了什么。"""
+    notice = ctx.dep("egress_notice")()
+    return str(notice) if notice else None
+
+
+register(Provider(
+    name="context.egress_status", priority=47, provide=_provide_egress,
+    enabled=_not_pure, budget=1200, critical=False,
+    deps=("egress_notice",),
     skip_reason="对话模式不注入",
 ))
 
@@ -246,6 +290,7 @@ def _provide_failures(ctx):
 register(Provider(
     name="context.failure_patterns", priority=50, provide=_provide_failures,
     enabled=_not_pure, budget=6000, critical=False,
+    deps=("failures_text",),
     skip_reason="对话模式不注入",
 ))
 
@@ -264,6 +309,7 @@ def _provide_patterns(ctx):
 register(Provider(
     name="context.success_patterns", priority=60, provide=_provide_patterns,
     enabled=_not_pure, budget=1500, critical=False,
+    deps=("patterns_load",),
     skip_reason="对话模式不注入",
 ))
 
@@ -275,6 +321,7 @@ def _provide_plugins(ctx):
 register(Provider(
     name="context.plugins", priority=70, provide=_provide_plugins,
     enabled=_not_pure, budget=2000, critical=False,
+    deps=("plugins_hint",),
     skip_reason="对话模式不注入",
 ))
 
@@ -298,6 +345,7 @@ def _provide_tasklog(ctx):
 register(Provider(
     name="context.tasklog", priority=80, provide=_provide_tasklog,
     enabled=_not_pure, budget=1500, critical=False,
+    deps=("active_dir",),
     skip_reason="对话模式不注入",
 ))
 
@@ -333,6 +381,13 @@ def assemble(ctx: Context) -> Dict[str, Any]:
                            "critical": p.critical, "stage": "enabled"})
             degrade.degrade(
                 p.name, e, "该上下文来源未注入（条件判定失败）", critical=p.critical)
+            continue
+        # 依赖未注入 = 接线疏漏，不是运行期故障：如实记进回执但不计为失败，
+        # 否则一次接线错误会变成永远刷屏的假降级告警。
+        missing = [d for d in (p.deps or ()) if d not in ctx.deps]
+        if missing:
+            skipped.append({"name": p.name,
+                            "reason": "依赖未注入：" + "、".join(missing)})
             continue
         try:
             text = p.provide(ctx)
