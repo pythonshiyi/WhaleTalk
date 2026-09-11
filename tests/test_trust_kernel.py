@@ -277,6 +277,46 @@ def test_write_file_non_kernel_untouched(sandbox):
     assert plain.read_text(encoding="utf-8") == "hello"
 
 
+# ── 行尾差异（git 检出噪声）与真实改动的区分 ─────────────────────────────
+
+def _flip_eol(path):
+    """把文件整体换成另一种行尾（保证只差行尾，语义不变）。"""
+    raw = path.read_bytes()
+    flipped = raw.replace(b"\r\n", b"\n") if b"\r\n" in raw else raw.replace(b"\n", b"\r\n")
+    assert flipped != raw, "测试前置：需要文件含可翻转的行尾"
+    path.write_bytes(flipped)
+
+
+def test_eol_only_change_marked_cosmetic(sandbox):
+    """git 检出导致的整体行尾变化应被标注，避免把 git 正常行为报成篡改。"""
+    tk_, root = sandbox
+    _flip_eol(root / "permissions.py")
+    res = tk_.verify()
+    assert res["ok"] is False
+    assert res["changed"][0]["cosmetic"] is True
+    assert res["cosmetic_only"] is True
+    payload = tk_.boot_check()
+    assert payload["cosmetic_only"] is True
+    assert "行尾" in (payload.get("note") or "")
+    assert "行尾" in tk_.integrity_notice()
+    # 标注 ≠ 放行：依然是未确认状态，处置权仍在用户
+    assert tk_.status()["state"] == "unconfirmed"
+    # 确认一次即恢复干净
+    tk_.accept(all_=True)
+    assert tk_.verify()["ok"] is True
+
+
+def test_real_change_not_marked_cosmetic(sandbox):
+    """真实内容改动不得被误标为仅行尾差异。"""
+    tk_, root = sandbox
+    p = root / "security.py"
+    p.write_bytes(p.read_bytes() + b"# real change\n")
+    res = tk_.verify()
+    assert res["changed"][0].get("cosmetic") is False
+    assert res["cosmetic_only"] is False
+    assert "行尾" not in tk_.integrity_notice()
+
+
 # ── 健壮性 ───────────────────────────────────────────────────────────────
 
 def test_config_typo_does_not_alarm(sandbox):

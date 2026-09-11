@@ -375,6 +375,27 @@ def _update_manifest(mutate):
 
 # ── 核对 ─────────────────────────────────────────────────────────────────
 
+def _only_eol_differs(a_path, b_path):
+    """两个文件是否**仅行尾不同**（CRLF ↔ LF）。
+
+    为什么需要：本仓库是 git 工作区且常开 `core.autocrlf=true`，一次
+    `git checkout` / `pull` / `stash` 就会把工作区文件整体改写成另一种行尾——
+    字节哈希全变、语义一字未改。若不区分，信任内核会把 git 的正常行为报成
+    「未声明的自我修改」，噪音很快会淹没真正的异常。
+
+    注意：**只标注、不自动放行**。仅行尾差异仍然记事件、仍然进报告，只是把
+    结论说清楚（"多为 git 检出所致"），由用户决定 accept 还是进一步查。
+    """
+    try:
+        with open(a_path, "rb") as f:
+            da = f.read()
+        with open(b_path, "rb") as f:
+            db = f.read()
+        return da.replace(b"\r\n", b"\n") == db.replace(b"\r\n", b"\n")
+    except Exception:
+        return False
+
+
 def verify():
     """逐字节核对内核文件与可信基线。返回结构化结论（绝不抛出）。
 
@@ -402,18 +423,24 @@ def verify():
             untracked.append({"name": name, "path": kp,
                               "current_sha": k_sha, "note": "无基线也无指纹"})
         elif k_sha != ref_sha:
-            changed.append({
+            item = {
                 "name": name, "path": kp,
                 "baseline_sha": ref_sha, "current_sha": k_sha,
                 "ref_source": "baseline" if b_sha else "manifest",
                 "recorded_at": rec.get("recorded_at") or "",
                 "how": rec.get("how") or "",
-            })
+            }
+            # 仅行尾不同 → 标注 cosmetic（多为 git 检出所致），但不改变"已变更"的判定
+            if b_sha:
+                item["cosmetic"] = _only_eol_differs(bp, kp)
+            changed.append(item)
+    cosmetic_only = bool(changed) and all(c.get("cosmetic") for c in changed)
     return {
         "ok": not (changed or missing or untracked),
         "changed": changed,
         "missing": missing,
         "untracked": untracked,
+        "cosmetic_only": cosmetic_only,
         "checked_at": _now(),
         "protected": list(protected_names()),
         "mode": _config().get("mode"),
@@ -492,7 +519,13 @@ def boot_check():
             "untracked": [c["name"] for c in res["untracked"]],
             "guarded": guarded,
             "alerts": alerts,
+            "cosmetic_only": bool(res.get("cosmetic_only")),
         }
+        if res.get("cosmetic_only"):
+            payload["note"] = (
+                "所有差异均**仅限行尾**（CRLF/LF），语义未变——多为 git 检出"
+                "（core.autocrlf / .gitattributes）所致。确认无碍可 "
+                "`python trust_kernel.py accept --all`。")
         if not res["ok"]:
             details = []
             for c in res["changed"]:
@@ -505,9 +538,10 @@ def boot_check():
         _write_status_md(res, payload)
         if not res["ok"]:
             logger.warning(
-                "信任内核：检测到 %s 个未声明的自我修改（%s）——已记录事件 %s，"
+                "信任内核：检测到 %s 个未声明的自我修改（%s）%s——已记录事件 %s，"
                 "回滚：python trust_kernel.py restore <文件>；确认保留：python trust_kernel.py accept --all",
                 len(res["changed"]) + len(res["missing"]), ", ".join(payload["changed"] or payload["missing"]),
+                "（差异仅限行尾，多为 git 检出所致）" if res.get("cosmetic_only") else "",
                 payload.get("incident") or "（写入失败）",
             )
         for a in alerts:
@@ -576,8 +610,12 @@ def _write_status_md(res, payload):
         ]
         if not res["ok"]:
             lines += ["## 未声明的改动", ""]
+            if res.get("cosmetic_only"):
+                lines += ["> 注意：以下差异**均仅限行尾**（CRLF/LF），语义未变——"
+                          "多为 git 检出（core.autocrlf / .gitattributes）所致。", ""]
             for c in res["changed"]:
-                lines.append(f"- `{c['name']}`（基线来源：{c['ref_source']}，"
+                tag = "（仅行尾差异）" if c.get("cosmetic") else ""
+                lines.append(f"- `{c['name']}`{tag}（基线来源：{c['ref_source']}，"
                              f"上次登记：{c['recorded_at'] or '无'}）")
             for c in res["missing"]:
                 lines.append(f"- `{c['name']}`：文件缺失")
@@ -746,18 +784,21 @@ def status(deep=False):
             state = "ok" if res["ok"] else "unconfirmed"
             checked_at = res["checked_at"]
             alerts = []
+            cosmetic_only = bool(res.get("cosmetic_only"))
         else:
             last = _read_json(os.path.join(TRUST_DIR, "last_check.json"), {}) or {}
             changed = list(last.get("changed") or []) + list(last.get("missing") or [])
             state = str(last.get("state") or "unknown")
             checked_at = str(last.get("checked_at") or "")
             alerts = list(last.get("alerts") or [])
+            cosmetic_only = bool(last.get("cosmetic_only"))
         return {
             "state": state,
             "mode": cfg.get("mode"),
             "protected": list(protected_names()),
             "changed": changed,
             "alerts": alerts,
+            "cosmetic_only": cosmetic_only,
             "unchanged": [n for n in protected_names() if n not in changed],
             "last_check": checked_at,
             "counts": {
@@ -818,10 +859,13 @@ def integrity_notice():
         lines = []
         changed = st.get("changed") or []
         if changed:
+            cosmetic = bool(st.get("cosmetic_only"))
             lines.append(
                 "[自我完整性] 检测到你的信任内核文件在被声明的通道之外发生过改动，"
-                f"尚未被用户确认：{'、'.join(changed)}。\n"
-                "处理原则：如果你自己做过其中任何改动，请主动、如实向用户说明改了什么、为什么改；"
+                f"尚未被用户确认：{'、'.join(changed)}。"
+                + ("（差异仅限行尾 CRLF/LF，语义未变，通常是 git 检出所致。）\n"
+                   if cosmetic else "\n")
+                + "处理原则：如果你自己做过其中任何改动，请主动、如实向用户说明改了什么、为什么改；"
                 "不要替用户决定是否保留，也不要在用户知情前继续依赖这些改动。")
         for a in st.get("alerts") or []:
             lines.append(f"[自我完整性] 告警：{a.get('note')}")

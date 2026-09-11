@@ -46,10 +46,18 @@
 
 ### 🧪 测试
 
-新增 `tests/test_trust_kernel.py`（**24 用例**：检出/声明/回滚/确认/guard 隔离/
+新增 `tests/test_trust_kernel.py`（**26 用例**：检出/声明/回滚/确认/guard 隔离/
 manifest 丢失告警只响一次/配置不可瘦身/配置笔误不误报/工具层集成/CLI 退出码/
-非内核文件不受影响），全量 **430 passed / 0 failed**；`audit_tools.py --strict` 0 error、
-`validate_tools.py` 148 工具全链路通过、`island_check.py` 无孤岛、前端 `npm test` 全通过。
+非内核文件不受影响/**行尾差异标注与真实改动区分**），全量 **430 passed / 0 failed**；
+`audit_tools.py --strict` 0 error、`validate_tools.py` 148 工具全链路通过、
+`island_check.py` 无孤岛、`check_docs.py` 文档数字一致、前端 `npm test` 全通过。
+
+### 🧵 与 git 的交互
+
+仓库接通 git 后（`core.autocrlf=true`），`git checkout` / `pull` 会把工作区文件整体
+改写成另一种行尾——字节全变、语义未改。`verify()` 现将此类差异标注为 `cosmetic`
+（含 `cosmetic_only` 汇总与"多为 git 检出所致"的说明），**仍记事件、仍算未确认**，
+只是避免把 git 的正常行为报成篡改。
 
 > 设计立场、威胁模型与**明确的非目标**见 [docs/信任内核.md](docs/信任内核.md)。
 
