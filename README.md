@@ -8,9 +8,9 @@
 
 > **中文为主 · English follows**（中文完整介绍 + 英文简版）
 
-**鲸语 WhaleTalk v3.10.0** 是一个集成 DeepSeek V4.1 Flash（原生多模态统一模型）的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
+**鲸语 WhaleTalk v3.11.0** 是一个集成 DeepSeek V4.1 Flash（原生多模态统一模型）的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
 
-*WhaleTalk v3.10.0 is a Windows AI agent built on the unified DeepSeek V4.1 Flash model — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
+*WhaleTalk v3.11.0 is a Windows AI agent built on the unified DeepSeek V4.1 Flash model — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
 
 > 🌐 **官网 / Website：**https://whaletalk.top/
 
@@ -28,6 +28,21 @@
 - [📄 文档](#-文档)
 - [English Introduction](#english-introduction)
 - [⚠️ 品牌与免责](#️-品牌与免责)
+
+---
+
+## 🆕 v3.11.0 更新：架构收口 + 能力自省（工具 148 → 149）
+
+**本版是 v3.10.0 之后的收口批次**——不追能力宽度，而把已有能力的**边界与自我认知**补齐，
+7 个批次一并发布（详见 [CHANGELOG](CHANGELOG.md)）：
+
+- **🔍 能力自省（新工具）**：新增只读工具 `list_my_capabilities`——AI 可一行核验「我到底有多少项能力」（当前 149 项 / 11 组），**不再需要回读源码来确认自身能力**；默认只返回分组汇总（约百 token），按 `group=` / `query=` 下钻。**刻意不默认全量输出**：那会与能力地图等重，等于把按需加载省下的上下文又还回去
+- **🔄 预激活不再丢追问**：关键词预激活的扫描窗口从「仅最近 1 条」扩到最近 3 条 user 消息——"帮我抓取这个网页" → "继续"，不再因第二句没有关键词而整体失效
+- **📊 预激活可度量**：命中埋点（按关键词计数、落盘、失败静默），出口在用量报告——「命中最多 / 从未命中 N 条」，让手工维护的关键词表第一次有数据可依
+- **🧭 架构收口 P0**：横切关注点收进**钩子管线**（上下文装配 · 退化日志 · 工具钩子），工具体零改动即获得横切能力
+- **⇡ 架构收口 P1（边界对称化）**：入网早有 SSRF 硬底线、出网全裸 → 新增 **`egress.py` 出网账本**（通道/目的地/字节数/内容摘要留痕，默认不存明文，达阈值向模型注入「出网留痕」）；记忆体系从「有写无治」到**单一门面**（血缘标注 + 作废可回溯，且作废只认显式 supersede，绝不按相似度）
+- **🛡 自我完整性 · 信任内核**：决定「AI 能做什么」的代码（`permissions`/`security`/`crypto`/`snapshot`）改动**可声明 · 可见 · 可回滚**——不阻止写入（能力一条不减），靠「不可隐瞒」实现可信
+- **🧰 健壮性与安全批次**：搜索引擎软超时 + 翻页/站点诚实报错 + 额度预警；提案忽略改软删除；进程孤儿与契约别名修复；失败记忆生命周期（自动消解 + 归档）
 
 ---
 
@@ -254,7 +269,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 - **网络底线（唯一程序内置项）**：SSRF 硬底线默认开启——私网段（`10/8`、`172.16/12`、`192.168/16`）、链路本地（`169.254.0.0/16`，含云元数据）、保留段一律拦截，域名先做 DNS 解析（防重绑定）；回环默认放行（本地开发需要），可置 `network.allow_loopback=false` 加严。理由：模型可自主抓取任意 URL 且抓取内容会回灌上下文，仅靠用户黑名单盖不住「注入 → 诱导访问内网」这条链路
 - **硬限额（防误伤兜底）**：读取/下载/响应体大小与工具超时上限（如单文件下载 ≤200MB、API 响应 ≤500KB、`run_python` ≤60s / 输出 ≤20000 字符 / 进程树内存 ≤2048MB）；写操作自动快照可恢复；删除默认进回收站
 - **数据不出本机**：仅 127.0.0.1 监听 + Bearer token；API Key DPAPI 加密存储；隐私模式可关快照/会话/记忆/统计
-- **自我完整性 · 信任内核（第二项程序内置项，v3.10.0 新增）**：决定「AI 能做什么」的代码（`permissions` / `security` / `crypto` / `snapshot`）此前是可被无痕改写的普通文件。现在它们的改动**可声明 · 可见 · 可回滚**——启动时逐字节比对可信基线，未声明的改动生成事件并注入对话，`python trust_kernel.py diff|restore|accept` 一键查看/回滚/确认。**刻意不阻止写入**（能力一条不减），改由「不可隐瞒」实现可信：详见 [docs/信任内核.md](docs/信任内核.md)
+- **自我完整性 · 信任内核（第二项程序内置项，v3.11.0 新增）**：决定「AI 能做什么」的代码（`permissions` / `security` / `crypto` / `snapshot`）此前是可被无痕改写的普通文件。现在它们的改动**可声明 · 可见 · 可回滚**——启动时逐字节比对可信基线，未声明的改动生成事件并注入对话，`python trust_kernel.py diff|restore|accept` 一键查看/回滚/确认。**刻意不阻止写入**（能力一条不减），改由「不可隐瞒」实现可信：详见 [docs/信任内核.md](docs/信任内核.md)
 - 详见 [SECURITY.md](SECURITY.md)
 
 ## 📄 文档
@@ -269,7 +284,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 
 ## English Introduction
 
-WhaleTalk v3.10.0 is a Windows AI agent on the unified DeepSeek V4.1 Flash — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745), served from the browser with a system tray resident process.
+WhaleTalk v3.11.0 is a Windows AI agent on the unified DeepSeek V4.1 Flash — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745), served from the browser with a system tray resident process.
 
 - **v3.10**: unified DeepSeek V4.1 Flash model (native multimodal, no mode switching), auto-migration of legacy model names, new peak/off-peak pricing
 - **v3.0 highlights**: 3 themes (starfield/deepsea/arctic), console sidebar (model/thinking/scene/appearance), artifact one-click access, unified `web_app.py` entry (desktop/browser/headless)
