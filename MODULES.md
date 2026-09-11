@@ -14,6 +14,7 @@ api_server.py（本地 HTTP API：REST + SSE，93 /v1 端点）
 deepseek_client.py（能力引擎：DeepSeekClient + 148 工具 + smart_tools）
     │
     ├─ 基础设施：permissions / security / crypto / stores / stats / tokens / persistence
+    │              ＋ trust_kernel（信任内核：自我修改的声明 / 核对 / 回滚）
     ├─ 工具底座：net_utils / search_utils / db_utils / pdf_utils / proc_utils / mdparse
     ├─ 配置体系：config_defaults / config_utils / profiles / themes / roles / templates / deps
     ├─ 扩展体系：plugins / user_tools / fetch_blocked（按需）
@@ -51,6 +52,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 148 工具 + smart_tools）
 | `tokens.py` | token 估算（tiktoken o200k_base，缺省回退 1.5 字符/token，对象身份缓存） |
 | `persistence.py` | 原子 JSON 写入（mkstemp 唯一临时文件 + os.replace） |
 | `snapshot.py` | 文件/数据库写操作自动快照（P2）：写/编辑/重命名/数据库写前备份原内容到 `DATA_DIR/undo/`，可列出/恢复（`list_snapshots`/`restore_snapshot` 工具）；上限 200 条自动清理 |
+| `trust_kernel.py` | 信任内核（自我完整性）：让智能体对**自身授权代码**（permissions / security / crypto / snapshot / 自身）的改动**可声明 · 可见 · 可回滚**——`trust/baseline/` 可信副本（永不裁剪）+ `manifest.json` 索引 + `ledger.jsonl` 追加账本 + `incidents/` 未声明事件 + `history/` 已声明历史 + `quarantine/`（guard 模式隔离）；启动核对 `boot_check()`（基线优先、manifest 丢失也检出）、工具层 `declare/commit`（write_file/edit_file，绝不阻断写入）、CLI `status/verify/diff/restore/accept/log`。**刻意不加限制**：能力一条不减，只让改动不可能悄悄发生（详见 [docs/信任内核.md](docs/信任内核.md)） |
 | `app_utils.py` | 布尔转换、空壳目录判断、清理、干净退出标记、隐私日志 |
 | `proc_utils.py` | 进程树终止（Windows taskkill /T，防孙进程残留） |
 | `shared.py` | cron 5 字段引擎（校验/匹配/错峰顺延）、峰谷定价判定、预算感知思考降档、本地路径正则、Windows OCR/Toast PowerShell 脚本、跨进程文件锁 `file_lock`、参数钳制 `clamp_*`、**工具域阈值与锁**（P1-3 下沉：49 个工具阈值常量/锁统一归口于此，deepseek_client 顶部 re-export 保旧路径，域模块 from shared 导入） |
@@ -128,6 +130,11 @@ deepseek_client.py（能力引擎：DeepSeekClient + 148 工具 + smart_tools）
 | `profiles.json` / `user_tools.json` / `prompts.json` | Profile / 自定义工具 / 指令库 |
 | `archives/` | 上下文压缩归档 |
 | `logs/` | 审计日志 actions.log 等 |
+
+> 信任内核数据（源码同级 `trust/`，已入 `.gitignore`，不入库）：`baseline/` 可信副本、
+> `manifest.json` 指纹索引、`ledger.jsonl` 声明式账本、`incidents/` 未声明改动事件、
+> `history/` 已声明改动历史、`quarantine/`（guard 模式）、`last_check.json`、`STATUS.md`。
+> 首次运行自动 bootstrap（以当时代码为可信基线），故新克隆无需携带。
 
 > 鲸语大脑数据（源码同级 `brain/`）：`manifest.json`（指纹/状态）、`memories/memory.jsonl`（v3.7 结构化记忆库）、`thinking_log/`（思考日志）、`archive/`（快照 `brain_v{n}.whale`）、`.keys/`（密钥，DPAPI 免密）、`.lineage.json`（血缘）、`self_model.json`（动态自我模型）、`goals.json`（目标）、`decisions.jsonl`（决策日志）；`.brain_active` 持久化当前大脑，多大脑分支见 `brain-dirs`。
 

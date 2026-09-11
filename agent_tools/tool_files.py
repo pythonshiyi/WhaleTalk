@@ -156,6 +156,34 @@ def read_file(path, start_line=None, max_lines=None):
         return f"错误：无法读取文件 {path}: {e}"
 
 
+def _trust_declare(path, reason):
+    """命中信任内核文件时登记「已声明改动」。
+
+    刻意做成 try/except 全吞 + 惰性导入：留痕是旁路，**绝不允许阻断写入**——
+    能力一条不减是硬约束，这里只负责让改动不可能悄悄发生。
+    非内核文件返回 None（调用方无需分支，透传即可）。
+
+    位置约定：必须定义在 `@tool()` 装饰器**之前**。审计门禁按「装饰器后紧邻的
+    函数」判定实现名，若在这两者之间插入函数，schema 会被误绑到新函数上
+    （tools/audit_tools.py 的「实现名不一致」即为此信号）。
+    """
+    try:
+        import trust_kernel
+        return trust_kernel.declare(path, reason, actor="tool")
+    except Exception:
+        return None
+
+
+def _trust_commit(handle, ok=True):
+    """写后提交基线并记账（同样全吞异常；handle 为 None 时无操作）。"""
+    try:
+        if handle:
+            import trust_kernel
+            trust_kernel.commit(handle, ok=ok)
+    except Exception:
+        pass
+
+
 @tool(
         {
             "type": "function",
@@ -191,19 +219,24 @@ def write_file(path, content):
             f"{permissions.max_write_size()}"
         )
     p = permissions.resolve(path)
+    tk_handle = _trust_declare(p, "write_file 覆盖写入")
     try:
         # 覆盖已存在文件前自动快照（删除可恢复的安全网；新建无需快照）
         if os.path.exists(p):
             snapshot_mod.snapshot_before("write_file", p)
         created, real_size = _atomic_write(p, str(content))
         if not os.path.exists(p):
+            _trust_commit(tk_handle, ok=False)
             return f"错误：写入后核验失败，文件不存在：{p}"
         permissions.audit("write_file", p, f"{real_size} 字节")
+        _trust_commit(tk_handle, ok=True)
+        note = "，已登记为信任内核声明改动（基线已推进，可回滚）" if tk_handle else ""
         return (
             f"已写入 {p}（{'新建' if created else '覆盖并备份 .bak'}，"
-            f"实际 {real_size} 字节，已核验存在）"
+            f"实际 {real_size} 字节，已核验存在{note}）"
         )
     except Exception as e:
+        _trust_commit(tk_handle, ok=False)
         return f"错误：写入失败: {e}"
 
 
@@ -299,14 +332,19 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
         content = content.replace(old, new or "")
     if n == 0:
         return "错误：无匹配内容，未做修改"
+    tk_handle = _trust_declare(p, f"edit_file 替换 {n} 处")
     try:
         snapshot_mod.snapshot_before("edit_file", p)
         _atomic_write(p, content)
         if not os.path.exists(p):
+            _trust_commit(tk_handle, ok=False)
             return f"错误：写入后核验失败，文件不存在：{p}"
         permissions.audit("edit_file", p, f"替换 {n} 处")
-        return f"已替换 {n} 处，写入 {p}（已备份 .bak，已核验存在）"
+        _trust_commit(tk_handle, ok=True)
+        note = "，已登记为信任内核声明改动（基线已推进，可回滚）" if tk_handle else ""
+        return f"已替换 {n} 处，写入 {p}（已备份 .bak，已核验存在{note}）"
     except Exception as e:
+        _trust_commit(tk_handle, ok=False)
         return f"错误：写入失败: {e}"
 
 

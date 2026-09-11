@@ -52,6 +52,11 @@ brain_merged-*/
 *.whale
 brain_seed.whale
 
+# ===== 信任内核运行数据（不入库）=====
+# 基线副本 / 账本 / 事件 属本机运行状态：随每次启动生成，且可能含本机路径。
+# 首次运行会自动 bootstrap（以当时的代码为可信基线），故新克隆无需携带。
+trust/
+
 # ===== 前端依赖 =====
 webui/node_modules/
 webapp_*.log

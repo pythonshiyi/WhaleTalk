@@ -52,6 +52,18 @@ export default function StatusBar({ mode, onSwitchMode, generating, generatingTe
         </span>
       )}
       {status?.peak_hour ? " ⏰ 高峰" : ""}
+      {status?.trust && status.trust.state === "unconfirmed" && (
+        <span
+          className="st-budget-over"
+          title={
+            "🛡 信任内核：检测到未声明的自我修改（" +
+            [...(status.trust.files || [])].join("、") +
+            "）。\n查看差异：python trust_kernel.py diff <文件>\n回滚：python trust_kernel.py restore <文件>\n确认保留：python trust_kernel.py accept --all"
+          }
+        >
+          {` | 🛡 内核 ${status.trust.pending + status.trust.alerts} 项待确认`}
+        </span>
+      )}
     </span>
   ));
 

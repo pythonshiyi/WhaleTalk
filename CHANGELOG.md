@@ -2,6 +2,57 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.10.0（未发版追加·自我完整性批次）—— 🛡 信任内核：自我修改可声明 · 可见 · 可回滚
+
+**版本号不变**。一次「以智能体视角审视自身设计」的审查发现：决定「能做什么」的
+代码（permissions / security / crypto / snapshot）与普通文件没有区别，而默认自由
+权限下智能体可读写任意路径——**刹车片放在了油门旁边**，且改动无痕、不可复现。
+
+### 🛡 新增 `trust_kernel.py`（信任内核）
+
+- **不夺权是硬约束**：刻意**不**做写入拦截（`run_python` / `run_command` /
+  `start_process` 都能绕开工具层，工具层设卡只挡君子）。改为在**效果层**核对：
+  启动时逐字节比对可信基线，未声明的改动生成事件；对话时注入「自我完整性」提示，
+  干净时返回空串（**零 token、不扰动前缀缓存**）
+- **基线优先于索引**：`trust/baseline/` 是事实来源，`manifest.json` 只是索引——
+  **删掉 manifest 也不能让改动「看不见」**；manifest 丢失本身记为 `manifest_lost`
+  事件（不静默重建成"看起来一切正常"）
+- **目录语义分离**：`history/` 装已声明改动的历史（可撤销合法改动），`incidents/`
+  只装未声明改动的证据——避免异常淹没在正常流水里
+- **两种模式**：`report`（默认，只报告不倒改，开发期友好）／`guard`（隔离改动 +
+  恢复基线 + 保留原件待确认）。默认 report 的理由：本仓库活跃迭代，默认 guard 会
+  与 IDE 正常编辑对撞，反而逼人关掉整个机制
+- **配置只能追加保护**：`extra_protected` 只做并集，无法用来摘掉内核文件
+
+### 🔌 三处接线
+
+- **启动核对**：`api_server.start_server` 接入 `boot_check()`（可降级，不阻断启动）
+- **工具层声明**：`write_file` / `edit_file` 命中内核文件时 `declare → commit`
+  （基线推进 + 记账），**登记失败绝不阻断写入**；返回文案明示"已登记为信任内核
+  声明改动（基线已推进，可回滚）"
+- **可见性**：新增 `GET /v1/trust`（`?deep=1` 现场重算）+ `/v1/status` 的 `trust`
+  摘要（mtime 为键 + 30s TTL，状态栏刷新零成本）+ `trust/STATUS.md`
+
+### 🐛 过程中修掉的自身缺陷（均已加回归）
+
+- **装饰器绑定漂移（P0，被门禁抓出）**：辅助函数初次插入到 `@tool()` 与
+  `write_file` 之间 → schema 被误绑到辅助函数上（`TOOL_CALL_MAP['write_file']`
+  指向了 `_trust_declare`）。`tools/audit_tools.py --strict` 的「实现名不一致」
+  正是该信号。修复后绑定复原，门禁 **0 error / 0 warn**
+- **告警每次启动重复触发**：`rebootstrap` 被写成 manifest 持久字段，读取方拿它当
+  「刚刚发生」的信号 → 告警永不消失。改为模块级 `_last_bootstrap`
+- **相对名解析落到 cwd**：`restore("permissions.py")` 在非项目目录执行时解析失败，
+  现同时支持"内核相对名"与"绝对路径"两种输入形态
+
+### 🧪 测试
+
+新增 `tests/test_trust_kernel.py`（**24 用例**：检出/声明/回滚/确认/guard 隔离/
+manifest 丢失告警只响一次/配置不可瘦身/配置笔误不误报/工具层集成/CLI 退出码/
+非内核文件不受影响），全量 **430 passed / 0 failed**；`audit_tools.py --strict` 0 error、
+`validate_tools.py` 148 工具全链路通过、`island_check.py` 无孤岛、前端 `npm test` 全通过。
+
+> 设计立场、威胁模型与**明确的非目标**见 [docs/信任内核.md](docs/信任内核.md)。
+
 ## v3.10.0（未发版追加·搜索健壮性批次）—— 🔍 引擎软超时 · 翻页/站点诚实报错 · 额度预警
 
 **版本号不变**。一次取证式压测（19 次真实调用 + 向 Bing/DDG/360 及实时源发原始请求）发现 3 个 P0 + 4 个 P1 缺陷，已修复。

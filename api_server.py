@@ -773,6 +773,49 @@ def _status():
         "role": _role_name(cfg.get("system_prompt") or ""),
         "scenario": cfg.get("scenario") or "通用",
         "thinking": cfg.get("thinking") or "high",
+        # 信任内核摘要：仅暴露状态与文件名，详情走 GET /v1/trust（避免状态栏每次刷新都读账本）
+        "trust": _trust_brief(),
+    }
+
+
+def _trust_state():
+    """信任内核状态（进程内缓存最近一次核对结论，避免高频端点重复哈希）。
+
+    用 mtime 做缓存键：每次请求只 stat 几个内核文件，不重算 sha256；
+    需要现场核对时用 /v1/trust?deep=1 或 trust_kernel.status(deep=True)。
+    """
+    global _TRUST_CACHE
+    try:
+        import trust_kernel
+        key = tuple(
+            (n, os.path.getmtime(os.path.join(trust_kernel.PROJECT_DIR, n))
+             if os.path.exists(os.path.join(trust_kernel.PROJECT_DIR, n)) else 0)
+            for n in trust_kernel.protected_names()
+        )
+        now = time.time()
+        if _TRUST_CACHE.get("key") == key and now - _TRUST_CACHE.get("at", 0) < 30:
+            return _TRUST_CACHE["value"]
+        val = trust_kernel.status(deep=False)
+        _TRUST_CACHE = {"key": key, "at": now, "value": val}
+        return val
+    except Exception:
+        logger.exception("信任内核状态读取失败（降级为空）")
+        return {"state": "unknown", "changed": [], "protected": []}
+
+
+def _trust_brief():
+    """状态栏用的极简摘要：state + 待确认文件数 + 告警数 + 文件名（至多 5 个）。
+
+    带文件名是为了让前端指示灯能直接在 tooltip 里说清「是哪几个文件」——
+    否则用户还得自己去翻 STATUS.md 才知道要处理什么。
+    """
+    st = _trust_state()
+    changed = list(st.get("changed") or [])
+    return {
+        "state": st.get("state") or "unknown",
+        "pending": len(changed),
+        "alerts": len(st.get("alerts") or []),
+        "files": changed[:5],
     }
 
 
@@ -5020,6 +5063,9 @@ def _resolve_data_dir():
 DATA_DIR = _resolve_data_dir()
 
 _VOICE_CACHE_DIR = os.path.join(DATA_DIR, "voice", "cache")
+# 信任内核状态缓存（mtime 为键 + 30s TTL）：让 /v1/status 零成本读到结论，
+# 不必每次刷新都重算 5 个内核文件的 sha256。
+_TRUST_CACHE = {}
 HISTORY_DIR = os.path.join(DATA_DIR, "history")
 SESSIONS_DIR = os.path.join(HISTORY_DIR, "sessions")
 MEMORY_PATH = os.path.join(DATA_DIR, "memory.json")
@@ -6051,6 +6097,27 @@ class _Handler(BaseHTTPRequestHandler):
     @_get_route("/v1/status")
     def _g_v1_status(self):
         self._json(200, _status())
+
+
+    @_get_route(("qpath", "/v1/trust"))
+    def _g_v1_trust(self):
+        """信任内核状态。?deep=1 现场重新核对（重算 sha256 并生成事件）。
+
+        只读端点：**不会**修改任何文件、不会回滚、不会推进基线——处置权在用户。
+        回滚/确认走 CLI（python trust_kernel.py restore|accept）或前端按钮。
+        """
+        try:
+            import trust_kernel
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            deep = (qs.get("deep") or ["0"])[0] in ("1", "true", "yes")
+            st = trust_kernel.status(deep=True) if deep else _trust_state()
+            st = dict(st)
+            st["ok"] = st.get("state") == "ok"
+            st["ledger_tail"] = trust_kernel.ledger_tail(10)
+            self._json(200, st)
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e, state="unknown", changed=[], protected=[])
 
 
     @_get_route("/v1/brain")
@@ -7480,6 +7547,16 @@ class _Handler(BaseHTTPRequestHandler):
                 + "不要写到桌面/临时/系统目录；"
                 + "文档/PPT/PDF/图片等给用户看的交付物可放在该子目录或用户指定位置。"
             )
+        # 自我完整性：存在未声明的信任内核改动/告警时才注入（干净时零 token、不扰动缓存）。
+        # 这不是「禁止」，而是「不得隐瞒」——把改动摊到对话里，由用户决定保留或回滚。
+        if not pure_chat:
+            try:
+                import trust_kernel as _tkmod
+                _tn = _tkmod.integrity_notice()
+                if _tn:
+                    parts.append(_tn)
+            except Exception:
+                pass
         if not pure_chat:
             try:
                 fpm = stores_mod.failure_patterns_text(FAILURES_PATH)
@@ -7733,6 +7810,15 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
         snapshot_mod.init(os.path.join(DATA_DIR, "undo"))
     except Exception:
         logger.warning("快照模块初始化失败（可降级）：写操作将不带自动快照，误操作无法一键恢复")
+    # 信任内核启动核对：检出「未声明的自我修改」并留痕。
+    # 刻意不阻断启动、不回滚文件（默认 report 模式）——能力一条不减，改由
+    # 状态端点 + 系统提示注入 + STATUS.md 让改动可见；处置权始终在用户。
+    # 需要强隔离的部署把 trust/config.json 的 mode 置 "guard"。
+    try:
+        import trust_kernel as _tk
+        _trust_boot = _tk.boot_check()
+    except Exception:
+        logger.warning("信任内核启动核对失败（可降级）：本次不产出自我完整性结论")
     # run_workflow 的消息投递通道：Web 版无「投递输入框」，走无头后台执行
     def _send_to_headless(text):
         try:
