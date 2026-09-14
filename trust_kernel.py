@@ -846,6 +846,90 @@ def ledger_tail(n=20):
     return list(reversed(out))
 
 
+_EVENT_LABELS = {
+    "bootstrap": "建立可信基线",
+    "rebootstrap": "重新建立可信基线",
+    "declare": "声明改动（工具通道）",
+    "commit": "改动已提交（基线推进）",
+    "abort": "改动中止（未生效）",
+    "accept": "用户确认保留",
+    "restore": "回滚到可信基线",
+    "guarded_restore": "guard 模式隔离并恢复",
+    "undeclared_change": "发现未声明改动",
+    "manifest_lost": "清单丢失",
+}
+
+
+def timeline(limit=100):
+    """信任内核「故事线」：把账本 + 未声明事件合并为统一时间轴（新→旧）。
+
+    - 账本（ledger.jsonl）：声明/提交/确认/回滚等**已声明**流水。
+    - 事件（incidents/*.json）：启动核对发现的**未声明**改动（证据独立存放）。
+    两者 ts 口径一致（YYYY-MM-DD HH:MM:SS），合并后按时间倒序。
+    """
+    events = []
+    # 1) 账本
+    try:
+        with open(_ledger_path(), "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(e, dict):
+                    continue
+                ev = str(e.get("event") or "")
+                events.append({
+                    "ts": str(e.get("ts") or ""),
+                    "source": "ledger",
+                    "event": ev,
+                    "label": _EVENT_LABELS.get(ev, ev),
+                    "file": str(e.get("file") or ""),
+                    "actor": str(e.get("actor") or ""),
+                    "reason": str(e.get("reason") or ""),
+                    "summary": str(e.get("note") or ""),
+                })
+    except Exception:
+        pass
+    # 2) 未声明事件
+    try:
+        d = _incident_dir()
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".json"):
+                continue
+            obj = _read_json(os.path.join(d, fn), None)
+            if not isinstance(obj, dict):
+                continue
+            kind = str(obj.get("kind") or "undeclared_change")
+            changed = [str(x) for x in (obj.get("changed") or [])]
+            missing = [str(x) for x in (obj.get("missing") or [])]
+            parts = []
+            if changed:
+                parts.append("改动：" + "、".join(changed))
+            if missing:
+                parts.append("缺失：" + "、".join(missing))
+            if obj.get("cosmetic_only"):
+                parts.append("（仅行尾差异）")
+            events.append({
+                "ts": str(obj.get("at") or ""),
+                "source": "incident",
+                "event": kind,
+                "label": _EVENT_LABELS.get(kind, kind),
+                "file": changed[0] if changed else "",
+                "actor": "boot_check",
+                "reason": "",
+                "summary": "；".join(parts),
+                "incident": fn,
+            })
+    except Exception:
+        pass
+    events.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    return events[: max(1, int(limit))]
+
+
 def integrity_notice():
     """给智能体的「自我完整性」提示。
 

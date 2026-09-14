@@ -2152,6 +2152,8 @@ WORKFLOWS_FILE = None        # DATA_DIR/workflows.json
 CHECKPOINT_FILE = None       # DATA_DIR/task_checkpoint.json
 STATS_FILE = None            # DATA_DIR/stats.json
 PATTERNS_FILE = None         # DATA_DIR/patterns.json（成功模式配方，run_workflow 的 recipe 步骤用）
+PROMPTS_FILE = None          # DATA_DIR/prompts.json（指令库；技能结晶草稿也写这里，self_report/heatmap 用）
+TASKLOG_FILE = None          # <active_dir>/.whaletalk/tasklog.json（任务链记录，随工作目录切换而更新）
 FAILURES_FILE = None         # DATA_DIR/failures.json（失败模式库，failure_memory 工具用）
 FAILURES_ARCHIVE_FILE = None  # DATA_DIR/failures_archive.json（失败模式溢出归档）
 HINT_HITS_FILE = None        # DATA_DIR/preactivate_hits.json（预激活关键词命中计数，数据驱动维护 _HINT_ORDER）
@@ -3348,7 +3350,7 @@ _TOOL_ORDER = [
     'knowledge_search', 'database_execute', 'read_email', 'email_summary', 'agent_mail', 'task_checkpoint_save', 'task_checkpoint_load', 'run_workflow',
     'image_generate', 'usage_report', 'pdf_extract', 'pdf_create', 'pdf_visual_check', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'rss_fetch', 'qrcode',
     'secret_store', 'kv_store', 'media_ffmpeg', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_plugin', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check',
-    'list_my_capabilities',
+    'list_my_capabilities', 'capability_heatmap', 'self_report',
 ]
 
 _GROUP_ORDER = [
@@ -3388,6 +3390,7 @@ _HINT_ORDER = [
     ('查看定时', '我的定时任务', '取消定时', '列出定时'), ('点击屏幕', '移动鼠标', '键盘输入', '模拟按键', '屏幕坐标', '模拟滚轮', '桌面自动化'), ('朗读', '语音播报', '文字转语音', '读给我听', '停止朗读', 'tts'),
     ('执行流程', '运行工作流', '跑流程', '流程模板'), ('失败模式', '失败记忆', '老是报错', '已修复', '消解'),
     ('有哪些能力', '有什么能力', '有什么工具', '能力清单', '我的能力', '会哪些能力'),
+    ('能力热力图', '能力画像', '擅长什么', '弱项', '哪里不行', '能力统计'), ('自我述职', '周报', '我这周做了什么', '工作总结', '述职', '复盘'),
 ]
 
 TOOLS = build_tool_list(_TOOL_ORDER)

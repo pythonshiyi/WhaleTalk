@@ -715,6 +715,29 @@ export async function getTasklog() {
 export async function getAudit() {
   return api("/v1/audit");
 }
+/**
+ * 能力热力图：工具使用频率 / 失败率 / 技能结晶 / 预激活命中。
+ * @param {number} [days] 统计窗口天数（0=全部）
+ * @returns {Promise<Object>} {ok, heatmap:{summary, tools, hot, struggles, crystallized, preactivate}}
+ */
+export async function getHeatmap(days = 30) {
+  return api(`/v1/insight/heatmap?days=${days}`);
+}
+/**
+ * 自我述职：汇总决策/目标/进化/任务/成长/用量。
+ * @param {number} [days] 统计窗口天数
+ * @returns {Promise<Object>} {ok, report:{summary, decisions, goals, evolution, tasks, growth, usage, self_model}}
+ */
+export async function getSelfReport(days = 7) {
+  return api(`/v1/insight/report?days=${days}`);
+}
+/**
+ * 信任内核状态 + 故事线时间轴（账本 + 未声明事件合并，新→旧）。
+ * @returns {Promise<Object>} {state, mode, protected, changed, ok, timeline:[{ts,label,...}]}
+ */
+export async function getTrustTimeline() {
+  return api("/v1/trust?timeline=1");
+}
 
 // ── 鲸语大脑 ─────────────────────────────────────────
 

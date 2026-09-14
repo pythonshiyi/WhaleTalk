@@ -264,6 +264,7 @@ def _make_permission_cb(send, stop_event):
 _TOOL_DOMAIN = {
     "get_date": "系统与基础", "get_weather": "系统与基础",
     "list_my_capabilities": "系统与基础",
+    "capability_heatmap": "系统与基础", "self_report": "系统与基础",
     "environment_info": "系统与基础", "call_api": "系统与基础", "usage_report": "系统与基础",
     "secret_store": "系统与基础", "kv_store": "系统与基础",
     "watch_files": "系统与基础", "track_web": "系统与基础", "recall_session": "系统与基础",
@@ -1636,6 +1637,10 @@ def _set_dir(body):
     except Exception:
         pass
     try:
+        dc.TASKLOG_FILE = _tasklog_path()  # 任务链随工作目录切换（heatmap/self_report 读它）
+    except Exception:
+        pass
+    try:
         d = perms.get_data()
         allowed = [str(x) for x in d["filesystem"].get("allowed_dirs", [])]
         if p not in allowed:
@@ -2333,6 +2338,8 @@ def _dc_wiring_table():
         ("CHECKPOINT_FILE", CHECKPOINT_PATH),
         ("STATS_FILE", STATS_PATH),
         ("PATTERNS_FILE", PATTERNS_PATH),
+        ("PROMPTS_FILE", PROMPTS_PATH),
+        ("TASKLOG_FILE", _tasklog_path()),
         ("FAILURES_FILE", FAILURES_PATH),
         ("FAILURES_ARCHIVE_FILE", FAILURES_ARCHIVE_PATH),
         ("HINT_HITS_FILE", os.path.join(DATA_DIR, "preactivate_hits.json")),
@@ -2607,6 +2614,99 @@ def _crystallize_skills():
     stores.save_patterns(PROMPTS_PATH, items)
     _audit("skill_crystallized", ", ".join(d["name"] for d in drafts), f"{len(drafts)} 条草稿")
     return len(drafts)
+
+
+def _active_dir():
+    """当前工作目录（与 _status() / tasklog 口径一致；失效回落 DATA_DIR/workspace）。"""
+    try:
+        import config_utils
+        d = str(config_utils.load_config().get("active_dir") or "").strip()
+        if d and os.path.isdir(d):
+            return d
+    except Exception:
+        pass
+    return os.path.join(DATA_DIR, "workspace")
+
+
+def _tasklog_path():
+    """任务链记录路径（工作目录 .whaletalk/tasklog.json）。"""
+    return os.path.join(_active_dir(), ".whaletalk", "tasklog.json")
+
+
+def _read_tasklog_tasks():
+    try:
+        import stores
+        return stores.load_tasklog(_tasklog_path()).get("tasks") or []
+    except Exception:
+        return []
+
+
+def _read_failures_items():
+    try:
+        import stores
+        items = stores.load_failures(FAILURES_PATH)
+        return items if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
+def _read_pattern_items():
+    try:
+        import stores
+        items = stores.load_patterns(PATTERNS_PATH)
+        return items if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
+def _read_prompt_items():
+    try:
+        import stores
+        items = stores.load_patterns(PROMPTS_PATH)
+        return items if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
+def _read_hint_hits():
+    try:
+        import deepseek_client as dc
+        return dc.hint_hits_snapshot()
+    except Exception:
+        return {}
+
+
+def _insight_heatmap(days=30):
+    """能力热力图（工具使用/失败率/结晶/预激活命中）。"""
+    import insight
+    return insight.build_heatmap(
+        tasks=_read_tasklog_tasks(), failures=_read_failures_items(),
+        patterns=_read_pattern_items(), prompt_items=_read_prompt_items(),
+        hint_hits=_read_hint_hits(), days=days)
+
+
+def _insight_report(days=7):
+    """自我述职（决策/目标/进化/任务/成长/用量）。"""
+    import insight
+    decisions, goals, evolution, self_model = [], [], {}, {}
+    try:
+        import brainkit as bk
+        decisions = bk.list_decisions(limit=200)
+        goals = bk.load_goals()
+        evolution = bk.load_json(bk.BRAIN_DIR / "evolution.json", {}) or {}
+        self_model = bk.load_json(bk.BRAIN_DIR / "self_model.json", {}) or {}
+    except Exception:
+        pass
+    usage = {}
+    try:
+        import stats as stats_mod
+        usage = stats_mod.load_stats(STATS_PATH)
+    except Exception:
+        pass
+    return insight.build_self_report(
+        decisions=decisions, goals=goals, evolution=evolution,
+        tasks=_read_tasklog_tasks(), usage=usage, prompt_items=_read_prompt_items(),
+        self_model=self_model, days=days)
 
 
 def _record_recent_output(result):
@@ -6242,9 +6342,44 @@ class _Handler(BaseHTTPRequestHandler):
             st = dict(st)
             st["ok"] = st.get("state") == "ok"
             st["ledger_tail"] = trust_kernel.ledger_tail(10)
+            # 故事线：账本 + 未声明事件合并时间轴（?timeline=1 才返回，避免默认响应膨胀）
+            if (qs.get("timeline") or ["0"])[0] in ("1", "true", "yes"):
+                st["timeline"] = trust_kernel.timeline(100)
             self._json(200, st)
         except Exception as e:  # noqa: BLE001
             self._fail_soft(e, state="unknown", changed=[], protected=[])
+
+
+    @_get_route(("qpath", "/v1/insight/heatmap"))
+    def _g_v1_insight_heatmap(self):
+        """能力热力图：工具使用频率 / 失败率 / 技能结晶 / 预激活命中。"""
+        try:
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            try:
+                days = int((qs.get("days") or ["30"])[0])
+            except (TypeError, ValueError):
+                days = 30
+            days = max(0, min(3650, days))
+            self._json(200, {"ok": True, "heatmap": _insight_heatmap(days)})
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e, heatmap=None)
+
+
+    @_get_route(("qpath", "/v1/insight/report"))
+    def _g_v1_insight_report(self):
+        """自我述职：汇总一段时间的决策 / 目标 / 进化 / 任务 / 成长 / 用量。"""
+        try:
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            try:
+                days = int((qs.get("days") or ["7"])[0])
+            except (TypeError, ValueError):
+                days = 7
+            days = max(1, min(3650, days))
+            self._json(200, {"ok": True, "report": _insight_report(days)})
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e, report=None)
 
 
     @_get_route("/v1/brain")

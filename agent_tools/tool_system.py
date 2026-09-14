@@ -1437,6 +1437,157 @@ def usage_report(days=7):
         return f"错误：生成报告失败: {e}"
 
 
+def _insight_tasklog_tasks():
+    """读取任务链记录（tasklog），失败返回 []。"""
+    try:
+        import stores
+        if not _dc.TASKLOG_FILE:
+            return []
+        return stores.load_tasklog(_dc.TASKLOG_FILE).get("tasks") or []
+    except Exception:
+        return []
+
+
+def _insight_json_list(path, loader):
+    """读取 JSON 列表文件（失败返回 []）。"""
+    try:
+        if not path:
+            return []
+        items = loader(path)
+        return items if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "capability_heatmap",
+                "description": "生成能力热力图：统计工具使用频率、任务链长度、失败率、技能结晶数与预激活命中，用于发现自身能力薄弱点（哪些工具总出错、哪些几乎没用过）。适合『我哪些能力不行』『看看我的能力画像』",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"days": {"type": "integer", "description": "可选：统计最近 N 天（默认 30，0=全部，最大 3650）"}},
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='能力热力图/自身能力画像',
+    preactivate=(('能力热力图', '能力画像', '擅长什么', '弱项', '哪里不行', '能力统计'),),
+)
+def capability_heatmap(days=30):
+    """能力热力图：工具使用/失败率/结晶/预激活命中（返回文本摘要）。"""
+    import insight
+    try:
+        days = max(0, min(3650, int(days if days is not None else 30)))
+    except (TypeError, ValueError):
+        days = 30
+    try:
+        import stores
+        hm = insight.build_heatmap(
+            tasks=_insight_tasklog_tasks(),
+            failures=_insight_json_list(_dc.FAILURES_FILE, stores.load_failures),
+            patterns=_insight_json_list(_dc.PATTERNS_FILE, stores.load_patterns),
+            prompt_items=_insight_json_list(_dc.PROMPTS_FILE, stores.load_patterns),
+            hint_hits=_dc.hint_hits_snapshot() if hasattr(_dc, "hint_hits_snapshot") else {},
+            days=days,
+        )
+    except Exception as e:
+        return f"错误：生成能力热力图失败: {e}"
+    s = hm.get("summary") or {}
+    scope = f"近 {days} 天" if days else "全部时间"
+    lines = [
+        f"能力热力图（{scope}）：",
+        f"任务 {s.get('tasks', 0)} 项 · 工具调用 {s.get('tool_calls', 0)} 次 · "
+        f"覆盖 {s.get('distinct_tools', 0)} 个工具 · 平均链长 {s.get('avg_chain_len', 0)}",
+    ]
+    hot = [r for r in (hm.get("tools") or []) if int(r.get("calls") or 0) > 0][:8]
+    if hot:
+        lines.append("最常用：" + "、".join(f"{r['tool']}({r['calls']})" for r in hot))
+    struggles = hm.get("struggles") or []
+    if struggles:
+        lines.append("薄弱项（失败多）：" + "、".join(
+            f"{r['tool']} 失败{r.get('failure_hits', 0)}次"
+            + (f"（未消解{r.get('unresolved', 0)}）" if r.get("unresolved") else "")
+            for r in struggles))
+    else:
+        lines.append("薄弱项：近窗口内没有失败记录 🎉")
+    skills = hm.get("crystallized") or []
+    if skills:
+        lines.append("技能结晶：" + "、".join(f"{k.get('name')}（成功 {k.get('hits', 0)} 次）" for k in skills[:6]))
+    pre = hm.get("preactivate") or []
+    if pre:
+        lines.append("预激活命中 top：" + "、".join(f"{p['keyword']}({p['hits']})" for p in pre[:8]))
+    lines.append("提示：薄弱项若反复出现，可用 create_evolution 提改进提案；重复成功链可用技能结晶沉淀为可复用指令。")
+    return "\n".join(lines)
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "self_report",
+                "description": "生成自我述职（AI 周报）：汇总一段时间内的任务/决策/目标进度/进化/技能结晶/用量，形成一份可复盘的工作报告；write=true 时写入工作目录 Markdown 文件。适合『这周我都做了什么』『生成一份述职/周报』『复盘一下』",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "days": {"type": "integer", "description": "可选：汇总最近 N 天（默认 7，最大 3650）"},
+                        "write": {"type": "boolean", "description": "可选：true 时把述职写入工作目录 self-reports/ 下的 Markdown 文件"},
+                    },
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='自我述职/工作周报',
+    preactivate=(('自我述职', '周报', '我这周做了什么', '工作总结', '述职', '复盘'),),
+)
+def self_report(days=7, write=False):
+    """自我述职：汇总工作/决策/目标/进化/成长/用量（可写盘为 Markdown）。"""
+    import insight
+    try:
+        days = max(1, min(3650, int(days or 7)))
+    except (TypeError, ValueError):
+        days = 7
+    try:
+        import stores
+        decisions, goals, evolution, self_model = [], [], {}, {}
+        try:
+            import brainkit as bk
+            decisions = bk.list_decisions(limit=200)
+            goals = bk.load_goals()
+            evolution = bk.load_json(bk.BRAIN_DIR / "evolution.json", {}) or {}
+            self_model = bk.load_json(bk.BRAIN_DIR / "self_model.json", {}) or {}
+        except Exception:
+            pass
+        usage = {}
+        try:
+            import stats as stats_mod
+            if _dc.STATS_FILE:
+                usage = stats_mod.load_stats(_dc.STATS_FILE)
+        except Exception:
+            pass
+        report = insight.build_self_report(
+            decisions=decisions, goals=goals, evolution=evolution,
+            tasks=_insight_tasklog_tasks(), usage=usage,
+            prompt_items=_insight_json_list(_dc.PROMPTS_FILE, stores.load_patterns),
+            self_model=self_model, days=days,
+        )
+    except Exception as e:
+        return f"错误：生成自我述职失败: {e}"
+    md = insight.render_report(report, title="自我述职")
+    if not write:
+        return md
+    try:
+        base = os.path.dirname(os.path.dirname(_dc.TASKLOG_FILE)) if _dc.TASKLOG_FILE else (_dc.WORKING_DIR or os.getcwd())
+        out_dir = os.path.join(base, "self-reports")
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, f"自我述职_{time.strftime('%Y%m%d')}.md")
+        _atomic_write(path, md)
+        return f"✅ 已生成自我述职报告：{path}\n\n{md}"
+    except Exception as e:
+        return f"错误：写入述职文件失败: {e}\n\n{md}"
+
+
 @tool(
         {
             "type": "function",
@@ -1558,4 +1709,4 @@ def create_plugin(name, description="", tools=None, skills=None, workflows=None,
     )
 
 
-__all__ = ['create_plugin', 'watch_files', 'recall_session', 'project_info', 'read_project_file', 'list_my_capabilities', 'create_evolution', 'self_evolve', 'verify_files', 'git_tool', 'notify_desktop', 'app_manage', 'usage_report']
+__all__ = ['create_plugin', 'watch_files', 'recall_session', 'project_info', 'read_project_file', 'list_my_capabilities', 'create_evolution', 'self_evolve', 'verify_files', 'git_tool', 'notify_desktop', 'app_manage', 'usage_report', 'capability_heatmap', 'self_report']

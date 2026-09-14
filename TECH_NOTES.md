@@ -20,7 +20,7 @@ DeepSeek 已把全部模型升级为**单一原生多模态模型**，本产品�
 
 ## 1. 项目概览
 
-Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、149 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、鲸语大脑（跨会话灵魂）、插件体系（.wtplugin v2）、公众号自动写作。
+Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、151 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、鲸语大脑（跨会话灵魂）、插件体系（.wtplugin v2）、公众号自动写作。
 
 - 运行时：Python 3.9+（开发 3.12），核心依赖仅 `openai` / `httpx`，其余全部可选（缺失自动降级提示）
 - API 层：标准库 `http.server.ThreadingHTTPServer`（**无 Flask/无框架**）
@@ -31,8 +31,8 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 ```
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
-├── api_server.py           # 本地 HTTP API（REST + SSE，94+ /v1 端点）
-├── deepseek_client.py      # 能力引擎：DeepSeekClient + 149 工具 + smart_tools（4,735 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
+├── api_server.py           # 本地 HTTP API（REST + SSE，96+ /v1 端点）
+├── deepseek_client.py      # 能力引擎：DeepSeekClient + 151 工具 + smart_tools（4,735 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
 ├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop 共 11 模块 117 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
 ├── security.py             # SSRF 防护（云元数据永远拦截）
@@ -346,3 +346,24 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 1. **孤儿进程**：`kill_tree` 吞异常无返回值，`stop_process`/`cleanup_idle_processes` 无条件 `pop` 条目 → 杀失败后进程成孤儿（端口占着、工具却说"运行中：无"、再也停不掉）。修复：`kill_tree` 返回 bool（`proc.wait` 后 `poll() is not None` 才 True），**只有确认退出才摘条目**。
 2. **契约错位**：`stop_process(target)` 与 `start_process(name=)` 参数名不一致，是模型最高频调用错误。修复：`stop_process` 接受 `target/name/process_id/pid` 别名。
 3. **API 不诚实**：`_stop_process`/`_start_process` 恒 `ok:True`；`stop_process` 的"未找到进程"缺"错误"前缀（被误判成功）。修复：据 `shared.TOOL_RESULT_FAIL_PREFIXES` 判定，失败带 `error`。
+
+## 22. 自我洞察（insight.py）：能力热力图 · 自我述职 · 信任故事线
+
+**主题：让智能体「看见自己」。** 原料早已存在，缺的是把它们变成自我认知的一环。
+
+- **`insight.py`（纯函数 · 仅标准库）**：
+  - `build_heatmap(tasks, failures, patterns, prompt_items, hint_hits, days)`——按工具聚合调用次数/任务数/失败命中/成功模式，输出 `summary / tools / hot / struggles / crystallized / preactivate`。
+  - `build_self_report(decisions, goals, evolution, tasks, usage, prompt_items, self_model, days)`——汇总决策/目标/进化/任务/成长/用量；`render_report` 渲染为 Markdown。
+  - 时间窗口按 `ts` 前 10 位（`YYYY-MM-DD`）字典序过滤，兼容 `"YYYY-MM-DD HH:MM:SS"` 与 ISO 两种口径。
+- **两个 AI 工具**（`tool_system.py`，六层已同步）：`capability_heatmap(days=30)`、`self_report(days=7, write=False)`；
+  `self_report` 的 `write=true` 把 Markdown 写入工作目录 `self-reports/`（可配定时任务每周生成）。
+- **三个只读端点**：`GET /v1/insight/heatmap?days=N` · `GET /v1/insight/report?days=N` ·
+  `GET /v1/trust?timeline=1`（故事线，默认不返回以免响应膨胀）。
+- **`trust_kernel.timeline(limit)`**：把 `ledger.jsonl`（declare/commit/accept/restore…）与
+  `incidents/*.json`（未声明改动）合并为按 `ts` 倒序的统一事件流，附中文事件标签（`_EVENT_LABELS`）。
+  **不新增写路径**——只是把既有账本/事件读出来合并（与信任内核「不阻断、可回滚」立场一致）。
+- **新建模路径经单一注入点**：`_dc_wiring_table` 新增 `PROMPTS_FILE` / `TASKLOG_FILE`
+  （后者随工作目录切换，`_set_dir` 同步刷新），工具据此读取，不再各自拼路径。
+- **前端**：`AutonomyPage.jsx` 新增 `GrowthTab`（「自主 → 🌱 成长」）——能力热力图（条形 + 时间窗切换）
+  / 自我述职摘要 / 信任内核故事线；`api.js` 新增 `getHeatmap` / `getSelfReport` / `getTrustTimeline`。
+- **测试**：`tests/test_insight.py`（8 · 纯函数）+ `test_trust_kernel.py` 追加 4 个时间轴用例。

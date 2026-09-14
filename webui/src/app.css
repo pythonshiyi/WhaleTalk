@@ -2517,6 +2517,30 @@ button {
 .au-chain { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .au-item-ops { display: flex; gap: 4px; align-items: center; flex-shrink: 0; flex-wrap: wrap; }
 
+/* 成长栏目：能力热力图条形 + 时间窗选择 */
+.au-select {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm, 6px);
+  color: var(--text-2);
+  font-size: var(--fs-xs, 11.5px);
+  padding: 2px 6px;
+}
+.au-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-0);
+  overflow: hidden;
+  margin-top: 4px;
+  width: 100%;
+}
+.au-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--brand, #0ea5e9);
+  transition: width 0.2s ease;
+}
+
 .au-audit { display: flex; flex-direction: column; gap: 3px; max-height: 320px; overflow-y: auto; }
 .au-audit code {
   font-family: var(--font-mono);

@@ -178,4 +178,6 @@ __all__ = [
     'html_to_pdf',
     'ppt_layout_check',
     'list_my_capabilities',
+    'capability_heatmap',
+    'self_report',
 ]

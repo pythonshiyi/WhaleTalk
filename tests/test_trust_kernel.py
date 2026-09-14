@@ -350,3 +350,41 @@ def test_cli_verify_exit_code_reflects_state(sandbox):
     assert tk_.main(["verify"]) == 2
     assert tk_.main(["diff", "security.py"]) == 0
     assert tk_.main(["log", "-n", "2"]) == 0
+
+
+# ── 故事线（时间轴）──────────────────────────────────────────────────────
+
+def test_timeline_includes_bootstrap(sandbox):
+    """引导事件应出现在时间轴主干（账本）。"""
+    tk_, _ = sandbox
+    tl = tk_.timeline(20)
+    assert any(e["source"] == "ledger" and e["event"] in ("bootstrap", "rebootstrap") for e in tl)
+
+
+def test_timeline_merges_undeclared_incident(sandbox):
+    """未声明改动（incident）应合并进时间轴，且带中文事件标签。"""
+    tk_, root = sandbox
+    _write(root, "permissions.py", "# 未声明改动\n")
+    tk_.boot_check()                       # 生成 incident
+    tl = tk_.timeline(50)
+    inc = [e for e in tl if e["source"] == "incident"]
+    assert inc, "应包含未声明事件"
+    assert inc[0]["label"] == "发现未声明改动"
+    assert "permissions.py" in inc[0]["summary"]
+
+
+def test_timeline_sorted_desc_and_limited(sandbox):
+    tk_, root = sandbox
+    _write(root, "crypto.py", "# 改\n")
+    tk_.boot_check()
+    tl = tk_.timeline(1)
+    assert len(tl) == 1
+    full = tk_.timeline(100)
+    ts = [e["ts"] for e in full]
+    assert ts == sorted(ts, reverse=True)
+
+
+def test_timeline_never_raises_on_empty(sandbox, monkeypatch):
+    tk_, _ = sandbox
+    monkeypatch.setattr(tk_, "TRUST_DIR", os.path.join("Z:", "\\nonexistent", "trust"))
+    assert tk_.timeline(10) == []

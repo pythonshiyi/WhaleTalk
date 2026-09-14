@@ -411,6 +411,183 @@ function SelfTab({ onToast }) {
   );
 }
 
+function GrowthTab({ onToast }) {
+  const [days, setDays] = React.useState(30);
+  const [hm, setHm] = React.useState(null);
+  const [rep, setRep] = React.useState(null);
+  const [trust, setTrust] = React.useState(null);
+
+  const load = React.useCallback(async () => {
+    const [h, r, t] = await Promise.all([
+      api.getHeatmap(days).catch(() => null),
+      api.getSelfReport(7).catch(() => null),
+      api.getTrustTimeline().catch(() => null),
+    ]);
+    setHm(h && h.heatmap ? h.heatmap : null);
+    setRep(r && r.report ? r.report : null);
+    setTrust(t || null);
+  }, [days]);
+
+  React.useEffect(() => {
+    load();
+  }, [load]);
+
+  const maxCalls = hm && hm.tools && hm.tools.length ? Math.max(1, ...hm.tools.map((t) => t.calls || 0)) : 1;
+  const hmTools = hm ? (hm.tools || []).filter((t) => (t.calls || 0) > 0).slice(0, 12) : [];
+
+  return (
+    <div className="au-col">
+      <div className="au-card">
+        <div className="au-card-title">📊 能力热力图（我用得最多 / 最薄弱的能力）</div>
+        <div className="pm-cat" style={{ marginBottom: 8 }}>
+          <select className="au-select" value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            <option value={7}>近 7 天</option>
+            <option value={30}>近 30 天</option>
+            <option value={90}>近 90 天</option>
+            <option value={0}>全部时间</option>
+          </select>
+        </div>
+        {hm === null ? (
+          <div className="empty-tip is-loading">加载中…</div>
+        ) : (
+          <>
+            <div className="au-subject">
+              任务 {(hm.summary || {}).tasks || 0} 项 · 工具调用 {(hm.summary || {}).tool_calls || 0} 次 · 覆盖{" "}
+              {(hm.summary || {}).distinct_tools || 0} 个工具 · 平均链长 {(hm.summary || {}).avg_chain_len || 0}
+            </div>
+            {hmTools.length === 0 ? (
+              <div className="empty-tip">这段时间还没有任务链记录</div>
+            ) : (
+              <div className="au-list">
+                {hmTools.map((t) => (
+                  <div className="au-item" key={t.tool}>
+                    <div className="au-item-main">
+                      <b>{t.tool}</b>
+                      <span className="pm-cat">
+                        调用 {t.calls} 次 · 出现在 {t.tasks} 个任务
+                        {t.failure_hits ? ` · 失败 ${t.failure_hits} 次` : ""}
+                      </span>
+                      <div className="au-bar" title={`${t.calls} 次`}>
+                        <div className="au-bar-fill" style={{ width: `${Math.round((t.calls / maxCalls) * 100)}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(hm.struggles || []).length > 0 && (
+              <div className="au-subject" style={{ marginTop: 8 }}>
+                ⚠️ 薄弱项（失败多，建议用 create_evolution 提改进）：
+                {(hm.struggles || []).map((s) => `${s.tool}(${s.failure_hits})`).join("、")}
+              </div>
+            )}
+            {(hm.crystallized || []).length > 0 && (
+              <div className="au-subject">
+                🧩 技能结晶 {hm.crystallized.length} 项：
+                {(hm.crystallized || []).slice(0, 6).map((k) => k.name).join("、")}
+              </div>
+            )}
+            {(hm.preactivate || []).length > 0 && (
+              <div className="au-subject">
+                🎯 预激活命中 top：{(hm.preactivate || []).map((p) => `${p.keyword}(${p.hits})`).join("、")}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="au-card">
+        <div className="au-card-title">📋 自我述职（近 7 天 · AI 的自我复盘）</div>
+        {rep === null ? (
+          <div className="empty-tip is-loading">加载中…</div>
+        ) : (
+          <>
+            <div className="au-subject">
+              区间 {(rep.period || {}).start || "（全部）"} ~ {(rep.period || {}).end || ""}
+            </div>
+            <div className="au-list">
+              <div className="au-item">
+                <div className="au-item-main">
+                  <b>做了什么</b>
+                  <span className="pm-cat">
+                    任务 {(rep.summary || {}).tasks || 0} 项 · 工具调用 {(rep.summary || {}).tool_calls || 0} 次
+                  </span>
+                  {(rep.tasks || {}).items && (rep.tasks.items || []).slice(-6).map((t, i) => (
+                    <div className="au-subject" key={i}>· {t.ts} {t.title || "未命名"}（{t.chain_len} 步）</div>
+                  ))}
+                </div>
+              </div>
+              <div className="au-item">
+                <div className="au-item-main">
+                  <b>做了什么决定</b>
+                  <span className="pm-cat">
+                    共 {(rep.decisions || {}).total || 0} 条 · 未回执 {(rep.decisions || {}).open || 0}
+                  </span>
+                  {(rep.decisions || {}).items && (rep.decisions.items || []).slice(-5).map((d, i) => (
+                    <div className="au-subject" key={i}>
+                      · [{d.status}] {d.decision}{d.reason ? `（${d.reason}）` : ""}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="au-item">
+                <div className="au-item-main">
+                  <b>目标与成长</b>
+                  <span className="pm-cat">
+                    进行中目标 {(rep.goals || {}).active_count || 0} · 已完成 {(rep.goals || {}).done_count || 0} · 技能结晶{" "}
+                    {(rep.growth || {}).crystallized || 0} 项
+                  </span>
+                  {((rep.goals || {}).active || []).slice(0, 5).map((g, i) => (
+                    <div className="au-subject" key={`g${i}`}>⏳ {g.title}{g.progress ? `（${g.progress}）` : ""}</div>
+                  ))}
+                  {((rep.evolution || {}).items || []).slice(-4).map((e, i) => (
+                    <div className="au-subject" key={`e${i}`}>🧬 {e.title}</div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="pm-cat" style={{ marginTop: 8 }}>
+              让 AI 生成完整报告：「生成一份自我述职/周报」——它会用 self_report 工具写入工作目录。
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="au-card">
+        <div className="au-card-title">🛡 信任内核故事线（谁改过我的护栏 · 可回滚）</div>
+        {trust === null ? (
+          <div className="empty-tip is-loading">加载中…</div>
+        ) : (
+          <>
+            <div className="au-subject">
+              当前状态：{trust.state === "ok" ? "✅ 内核一致" : trust.state === "unconfirmed" ? "⚠️ 有未确认改动" : "（未知）"}
+              （mode：{trust.mode || "report"}）
+            </div>
+            {(trust.timeline || []).length === 0 ? (
+              <div className="empty-tip">暂无改动记录（内核自建立以来未被改动）</div>
+            ) : (
+              <div className="au-list">
+                {(trust.timeline || []).slice(0, 30).map((e, i) => (
+                  <div className="au-item" key={i}>
+                    <div className="au-item-main">
+                      <b>{e.source === "incident" ? "⚠️ " : "· "}{e.label || e.event}</b>
+                      <span className="pm-cat">
+                        {e.ts}{e.file ? ` · ${e.file}` : ""}{e.actor ? ` · by ${e.actor}` : ""}
+                      </span>
+                      {e.reason && <div className="au-subject">理由：{e.reason}</div>}
+                      {e.summary && <div className="au-subject">{e.summary}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function AutonomyPage() {
   const [tab, setTab] = React.useState("evolve");
   const [tip, setTip] = React.useState("");
@@ -421,6 +598,7 @@ export default function AutonomyPage() {
   }, [tip]);
   const tabs = [
     { id: "evolve", label: "🧬 进化管理" },
+    { id: "growth", label: "🌱 成长" },
     { id: "approval", label: "🛡 审批记录" },
     { id: "activity", label: "📜 行为日志" },
     { id: "self", label: "🧠 自我状态" },
@@ -429,7 +607,7 @@ export default function AutonomyPage() {
     <div className="page">
       <div className="page-head">
         <h1>自主</h1>
-        <p>AI 自主能力的观察与管理窗口 · 进化 · 审批 · 行为 · 自我</p>
+        <p>AI 自主能力的观察与管理窗口 · 进化 · 成长 · 审批 · 行为 · 自我</p>
       </div>
       <div className="au-tabs">
         {tabs.map((t) => (
@@ -440,6 +618,7 @@ export default function AutonomyPage() {
         {tip && <span className="au-tip">{tip}</span>}
       </div>
       {tab === "evolve" && <EvTab onToast={setTip} />}
+      {tab === "growth" && <GrowthTab onToast={setTip} />}
       {tab === "approval" && <ApprovalTab onToast={setTip} />}
       {tab === "activity" && <ActivityTab onToast={setTip} />}
       {tab === "self" && <SelfTab onToast={setTip} />}

@@ -18,11 +18,11 @@
 浏览器是唯一界面。
 
 - **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.11.0`）。
-- **能力规模（实测口径，2026-09-14）**：**149 个 Agent 工具**（11 组）、**94 个 `/v1` 端点**、
-  **49 个 pytest 用例文件 + 11 个前端 node 测试套件**、源码约 **4.9 万行**（`api_server.py` 7,987 /
-  `deepseek_client.py` 4,869 / `brainkit.py` 2,821 为主力）。
-- **三层架构**：`web_app.py`（入口）→ `api_server.py`（本地 API，94 端点）→
-  `deepseek_client.py`（能力引擎：`DeepSeekClient` + 149 工具 + smart_tools 按需调取）。
+- **能力规模（实测口径，2026-09-14）**：**151 个 Agent 工具**（11 组）、**96 个 `/v1` 端点**、
+  **50 个 pytest 用例文件 + 11 个前端 node 测试套件**、源码约 **5.0 万行**（`api_server.py` 8,151 /
+  `deepseek_client.py` 4,872 / `brainkit.py` 2,821 为主力）。
+- **三层架构**：`web_app.py`（入口）→ `api_server.py`（本地 API，96 端点）→
+  `deepseek_client.py`（能力引擎：`DeepSeekClient` + 151 工具 + smart_tools 按需调取）。
 - **安全模型**：**默认自由**（零审批、零白名单），唯一程序内置两条底线 = **网络 SSRF 硬底线**
   + **信任内核（自我修改可声明/可见/可回滚）**；其余限制全部来自用户黑名单配置。
 - **品牌**：独立产品，与 DeepSeek 官方**无任何关联**（对外用品牌名，技术描述可写"基于 DeepSeek API"）。
@@ -52,7 +52,7 @@ cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typed
 python tools/audit_tools.py --strict     # 六层一致性审计（error 级门禁，可入 CI）
 python tools/validate_tools.py           # smart_tools 全链路回归（描述无损等）
 python tools/island_check.py             # 九层孤岛对账（工具可达性）
-python tools/check_docs.py               # 文档数字 vs 源码实测（149 工具 / 94 端点 / 版本）
+python tools/check_docs.py               # 文档数字 vs 源码实测（151 工具 / 96 端点 / 版本）
 ```
 
 > **CI**：`.github/workflows/ci.yml` 含 4 个 job——`check`（ruff 关键规则 `E9,F63,F7,F82` +
@@ -68,23 +68,24 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（149 �
 | 层 | 模块 | 一句话职责 |
 |---|---|---|
 | **入口** | `web_app.py`（951 行） | 唯一启动入口：参数解析 → 依赖自检/自动安装 → 桌面+开始菜单快捷方式 → WebUI 自动构建 → 单实例探测 → 起 API → 开浏览器 → 托盘常驻 |
-| **API 层** | `api_server.py`（7,987 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，94 端点；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；审批/询问/白名单双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
-| **能力引擎** | `deepseek_client.py`（4,869 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 149 工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步 |
+| **API 层** | `api_server.py`（8,151 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，96 端点；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；审批/询问/白名单双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
+| **能力引擎** | `deepseek_client.py`（4,872 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 151 工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步 |
 | **工具声明** | `toolkit.py`（270 行） | **`@tool()` 装饰器 + 注册表 + 六层构建函数**——工具系统单一事实源（见 §6.1） |
 | **钩子管线** | `tool_hooks.py`（341 行） | 横切关注点收口：pre/post 钩子表 + `wrap()` 包装器；在 `@tool()` **注册处**统一包装执行体，任何调用路径都逃不掉钩子（P0-1） |
 | **上下文装配** | `context_providers.py`（433 行） | 把「往系统提示塞什么」变成 Provider 表（name/priority/budget/critical/enabled/provide），统一排序限预算记回执（P0-2） |
 | **退化日志** | `degrade.py`（214 行） | 全项目 `except: pass` 的唯一收口：按 key 归并 + 节流 + 原子落盘 + critical 分级（P0-3） |
 | **出网账本** | `egress.py`（307 行） | 每次「带内容出网」留痕（通道/目的地/字节数/内容摘要），**不阻断只审计**；`EGRESS_SPECS` 声明式抽取（P1-A） |
 | **记忆门面** | `memory_facade.py`（443 行） | `memory.json` 唯一写入门面：`origin`（血缘）+ `confidence` + `status` + `supersede` 双向链接；作废**只认显式 key**（P1-B） |
-| **信任内核** | `trust_kernel.py`（947 行） | 自我完整性：`permissions`/`security`/`crypto`/`snapshot`/自身 的改动**可声明·可见·可回滚**；基线优先比对 + 账本 + 事件（report/guard 两模式） |
+| **信任内核** | `trust_kernel.py`（1,031 行） | 自我完整性：`permissions`/`security`/`crypto`/`snapshot`/自身 的改动**可声明·可见·可回滚**；基线优先比对 + 账本 + 事件（report/guard 两模式）；`timeline()` 合并账本+未声明事件为故事线 |
+| **自我洞察** | `insight.py`（356 行） | 纯函数（仅标准库）：`build_heatmap`（能力热力图：使用频率/失败率/结晶/预激活命中）+ `build_self_report`（自我述职）+ `render_report`（Markdown）。供工具/端点复用 |
 | **权限** | `permissions.py`（786 行） | 权限模型 v2：`security_mode=blacklist`（默认放行+黑名单）/ `whitelist`（旧回退）；路径/命令/网络判定；审计只记不拦 |
 | **安全** | `security.py`（213 行） | SSRF 硬底线 `_hard_floor_reason`（私网/链路本地/保留段拦截 + DNS 预解析防重绑定）+ `_safe_url`；信任白名单 |
 | **存储** | `stores.py`（476 行） | 本地 JSON 存取统一层：最近产物/成功模式/失败模式（**带生命周期**：fingerprint 归并 + hits + resolved + 归档）/任务日志/长期记忆/定时任务 |
 | **大脑 CLI** | `brainkit.py`（2,821 行） | 鲸语大脑命令行：init/keyring/heartbeat/think/remember/consolidate/goal/decision/archive/restore/merge（LCA 三路合并）/diff/export-key/import-key 等 |
 | **大脑适配** | `brain_api.py`（815 行） | 大脑→API 适配层：把 CLI 命令包装成纯函数 + `brain_context`（身份/断点/目标/自我认知/未决决策/记忆注入）+ `consolidate_with_llm` |
-| **MCP 出口** | `mcp_server.py`（139 行） | MCP over stdio，供外部 host 调 WhaleTalk 的 149 工具（纯标准库，最小合规子集） |
+| **MCP 出口** | `mcp_server.py`（139 行） | MCP over stdio，供外部 host 调 WhaleTalk 的 151 工具（纯标准库，最小合规子集） |
 
-### 2.2 工具域包 `agent_tools/`（149 工具的实现所在，P0-1 巨石拆分成果）
+### 2.2 工具域包 `agent_tools/`（151 工具的实现所在，P0-1 巨石拆分成果）
 
 每个域模块用 `@tool()` 声明工具；`__init__.py` 用 `from .tool_* import *` 聚合并显式
 `__all__` re-export 工具函数名，保证 `dc.<tool_name>` 旧访问路径不变。**加载顺序契约**：
@@ -98,7 +99,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（149 �
 | `tool_media.py` | 641 | 🎨 媒体图像（image_process/ocr_image/image_understand/screen_capture/chart_read…） |
 | `tool_docs.py` | 3,675 | 📊 数据与文档（最大：read_excel/database_query/pdf_extract/docx/pptx/html_render/html_to_pdf/secret_store/kv_store/create_doc…） |
 | `tool_desktop.py` | 1,355 | 🖱 桌面视觉语音（rpa_*/screen_find_click/vision_loop/voice_chat_loop/team_run/tts…） |
-| `tool_system.py` | 1,561 | 🔧 系统与项目（watch_files/recall_session/project_info/create_evolution/self_evolve/git_tool…） |
+| `tool_system.py` | 1,712 | 🔧 系统与项目（watch_files/recall_session/project_info/create_evolution/self_evolve/git_tool/capability_heatmap/self_report…） |
 | `tool_msg.py` | 748 | 📧 邮件消息（send_email/publish_draft/send_webhook/im_send/agent_mail/run_wechat_writer…） |
 | `tool_brain.py` | 1,094 | 🧠 记忆定时（write_memory/self_profile/query_memory_graph/schedule_task/run_workflow…） |
 | `tool_files.py` | 1,525 | 📁 文件进程（read_file/write_file/edit_file/list_dir/asset_import/list_snapshots/start_process…） |
@@ -165,7 +166,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（149 �
 | `wechat_writer/` | 公众号自动写作：`main.run_once`（采集 sources → 选题 topic → 三阶段写作 writer → 质检 quality → 草稿 output），任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（九层孤岛）、`check_docs.py`（文档数字校验）、`_gen_routes.py`/`_verify_routes.py`/`_verify_route_bodies.py`（路由表生成/校验）、`_restore_proposals.py`（从会话救回被误删提案） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 49 个 pytest 文件 |
+| `tests/` | 后端回归 50 个 pytest 文件 |
 | `webui/tests/` | 前端 node 测试 11 个 + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建） |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库） |
 | `data/` | 本地运行数据（见 §7） |
@@ -187,7 +188,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（149 �
 
 ---
 
-## 4. API 层（api_server.py）——94 端点的解剖
+## 4. API 层（api_server.py）——96 端点的解剖
 
 ### 4.1 认证与安全
 
@@ -234,7 +235,8 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（149 �
 `GET /v1/workflows` / `POST /v1/workflows` · `GET /v1/checkpoint` / `POST /v1/checkpoint` ·
 `GET /v1/services` / `POST /v1/services`
 **审计/权限/信任**：`GET /v1/audit` · `GET /v1/approvals` · `GET /v1/permissions` / `POST /v1/permissions` ·
-`GET /v1/trust`(?deep=1 现场重算)
+`GET /v1/trust`(?deep=1 现场重算；?timeline=1 返回故事线时间轴)
+**自我洞察**：`GET /v1/insight/heatmap?days=N`（能力热力图） · `GET /v1/insight/report?days=N`（自我述职）
 **TTS**：`GET /v1/tts/audio/<fn>` · `GET /v1/tts/voices` · `POST /v1/tts/synthesize` ·
 `POST /v1/tts/{download_piper,setup_piper}`
 **依赖/备份/更新**：`GET /v1/deps` · `GET /v1/first_run` / `POST /v1/first_run/complete` ·
@@ -307,7 +309,7 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：`reasoning`（思
 
 ### 5.4 smart_tools 智能调取（成本核心，deepseek_client）
 
-完全智能模式不再全量注入 149 个工具 schema（约 15k token），改为：
+完全智能模式不再全量注入 151 个工具 schema（约 15k token），改为：
 
 1. 常驻注入「能力地图」（`build_tool_index`：11 组分类 + 工具名 + 核心动作短语）。
 2. `activate_tools` 点菜工具（支持**按组激活**，`_TOOL_GROUP_NAME_MAP`）。
@@ -488,7 +490,7 @@ def my_tool(...): ...
   `git rev-parse HEAD` 一致。
 - **本地不入库产物**：`能力差距分析_*.md` / `*能力报告_*.md` / `*阅读报告_*.md` 等分析文档历来
   不入库；`brain/`/`trust/`/`evolutions/`/`data/` 均在 `.gitignore`。
-- **文档数字由门禁守护**：`tools/check_docs.py` 从源码 AST 实测（149 工具 / 94 端点 / 版本），
+- **文档数字由门禁守护**：`tools/check_docs.py` 从源码 AST 实测（151 工具 / 96 端点 / 版本），
   与 README/TECH_NOTES/MODULES 比对，`--fix` 可自动修正（**保留原行尾写回**，防止把 LF 改 CRLF）。
 - **更新纪律**：CHANGELOG 标题与 `config_defaults.VERSION` 一致；更新包 Ed25519 签名 + SHA-256 校验；
   更新前自动备份 `backups/WhaleTalk_v<版本>_<时间戳>.zip`。
@@ -537,7 +539,7 @@ def my_tool(...): ...
 
 ## 13. 明确不做的设计边界（改代码前先确认不越线）
 
-- **不为"优雅"合并那 94 个端点**：CRUD 端点薄是特性不是缺陷。
+- **不为"优雅"合并那 96 个端点**：CRUD 端点薄是特性不是缺陷。
 - **不给 `write_file`/`run_python` 加拦截**：`run_python` 本就绕得过，工具层设卡只挡君子。
 - **不合并 `snapshot.py` 与 `trust_kernel.py`**：生命周期语义不同（200 条轮转 vs 永不裁剪）。
 - **不按相似度自动作废记忆**、**不存出网明文内容**、**不接管大脑记忆**（两套体系边界清晰）。
@@ -545,7 +547,7 @@ def my_tool(...): ...
 
 ---
 
-## 14. 测试资产速查（tests/，49 个 pytest 文件）
+## 14. 测试资产速查（tests/，50 个 pytest 文件）
 
 按领域分组（文件名即内容）：
 
@@ -591,5 +593,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（149 工具 / 94 端点 / 版本 3.11.0）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（151 工具 / 96 端点 / 版本 3.11.0）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*
