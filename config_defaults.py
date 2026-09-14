@@ -207,6 +207,9 @@ UPDATE_URL = "https://api.github.com/repos/pythonshiyi/WhaleTalk/releases/latest
 # 在线插件市场索引（index.json）；用户可在配置 plugin_market_url 覆盖
 PLUGIN_MARKET_URL = "https://raw.githubusercontent.com/pythonshiyi/WhaleTalk/main/plugin_market/index.json"
 
+# ⚠️ Tkinter 时代残留：Web 版（v3.0+）没有桌面窗口快捷键，本表与 config 的
+# `shortcuts` 键在 Web 版**均为 no-op**（无任何读取点）。仅作历史兼容占位保留，
+# 请勿在此基础上开发"快捷键"功能；新增前端快捷键应走浏览器/前端层。
 # 可自定义的根窗口快捷键（动作名 -> Tk 键序列）。留空值表示使用默认。
 DEFAULT_SHORTCUTS = {
     "new_conversation": "<Control-n>",
@@ -296,7 +299,7 @@ DEFAULT_CONFIG = {
     "plugin_market_url": "",  # 在线插件市场索引（index.json；留空则使用默认 GitHub 源）
     "plugin_market_public_key": "",  # 插件市场签名公钥（Ed25519，PEM/base64；配置后市场插件强制验签，无签名或验签失败拒绝安装）
     "custom_themes": {},      # 自定义主题：名称 -> 主题 token 字典（合并到内置主题）
-    "shortcuts": {},          # 快捷键自定义：动作名 -> Tk 键序列（留空使用内置默认）
+    "shortcuts": {},          # Tk 版残留（Web 版 no-op，见 DEFAULT_SHORTCUTS 注释）；保留仅为兼容旧配置
     "update_public_key": "",  # 更新包签名公钥（可选；配置后校验 Ed25519 签名/或 sha256 字段）
     "agent_mail_enabled": False,  # Agent Mail（agently-cli）集成开关；默认关闭，不配置不影响使用
     "agent_mail_cli": "agently-cli",  # agently-cli 可执行文件（或绝对路径）

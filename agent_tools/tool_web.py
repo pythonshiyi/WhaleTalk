@@ -638,7 +638,8 @@ def _search_stackoverflow(query, num):
         },
     groups=['🌐 浏览器与网页'],
     phrases='实时热点/社区讨论搜索',
-    preactivate=(('搜索', '搜一下', '查一下', '新闻', '资讯', '最新'),),
+    preactivate=(('搜索', '搜一下', '查一下', '新闻', '资讯', '最新'),
+                 ('热门仓库', 'B站热门', 'bilibili', '技术问答', 'stackoverflow')),
 )
 def search_realtime(query="", num=5, source="hn"):
     """实时信息通道（多源）：hn / github / bilibili / stackoverflow。

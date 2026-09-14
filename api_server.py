@@ -5401,12 +5401,35 @@ def _harvest_is_low_value(line: str) -> bool:
     return len(s) <= 10
 
 
-def _chat_harvest(reply: str, user_text: str, cfg: dict):
+def _chat_harvest(reply: str, user_text: str, cfg: dict, messages=None):
     """后台线程：从本次对话提炼 0-3 条值得长期记住的信息写入记忆（自动入脑）。
 
     config.auto_memory 控制开关（默认开）；无可用 LLM / 记忆关闭时静默跳过。
+    origin 判定（P1-B 血缘自动化）：本轮工具结果中出现「外部内容开始」标记
+    （即 AI 抓取了外部网页）时，提炼的记忆标 origin="web"（confidence=0.3），
+    否则标 "agent"（confidence=0.4）——打断「外部网页→自动提炼→被当作用户前提」的注入链。
     """
     import threading
+
+    def _involved_external(messages):
+        """本轮对话是否引用了外部网页内容（任一工具结果含外部内容标记）。"""
+        try:
+            import deepseek_client as dc
+            # 标记前缀（{source} 前段）："--- 外部内容开始（来源："
+            prefix = str(getattr(dc, "EXTERNAL_CONTENT_START", "")).split("{source}")[0].strip()
+            if not prefix:
+                return False
+            for m in (messages or ()):
+                c = m.get("content") if isinstance(m, dict) else None
+                if isinstance(c, str) and prefix in c:
+                    return True
+                if isinstance(c, list):
+                    for part in c:
+                        if isinstance(part, dict) and prefix in str(part.get("text") or ""):
+                            return True
+        except Exception:
+            return False
+        return False
 
     def _run():
         try:
@@ -5425,14 +5448,15 @@ def _chat_harvest(reply: str, user_text: str, cfg: dict):
                 f"用户：{str(user_text)[:500]}\nAI：{str(reply)[:500]}"
             )
             out = c.chat([{"role": "user", "content": prompt}], max_tokens=200, thinking="low")
+            origin = "web" if _involved_external(messages) else "agent"
+            confidence = 0.3 if origin == "web" else 0.4
             for line in str(out or "").splitlines():
                 s = line.strip().strip("-•*").strip()
                 if len(s) >= 8 and "无" not in s[:6] and not _harvest_is_low_value(s):
-                    # 自动提炼的记忆一律标 origin="agent" + 低置信度（P1-B）：
-                    # 注入时会带〔推断〕标注，模型不得把它当作用户明说的前提——
-                    # 这正是打断「外部网页→自动提炼→持久记忆」注入链的一环。
+                    # 自动提炼的记忆：来自外部网页则标 origin="web"（〔来自外部内容〕），
+                    # 否则标 origin="agent"（〔推断〕）——注入时模型不得把它当作用户明说的前提。
                     dc.write_memory(s, tags="自动", type="对话",
-                                    origin="agent", confidence=0.4)
+                                    origin=origin, confidence=confidence)
         except Exception:
             pass
 
@@ -7610,6 +7634,11 @@ class _Handler(BaseHTTPRequestHandler):
         """
         import config_defaults
         import stores as stores_mod
+        # 设计决策：调用方（外部集成 / 直接调 /v1/chat 的第三方）若自带 system 消息，
+        # 则尊重其自定义系统提示，**不再注入**任何 Provider 上下文（记忆/大脑/失败模式/
+        # 自我状态/装配回执全跳过）——避免用本程序上下文覆盖调用方的系统设定。
+        # 前端正常链路（buildMessageChain）只发 user/assistant/tool，**不会**命中此分支，
+        # 因此常规对话仍享有全部上下文注入。此行为是刻意的，勿改。
         if any(isinstance(m, dict) and m.get("role") == "system" for m in messages):
             return messages, None
         import context_providers as _cp
@@ -7690,7 +7719,7 @@ class _Handler(BaseHTTPRequestHandler):
                 last_user = next((m.get("content") for m in reversed(messages)
                                   if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
                 if text and last_user and not quiet_mode:
-                    _chat_harvest(text, last_user[:600], cfg)
+                    _chat_harvest(text, last_user[:600], cfg, messages=messages)
             except Exception:
                 pass
             self._json(200, {"content": text or "", "usage": usage})

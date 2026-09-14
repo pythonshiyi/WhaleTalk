@@ -2,7 +2,7 @@
 """WhaleTalk MCP 出口（Model Context Protocol over stdio）——让外部 MCP 客户端接入。
 
 外部工具/Agent（Claude Desktop、Cline、其他 MCP host）可把 WhaleTalk 当作一个
-MCP server，调用其内部 AI 工具（147 个，如读文档/搜文件/生成 PPT 等）。
+MCP server，调用其内部 AI 工具（149 个，如读文档/搜文件/生成 PPT 等）。
 
 协议：MCP 基于 JSON-RPC 2.0，stdio 传输——每条消息一行 JSON，读到 EOF 退出。
 支持方法：
@@ -28,7 +28,15 @@ import sys
 # 工具名 → 白名单：默认开放全部注册工具（外部调用需真执行，谨慎）。可设环境变量
 # WHALETALK_MCP_TOOLS="a,b,c" 限制；或 WHALETALK_MCP_ALLOW_READ=1 只暴露只读工具。
 _PROTOCOL_VERSION = "2024-11-05"
-_SERVER_INFO = {"name": "WhaleTalk", "version": "3.9.0"}
+
+
+def _server_info():
+    """serverInfo：版本跟随 config_defaults.VERSION（单一版本源），避免硬编码漂移。"""
+    try:
+        from config_defaults import VERSION as _ver
+    except Exception:
+        _ver = "unknown"
+    return {"name": "WhaleTalk", "version": _ver}
 
 
 def _load_tools():
@@ -53,17 +61,26 @@ def _load_tools():
 
 
 def _handle_request(req, tools, dc):
-    """处理单条 JSON-RPC 请求；返回响应 dict（或 None=通知无需响应）。"""
+    """处理单条 JSON-RPC 请求；返回响应 dict（或 None=通知无需响应）。
+
+    JSON-RPC 2.0 合规：**通知**（请求对象不含 `id`）一律不返回响应——
+    规范规定对通知必须不产生任何应答。未知方法若是通知也仅丢弃。
+    """
     method = req.get("method", "")
     rid = req.get("id")
+    is_notification = rid is None
     params = req.get("params") or {}
     if method == "initialize":
         return {"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": _PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}, "prompts": {}, "resources": {}},
-            "serverInfo": _SERVER_INFO,
+            "serverInfo": _server_info(),
         }}
-    if method in ("notifications/initialized",):
+    if method == "notifications/initialized":
+        return None
+    if is_notification:
+        # 其余方法以通知形式到达（无 id）：可执行但不应回响应。
+        # 已知通知方法在此静默丢弃；工具类调用若以通知形式到达也按通知语义处理。
         return None
     if method == "ping":
         return {"jsonrpc": "2.0", "id": rid, "result": {}}
@@ -103,8 +120,6 @@ def _handle_request(req, tools, dc):
         return {"jsonrpc": "2.0", "id": rid, "result": {"prompts": []}}
     if method == "resources/list":
         return {"jsonrpc": "2.0", "id": rid, "result": {"resources": []}}
-    if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": []}}
     return {"jsonrpc": "2.0", "id": rid,
             "error": {"code": -32601, "message": f"未知方法: {method}"}}
 
@@ -125,6 +140,9 @@ def main():
         try:
             resp = _handle_request(req, tools, dc)
         except Exception as e:
+            # 通知（无 id）异常也不得回响应（JSON-RPC 2.0 合规）
+            if req.get("id") is None:
+                continue
             resp = {"jsonrpc": "2.0", "id": req.get("id"), "error": {"code": -32700, "message": str(e)}}
         if resp is None:
             continue
