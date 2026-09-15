@@ -10,6 +10,8 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
+import json
 
 import permissions
 
@@ -1383,6 +1385,90 @@ def pdf_extract(path, pages="all", mode="text"):
         return f"错误：PDF 读取失败: {e}"
 
 
+# ── Markdown → HTML（供 pdf_create 收敛到 HTML 渲染管线）──
+def _md_escape(s):
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _mdtext_inline(s):
+    t = _md_escape(s)
+    t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
+    t = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)", r'<img src="\2" alt="\1">', t)
+    t = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", r'<a href="\2">\1</a>', t)
+    t = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", t)
+    t = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", t)
+    return t
+
+
+def _md_to_html(md):
+    lines = str(md or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    out = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        if line.strip().startswith("```"):
+            i += 1
+            buf = []
+            while i < n and not lines[i].strip().startswith("```"):
+                buf.append(lines[i])
+                i += 1
+            i += 1
+            out.append(f"<pre><code>{_md_escape(chr(10).join(buf))}</code></pre>")
+            continue
+        m = re.match(r"^\s{0,3}(#{1,6})\s+(.*)$", line)
+        if m:
+            lvl = len(m.group(1))
+            out.append(f"<h{lvl}>{_mdtext_inline(m.group(2).strip())}</h{lvl}>")
+            i += 1
+            continue
+        if re.match(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$", line):
+            out.append("<hr>")
+            i += 1
+            continue
+        if "|" in line and i + 1 < n and "-" in lines[i + 1] and re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[i + 1]):
+            header = [c.strip() for c in line.strip().strip("|").split("|")]
+            i += 2
+            rows = []
+            while i < n and lines[i].strip() and "|" in lines[i]:
+                rows.append([c.strip() for c in lines[i].strip().strip("|").split("|")])
+                i += 1
+            th = "".join(f"<th>{_mdtext_inline(c)}</th>" for c in header)
+            trs = "".join("<tr>" + "".join(f"<td>{_mdtext_inline(c)}</td>" for c in r) + "</tr>" for r in rows)
+            out.append(f"<table><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>")
+            continue
+        if re.match(r"^\s*>", line):
+            buf = []
+            while i < n and re.match(r"^\s*>", lines[i]):
+                buf.append(re.sub(r"^\s*>\s?", "", lines[i]))
+                i += 1
+            out.append(f"<blockquote>{_mdtext_inline(' '.join(buf))}</blockquote>")
+            continue
+        if re.match(r"^\s*([-*+])\s+", line):
+            buf = []
+            while i < n and re.match(r"^\s*([-*+])\s+", lines[i]):
+                buf.append(re.sub(r"^\s*([-*+])\s+", "", lines[i]))
+                i += 1
+            out.append("<ul>" + "".join(f"<li>{_mdtext_inline(x)}</li>" for x in buf) + "</ul>")
+            continue
+        if re.match(r"^\s*\d+[.)]\s+", line):
+            buf = []
+            while i < n and re.match(r"^\s*\d+[.)]\s+", lines[i]):
+                buf.append(re.sub(r"^\s*\d+[.)]\s+", "", lines[i]))
+                i += 1
+            out.append("<ol>" + "".join(f"<li>{_mdtext_inline(x)}</li>" for x in buf) + "</ol>")
+            continue
+        if not line.strip():
+            i += 1
+            continue
+        buf = []
+        while (i < n and lines[i].strip() and not lines[i].strip().startswith("```")
+               and not re.match(r"^\s*(#{1,6}\s|>|[-*+]\s|\d+[.)]\s)", lines[i])):
+            buf.append(lines[i].strip())
+            i += 1
+        out.append(f"<p>{_mdtext_inline(' '.join(buf))}</p>")
+    return "\n".join(out)
+
+
 @tool(
         {
             "type": "function",
@@ -1444,6 +1530,30 @@ def pdf_create(content="", source_path="", output="", title=""):
     ok, reason = permissions.check_filesystem(out, write=True)
     if not ok:
         return reason
+    # 优先走 HTML 渲染管线（与 html_to_pdf 同源：中文/图片/分页/矢量一致）；失败再回退 reportlab
+    try:
+        _c = str(content)
+        _h = _c if _c.lstrip().lower().startswith(("<html", "<!doctype")) else _md_to_html(_c)
+        _cover = ""
+        if str(title or "").strip():
+            _cover = ("<section class='wt-page' style='height:250mm;display:flex;flex-direction:column;"
+                      "align-items:center;justify-content:center;text-align:center;page-break-after:always'>"
+                      f"<h1 style='font-size:34pt;margin:0'>{_mdtext_inline(title)}</h1></section>")
+        _doc = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'><style>"
+                ":where(body){font-family:'Microsoft YaHei','PingFang SC',sans-serif;color:#24384f;line-height:1.85}"
+                "@page{size:A4;margin:18mm}"
+                ":where(h1){font-size:22pt}:where(h2){font-size:17pt}:where(h3){font-size:13pt}"
+                ":where(pre){background:#0d1526;color:#c9d8f5;padding:4mm 5mm;border-radius:6px;overflow:auto;font-size:9pt}"
+                ":where(code){font-family:Consolas,monospace;background:#f4f8fc;padding:1px 4px;border-radius:3px}"
+                ":where(table){border-collapse:collapse;width:100%;font-size:9.5pt}"
+                ":where(th,td){border:1px solid #dbe6f0;padding:2.5mm 3mm}:where(thead th){background:#0b1e3a;color:#fff}"
+                ":where(blockquote){border-left:4px solid #0ea5e9;background:#f4f8fc;padding:3mm 5mm;margin:4mm 0}"
+                "</style></head><body>" + _cover + _h + "</body></html>")
+        _r = html_to_pdf(html=_doc, output=out, title=title, footer="第 {n} 页 · 共 {total} 页")
+        if isinstance(_r, str) and not _r.startswith("错误"):
+            return _r
+    except Exception:
+        pass
     try:
         import mdparse  # 复用项目自有 Markdown 块解析（无第三方依赖）
     except Exception:
@@ -3219,50 +3329,278 @@ def _html_render_lock():
     return _HTML_RENDER_LOCK
 
 
-def _prep_html_doc(content):
-    """HTML 片段/整页 → 补全成可渲染文档；返回 (html_doc, data_uri)。"""
+# 本地图片内联 + 临时文件渲染：修复「data: URI 无 base URL → 本地相对图片加载失败」与
+# 「大内容 data: URI 触发 ERR_ABORTED」两类问题（此前 html_render/html_to_pdf/html_to_ppt 共用该缺陷）。
+_INLINE_IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
+_INLINE_IMG_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+    ".bmp": "image/bmp", ".ico": "image/x-icon",
+}
+_HTML_SRC_RE = re.compile(r'''(?P<pre>\bsrc\s*=\s*)(?P<q>["'])(?P<url>[^"']+)(?P=q)''', re.I)
+_HTML_CSSURL_RE = re.compile(r'''url\(\s*(?P<q>["']?)(?P<url>[^"')]+)(?P=q)\s*\)''', re.I)
+_RENDER_TMP_NAME = ".render_tmp"
+
+
+def _local_image_data_uri(url, base_dir, cache):
+    """本地图片路径 → data URI；非本地/非图片/不存在 → None。"""
+    if not url:
+        return None
+    from urllib.parse import unquote
+    u = unquote(str(url).strip())
+    if u.lower().startswith(("data:", "http://", "https://", "//", "#", "mailto:", "blob:")):
+        return None
+    ext = os.path.splitext(u.split("?", 1)[0])[1].lower()
+    if ext not in _INLINE_IMG_EXT:
+        return None
+    path = u.replace("/", os.sep).replace("\\", os.sep)
+    if not os.path.isabs(path):
+        path = os.path.join(base_dir or ".", path)
+    path = os.path.abspath(path)
+    if path in cache:
+        return cache[path]
+    cache[path] = None  # 先占位：失败不重复读盘
+    try:
+        if os.path.isfile(path) and os.path.getsize(path) <= 30 * 1024 * 1024:
+            import base64
+            with open(path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            uri = f"data:{_INLINE_IMG_MIME.get(ext, 'application/octet-stream')};base64,{b64}"
+            cache[path] = uri
+            return uri
+    except Exception:
+        pass
+    return None
+
+
+def _inline_local_images(html_doc, base_dir=None):
+    """把 HTML 内引用的本地图片（相对/绝对路径）内联为 data URI。
+    图片以 data URI 进 DOM 后不再依赖 base URL / file:// 子资源策略，稳定可渲染。"""
+    if not html_doc:
+        return html_doc
+    cache = {}
+
+    def _sub_src(m):
+        uri = _local_image_data_uri(m.group("url"), base_dir, cache)
+        return f'{m.group("pre")}{m.group("q")}{uri}{m.group("q")}' if uri else m.group(0)
+
+    def _sub_css(m):
+        uri = _local_image_data_uri(m.group("url"), base_dir, cache)
+        return f'url("{uri}")' if uri else m.group(0)
+
+    out = _HTML_SRC_RE.sub(_sub_src, html_doc)
+    out = _HTML_CSSURL_RE.sub(_sub_css, out)
+    return out
+
+
+def _prep_html_doc(content, base_dir=None):
+    """HTML 片段/整页 → 补全成可渲染文档，并内联本地图片。返回 html_doc。"""
     html_doc = str(content or "")
     if not html_doc.strip():
-        return "", ""
+        return ""
     if not html_doc.lstrip().lower().startswith("<!doctype") and not html_doc.lstrip().lower().startswith("<html"):
         html_doc = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
                     "<style>html,body{margin:0;padding:0}*{box-sizing:border-box}</style></head>"
                     f"<body>{html_doc}</body></html>")
-    import base64
-    data_uri = "data:text/html;base64," + base64.b64encode(html_doc.encode("utf-8")).decode("ascii")
-    return html_doc, data_uri
+    return _inline_local_images(html_doc, base_dir)
 
 
-def _html_to_pngs(items, w, h, sc, full_page):
+def _render_base_dir(base_dir=None):
+    return base_dir or _dc.WORKING_DIR or permissions.WORKSPACE_DIR or tempfile.gettempdir()
+
+
+def _safe_rm_temp(path):
+    """删除渲染临时文件；若临时目录已空顺带删掉（失败静默）。"""
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+    try:
+        os.rmdir(os.path.dirname(path))
+    except Exception:
+        pass
+
+
+# 打印基线：Chromium 打印时保证「标题不落单、图表/代码/表格行不跨页撕裂、表头跨页重复」。
+# 仅注入到 HTML→PDF（以及显式 print 预览），不影响屏幕渲染。
+_PRINT_BASELINE = (
+    "<style data-wt='print-baseline'>"
+    "@media print{"
+    "h1,h2,h3,h4,h5{break-after:avoid-page;page-break-after:avoid}"
+    "h1,h2,h3{break-inside:avoid}"
+    "img,figure,pre,blockquote,table{break-inside:avoid}"
+    "tr,li{break-inside:avoid}"
+    "thead{display:table-header-group}"
+    "tfoot{display:table-footer-group}"
+    "img{max-width:100%}"
+    "a{color:inherit;text-decoration:none}"
+    "}"
+    "</style>"
+)
+
+
+def _inject_head(html_doc, head_html):
+    """把 head_html 注入 HTML 的 <head>（无 head 时按位置兜底插入）。"""
+    if not html_doc or not head_html:
+        return html_doc
+    if re.search(r"(?i)</head\s*>", html_doc):
+        return re.sub(r"(?i)</head\s*>", head_html + "</head>", html_doc, count=1)
+    if re.search(r"(?i)<head[^>]*>", html_doc):
+        return re.sub(r"(?i)(<head[^>]*>)", r"\1" + head_html, html_doc, count=1)
+    if re.search(r"(?i)<html[^>]*>", html_doc):
+        return re.sub(r"(?i)(<html[^>]*>)", r"\1<head><meta charset='utf-8'>" + head_html + "</head>", html_doc, count=1)
+    return html_doc + head_html
+
+
+def _set_title(html_doc, title):
+    """设置/替换 <title>（Chromium 会把它写成 PDF 标题元数据）。"""
+    t = str(title or "").strip()
+    if not t:
+        return html_doc
+    t = t.replace("<", "&lt;").replace(">", "&gt;")
+    tag = f"<title>{t}</title>"
+    if re.search(r"(?i)<title[^>]*>.*?</title>", html_doc, re.S):
+        return re.sub(r"(?i)<title[^>]*>.*?</title>", tag, html_doc, count=1, flags=re.S)
+    return _inject_head(html_doc, tag)
+
+
+# ── 离线渲染资源（assets/render/）：设计系统 CSS + Mermaid/KaTeX/ECharts + 引导脚本 ──
+_RENDER_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "render")
+
+
+def _file_url(path):
+    try:
+        import pathlib
+        return pathlib.Path(path).as_uri()
+    except Exception:
+        return "file:///" + os.path.abspath(path).replace("\\", "/")
+
+
+def _inject_render_assets(html_doc, design=True):
+    """按文档内容按需注入本地离线资源（设计系统 CSS / 按需 Mermaid·KaTeX·ECharts + 引导脚本）。
+    返回 (html_doc, needs_ready)：needs_ready=True 表示注入了需执行 JS 的库，渲染前应等就绪标志。"""
+    if not html_doc:
+        return html_doc, False
+    adir = _RENDER_ASSETS_DIR
+
+    def _asset(name):
+        p = os.path.join(adir, name)
+        return _file_url(p) if os.path.isfile(p) else ""
+
+    head = []
+    if design and _asset("wt-design.css") and "wt-design.css" not in html_doc:
+        head.append(f'<link rel="stylesheet" href="{_asset("wt-design.css")}">')
+    low = html_doc
+    needs_ready = False
+    has_katex = re.search(r'class\s*=\s*["\'][^"\']*\btex(-block)?\b', low, re.I)
+    has_chart = re.search(r'class\s*=\s*["\'][^"\']*\bwt-chart\b', low, re.I)
+    has_mermaid = re.search(r'class\s*=\s*["\'][^"\']*\bmermaid\b', low, re.I)
+    if has_katex and _asset("katex.min.js"):
+        if "katex.min.css" not in html_doc:
+            head.append(f'<link rel="stylesheet" href="{_asset("katex.min.css")}">')
+        head.append(f'<script src="{_asset("katex.min.js")}"></script>')
+        needs_ready = True
+    if has_chart and _asset("echarts.min.js"):
+        head.append(f'<script src="{_asset("echarts.min.js")}"></script>')
+        needs_ready = True
+    if has_mermaid and _asset("mermaid.min.js"):
+        head.append(f'<script src="{_asset("mermaid.min.js")}"></script>')
+        needs_ready = True
+    if needs_ready and _asset("wt-render.js"):
+        head.append(f'<script src="{_asset("wt-render.js")}"></script>')
+    if not head:
+        return html_doc, False
+    return _inject_head(html_doc, "".join(head)), needs_ready
+
+
+def _prepare_render_doc(content, base_dir=None, design=True):
+    """渲染文档准备：片段补全 + 本地图片内联 + 按需注入离线资源。返回 (html_doc, needs_ready)。"""
+    html_doc = _prep_html_doc(content, base_dir)
+    if not html_doc:
+        return "", False
+    return _inject_render_assets(html_doc, design=design)
+
+
+def _wait_render_ready(pg, wait_selector=None, extra_wait=300, expect_ready=False):
+    """渲染就绪等待：字体加载完成（+ 可选 JS 库就绪标志 + 可选选择器 + 兜底延时）。"""
+    try:
+        pg.wait_for_function(
+            "() => document.fonts ? document.fonts.status === 'loaded' : true", timeout=3000
+        )
+    except Exception:
+        pass
+    if expect_ready:
+        try:
+            pg.wait_for_function(
+                "() => document.documentElement.getAttribute('data-wt-ready') === '1'", timeout=6000
+            )
+        except Exception:
+            pass
+    sel = str(wait_selector or "").strip()
+    if sel:
+        try:
+            pg.wait_for_selector(sel, timeout=8000)
+        except Exception:
+            pass
+    try:
+        pg.wait_for_timeout(max(0, int(extra_wait)))
+    except Exception:
+        pass
+
+
+def _goto_html_doc(pg, html_doc, base_dir=None, media=None, wait_selector=None,
+                   extra_wait=300, expect_ready=False):
+    """把 HTML 写入本地临时文件并以 file:// 打开（大内容不受 data: URL 导航上限限制）。
+    media='print' 模拟打印媒体；expect_ready=True 等 JS 图表/公式渲染完成。返回临时文件路径。"""
+    import pathlib
+    d = os.path.join(_render_base_dir(base_dir), _RENDER_TMP_NAME)
+    os.makedirs(d, exist_ok=True)
+    fd, path = tempfile.mkstemp(suffix=".html", dir=d)
+    os.close(fd)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(html_doc)
+    pg.goto(pathlib.Path(path).as_uri(), wait_until="load")
+    if media in ("print", "screen"):
+        try:
+            pg.emulate_media(media=media)
+        except Exception:
+            pass
+    _wait_render_ready(pg, wait_selector=wait_selector, extra_wait=extra_wait, expect_ready=expect_ready)
+    return path
+
+
+
+
+def _html_to_pngs(items, w, h, sc, full_page, base_dir=None):
     """批量渲染 HTML→PNG（共享一个浏览器上下文，避免每页起停浏览器，显著提速）。
     items: [(html, out_path), ...]。成功返回 None，失败返回错误串。"""
     try:
-        import base64
         from playwright.sync_api import sync_playwright
         todo = []
         for html_s, out_path in items:
-            hdoc, _ = _prep_html_doc(html_s)
+            hdoc, needs_ready = _prepare_render_doc(html_s, base_dir)
             if not hdoc:
                 continue
-            uri = "data:text/html;base64," + base64.b64encode(hdoc.encode("utf-8")).decode("ascii")
-            todo.append((uri, out_path))
+            todo.append((hdoc, out_path, needs_ready))
         if not todo:
             return "无有效 HTML 内容"
         w, h, sc = int(w), int(h), max(1, min(int(sc or 1), 3))
         with _html_render_lock():
             with sync_playwright() as p:
                 browser = None
+                tmp_files = []
                 try:
                     try:
                         browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
                     except Exception:
                         browser = p.chromium.launch(args=["--no-sandbox"])
-                    for uri, out_path in todo:
+                    for hdoc, out_path, needs_ready in todo:
                         pg = browser.new_page(viewport={"width": w * sc, "height": h * sc},
                                               device_scale_factor=sc)
                         try:
-                            pg.goto(uri, wait_until="load")
-                            pg.wait_for_timeout(300)
+                            tmp_files.append(_goto_html_doc(pg, hdoc, base_dir, expect_ready=needs_ready))
                             os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
                             pg.screenshot(path=out_path, full_page=bool(full_page))
                         finally:
@@ -3276,23 +3614,26 @@ def _html_to_pngs(items, w, h, sc, full_page):
                             browser.close()
                         except Exception:
                             pass
+                    for t in tmp_files:
+                        _safe_rm_temp(t)
         return None
     except Exception as e:
         return f"批量 HTML 渲染失败: {e}（需已装 playwright，系统有 Edge 最佳）"
 
 
-def _html_to_png(content, out_path, w, h, sc, full_page):
+def _html_to_png(content, out_path, w, h, sc, full_page, base_dir=None, media=None, wait_selector=None):
     """渲染 HTML 字符串到 PNG（共用内核，html_render/html_to_ppt 复用）。
-    自动补全 HTML、data URI 注入、优先系统 Edge channel。成功返回 None，失败返回错误串。"""
+    自动补全 HTML、内联本地图片、写临时文件以 file:// 打开、等字体就绪、优先系统 Edge channel。
+    成功返回 None，失败返回错误串。"""
     try:
-        html_doc, data_uri = _prep_html_doc(content)
+        html_doc, needs_ready = _prepare_render_doc(content, base_dir)
         if not html_doc:
             return "HTML 内容为空"
-        import base64
         from playwright.sync_api import sync_playwright
         with _html_render_lock():
             with sync_playwright() as p:
                 browser = None
+                tmp = None
                 try:
                     try:
                         browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
@@ -3300,8 +3641,8 @@ def _html_to_png(content, out_path, w, h, sc, full_page):
                         browser = p.chromium.launch(args=["--no-sandbox"])
                     pg = browser.new_page(viewport={"width": int(w) * int(sc), "height": int(h) * int(sc)},
                                           device_scale_factor=int(sc))
-                    pg.goto(data_uri, wait_until="load")
-                    pg.wait_for_timeout(350)
+                    tmp = _goto_html_doc(pg, html_doc, base_dir, media=media,
+                                         wait_selector=wait_selector, expect_ready=needs_ready)
                     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
                     pg.screenshot(path=out_path, full_page=bool(full_page))
                 finally:
@@ -3310,6 +3651,7 @@ def _html_to_png(content, out_path, w, h, sc, full_page):
                             browser.close()
                         except Exception:
                             pass
+                    _safe_rm_temp(tmp)
         return None
     except Exception as e:
         return f"HTML 渲染失败: {e}（需已装 playwright，可用 pip_install playwright；系统有 Edge 最佳）"
@@ -3331,6 +3673,8 @@ def _html_to_png(content, out_path, w, h, sc, full_page):
                         "height": {"type": "integer", "description": "可选：视口高 px（默认 720，16:9）"},
                         "scale": {"type": "integer", "description": "可选：超采样倍数 1-3（默认 1；2~3 更清晰但文件更大）"},
                         "full_page": {"type": "boolean", "description": "可选：true=整页截图(不限高)；false=仅视口高（默认 false）"},
+                        "media": {"type": "string", "description": "可选：screen（默认）或 print——print 模拟打印媒体，用于「所见即 PDF」预览"},
+                        "wait_selector": {"type": "string", "description": "可选：等待该 CSS 选择器出现后再截图（JS 图表/字体就绪）"},
                     },
                     "required": ["output"],
                 },
@@ -3341,7 +3685,7 @@ def _html_to_png(content, out_path, w, h, sc, full_page):
     preactivate=(('写', '保存', '创建', '生成'),),
 )
 def html_render(html="", source_path="", output="", width=1280, height=720,
-                scale=1, full_page=False):
+                scale=1, full_page=False, media="screen", wait_selector=""):
     """把 HTML/CSS 渲染成 PNG（无头浏览器，优先系统 Edge）。返回产物路径/错误。"""
     if not str(output or "").strip():
         return "错误：output 必填"
@@ -3377,7 +3721,13 @@ def html_render(html="", source_path="", output="", width=1280, height=720,
         w = int(width) or 1280
         h = int(height) or 720
         sc = max(1, min(int(scale or 1), 3))
-        err = _html_to_png(content, out, w, h, sc, bool(full_page))
+        base_dir = None
+        if str(source_path or "").strip():
+            _sp = permissions.resolve(source_path)
+            base_dir = os.path.dirname(_sp) if _sp else None
+        _media = "print" if str(media or "").strip().lower() == "print" else "screen"
+        err = _html_to_png(content, out, w, h, sc, bool(full_page), base_dir,
+                           media=_media, wait_selector=str(wait_selector or "").strip())
         if err:
             return "错误：" + err
         size = os.path.getsize(out)
@@ -3432,6 +3782,7 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
         sc = max(1, min(int(scale or 1), 3))
         cache_dir = os.path.join(os.path.dirname(p) or ".", ".wt_htmlppt")
         os.makedirs(cache_dir, exist_ok=True)
+        base_dir = os.path.dirname(p) or None  # 页面内相对图片以此目录为基准解析
         prs = Presentation()
         prs.slide_width = _In(13.333)
         prs.slide_height = _In(7.5)
@@ -3446,7 +3797,7 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
             jobs.append((html_s, png_path))
             png_paths[idx] = png_path
         if jobs:
-            berr = _html_to_pngs(jobs, w, h, sc, False)
+            berr = _html_to_pngs(jobs, w, h, sc, False, base_dir)
             if berr:
                 return f"错误：HTML 渲染失败: {berr}"
         # 已渲染到缓存，逐页插入（失败则逐页回退单页渲染兜底）
@@ -3456,7 +3807,7 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
                 continue
             png_path = png_paths.get(idx)
             if png_path and not os.path.isfile(png_path):
-                err = _html_to_png(html_s, png_path, w, h, sc, False)
+                err = _html_to_png(html_s, png_path, w, h, sc, False, base_dir)
                 if err:
                     return f"错误：第{idx}页 HTML 渲染失败: {err}"
             if not os.path.isfile(png_path):
@@ -3484,7 +3835,7 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
             "type": "function",
             "function": {
                 "name": "html_to_pdf",
-                "description": "HTML/CSS 渲染成印刷级 PDF（支持 @page 分页/页边距/横向），用 CSS 排版比代码排印美观；走系统 Edge 免 chromium",
+                "description": "HTML/CSS 渲染成印刷级 PDF（@page 分页/页边距/横向；可选页眉页脚/页码/标题元数据；自动注入打印分页基线），用 CSS 排版比代码排印美观；走系统 Edge 免 chromium",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3494,6 +3845,11 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
                         "size": {"type": "string", "description": "可选：A4/A3/Letter/Legal（默认 A4）"},
                         "margin": {"type": "string", "description": "可选：页边距 CSS 值如 '1cm' 或 '0.5in'（默认 1cm；设 0 则无，适合全幅设计稿转 PDF）"},
                         "landscape": {"type": "boolean", "description": "可选：横向（默认 false）"},
+                        "header": {"type": "string", "description": "可选：页眉文字（如文档名/章节）"},
+                        "footer": {"type": "string", "description": "可选：页脚文字"},
+                        "page_numbers": {"type": "boolean", "description": "可选：页脚显示「当前页 / 总页数」（默认 false）"},
+                        "title": {"type": "string", "description": "可选：PDF 标题元数据（写入 <title>，阅读器书签/标题栏可见）"},
+                        "css_page_size": {"type": "boolean", "description": "可选：true=以文档内 @page size 决定页面尺寸（图表/单页设计稿用），忽略 size 参数"},
                     },
                     "required": ["output"],
                 },
@@ -3503,7 +3859,8 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
     phrases='HTML 转 PDF',
     preactivate=(('写', '保存', '创建', '生成'),),
 )
-def html_to_pdf(html="", source_path="", output="", size="A4", margin="1cm", landscape=False):
+def html_to_pdf(html="", source_path="", output="", size="A4", margin="1cm", landscape=False,
+                header="", footer="", page_numbers=False, title="", css_page_size=False):
     """HTML/CSS → PDF（无头浏览器 print 渲染，优先系统 Edge）。返回路径/错误。"""
     if not str(output or "").strip():
         return "错误：output 必填"
@@ -3535,38 +3892,78 @@ def html_to_pdf(html="", source_path="", output="", size="A4", margin="1cm", lan
     if not ok:
         return reason
     try:
-        if not content.lstrip().lower().startswith("<!doctype") and not content.lstrip().lower().startswith("<html"):
-            content = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
-                       "<style>html,body{margin:0;padding:0}*{box-sizing:border-box}</style></head>"
-                       f"<body>{content}</body></html>")
-        import base64
-        data_uri = "data:text/html;base64," + base64.b64encode(content.encode("utf-8")).decode("ascii")
+        base_dir = None
+        if str(source_path or "").strip():
+            _sp = permissions.resolve(source_path)
+            base_dir = os.path.dirname(_sp) if _sp else None
+        html_doc, needs_ready = _prepare_render_doc(content, base_dir)
+        if not html_doc:
+            return "错误：HTML 内容为空"
+        html_doc = _inject_head(html_doc, _PRINT_BASELINE)   # 打印分页基线（防标题落单/图表撕裂）
+        html_doc = _set_title(html_doc, title)               # PDF 标题元数据
+
+        def _esc(s):
+            return str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        header_txt = str(header or "").strip()
+        footer_txt = str(footer or "").strip()
+        want_hf = bool(header_txt or footer_txt or page_numbers)
+        mnum = re.match(r"\s*([0-9.]+)", str(margin or "1cm"))
+        margin_val = float(mnum.group(1)) if mnum else 1.0
+        top_m = bottom_m = str(margin)
+        if want_hf and margin_val < 1.2:
+            top_m = bottom_m = "1.2cm"  # 页眉页脚绘制在页边距区，需留出空间
+        hf_style = ("font-size:8px;color:#8a97a8;width:100%;padding:0 12mm;"
+                    "font-family:'Microsoft YaHei','PingFang SC',sans-serif;")
+        header_tpl = f"<div style='{hf_style}'>{_esc(header_txt)}</div>" if header_txt else "<div></div>"
+        foot_parts = []
+        if footer_txt:
+            _ft = (_esc(footer_txt)
+                   .replace("{n}", "<span class='pageNumber'></span>")
+                   .replace("{total}", "<span class='totalPages'></span>"))
+            foot_parts.append(f"<span>{_ft}</span>")
+        if page_numbers and "{n}" not in footer_txt and "{total}" not in footer_txt:
+            foot_parts.append("<span><span class='pageNumber'></span> / <span class='totalPages'></span></span>")
+        footer_tpl = (f"<div style='{hf_style}text-align:center'>{' · '.join(foot_parts)}</div>"
+                      if foot_parts else "<div></div>")
+
         from playwright.sync_api import sync_playwright
         with _html_render_lock():
             with sync_playwright() as p:
                 browser = None
+                tmp = None
                 try:
                     try:
                         browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
                     except Exception:
                         browser = p.chromium.launch(args=["--no-sandbox"])
                     pg = browser.new_page()
-                    pg.goto(data_uri, wait_until="load")
-                    pg.wait_for_timeout(400)
+                    tmp = _goto_html_doc(pg, html_doc, base_dir, extra_wait=400, expect_ready=needs_ready)
                     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-                    pg.pdf(path=out, format=str(size or "A4").upper(),
-                           margin={"top": str(margin), "bottom": str(margin),
-                                   "left": str(margin), "right": str(margin)},
-                           print_background=True, landscape=bool(landscape))
+                    pdf_kwargs = dict(
+                        path=out,
+                        margin={"top": top_m, "bottom": bottom_m,
+                                "left": str(margin), "right": str(margin)},
+                        print_background=True, landscape=bool(landscape),
+                        display_header_footer=want_hf,
+                        header_template=header_tpl, footer_template=footer_tpl,
+                    )
+                    if css_page_size:
+                        pdf_kwargs["prefer_css_page_size"] = True
+                    else:
+                        pdf_kwargs["format"] = str(size or "A4").upper()
+                    pg.pdf(**pdf_kwargs)
                 finally:
                     if browser is not None:
                         try:
                             browser.close()
                         except Exception:
                             pass
+                    _safe_rm_temp(tmp)
         sz = os.path.getsize(out)
         permissions.audit("html_to_pdf", out, f"{sz} 字节")
-        return f"已生成 PDF: {out}（{size} {('横向' if landscape else '纵向')}，{sz/1024:.1f} KB）"
+        extra = "，含页眉页脚" if want_hf else ""
+        return f"已生成 PDF: {out}（{size} {('横向' if landscape else '纵向')}，{sz/1024:.1f} KB{extra}）"
     except Exception as e:
         return f"错误：PDF 生成失败: {e}（需已装 playwright，系统有 Edge 最佳）"
 
@@ -3672,4 +4069,516 @@ def ppt_layout_check(path, margin=0.05):
         return f"错误：版面检查失败: {e}"
 
 
-__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'pdf_visual_check', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check', 'secret_store', 'kv_store', 'create_doc']
+# ═══ 矢量图表（ECharts 离线渲染） ═══════════════════════════════
+_WT_PALETTE = {
+    "": ["#5470c6", "#91cc75", "#fac858", "#ee6666", "#73c0de", "#3ba272"],
+    "tech": ["#22c8ff", "#0ea5e9", "#38bdf8", "#818cf8", "#a78bfa", "#34d399"],
+    "forest": ["#10b981", "#059669", "#34d399", "#84cc16", "#f59e0b", "#0ea5e9"],
+}
+
+
+def _chart_option(data, labels, series, kind, title, x_label, y_label, theme):
+    """把友好输入转成 ECharts option（line/bar/area/pie/scatter）。"""
+    kind = (kind or "line").lower()
+    area = kind == "area"
+    if area:
+        kind = "line"
+    opt = {"color": _WT_PALETTE.get(str(theme or "").lower(), _WT_PALETTE[""]),
+           "grid": {"left": 72, "right": 32, "top": 64 if title else 40, "bottom": 56}}
+    if title:
+        opt["title"] = {"text": title, "left": "center"}
+    if kind == "pie":
+        vals = data
+        if series and isinstance(series, list) and series and isinstance(series[0], dict):
+            vals = series[0].get("data") or vals
+        pdata = []
+        for i, v in enumerate(vals or []):
+            nm = labels[i] if labels and i < len(labels) else f"项{i + 1}"
+            if isinstance(v, dict):
+                pdata.append(v)
+            else:
+                pdata.append({"name": nm, "value": v})
+        opt["tooltip"] = {"trigger": "item"}
+        opt["legend"] = {"bottom": 8}
+        opt["series"] = [{"type": "pie", "radius": ["38%", "64%"], "center": ["50%", "48%"],
+                          "label": {"formatter": "{b}: {c} ({d}%)"}, "data": pdata}]
+        opt.pop("grid", None)
+        return opt
+
+    def _xy(d):
+        if d and isinstance(d[0], (list, tuple)) and len(d[0]) == 2:
+            return [[p[0], p[1]] for p in d]
+        return d
+
+    srs = series if (series and isinstance(series, list)) else [{"name": title or "数据", "data": data}]
+    x_type = "category" if labels else "value"
+    opt["tooltip"] = {"trigger": "axis"}
+    if len(srs) > 1:
+        opt["legend"] = {"top": 6}
+    opt["xAxis"] = {"type": x_type, "name": x_label or ""}
+    if labels:
+        opt["xAxis"]["data"] = labels
+    opt["yAxis"] = {"type": "value", "name": y_label or ""}
+    so = []
+    for s in srs:
+        nm = s.get("name", "") if isinstance(s, dict) else ""
+        d = (s.get("data") if isinstance(s, dict) else s) or []
+        item = {"name": nm, "type": ("scatter" if kind == "scatter" else kind), "data": _xy(d)}
+        if kind == "line":
+            item["smooth"] = True
+            if area:
+                item["areaStyle"] = {}
+        so.append(item)
+    opt["series"] = so
+    return opt
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "chart_render",
+                "description": "数据 → 矢量图表（ECharts 离线渲染，出 PNG 或矢量 PDF）：line/bar/area/pie/scatter，可与文档同风格、PDF 内保持矢量",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "output": {"type": "string", "description": "输出绝对路径（.png/.jpg/.pdf；须在允许目录内）"},
+                        "data": {"type": "array", "items": {}, "description": "数值数组（配 labels）或 [[x,y],...]（散点）；多系列请用 series"},
+                        "labels": {"type": "array", "items": {"type": "string"}, "description": "可选：x 轴标签（饼图则为每项名称）"},
+                        "series": {"type": "array", "items": {"type": "object"}, "description": "可选多系列：[{\"name\":\"A\",\"data\":[..]},...]"},
+                        "kind": {"type": "string", "description": "line/bar/area/pie/scatter（默认 line）"},
+                        "title": {"type": "string", "description": "图表标题（可选）"},
+                        "x_label": {"type": "string", "description": "x 轴名称（可选）"},
+                        "y_label": {"type": "string", "description": "y 轴名称（可选）"},
+                        "width": {"type": "integer", "description": "画布宽 px（默认 1200）"},
+                        "height": {"type": "integer", "description": "画布高 px（默认 675）"},
+                        "scale": {"type": "integer", "description": "超采样 1-3（默认 2）"},
+                        "theme": {"type": "string", "description": "可选配色：tech/forest（默认品牌蓝）"},
+                    },
+                    "required": ["output", "data"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='数据成图（矢量）',
+    preactivate=(('画图', '数据图', '柱状图', '折线图', '饼图', '散点图', '可视化'),),
+)
+def chart_render(output, data, labels=None, series=None, kind="line", title="", x_label="", y_label="",
+                 width=1200, height=675, scale=2, theme=""):
+    """数据 → 矢量图表（ECharts）。返回产物路径/错误。"""
+    if not str(output or "").strip():
+        return "错误：output 必填"
+    if not isinstance(data, list) and not series:
+        return "错误：data 必须是数组（或提供 series）"
+    out = permissions.resolve(output)
+    if not out:
+        return "错误：输出路径无效"
+    low = out.lower()
+    if not low.endswith((".png", ".jpg", ".jpeg", ".pdf")):
+        out += ".png"
+        low = out.lower()
+    ok, reason = permissions.check_filesystem(out, write=True)
+    if not ok:
+        return reason
+    try:
+        opt = _chart_option(data if isinstance(data, list) else [], labels, series, kind, title, x_label, y_label, theme)
+        w = int(width) or 1200
+        h = int(height) or 675
+        opt_json = json.dumps(opt, ensure_ascii=False)
+        if low.endswith(".pdf"):
+            w_mm = round(w / 96 * 25.4, 2)
+            h_mm = round(h / 96 * 25.4, 2)
+            html = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
+                    f"<style>html,body{{margin:0;background:#fff}}@page{{size:{w_mm}mm {h_mm}mm;margin:0}}"
+                    f"#wtc{{width:{w}px;height:{h}px}}</style></head><body>"
+                    f"<div id='wtc' class='wt-chart' style='width:{w}px;height:{h}px'>"
+                    f"<script type='application/json'>{opt_json}</script></div></body></html>")
+            return html_to_pdf(html=html, output=out, margin="0", css_page_size=True, title=title)
+        html = ("<!DOCTYPE html><html lang='zh'><head><meta charset='utf-8'>"
+                "<style>html,body{margin:0;background:#fff}</style></head><body>"
+                f"<div id='wtc' class='wt-chart' style='width:{w}px;height:{h}px'>"
+                f"<script type='application/json'>{opt_json}</script></div></body></html>")
+        err = _html_to_png(html, out, w, h, max(1, min(int(scale or 2), 3)), True)
+        if err:
+            return "错误：" + err
+        sz = os.path.getsize(out)
+        permissions.audit("chart_render", out, f"{sz} 字节")
+        return f"已生成图表: {out}（{kind}，{w}x{h}，{sz / 1024:.0f} KB）"
+    except Exception as e:
+        return f"错误：图表生成失败: {e}"
+
+
+# ═══ PDF 后处理套件（PyMuPDF） ══════════════════════════════════
+def _hex_to_rgb01(h):
+    s = str(h or "").lstrip("#")
+    if len(s) == 3:
+        s = "".join(c * 2 for c in s)
+    try:
+        return tuple(int(s[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except Exception:
+        return (0.5, 0.5, 0.5)
+
+
+def _parse_page_ranges(spec, total):
+    pages = []
+    for part in str(spec or "").replace("，", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, _, b = part.partition("-")
+            try:
+                a, b = int(a), int(b)
+            except ValueError:
+                continue
+            pages.extend(range(max(1, a), min(total, b) + 1))
+        else:
+            try:
+                pages.append(int(part))
+            except ValueError:
+                pass
+    return [p for p in pages if 1 <= p <= total]
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "pdf_toolkit",
+                "description": "PDF 后处理套件：合并/拆分/水印/页码/压缩/加密/抽图/转图/目录书签/信息（PyMuPDF，无需外部程序）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "merge/split/watermark/page_numbers/compress/encrypt/extract_images/to_images/set_toc/info"},
+                        "path": {"type": "string", "description": "源 PDF（除 merge 外均需要）"},
+                        "output": {"type": "string", "description": "输出文件（split/to_images/extract_images 为输出目录）"},
+                        "paths": {"type": "array", "items": {"type": "string"}, "description": "merge：待合并 PDF 路径数组（按顺序）"},
+                        "pages": {"type": "string", "description": "split：页码范围如 '1-3,5'（默认全部逐页）"},
+                        "text": {"type": "string", "description": "watermark/page_numbers：文字（页码模板支持 {n} 与 {total}）"},
+                        "password": {"type": "string", "description": "encrypt：用户打开口令"},
+                        "owner_password": {"type": "string", "description": "encrypt：所有者口令（默认同用户口令）"},
+                        "toc": {"type": "array", "items": {"type": "array"}, "description": "set_toc：[[层级, 标题, 页码], ...]"},
+                        "dpi": {"type": "integer", "description": "to_images：DPI（默认 144）"},
+                        "max_pages": {"type": "integer", "description": "to_images：最多页数（默认 50）"},
+                        "fontsize": {"type": "number", "description": "watermark/page_numbers 字号（默认 12）"},
+                        "opacity": {"type": "number", "description": "watermark 透明度 0-1（默认 0.18）"},
+                        "rotate": {"type": "number", "description": "watermark 旋转角度（默认 45）"},
+                        "color": {"type": "string", "description": "watermark/page_numbers 颜色（十六进制，默认 #8a97a8）"},
+                        "position": {"type": "string", "description": "page_numbers：bottom-center/top-center（默认 bottom-center）"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='PDF 后处理',
+    preactivate=(('合并pdf', '拆分pdf', 'pdf水印', 'pdf页码', 'pdf加密', 'pdf压缩', 'pdf目录'),),
+)
+def pdf_toolkit(action, path="", output="", paths=None, pages="", text="", password="",
+                owner_password="", toc=None, dpi=144, max_pages=50, fontsize=12,
+                opacity=0.18, rotate=45, color="#8a97a8", position="bottom-center"):
+    """PDF 后处理套件。返回结果说明/错误。"""
+    act = str(action or "").strip().lower()
+    try:
+        import fitz  # PyMuPDF
+    except Exception:
+        try:
+            import pymupdf as fitz
+        except Exception:
+            return "未安装 PyMuPDF，请先 pip_install PyMuPDF"
+    try:
+        def _open(p):
+            sp = permissions.resolve(p)
+            if not sp or not os.path.isfile(sp):
+                raise RuntimeError(f"源文件不存在：{p}")
+            okr, reasonr = permissions.check_filesystem(sp, write=False)
+            if not okr:
+                raise RuntimeError(reasonr)
+            return fitz.open(sp)
+
+        def _out(p):
+            op = permissions.resolve(p)
+            if not op:
+                raise RuntimeError("输出路径无效")
+            okw, reasonw = permissions.check_filesystem(op, write=True)
+            if not okw:
+                raise RuntimeError(reasonw)
+            os.makedirs(os.path.dirname(op) or ".", exist_ok=True)
+            return op
+
+        if act == "info":
+            doc = _open(path)
+            md = doc.metadata or {}
+            return f"页数：{doc.page_count}\n标题：{md.get('title') or '—'}\n作者：{md.get('author') or '—'}\n加密：{bool(doc.is_encrypted)}"
+        if act == "merge":
+            if not isinstance(paths, list) or len(paths) < 2:
+                return "错误：merge 需要 paths（至少 2 个 PDF）"
+            if not str(output or "").strip():
+                return "错误：merge 需要 output"
+            op = _out(output)
+            merged = fitz.open()
+            for p in paths:
+                merged.insert_pdf(_open(p))
+            merged.save(op)
+            merged.close()
+            permissions.audit("pdf_toolkit", op, "merge")
+            return f"已合并 {len(paths)} 个 PDF → {op}（{os.path.getsize(op) / 1024:.0f} KB）"
+        if act == "split":
+            doc = _open(path)
+            outdir = permissions.resolve(output) if str(output or "").strip() else None
+            if not outdir:
+                return "错误：split 需要 output（目录）"
+            os.makedirs(outdir, exist_ok=True)
+            spec = pages or f"1-{doc.page_count}"
+            stem = os.path.splitext(os.path.basename(permissions.resolve(path)))[0]
+            made = 0
+            if "," in spec or "-" in spec:
+                # 每个逗号分段单独成文件
+                for seg in str(spec).split(","):
+                    seg = seg.strip()
+                    if not seg:
+                        continue
+                    idxs = [i - 1 for i in _parse_page_ranges(seg, doc.page_count)]
+                    if not idxs:
+                        continue
+                    nd = fitz.open()
+                    for i in idxs:
+                        nd.insert_pdf(doc, from_page=i, to_page=i)
+                    fp = os.path.join(outdir, f"{stem}_{seg.replace('-', '_')}.pdf")
+                    nd.save(fp)
+                    nd.close()
+                    made += 1
+            else:
+                for i in range(doc.page_count):
+                    nd = fitz.open()
+                    nd.insert_pdf(doc, from_page=i, to_page=i)
+                    fp = os.path.join(outdir, f"{stem}_p{i + 1}.pdf")
+                    nd.save(fp)
+                    nd.close()
+                    made += 1
+            permissions.audit("pdf_toolkit", outdir, f"split {made}")
+            return f"已拆分 {made} 个文件 → {outdir}"
+        if act in ("watermark", "page_numbers"):
+            doc = _open(path)
+            op = _out(output) if str(output or "").strip() else permissions.resolve(path)
+            use_cjk = bool(re.search(r"[^\x00-\x7f]", str(text or "")))
+            fname = "china-s" if use_cjk else "helv"
+            col = _hex_to_rgb01(color)
+            total = doc.page_count
+            for i, page in enumerate(doc):
+                if act == "watermark":
+                    t = str(text or "DRAFT")
+                    center = fitz.Point(page.rect.width / 2, page.rect.height / 2)
+                    try:
+                        mat = fitz.Matrix(1, 1).prerotate(float(rotate))
+                        page.insert_text(center, t, fontsize=float(fontsize), fontname=fname,
+                                         color=col, fill_opacity=float(opacity), morph=(center, mat))
+                    except Exception:
+                        page.insert_text(center, t, fontsize=float(fontsize), fontname=fname,
+                                         color=col, fill_opacity=float(opacity))
+                else:
+                    t = (text or "{n} / {total}").replace("{n}", str(i + 1)).replace("{total}", str(total))
+                    y = page.rect.height - 26 if position.startswith("bottom") else 20
+                    page.insert_textbox(fitz.Rect(0, y, page.rect.width, y + 22), t,
+                                        fontsize=float(fontsize), fontname=fname, color=col, align=1)
+            doc.save(op)
+            doc.close()
+            permissions.audit("pdf_toolkit", op, act)
+            return f"已{'添加水印' if act == 'watermark' else '添加页码'} → {op}"
+        if act == "compress":
+            doc = _open(path)
+            op = _out(output) if str(output or "").strip() else permissions.resolve(path)
+            doc.save(op, garbage=4, deflate=True, clean=True)
+            doc.close()
+            return f"已压缩 → {op}（{os.path.getsize(op) / 1024:.0f} KB）"
+        if act == "encrypt":
+            if not str(password or "").strip():
+                return "错误：encrypt 需要 password"
+            doc = _open(path)
+            op = _out(output) if str(output or "").strip() else permissions.resolve(path)
+            doc.save(op, encryption=fitz.PDF_ENCRYPT_AES_256,
+                     owner_pw=str(owner_password or password), user_pw=str(password))
+            doc.close()
+            permissions.audit("pdf_toolkit", op, "encrypt")
+            return f"已加密 → {op}"
+        if act == "extract_images":
+            doc = _open(path)
+            outdir = permissions.resolve(output) if str(output or "").strip() else None
+            if not outdir:
+                return "错误：extract_images 需要 output（目录）"
+            os.makedirs(outdir, exist_ok=True)
+            n = 0
+            seen = set()
+            for page in doc:
+                for img in page.get_images(full=True):
+                    xref = img[0]
+                    if xref in seen:
+                        continue
+                    seen.add(xref)
+                    info = doc.extract_image(xref)
+                    fp = os.path.join(outdir, f"img_{xref}.{info.get('ext', 'png')}")
+                    with open(fp, "wb") as f:
+                        f.write(info["image"])
+                    n += 1
+            return f"已导出 {n} 张图片 → {outdir}"
+        if act == "to_images":
+            doc = _open(path)
+            outdir = permissions.resolve(output) if str(output or "").strip() else None
+            if not outdir:
+                return "错误：to_images 需要 output（目录）"
+            os.makedirs(outdir, exist_ok=True)
+            z = max(0.5, float(dpi) / 72.0)
+            n = 0
+            for i, page in enumerate(doc):
+                if i >= int(max_pages):
+                    break
+                pix = page.get_pixmap(matrix=fitz.Matrix(z, z), alpha=False)
+                pix.save(os.path.join(outdir, f"p{i + 1:02d}.png"))
+                n += 1
+            return f"已导出 {n} 页图片 → {outdir}"
+        if act == "set_toc":
+            if not isinstance(toc, list) or not toc:
+                return "错误：set_toc 需要 toc=[[层级,标题,页码],...]"
+            doc = _open(path)
+            op = _out(output) if str(output or "").strip() else permissions.resolve(path)
+            doc.set_toc([[int(t[0]), str(t[1]), int(t[2])] for t in toc])
+            doc.save(op)
+            doc.close()
+            return f"已写入目录书签（{len(toc)} 条）→ {op}"
+        return f"错误：未知 action：{action}"
+    except Exception as e:
+        return f"错误：PDF 处理失败: {e}"
+
+
+# ═══ 设计工具（规范自检 / 模板 / 品牌套件） ═════════════════════
+def _brand_path():
+    base = permissions.WORKSPACE_DIR or _dc.WORKING_DIR or "."
+    return os.path.join(base, ".wt_brand.json")
+
+
+def _design_lint_html(html_text):
+    body = str(html_text or "")
+    colors = set(m.group(0).lower() for m in re.finditer(r"#[0-9a-fA-F]{3,8}\b", body))
+    colors |= set(re.sub(r"\s+", "", m.group(0).lower()) for m in re.finditer(r"rgba?\([^)]*\)", body))
+    sizes = set(m.group(1).strip() for m in re.finditer(r"font-size\s*:\s*([^;{}]+)", body, re.I))
+    imgs = re.findall(r"<img\b[^>]*>", body, re.I)
+    no_alt = [t for t in imgs if not re.search(r"\balt\s*=", t, re.I)]
+    inline = len(re.findall(r"\bstyle\s*=\s*[\"']", body, re.I))
+    lines = ["📐 设计规范自检", ""]
+    def _mark(cond_ok, text):
+        lines.append(("  ✅ " if cond_ok else "  ⚠ ") + text)
+    _mark(len(colors) <= 6, f"主色调数量：{len(colors)}（建议 ≤6，现有点：{', '.join(sorted(colors)[:8]) or '—'}）")
+    _mark(len(sizes) <= 6, f"字号层级：{len(sizes)}（建议 ≤6，现值：{', '.join(sorted(sizes)) or '—'}）")
+    _mark(len(no_alt) == 0, f"图片缺 alt：{len(no_alt)} / {len(imgs)}（无障碍）")
+    _mark("<title>" in body.lower(), "是否含 <title>（PDF 标题元数据）")
+    _mark(inline <= 10, f"内联 style 数：{inline}（建议 ≤10，多用类）")
+    if len(colors) > 6:
+        lines.append("  → 建议：收敛为品牌主色 + 1 强调 + 中性灰阶。")
+    if len(sizes) > 6:
+        lines.append("  → 建议：正文/次级/标题 三档即可。")
+    if no_alt:
+        lines.append("  → 建议：为配图补 alt 文本。")
+    return "\n".join(lines)
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "design_kit",
+                "description": "设计工具：lint=HTML 版式规范自检（配色/字号/alt/title/内联样式）；templates/template=列出/取用内置专业模板；brand-set/brand-get/brand-css=品牌套件（记忆品牌色/字体，供文档统一）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "description": "lint/templates/template/brand-set/brand-get/brand-css"},
+                        "html": {"type": "string", "description": "lint：待检查的 HTML（与 path 二选一）"},
+                        "path": {"type": "string", "description": "lint：待检查的 HTML 文件；template：输出文件（可选）"},
+                        "name": {"type": "string", "description": "template：模板名（如 report/onepager/slide）"},
+                        "data": {"type": "object", "description": "brand-set：品牌数据 {name, colors:[..], font, logo}"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['📊 数据与文档'],
+    phrases='设计规范自检与模板',
+    preactivate=(('设计规范', '版式检查', '配色检查', '设计模板', '品牌套件'),),
+)
+def design_kit(action, html="", path="", name="", data=None):
+    """设计工具：规范自检 / 模板 / 品牌套件。返回文本结果/错误。"""
+    act = str(action or "").strip().lower()
+    tdir = os.path.join(_RENDER_ASSETS_DIR, "templates")
+    try:
+        if act == "lint":
+            content = str(html or "")
+            if not content.strip() and str(path or "").strip():
+                sp = permissions.resolve(path)
+                if not sp or not os.path.isfile(sp):
+                    return f"错误：文件不存在：{path}"
+                with open(sp, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read(2_000_000)
+            if not content.strip():
+                return "错误：lint 需要 html 或 path"
+            return _design_lint_html(content)
+        if act == "templates":
+            if not os.path.isdir(tdir):
+                return "暂无内置模板"
+            items = [f for f in sorted(os.listdir(tdir)) if f.endswith(".html")]
+            desc = {"report.html": "多页报告（封面+章节+指标+表格+时间线）",
+                    "onepager.html": "一页纸速览（指标+双栏+表格）",
+                    "slide.html": "16:9 演示单页（供 html_to_ppt 逐页使用）"}
+            return "内置模板：\n" + "\n".join(f"  • {i} — {desc.get(i, '')}" for i in items)
+        if act == "template":
+            fn = os.path.basename(str(name or "")).strip()
+            if not fn.endswith(".html"):
+                fn += ".html"
+            fp = os.path.join(tdir, fn)
+            if not os.path.isfile(fp):
+                return f"错误：模板不存在：{name}（可用 design_kit action=templates 查看）"
+            with open(fp, "r", encoding="utf-8") as f:
+                tpl = f.read()
+            if str(path or "").strip() or str(html or "").strip():
+                op = permissions.resolve(path or html)
+                if not op:
+                    return "错误：输出路径无效"
+                os.makedirs(os.path.dirname(op) or ".", exist_ok=True)
+                with open(op, "w", encoding="utf-8") as f:
+                    f.write(tpl)
+                return f"已写入模板副本 → {op}（替换 {{占位符}} 后即可渲染）"
+            return tpl
+        if act == "brand-set":
+            if not isinstance(data, dict) or not data:
+                return "错误：brand-set 需要 data（如 {name,colors,font,logo}）"
+            with open(_brand_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return f"已保存品牌套件（{', '.join(data.keys())}）"
+        if act == "brand-get":
+            bp = _brand_path()
+            if not os.path.isfile(bp):
+                return "尚未设置品牌套件（用 design_kit action=brand-set data={...}）"
+            with open(bp, "r", encoding="utf-8") as f:
+                return "品牌套件：\n" + json.dumps(json.load(f), ensure_ascii=False, indent=2)
+        if act == "brand-css":
+            bp = _brand_path()
+            if not os.path.isfile(bp):
+                return "尚未设置品牌套件"
+            with open(bp, "r", encoding="utf-8") as f:
+                b = json.load(f)
+            colors = b.get("colors") or []
+            css = [":root {"]
+            if colors:
+                css.append(f"  --wt-brand: {colors[0]};")
+                if len(colors) > 1:
+                    css.append(f"  --wt-accent: {colors[1]};")
+            if b.get("font"):
+                css.append(f"  --wt-font: \"{b['font']}\", \"Microsoft YaHei\", sans-serif;")
+            css.append("}")
+            if b.get("logo"):
+                css.append(f".wt-cover img {{ content: url('{b['logo']}'); }}")
+            return "\n".join(css)
+        return f"错误：未知 action：{action}"
+    except Exception as e:
+        return f"错误：design_kit 失败: {e}"
+
+
+__all__ = ['database_query_mysql', 'database_query_postgres', 'read_excel', 'epub_read', 'mobi_read', 'doc_read', 'msg_read', 'archive_list', 'write_excel', 'xlsx_edit', 'chart_data', 'database_query', 'database_execute', 'pdf_extract', 'pdf_create', 'pdf_visual_check', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check', 'secret_store', 'kv_store', 'create_doc', 'chart_render', 'pdf_toolkit', 'design_kit']

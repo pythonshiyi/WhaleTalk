@@ -3408,6 +3408,7 @@ _TOOL_ORDER = [
     'image_generate', 'usage_report', 'pdf_extract', 'pdf_create', 'pdf_visual_check', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'rss_fetch', 'qrcode',
     'secret_store', 'kv_store', 'media_ffmpeg', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_plugin', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check',
     'list_my_capabilities', 'capability_heatmap', 'self_report',
+    'chart_render', 'pdf_toolkit', 'design_kit',
 ]
 
 _GROUP_ORDER = [
@@ -3448,6 +3449,9 @@ _HINT_ORDER = [
     ('执行流程', '运行工作流', '跑流程', '流程模板'), ('失败模式', '失败记忆', '老是报错', '已修复', '消解'),
     ('有哪些能力', '有什么能力', '有什么工具', '能力清单', '我的能力', '会哪些能力'),
     ('能力热力图', '能力画像', '擅长什么', '弱项', '哪里不行', '能力统计'), ('自我述职', '周报', '我这周做了什么', '工作总结', '述职', '复盘'),
+    ('画图', '数据图', '柱状图', '折线图', '饼图', '散点图', '可视化'),
+    ('合并pdf', '拆分pdf', 'pdf水印', 'pdf页码', 'pdf加密', 'pdf压缩', 'pdf目录'),
+    ('设计规范', '版式检查', '配色检查', '设计模板', '品牌套件'),
 ]
 
 TOOLS = build_tool_list(_TOOL_ORDER)

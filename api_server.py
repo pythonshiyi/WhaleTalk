@@ -283,6 +283,7 @@ _TOOL_DOMAIN = {
     "docx_edit": "数据与文档", "pptx_create": "数据与文档", "xlsx_edit": "数据与文档",
     "html_render": "数据与文档", "html_to_ppt": "数据与文档", "html_to_pdf": "数据与文档",
     "pdf_visual_check": "数据与文档", "ppt_layout_check": "数据与文档",
+    "chart_render": "数据与文档", "pdf_toolkit": "数据与文档", "design_kit": "数据与文档",
     "database_query": "数据库", "database_query_mysql": "数据库",
     "database_query_postgres": "数据库", "database_execute": "数据库",
     "fetch_url": "网络与通信", "fetch_blocked": "网络与通信", "search_web": "网络与通信",

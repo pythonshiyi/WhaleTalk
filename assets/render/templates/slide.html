@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; width: 1280px; height: 720px; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    box-sizing: border-box; padding: 64px 80px;
+    display: flex; flex-direction: column;
+    background: linear-gradient(135deg, #0b2141 0%, #050c1a 100%); color: #eaf4ff;
+  }
+  .eyebrow { font-size: 15px; letter-spacing: 4px; color: #8fe6f5; }
+  h1 { font-size: 52px; margin: 6px 0 18px; letter-spacing: 2px; }
+  .rule { width: 84px; height: 3px; background: linear-gradient(90deg, #35e0d6, transparent); margin-bottom: 26px; }
+  .body { font-size: 22px; line-height: 1.7; color: #cfe9f7; }
+  .cards { display: flex; gap: 22px; margin-top: auto; }
+  .card { flex: 1; background: rgba(53,224,214,.09); border: 1px solid rgba(53,224,214,.28); border-radius: 12px; padding: 20px 22px; }
+  .card b { display: block; font-size: 21px; color: #fff; margin-bottom: 6px; }
+  .card span { font-size: 16px; color: #9fc4dd; }
+  .pageno { position: absolute; }
+</style>
+</head>
+<body>
+  <div class="eyebrow">{{EYEBROW}}</div>
+  <h1>{{TITLE}}</h1>
+  <div class="rule"></div>
+  <div class="body">{{BODY}}</div>
+  <div class="cards">
+    <div class="card"><b>{{C1_TITLE}}</b><span>{{C1_BODY}}</span></div>
+    <div class="card"><b>{{C2_TITLE}}</b><span>{{C2_BODY}}</span></div>
+    <div class="card"><b>{{C3_TITLE}}</b><span>{{C3_BODY}}</span></div>
+  </div>
+</body>
+</html>

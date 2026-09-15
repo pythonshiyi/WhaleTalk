@@ -2,6 +2,64 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.11.1（未发版追加）—— 🎨 设计/作图/排版/PDF/表格 能力批次（离线全家桶 · 工具 151 → 154）
+
+**主题：给已很强的「代码即设计」补上缺的零部件与质量门禁**（不重造，只增强）。
+
+### B · 离线渲染组件库（`assets/render/`，零网络）
+- **Mermaid**（流程图/时序图/ER/甘特/思维导图）+ **KaTeX**（数学公式，含 20 个 woff2）+ **ECharts**（矢量图表）本地打包
+- `wt-design.css`：文档设计系统（封面/章节/卡片/指标/时间线/专业表格/引用/双栏/页脚 + 3 套色板）；
+  **元素级默认全部包在 `:where()`**（零特异性）——只兜底、绝不覆盖 AI 自己的样式
+- `wt-render.js`：按需初始化 Mermaid/ECharts/KaTeX 并置 `data-wt-ready` 就绪标志
+
+### A · 渲染内核升级
+- HTML 管线**按需自动注入**上述资源（按 `class="mermaid"`/`wt-chart`/`tex` 检测）
+- 渲染前等 **`document.fonts.ready` + JS 库就绪标志**（`_wait_render_ready`），不再截到半成品
+- `html_render` 新增 `media="print"`（所见即 PDF 预览）与 `wait_selector`
+- HTML→PDF 自动注入**打印分页基线**（标题不落单、图表/表格行不撕裂、表头跨页重复）
+
+### C · 矢量图表
+- 新增工具 **`chart_render`**：数据 → ECharts 矢量图（line/bar/area/pie/scatter），出 PNG 或**矢量 PDF**
+
+### D · PDF 排版与后处理
+- `html_to_pdf` 新增 **`header`/`footer`/`page_numbers`/`title`/`css_page_size`**；页脚支持 `{n}`/`{total}` 占位符（中文页码）
+- 新增工具 **`pdf_toolkit`**：`merge/split/watermark/page_numbers/compress/encrypt/extract_images/to_images/set_toc/info`（PyMuPDF）
+- **`pdf_create` 收敛到 HTML 管线**（MD→HTML→高质量渲染），reportlab 仅作无浏览器兜底；保留封面 + 「共 N 页」页脚
+
+### E · 设计规范自检
+- 新增工具 **`design_kit`**：`lint`（配色数/字号层级/图片 alt/内联样式）、`templates`/`template`（内置报告/一页纸/16:9 幻灯片模板）、`brand-set`/`brand-get`/`brand-css`（品牌套件）
+
+### F · 设计资产复用
+- `assets/render/templates/`：`report.html`（多页报告）/`onepager.html`（一页纸）/`slide.html`（16:9 演示页）
+- 品牌套件落盘 `WORKSPACE_DIR/.wt_brand.json`，可导出 `brand-css` 统一文档配色/字体
+
+### 同步点与验证
+- 新增工具已同步全部 8 处（`@tool`/领域 `__all__`/包 `__all__`/`_TOOL_ORDER`/`_HINT_ORDER`/`_API _TOOL_DOMAIN`/`test_tool_split`/文档数字）
+- 实机自检：图表（PNG/PDF）、PDF 后处理 10 个动作、设计工具、`pdf_create` 全通过；Mermaid/ECharts 渲染经像素分析确认
+- **pytest 584 passed**（+9）；`audit_tools --strict` 154 工具 0 error；`validate_tools`/`island_check`/`check_docs` 全绿
+
+
+## v3.11.1（未发版追加）—— 🖼 修复 HTML→PDF/PNG/PPT 本地图片不嵌入
+
+**症状**：`html_to_pdf` 生成的 PDF 里，本地图片全部渲染成「撕裂占位图标」；
+`html_render`/`html_to_ppt` 同理。
+
+**根因**：三个工具都用 `data:text/html;base64,...` 通过 `page.goto` 载入 HTML——
+`data:` 文档没有 base URL，`<img src="../pic.png">` 无法解析；且 HTML 稍大（如内联 4MB
+图片）会让 `page.goto` 直接 `ERR_ABORTED`（Chromium 对 data: URL 导航有体积上限）。
+
+**修复**（`agent_tools/tool_docs.py`）：
+- 新增 `_inline_local_images()`：把 HTML 中引用的**本地图片（相对/绝对路径）内联为
+  data URI**（仅图片扩展名；http(s)/data/#/缺失文件原样跳过；同时处理 CSS `url()`）。
+- 新增 `_goto_html_doc()`：把 HTML 写入 `<base>/.render_tmp/` 临时文件，改用
+  **`file://` 导航**——大内容不再撞 data: 上限；渲染后 `_safe_rm_temp()` 清理（含空目录）。
+- 三个工具统一走上述路径（`html_to_pdf` 去掉手写 data URI；`html_render`/`html_to_ppt`
+  增加 `base_dir`，相对图片以源文件/输出目录为基准解析）。
+
+**验证**：对 `data/workspace/自我形象设计/src/manual.html` 重新生成，
+PDF 由 237.7KB → **2474.7KB**，PyMuPDF 确认每页图片 XObject `[1,0,1,2,0]`（头像/色卡/标志+主视觉）；
+`tests/test_html_image_inline.py`(8) 锁定内联语义，全量 **570 passed**；四道门禁通过。
+
 ## v3.11.1（未发版追加）—— 🎨 前端 UI 精修（P0→P2 三批）
 
 **主题：不追新功能，只把已有界面的边界与细节打磨到一致。** 三次审计（令牌合规 /

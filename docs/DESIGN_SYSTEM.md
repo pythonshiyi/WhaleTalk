@@ -125,3 +125,21 @@
 - **进程**：`.px-term-head`（图标+选择+状态）+ `.px-term-ops`（跟随/复制/清屏/重启/停止图标按钮）+ 等宽终端 `.px-term`。
 - **保存条**：`.px-savebar` 贴底 sticky。
 
+## 10. 文档渲染设计系统（`assets/render/`，面向导出而非界面）
+
+> 与 UI（第 1–9 节）不同：这是**导出文档**（HTML→PNG/PDF/PPT）用的设计语言，随渲染管线自动注入。
+
+- `wt-design.css`：文档组件与令牌（封面 `.wt-cover`、章节 `.wt-h`、卡片 `.wt-card(s)`、指标 `.wt-metrics`、
+  时间线 `.wt-timeline`、专业表格 `.wt-table`、引用 `.wt-quote`、提示 `.wt-note`、徽标 `.wt-badge`、
+  双栏 `.wt-two`、图注 `.wt-figure/.wt-cap`、页脚 `.wt-footer`）。三套色板：默认 / `.wt-theme-tech` / `.wt-theme-forest`。
+- **零特异性原则**：所有元素级默认（`body/h1/p/pre/table…`）都包在 `:where()` 里——只做兜底，
+  **绝不覆盖作者（AI）自己写的样式**。组件类 `.wt-*` 才是有意启用的高特异性样式。
+- `wt-render.js` + `mermaid.min.js`/`katex.min.js`+`fonts`/`echarts.min.js`：离线、按需注入；
+  渲染前等字体就绪与 `data-wt-ready` 标志（`_wait_render_ready`）。
+- 作者写法：图表 `<div class="wt-chart"><script type="application/json">{ECharts option}</script></div>`；
+  流程图 `<pre class="mermaid">flowchart LR …</pre>`；公式 `<span class="tex">E=mc^2</span>`。
+- `templates/`：`report.html` / `onepager.html` / `slide.html`，可用 `design_kit action=template` 取用。
+- 质量门禁：`design_kit action=lint`（配色数/字号层级/图片 alt/内联样式）；PDF 几何/分页分别由
+  `ppt_layout_check` / `pdf_visual_check` 覆盖。
+
+

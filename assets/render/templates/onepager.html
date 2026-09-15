@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>{{TITLE}}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+</style>
+</head>
+<body>
+<!-- 一页纸（单页速览）：标题 + 指标 + 双栏 + 表格 -->
+<section class="wt-page">
+  <h1 style="font-size:24pt;margin-bottom:2mm">{{TITLE}}</h1>
+  <p class="wt-cap">{{SUBTITLE}} · {{DATE}}</p>
+
+  <div class="wt-metrics">
+    <div class="wt-metric"><b>{{M1}}</b><span>{{M1_LABEL}}</span></div>
+    <div class="wt-metric"><b>{{M2}}</b><span>{{M2_LABEL}}</span></div>
+    <div class="wt-metric"><b>{{M3}}</b><span>{{M3_LABEL}}</span></div>
+  </div>
+
+  <div class="wt-two">
+    <div>
+      <h3>{{LEFT_TITLE}}</h3>
+      <p>{{LEFT_BODY}}</p>
+      <ul>
+        <li>{{L1}}</li>
+        <li>{{L2}}</li>
+        <li>{{L3}}</li>
+      </ul>
+    </div>
+    <div>
+      <h3>{{RIGHT_TITLE}}</h3>
+      <p>{{RIGHT_BODY}}</p>
+      <div class="wt-note">{{RIGHT_NOTE}}</div>
+    </div>
+  </div>
+
+  <h3>{{TABLE_TITLE}}</h3>
+  <table class="wt-table">
+    <thead><tr><th>项</th><th>说明</th><th class="num">数值</th></tr></thead>
+    <tbody>
+      <tr><td>{{A}}</td><td>{{AD}}</td><td class="num">{{AN}}</td></tr>
+      <tr><td>{{B}}</td><td>{{BD}}</td><td class="num">{{BN}}</td></tr>
+    </tbody>
+  </table>
+</section>
+</body>
+</html>

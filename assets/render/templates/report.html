@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>{{TITLE}}</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+</style>
+</head>
+<body>
+<!-- 封面 -->
+<section class="wt-page wt-cover">
+  <h1>{{TITLE}}</h1>
+  <div class="wt-en">{{SUBTITLE}}</div>
+  <div class="wt-rule"></div>
+  <div class="wt-sub">{{TAGLINE}}</div>
+  <div class="wt-foot">{{FOOTER}}</div>
+</section>
+
+<!-- 正文章节（复制此节为多章） -->
+<section class="wt-page">
+  <h2 class="wt-h">一、{{SECTION_TITLE}}</h2>
+  <p>{{LEAD_PARAGRAPH}}</p>
+
+  <div class="wt-metrics">
+    <div class="wt-metric"><b>{{M1}}</b><span>{{M1_LABEL}}</span></div>
+    <div class="wt-metric"><b>{{M2}}</b><span>{{M2_LABEL}}</span></div>
+    <div class="wt-metric"><b>{{M3}}</b><span>{{M3_LABEL}}</span></div>
+    <div class="wt-metric"><b>{{M4}}</b><span>{{M4_LABEL}}</span></div>
+  </div>
+
+  <div class="wt-cards cols-3">
+    <div class="wt-card"><b>{{C1_TITLE}}</b>{{C1_BODY}}</div>
+    <div class="wt-card"><b>{{C2_TITLE}}</b>{{C2_BODY}}</div>
+    <div class="wt-card"><b>{{C3_TITLE}}</b>{{C3_BODY}}</div>
+  </div>
+
+  <h3>{{SUBHEAD}}</h3>
+  <table class="wt-table">
+    <thead><tr><th>项目</th><th>说明</th><th class="num">数值</th></tr></thead>
+    <tbody>
+      <tr><td>{{R1K}}</td><td>{{R1V}}</td><td class="num">{{R1N}}</td></tr>
+      <tr><td>{{R2K}}</td><td>{{R2V}}</td><td class="num">{{R2N}}</td></tr>
+      <tr><td>{{R3K}}</td><td>{{R3V}}</td><td class="num">{{R3N}}</td></tr>
+    </tbody>
+  </table>
+
+  <ul class="wt-timeline">
+    <li><b>{{T1}}</b><span class="wt-time">{{T1_TIME}}</span><br>{{T1_BODY}}</li>
+    <li><b>{{T2}}</b><span class="wt-time">{{T2_TIME}}</span><br>{{T2_BODY}}</li>
+  </ul>
+
+  <div class="wt-note">{{NOTE}}</div>
+  <div class="wt-footer"><span>{{FOOTER}}</span><span>{{DATE}}</span></div>
+</section>
+</body>
+</html>
