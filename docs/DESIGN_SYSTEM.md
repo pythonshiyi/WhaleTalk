@@ -101,3 +101,27 @@
 - **已登记例外（硬编码色值，勿再复制）**：① `exporters.js` 导出独立 HTML 模板——运行时无 `:root`，须内置色值；② `SettingsPage.jsx` 主题预览色块与 `app.css` 的 `.px-theme-dot`——预览需展示各主题原始底色，非当前主题令牌。新增例外请在此登记。
 - **已登记例外（尺寸）**：① 超大字（`.welcome-logo 64` / `.app-boot-whale 56` / `.empty-whale 52` / `.wmode-icon 36`）为图标/emoji 视觉尺寸，非文字排版层级，不纳入 `--fs-*`；② 少量 6/7/9/10/14/18px 间距为历史微调，新代码请用 `--sp-*` 8px 网格，勿再新增裸值。
 - 全局改 `transition` 只列具体属性，勿用 `all`。
+
+## 8. 图标系统（`webui/src/components/icons.jsx`）
+
+- **界面 chrome 一律用 SVG 图标，不用 emoji**（emoji 随系统变形、彩色、无法统一尺寸/颜色）。
+  仅**用户内容**（消息正文、AI 产出）可含 emoji。
+- 用法：`<Icon name="folder" size={16} />`；`stroke="currentColor"`，颜色随语义令牌/父级文字色。
+  统一 `viewBox 24 / stroke-width 1.8 / round`，与 Sidebar、顶栏同源。
+- 尺寸档：页签 15、分组/行内 14、按钮 13–14、状态点 7–11。新增图标在 `icons.jsx` 的 `PATHS` 里加一条。
+- 需要填充态（如收藏星）传 `fill="currentColor"`。
+
+## 9. 第四栏 · 控制台设计语言（`AuxPanel.jsx` + `app.css` 末尾「控制台 2.0」区段）
+
+> 该区段位于 `app.css` 末尾，**覆盖**上方较旧的 aux/px/fx/act 规则（历史规则暂留，新增改动应落在 2.0 区段）。
+
+- **页签**：下划线式（`.aux-tabbtn`）——图标+文字居中，active 用 `--brand` 2px 下划线；
+  徽标绝对定位于右上角（`.aux-tab-badge`，流式中用脉冲点）。
+- **字号**：面板正文 13(`--fs-sm`)/次级 12(`--fs-xs`)/弱 11(`--fs-2xs`)；**不再使用 9px**。
+- **状态带**：`.px-stats` 为 4 等分网格 + 竖分隔线，值 mono 14px 品牌色、标签 11px。
+- **分组**：`.px-group` 卡片 + `.px-group-title`（图标+标题+右侧状态）；字段 `.px-field` 统一「上标签下控件」；布尔项 `.px-tgl-row` 为「左标签右开关」的行式，二者是有意区分。
+- **活动**：`.act-steps` 时间线（左侧连线 + 状态节点），详细结果折叠在 `.act-detail`；产物用 `.act-prods` 网格卡片。
+- **文件**：`.fx-row` 行高 30、整行 hover、类型图标、右侧 mono meta、hover 揭示操作；分组头 `.fx-group-title` 吸顶。
+- **进程**：`.px-term-head`（图标+选择+状态）+ `.px-term-ops`（跟随/复制/清屏/重启/停止图标按钮）+ 等宽终端 `.px-term`。
+- **保存条**：`.px-savebar` 贴底 sticky。
+
