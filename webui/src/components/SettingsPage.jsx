@@ -36,6 +36,7 @@ const PRESETS = [
 // 只填 base_url + 推荐 model（api_key 由用户自填）。点选即切网关。
 const PROVIDER_PRESETS = [
   { id: "deepseek", name: "🧬 DeepSeek", base: "https://api.deepseek.com", model: "deepseek-flash", desc: "官方统一模型 V4.1 Flash · 深度优化" },
+  { id: "opencode-go", name: "🦙 OpenCode Go", base: "https://opencode.ai/zen/go/v1", model: "deepseek-flash", desc: "OpenAI 兼容 · 填 OpenCode Go Key（用 /chat/completions 模型）" },
   { id: "openai", name: "🟢 OpenAI", base: "https://api.openai.com/v1", model: "gpt-4o", desc: "填自己的 sk-… Key" },
   { id: "ollama", name: "🦙 Ollama 本地", base: "http://localhost:11434/v1", model: "qwen2.5", desc: "本地免费离线 · 无需 Key" },
   { id: "kimi", name: "🔴 Kimi(月之暗面)", base: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k", desc: "填 Kimi Key" },
@@ -880,6 +881,9 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
   // 文本输入本地草稿：编辑不落盘，失焦/回车才保存（避免打字过程写半截模型名）
   const modelText = modelDraft ?? cfg?.model ?? "";
   const baseUrlText = baseUrlDraft ?? cfg?.base_url ?? "";
+  // 第三方网关判定：非 DeepSeek 官方端点时，官方专属能力（thinking/
+  // reasoning_effort//beta/FIM/strict）自动降级，界面给出说明。
+  const isCustomGateway = !/^(https?:)\/\/api\.deepseek\.com(\/|$)/i.test(String(baseUrlText).trim());
   const commitModel = (v) => {
     const clean = String(v).trim();
     if (clean) {
@@ -1110,9 +1114,16 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                 <Row label="API Key" desc={cfg.has_key ? `✅ 已配置 ${cfg.key_hint || ""}（加密存储于 config.json）· 输入新 Key 可覆盖` : "⚠️ 未配置，粘贴后回车或失焦保存"}>
                   <input className="set-select set-combo" type="password" placeholder="sk-…" value={apiKeyDraft ?? ""} onChange={(e) => setApiKeyDraft(e.target.value)} onBlur={(e) => commitApiKey(e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
                 </Row>
-                <Row label="🌐 API 网关地址" desc="支持任意 OpenAI 兼容网关（/beta、中转站）">
+                <Row label="🌐 API 网关地址" desc="支持任意 OpenAI 兼容网关（OpenCode Go / OpenAI / Kimi / 中转站…）">
                   <input className="set-select set-combo" value={baseUrlText} placeholder="https://api.deepseek.com" onChange={(e) => setBaseUrlDraft(e.target.value)} onBlur={(e) => commitBaseUrl(e.target.value)} />
                 </Row>
+                {isCustomGateway && (
+                  <div className="set-compat-note">
+                    🌐 第三方网关模式：已自动关闭官方专属能力（thinking 思考档改用采样参数、
+                    不追加 /beta、关闭 strict 工具模式、FIM 代码补全不可用）。接口需兼容
+                    OpenAI <code>/chat/completions</code>（含流式与工具调用）。
+                  </div>
+                )}
                 <Row label="模型" desc={activeModelMeta ? `${activeModelMeta.label} · 上下文 ${(activeModelMeta.max_context_tokens / 1000000).toFixed(1)}M · 输出 ${(activeModelMeta.max_output_tokens / 1024).toFixed(0)}K` : "可输入任意兼容模型"}>
                   {customModel || !modelOptions.includes(cfg.model) ? (
                     <div style={{ display: "flex", gap: 6, width: "100%", maxWidth: 420 }}>

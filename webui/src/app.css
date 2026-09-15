@@ -1062,6 +1062,20 @@ button {
   background: var(--danger-soft); border: 1px solid rgba(var(--danger-rgb), .35);
   color: var(--danger); font-size: var(--fs-sm);
 }
+/* 第三方网关兼容说明 */
+.set-compat-note {
+  margin: 6px 6px 2px; padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+  border: 1px dashed rgba(var(--warn-rgb), .35);
+  color: var(--text-2);
+  font-size: var(--fs-xs); line-height: 1.6;
+}
+.set-compat-note code {
+  font-family: var(--font-mono);
+  background: var(--code-inline-bg); border: 1px solid var(--code-inline-border);
+  border-radius: var(--r-sm); padding: 0 4px;
+}
 
 /* 插件信息辅助 */
 .plugin-kind, .plugin-ver { font-size: var(--fs-3xs); color: var(--text-3); }

@@ -14,6 +14,16 @@ DeepSeek 已把全部模型升级为**单一原生多模态模型**，本产品�
 - **计费**：新价自 2026-09-10 12:00 生效——高峰（缓存命中/未命中/输出）**0.04 / 2.0 / 8.0** 元每百万 tokens，空闲减半。`stats.price_for(model, day)` 按「用量发生日」选价（分界 `PRICE_ERA_CURRENT = "2026-09-10"`），历史记录不被追溯改价；未收录的模型名回落到 `DEFAULT_PRICE`（即当前价），与官方「旧名按 V4.1 Flash 单价计费」一致。
 - **能力归一**：`is_vision_model()` 先经 `resolve_model` 再看 `MODELS` 元数据——统一模型恒为支持视觉；未知/自定义模型沿用名称启发式（含 `vision` 视为支持）。
 
+### 第三方 / OpenCode Go 网关兼容（v3.11.x）
+
+本产品说的是 **OpenAI `/chat/completions`** 协议，可指向任意兼容网关（设置页预设：DeepSeek / **OpenCode Go**（`https://opencode.ai/zen/go/v1`）/ OpenAI / Ollama / Kimi / 智谱 / 通义）。DeepSeek **官方专属能力仅在官方端点下发**，第三方网关自动降级（`deepseek_client.is_official_endpoint()` 判定，`DeepSeekClient.is_official` 记录）：
+
+- `thinking`（`extra_body`）、`reasoning_effort`、续写 `prefix`、strict 工具 schema —— 非官方端点**一律不下发**，改走通用采样参数（temperature/top_p）；`fim_complete`（`/beta`）与 `check_balance`（`/user/balance`）在非官方端点明确报错，不发起必然 404 的请求。
+- `api_server._client_from_cfg` 也只在官方端点追加 `/beta`（beta_api / strict_tools），避免第三方网关 404。
+- 视觉：`deepseek-flash` 名字被识别为支持图像；其它模型名带图时回退 `VISION_MODEL`（同端点 `deepseek-flash`）。
+- 计费：`stats.py` 仍按 DeepSeek 官方价目估算，订阅制网关的费用数字仅供参考。
+- 回归：`tests/test_gateway_compat.py`。
+
 - 品牌：鲸语 WhaleTalk（独立产品，与 DeepSeek 官方无关联）。对外展示一律使用品牌名，技术描述可写"基于 DeepSeek API"。
 - **版本单一源**：`config_defaults.VERSION`（当前 3.11.0）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
 - 入口形态：**纯 Web + 托盘常驻**。浏览器是唯一界面；无 pywebview 原生窗口（desktop.py 已废弃）。

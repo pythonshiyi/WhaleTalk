@@ -229,6 +229,23 @@ def _tool_executor_for(name):
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 
+
+def is_official_endpoint(base_url):
+    """是否为 DeepSeek 官方端点。
+
+    官方专属能力/参数（`thinking` extra_body、`reasoning_effort`、`/beta`
+    端点、FIM `prefix`、`/user/balance`）**仅对官方端点下发**；第三方
+    OpenAI 兼容网关（OpenAI / OpenCode Go / Kimi / 智谱 / Ollama …）不支持
+    这些字段，硬发可能被 400 拒绝。非官方网关一律降级为通用采样参数。
+    """
+    b = str(base_url or "").strip().lower()
+    b = b.rstrip("/")
+    if b.endswith("/beta"):
+        b = b[: -len("/beta")]
+    return b in ("https://api.deepseek.com", "http://api.deepseek.com",
+                 "https://api.deepseek.com/v1", "http://api.deepseek.com/v1")
+
+
 # ── 统一模型（v3.10.0）──────────────────────────────────────────────
 # 2026-09-10 DeepSeek 发布 V4.1 Flash：全新 Causal-Encoder-Decoder 非对称 MoE
 # 结构（552B 总参数 / 输入激活 8B / 输出激活 16B），具备**原生多模态视觉理解**，
@@ -3745,6 +3762,8 @@ compact_tools_list = normalize_tools_list
 
 def check_balance(api_key, base_url=DEFAULT_BASE_URL, timeout=10.0):
     # balance 接口只在官方主端点，避免 base_url 带 /beta 等路径时拼接错误
+    if not is_official_endpoint(base_url):
+        return {"error": "余额查询仅支持 DeepSeek 官方端点（第三方网关无 /user/balance 接口）"}
     try:
         url = str(httpx.URL(str(base_url)).join("/user/balance"))
     except Exception:
@@ -3916,6 +3935,9 @@ class DeepSeekClient:
         self.base_url = base_url
         self.model = model
         self.timeout = timeout
+        # 官方端点标记：决定是否下发 DeepSeek 专属参数（thinking / reasoning_effort
+        # / prefix / strict 等）。第三方 OpenAI 兼容网关一律走通用路径。
+        self.is_official = is_official_endpoint(base_url)
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -4021,6 +4043,10 @@ class DeepSeekClient:
     ):
         cfg = SCENARIOS.get(scenario, SCENARIOS["通用"])
         thinking_key = thinking if thinking in THINKING_MODES else "high"
+        # strict 工具 schema（strict:true）是 DeepSeek 官方 Beta 特性；第三方
+        # OpenAI 兼容网关多数不接受，非官方端点一律关闭，避免 400。
+        if strict_tools and not self.is_official:
+            strict_tools = False
 
         messages[:] = self._sanitize_messages(messages)
         # 图片内联：仅替换受影响的 user 消息副本；原始消息对象（content 文本 +
@@ -4071,9 +4097,6 @@ class DeepSeekClient:
             work = work + [image_hint_msg]
         trailing = str(trailing_text or "")
 
-        extra_body = {
-            "thinking": {"type": "enabled" if thinking_key != "none" else "disabled"}
-        }
         kwargs = {
             "model": eff_model,
             "messages": work,
@@ -4081,8 +4104,13 @@ class DeepSeekClient:
             "stream": True,
             # 流式必须显式请求 usage（否则部分端点不返回末尾 usage chunk）
             "stream_options": {"include_usage": True},
-            "extra_body": extra_body,
         }
+        # DeepSeek 官方专属：thinking 开关（extra_body）。第三方 OpenAI 兼容网关
+        # 不认该字段，硬发可能 400 —— 仅官方端点下发。
+        if self.is_official:
+            kwargs["extra_body"] = {
+                "thinking": {"type": "enabled" if thinking_key != "none" else "disabled"}
+            }
         if json_output:
             kwargs["response_format"] = {"type": "json_object"}
         if stop:
@@ -4095,11 +4123,13 @@ class DeepSeekClient:
             kwargs["logprobs"] = True
         if tool_choice is not None:
             kwargs["tool_choice"] = tool_choice
-        if continue_prefix and work and work[-1].get("role") == "assistant":
+        # 续写前缀（prefix 字段）为 DeepSeek 官方 Beta 专属：仅官方端点下发。
+        if continue_prefix and work and work[-1].get("role") == "assistant" and self.is_official:
             last = dict(work[-1])
             last["prefix"] = True
             work[-1] = last
-        if thinking_key == "none":
+        if thinking_key == "none" or not self.is_official:
+            # 无思考档，或第三方网关（reasoning_effort 为官方专属）→ 通用采样参数
             kwargs["temperature"] = cfg["temperature"] if temperature is None else temperature
             kwargs["top_p"] = cfg["top_p"] if top_p is None else top_p
         else:
@@ -4842,7 +4872,13 @@ class DeepSeekClient:
         """FIM 补全（Beta）：提供前缀与可选后缀，模型补全中间内容。
 
         需要 Beta 端点（https://api.deepseek.com/beta），最大补全长度 4K。
+        仅 DeepSeek 官方端点支持；第三方网关无 `/beta` 端点，明确报错而非 404。
         """
+        if not self.is_official:
+            raise RuntimeError(
+                "FIM 代码补全仅支持 DeepSeek 官方端点（当前为自定义/第三方网关）——"
+                "请改用对话续写（「继续」按钮）。"
+            )
         base = self.base_url.rstrip("/")
         if not base.endswith("/beta"):
             base += "/beta"

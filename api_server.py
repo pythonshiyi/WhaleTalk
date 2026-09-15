@@ -7686,10 +7686,13 @@ class _Handler(BaseHTTPRequestHandler):
             raise RuntimeError("未配置 DeepSeek API Key（config.json 的 api_key）")
         model = str(body.get("model") or cfg.get("model") or dc.DEFAULT_MODEL)
         base_url = str(cfg.get("base_url") or dc.DEFAULT_BASE_URL)
-        if cfg.get("beta_api") and not base_url.rstrip("/").endswith("/beta"):
-            base_url = base_url.rstrip("/") + "/beta"
-        if cfg.get("strict_tools") and not base_url.rstrip("/").endswith("/beta"):
-            base_url = base_url.rstrip("/") + "/beta"
+        # `/beta` 端点（beta_api / strict_tools）是 DeepSeek 官方专属；第三方
+        # OpenAI 兼容网关没有该路径，拼接会导致 404 —— 仅在官方端点启用。
+        if dc.is_official_endpoint(base_url):
+            if cfg.get("beta_api") and not base_url.rstrip("/").endswith("/beta"):
+                base_url = base_url.rstrip("/") + "/beta"
+            if cfg.get("strict_tools") and not base_url.rstrip("/").endswith("/beta"):
+                base_url = base_url.rstrip("/") + "/beta"
         timeout = float(cfg.get("timeout") or 120.0)
         client = dc.DeepSeekClient(key, base_url=base_url, model=model, timeout=timeout)
         # 注册为会话级客户端：视觉/子代理/语音/团队等工具经 get_active_client 直接复用，
