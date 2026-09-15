@@ -395,6 +395,7 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
         else if (ev.type === "tool") handlers.onTool?.(ev);
         else if (ev.type === "tool_duration") handlers.onToolDuration?.(ev);
         else if (ev.type === "usage") handlers.onUsage?.(ev);
+        else if (ev.type === "metrics") handlers.onMetrics?.(ev);
         else if (ev.type === "compressed") handlers.onCompressed?.(ev);
         else if (ev.type === "ask_request") handlers.onAskRequest?.(ev);
         else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);

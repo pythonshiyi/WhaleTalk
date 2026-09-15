@@ -1656,6 +1656,17 @@ button {
   background: var(--brand); box-shadow: 0 0 5px var(--brand);
 }
 .msg-time { font-size: var(--fs-3xs); color: var(--text-3); font-family: var(--font-mono); }
+/* 每条回复的用量/速率小条（输入/输出 tokens · 缓存 · tok/s · 首字 · 耗时） */
+.msg-metrics {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 7px; font-size: var(--fs-2xs); color: var(--text-3);
+  font-family: var(--font-mono);
+}
+.mm-item { white-space: nowrap; }
+.mm-cache { color: var(--ok); }
+.mm-tps { color: var(--brand-strong); font-weight: 600; }
+/* 状态栏生成中实时速率 */
+.st-tps { color: var(--brand-strong); margin-left: 8px; font-family: var(--font-mono); }
 .msg-flag-emoji { font-size: var(--fs-2xs); }
 .msg-flag { margin-right: 6px; font-size: var(--fs-2xs); }
 .msg-ops { display: flex; gap: 4px; margin-top: 6px; opacity: 0; transition: opacity .15s var(--ease); flex-wrap: wrap; align-items: center; }

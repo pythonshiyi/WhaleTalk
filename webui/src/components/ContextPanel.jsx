@@ -70,11 +70,26 @@ export default function ContextPanel({ data, onClose }) {
         })()}
         {tab === "用量" && (() => {
           const usage = (data || {}).usage || {};
+          const s = (data || {}).session || null;
+          const su = (s && s.usage) || {};
+          const sessionCachePct = su.prompt > 0 ? Math.round(((su.cache_hit || 0) / su.prompt) * 100) : 0;
           const hitRate = Math.min(100, Math.max(0, parseFloat(String(usage.cached || "").replace("%", "")) || 0));
           return (
             <div className="usage">
-              <div className="usage-row"><span>本月输入 tokens</span><b>{(usage.prompt || 0).toLocaleString()}</b></div>
-              <div className="usage-row"><span>本月输出 tokens</span><b>{(usage.completion || 0).toLocaleString()}</b></div>
+              {s && s.turns > 0 && (
+                <>
+                  <div className="ctx-group-title">本会话（{s.turns} 轮）</div>
+                  <div className="usage-row"><span>输入 tokens</span><b>{(su.prompt || 0).toLocaleString()}</b></div>
+                  <div className="usage-row"><span>输出 tokens</span><b>{(su.completion || 0).toLocaleString()}</b></div>
+                  <div className="usage-row"><span>缓存命中</span><b className="usage-ok">{su.cache_hit ? `${sessionCachePct}%` : "—"}</b></div>
+                  <div className="usage-row"><span>平均输出速率</span><b className={s.tps > 0 ? "usage-ok" : ""}>{s.tps > 0 ? `${s.tps} tok/s` : "—"}</b></div>
+                  <div className="usage-row"><span>首字延迟</span><b>{s.ttft != null ? `${(s.ttft / 1000).toFixed(1)}s` : "—"}</b></div>
+                  <div className="usage-row"><span>累计耗时</span><b>{(s.total_ms / 1000).toFixed(1)}s</b></div>
+                </>
+              )}
+              <div className="ctx-group-title">本月累计</div>
+              <div className="usage-row"><span>输入 tokens</span><b>{(usage.prompt || 0).toLocaleString()}</b></div>
+              <div className="usage-row"><span>输出 tokens</span><b>{(usage.completion || 0).toLocaleString()}</b></div>
               <div className="usage-row"><span>前缀缓存命中率</span><b className="usage-ok">{usage.cached || "—"}</b></div>
               <div className="usage-row"><span>本月成本</span><b>¥{Number(usage.cost || 0).toFixed(2)}</b></div>
               <div className="usage-bar">

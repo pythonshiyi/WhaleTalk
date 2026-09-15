@@ -78,6 +78,18 @@ function TaskProgress({ tools, streaming }) {
   );
 }
 
+// 统计数字格式化：tokens 用 k 缩写；毫秒按量级转 s/ms。
+function fmtTokens(n) {
+  const v = Number(n) || 0;
+  if (v >= 10000) return `${Math.round(v / 1000)}k`;
+  if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
+  return String(v);
+}
+function fmtMs(ms) {
+  const v = Number(ms) || 0;
+  return v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`;
+}
+
 const Whale = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 12c1.5-4 4-6 7-6 3.5 0 5.5 2 9 2 1.6 0 2.8-.6 4-1.5-1 3-3 4.5-5 4.8.6 1.4.9 2.9.9 4.5 0 .8-.1 1.6-.3 2.3-1-.4-1.8-1-2.2-1.8-.9 1-2.4 1.7-4.2 1.7s-3.3-.7-4.2-1.7c-.4.8-1.2 1.4-2.2 1.8A11 11 0 015 15c0-1.6.3-3.1.9-4.5C4.7 10.2 3.3 8.7 3 12z" />
@@ -219,6 +231,22 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
         )}
         {msg.text && <Markdown text={msg.text} deferCode={msg.streaming} />}
         {msg.streaming && <span className="caret" />}
+        {!msg.streaming && msg.text && (msg.usage || msg.metrics) && (() => {
+          const u = msg.usage || {};
+          const mt = msg.metrics || {};
+          const cachePct = u.prompt > 0 ? Math.round((u.cache_hit || 0) / u.prompt * 100) : 0;
+          return (
+            <div className="msg-metrics" title="本轮用量与速率：输入/输出 tokens · 输出速率 · 首字延迟 · 总耗时">
+              {(u.prompt || u.completion) ? (
+                <span className="mm-item">↑{fmtTokens(u.prompt)} ↓{fmtTokens(u.completion)}</span>
+              ) : null}
+              {cachePct > 0 && <span className="mm-item mm-cache">缓存 {cachePct}%</span>}
+              {mt.tps > 0 && <span className="mm-item mm-tps">⚡ {mt.tps} tok/s</span>}
+              {mt.ttft_ms != null && <span className="mm-item">首字 {fmtMs(mt.ttft_ms)}</span>}
+              {mt.total_ms > 0 && <span className="mm-item">耗时 {fmtMs(mt.total_ms)}</span>}
+            </div>
+          );
+        })()}
         {!msg.streaming && msg.text && (
           <div className="msg-ops">
             <button className="msg-op" title="复制回复" onClick={copy}>

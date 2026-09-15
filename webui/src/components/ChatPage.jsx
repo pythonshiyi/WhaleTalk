@@ -19,6 +19,36 @@ import extractProducts from "../extractProducts.js";
 
 import { silentWarn } from "../quiet.js";
 
+// 落盘用消息链：与 buildMessageChain 结构一致，但额外携带 usage/metrics（速率统计），
+// 且**仅用于保存**——绝不送入模型（避免未知字段导致 API 400）。
+function toSaveMessages(msgs) {
+  const out = [];
+  for (const m of msgs || []) {
+    if (m.role === "user") {
+      out.push({ role: "user", content: unwrapLongText(m.text || "") });
+    } else if (m.role === "assistant") {
+      const am = { role: "assistant", content: unwrapLongText(m.text || "") };
+      if (m.think) am.reasoning_content = m.think;
+      if (m.usage) am.usage = m.usage;
+      if (m.metrics) am.metrics = m.metrics;
+      if (m.tools && m.tools.length) {
+        am.tool_calls = m.tools.map((t, i) => ({
+          id: `call_${i}`,
+          type: "function",
+          function: { name: t.tool, arguments: JSON.stringify(t.args || {}) },
+        }));
+        out.push(am);
+        m.tools.forEach((t, i) => {
+          out.push({ role: "tool", tool_call_id: `call_${i}`, name: t.tool, content: String(t.result || "").slice(0, 4000) });
+        });
+      } else {
+        out.push(am);
+      }
+    }
+  }
+  return out;
+}
+
 // 网关会话 id（不透明、按会话稳定）：供 OpenCode Go/Zen 的 x-opencode-session
 // 做路由/缓存亲和；与业务会话 id 无关，仅本标签页内有效。
 function newGwSessionId() {
@@ -116,7 +146,7 @@ function useBackendChat({
   pendingRef, historyRef,
   chatMode, webSearch, quietMode,
   onFinished, stopSignalRef, onPrompt, setGenState,
-  continueRef, sessionIdRef, gwSessionRef, toast,
+  continueRef, sessionIdRef, gwSessionRef, setGenTps, toast,
 }) {
 
   const updateMsgs = (fn) => {
@@ -216,6 +246,7 @@ function useBackendChat({
         updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, streaming: false } : x)));
         setBusy(false);
         setGenState({ on: false, text: "" });
+        setGenTps(0);
         // 自动朗读收尾：本条回复完成后，整段恰好朗读一次（sentence/full 均整段读，杜绝重复）
         try {
           maybeAutoReadOnce();
@@ -309,6 +340,13 @@ function useBackendChat({
                 else patchLast((x) => ({ ...x, usage: u }));
               }
             },
+            onMetrics: (mt) => {
+              if (!alive || stopRef.current) return;
+              // 本轮累计（跨工具轮）的 TTFT/输出速率/输入输出：写到最后一条 assistant
+              if (isContinue) updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, metrics: mt } : x)));
+              else patchLast((x) => ({ ...x, metrics: mt }));
+              setGenTps(mt?.tps || 0);
+            },
             onCompressed: (ev) => {
               if (!alive) return;
               if (!isContinue) {
@@ -340,6 +378,7 @@ function useBackendChat({
               updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, text: (x.text || "") + "\n\n⚠️ 后端错误：" + e, streaming: false } : x)));
               setBusy(false);
               setGenState({ on: false, text: "" });
+              setGenTps(0);
               try {
                 onFinished?.({ userText, msg: currentMsg(), ok: false, isContinue, error: String(e) });
               } catch (err2) { silentWarn(err2, "ChatPage"); }
@@ -354,6 +393,7 @@ function useBackendChat({
         if (!alive) return;
         setBusy(false);
         setGenState({ on: false, text: "" });
+        setGenTps(0);
         try {
           onFinished?.({
             userText: pendingRef.current.text,
@@ -492,6 +532,9 @@ function useDataSources() {
                 tools,
                 text: m.content,
                 streaming: false,
+                // 历史会话回显：单条用量/速率
+                usage: m.usage,
+                metrics: m.metrics,
               };
             })
             .filter(Boolean);
@@ -538,6 +581,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const { flash } = React.useContext(FlashContext);
   const { toast } = React.useContext(ToastContext);
   const [genState, setGenState] = React.useState({ on: false, text: "" });
+  // 生成中的实时输出速率（tok/s，来自后端 metrics 事件），结束/停止时清零
+  const [genTps, setGenTps] = React.useState(0);
   const [activeId, setActiveId] = React.useState(null);
   // 最新会话 id 转发给 useBackendChat（避免 effect 闭包过期）：已有会话生成完成后由后端自动落盘
   const activeIdRef = React.useRef(null);
@@ -622,6 +667,34 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       }
     }
     return list;
+  }, [msgs]);
+
+  // ── 本会话统计：从消息的 usage/metrics 汇总（输入/输出/缓存 + 平均输出速率/TTFT）──
+  const sessionStats = React.useMemo(() => {
+    const usage = { prompt: 0, completion: 0, cache_hit: 0, cache_miss: 0 };
+    let gen_ms = 0;
+    let total_ms = 0;
+    let ttft = null;
+    let turns = 0;
+    for (const m of msgs) {
+      if (!m || m.role !== "assistant") continue;
+      turns += 1;
+      const u = m.usage;
+      if (u) {
+        usage.prompt += u.prompt || 0;
+        usage.completion += u.completion || 0;
+        usage.cache_hit += u.cache_hit || 0;
+        usage.cache_miss += u.cache_miss || 0;
+      }
+      const mt = m.metrics;
+      if (mt) {
+        gen_ms += mt.gen_ms || 0;
+        total_ms += mt.total_ms || 0;
+        if (ttft == null && mt.ttft_ms != null) ttft = mt.ttft_ms;
+      }
+    }
+    const tps = gen_ms > 50 ? Math.round((usage.completion / (gen_ms / 1000)) * 10) / 10 : 0;
+    return { usage, gen_ms, total_ms, ttft, tps, turns };
   }, [msgs]);
 
   const doBatch = () => {
@@ -726,6 +799,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     continueRef,
     sessionIdRef: activeIdRef,
     gwSessionRef,
+    setGenTps,
     toast,
   });
 
@@ -745,7 +819,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         // 续写：用 msgsRef 实时镜像（含续写流式内容）重建完整消息链保存；
         // 续写不产生新 user 消息、msg 为空，直接以镜像消息链为准
         try {
-          const updated = buildMessageChain(
+          const updated = toSaveMessages(
             msgsRef.current.length ? msgsRef.current : msgs
           );
           await api.saveSession({
@@ -788,6 +862,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
               content: msg.text,
               reasoning_content: msg.think || "",
               ...(calls.length ? { tool_calls: calls } : {}),
+              // 用量/速率随消息落盘（历史会话回显；后端据此汇总会话级统计）
+              ...(msg.usage ? { usage: msg.usage } : {}),
+              ...(msg.metrics ? { metrics: msg.metrics } : {}),
             },
             ...toolMsgs,
           ],
@@ -883,6 +960,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     });
     setBusy(false);
     setGenStateThrottled({ on: false, text: "" });
+    setGenTps(0);
     toast("⏹ 已停止生成");
   };
 
@@ -1494,7 +1572,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
 
         {ctxOpen && <div className="drawer-scrim scrim-ctx" onClick={() => setCtxOpen(false)} />}
         {ctxOpen && (
-          <ContextPanel data={ctx} onClose={() => setCtxOpen(false)} />
+          <ContextPanel data={{ ...(ctx || {}), session: sessionStats }} onClose={() => setCtxOpen(false)} />
         )}
 
         {auxOpen && <div className="drawer-scrim scrim-aux" onClick={() => setAuxOpen(false)} />}
@@ -1505,7 +1583,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         )}
       </div>
 
-      <StatusBar mode={mode} onSwitchMode={switchMode} generating={genState.on} generatingText={genState.text} />
+      <StatusBar mode={mode} onSwitchMode={switchMode} generating={genState.on} generatingText={genState.text} tps={genTps} />
 
       <ConfirmGate
         req={promptReq}

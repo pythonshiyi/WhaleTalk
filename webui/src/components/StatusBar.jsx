@@ -5,7 +5,7 @@ import { FlashContext } from "./FlashToast.jsx";
 import { silentWarn } from "../quiet.js";
 // ── 底部状态栏（对齐原程序：模式/目录/累计/预算/高峰 | 模型/角色/场景/思考）──
 // 生成中状态：🤔 思考中… / ⚙ 正在执行「工具」（第 N 个）… / ⏳ 等待模型响应…
-export default function StatusBar({ mode, onSwitchMode, generating, generatingText }) {
+export default function StatusBar({ mode, onSwitchMode, generating, generatingText, tps = 0 }) {
   const { flashMsg } = React.useContext(FlashContext);
   const [status, setStatus] = React.useState(null);
 
@@ -35,7 +35,10 @@ export default function StatusBar({ mode, onSwitchMode, generating, generatingTe
   const dirShort = dir.length > 30 ? "…" + dir.slice(-29) : dir;
 
   const display = flashMsg?.text || (generatingText ? (
-    <span className="status-text st-gen">{generatingText}</span>
+    <span className="status-text st-gen">
+      {generatingText}
+      {generating && tps > 0 ? <span className="st-tps">⚡ {tps} tok/s</span> : null}
+    </span>
   ) : (
     <span className="status-text">
       {status?.privacy ? "🔒 " : ""}

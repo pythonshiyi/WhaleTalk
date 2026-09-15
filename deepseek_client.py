@@ -4086,6 +4086,7 @@ class DeepSeekClient:
         strict_tools=False,
         smart_tools=False,
         preset_tools=None,
+        on_metrics=None,
     ):
         cfg = SCENARIOS.get(scenario, SCENARIOS["通用"])
         thinking_key = thinking if thinking in THINKING_MODES else "high"
@@ -4261,6 +4262,13 @@ class DeepSeekClient:
                 t for t in all_tools if t["function"]["name"] in SELF_EVOLUTION_TOOLS
             ]
 
+        # 本轮（用户可见的一次回复）计时与速率聚合：跨工具轮次累加。
+        turn_t0 = time.perf_counter()
+        agg = {
+            "rounds": 0, "prompt": 0, "completion": 0,
+            "cache_hit": 0, "cache_miss": 0,
+            "gen_ms": 0.0, "ttft_ms": None, "total_ms": 0.0, "tps": 0.0,
+        }
         empty_retries = 0
         plan_rejections = 0
         json_retried = False  # JSON 输出自校验重试只允许一次
@@ -4331,9 +4339,11 @@ class DeepSeekClient:
                 stream_usage = None
                 try:
                     for stream_attempt in range(2):
+                        round_t0 = time.perf_counter()
                         response = self._create_with_retry(kw, attempts=2, stop_event=stop_event)
                         try:
-                            reasoning, content, tool_calls, finish_reason, stream_usage = self._consume_stream(
+                            (reasoning, content, tool_calls, finish_reason, stream_usage,
+                             stream_timing) = self._consume_stream(
                                 response, on_reasoning, on_content, stop_event
                             )
                             break
@@ -4350,13 +4360,38 @@ class DeepSeekClient:
                     if on_truncated:
                         on_truncated("网络中断：本轮回复不完整")
                     return False
+                round_usage = {}
                 if stream_usage is not None:
+                    round_usage = self._usage_dict(stream_usage)
                     if on_usage:
-                        on_usage(self._usage_dict(stream_usage))
+                        on_usage(round_usage)  # 单轮增量（用量统计按增量落盘，防重复计数）
                 elif getattr(response, "usage", None):
                     # 兼容旧版 openai SDK（Stream 对象自带聚合 usage）
+                    round_usage = self._usage_dict(response.usage)
                     if on_usage:
-                        on_usage(self._usage_dict(response.usage))
+                        on_usage(round_usage)
+
+                # ── 计时聚合（供前端显示 TTFT / 输出速率 / 输入输出）──
+                # 累加所有 LLM 轮次：completion 求和，gen_ms 为各轮「首字→末字」之和
+                # （剔除工具执行与首字等待），TTFT 取第一轮；total_ms 为整轮墙钟。
+                try:
+                    round_end = time.perf_counter()
+                    first_ts, last_ts = stream_timing if stream_timing else (None, None)
+                    if first_ts is not None:
+                        if agg["ttft_ms"] is None:
+                            agg["ttft_ms"] = round((first_ts - round_t0) * 1000.0, 1)
+                        if last_ts is not None:
+                            agg["gen_ms"] += (last_ts - first_ts) * 1000.0
+                    agg["rounds"] += 1
+                    for _k in ("prompt", "completion", "cache_hit", "cache_miss"):
+                        agg[_k] += int(round_usage.get(_k, 0) or 0)
+                    agg["total_ms"] = round((round_end - turn_t0) * 1000.0, 1)
+                    _gen_s = agg["gen_ms"] / 1000.0
+                    agg["tps"] = round(agg["completion"] / _gen_s, 1) if _gen_s > 0.05 else 0.0
+                    if on_metrics:
+                        on_metrics(dict(agg))
+                except Exception:
+                    pass
 
                 if not tool_calls and not content.strip() and not reasoning.strip():
                     if empty_retries < MAX_EMPTY_RETRIES:
@@ -4827,6 +4862,10 @@ class DeepSeekClient:
         tool_calls = {}
         finish_reason = None
         usage = None
+        # 计时：首个增量（reasoning/content）与最后一个增量的时刻（perf_counter），
+        # 供上层计算 TTFT 与输出速率（gen = 末-首，剔除首字等待与工具时间）。
+        first_ts = None
+        last_ts = None
         try:
             for chunk in response:
                 if stop_event and stop_event.is_set():
@@ -4854,6 +4893,11 @@ class DeepSeekClient:
                     content += delta.content
                     if on_content:
                         on_content(delta.content)
+                if reasoning_part or delta.content:
+                    now = time.perf_counter()
+                    if first_ts is None:
+                        first_ts = now
+                    last_ts = now
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
                         idx = tc.index if tc.index is not None else 0
@@ -4871,7 +4915,7 @@ class DeepSeekClient:
                     response.close()
             except Exception:
                 pass
-        return reasoning, content, list(tool_calls.values()), finish_reason, usage
+        return reasoning, content, list(tool_calls.values()), finish_reason, usage, (first_ts, last_ts)
 
     @staticmethod
     def _usage_dict(usage):

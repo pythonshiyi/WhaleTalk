@@ -2288,6 +2288,39 @@ def _sanitize_error_text(s, limit=200):
     return t if len(t) <= limit else t[:limit] + "…"
 
 
+def _safe_int(v, default=0):
+    """尽力转 int（用于会话/消息的 usage 字段，脏数据不抛错）。"""
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _norm_metrics(mt):
+    """规范化单条消息的 metrics（速率统计），限制字段与类型。"""
+    ttft = mt.get("ttft_ms")
+    try:
+        ttft = float(ttft) if ttft is not None else None
+    except (TypeError, ValueError):
+        ttft = None
+    try:
+        gen_ms = float(mt.get("gen_ms") or 0)
+        total_ms = float(mt.get("total_ms") or 0)
+        tps = float(mt.get("tps") or 0)
+    except (TypeError, ValueError):
+        gen_ms = total_ms = tps = 0.0
+    return {
+        "rounds": _safe_int(mt.get("rounds")),
+        "completion": _safe_int(mt.get("completion")),
+        "prompt": _safe_int(mt.get("prompt")),
+        "cache_hit": _safe_int(mt.get("cache_hit")),
+        "ttft_ms": ttft,
+        "gen_ms": round(gen_ms, 1),
+        "total_ms": round(total_ms, 1),
+        "tps": round(tps, 1),
+    }
+
+
 def _friendly_error(e):
     """官方错误码 → 中文可操作提示；未映射的异常脱敏后回传。"""
     s = str(e)
@@ -5853,6 +5886,11 @@ class _Handler(BaseHTTPRequestHandler):
                     item["tool_calls"] = tc[:64]
                 if m.get("role") == "tool" and m.get("tool_call_id"):
                     item["tool_call_id"] = str(m["tool_call_id"])[:128]
+                # 用量/速率：历史会话回显（输入输出/速率/TTFT）
+                if isinstance(m.get("usage"), dict):
+                    item["usage"] = m["usage"]
+                if isinstance(m.get("metrics"), dict):
+                    item["metrics"] = m["metrics"]
                 msgs.append(item)
             return {
                 "id": str(d.get("id") or sid),
@@ -5860,6 +5898,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "model": str(d.get("model") or ""),
                 "messages": msgs,
                 "usage_total": d.get("usage_total") or {},
+                "metrics_total": d.get("metrics_total") or {},
                 "stars": [{"role": str(s.get("role") or ""), "content": str(s.get("content") or ""), "time": str(s.get("time") or "")} for s in (d.get("stars") or []) if isinstance(s, dict)][:200],
                 "pinned": [str(p) for p in ((d.get("pinned") or []) if isinstance(d.get("pinned"), list) else [])][:200],
                 "top": bool(d.get("top") or (isinstance(d.get("pinned"), bool) and d["pinned"])),
@@ -5985,6 +6024,13 @@ class _Handler(BaseHTTPRequestHandler):
                 item["tool_call_id"] = str(m["tool_call_id"])[:128]
             if m.get("role") == "tool" and m.get("name"):
                 item["name"] = str(m["name"])[:128]
+            # 用量与速率（可选）：per-message 持久化，供历史会话回显（输入/输出/速率/TTFT）
+            us = m.get("usage")
+            if isinstance(us, dict):
+                item["usage"] = {k: _safe_int(us.get(k)) for k in ("prompt", "completion", "cache_hit", "cache_miss")}
+            mt = m.get("metrics")
+            if isinstance(mt, dict):
+                item["metrics"] = _norm_metrics(mt)
             clean.append(item)
         sid = self._safe_sid(str(body.get("id") or ""))
         if not sid:
@@ -6014,11 +6060,32 @@ class _Handler(BaseHTTPRequestHandler):
                 saved_msgs = old_msgs + clean
             else:
                 saved_msgs = old_msgs
+        # 会话级累计（输入/输出/缓存 + 平均输出速率）：由消息的 usage/metrics 汇总，
+        # append 场景下对「旧消息 + 新消息」整体求和，保证连续对话累计正确。
+        usage_total = {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0}
+        metrics_total = {"rounds": 0, "completion": 0, "gen_ms": 0.0, "total_ms": 0.0, "tps": 0.0}
+        for _m in saved_msgs:
+            _us = _m.get("usage") if isinstance(_m.get("usage"), dict) else {}
+            for _k in usage_total:
+                usage_total[_k] += _safe_int(_us.get(_k))
+            _mt = _m.get("metrics") if isinstance(_m.get("metrics"), dict) else {}
+            metrics_total["rounds"] += _safe_int(_mt.get("rounds"))
+            metrics_total["completion"] += _safe_int(_mt.get("completion"))
+            try:
+                metrics_total["gen_ms"] += float(_mt.get("gen_ms") or 0)
+                metrics_total["total_ms"] += float(_mt.get("total_ms") or 0)
+            except (TypeError, ValueError):
+                pass
+        _gs = metrics_total["gen_ms"] / 1000.0
+        metrics_total["tps"] = round(metrics_total["completion"] / _gs, 1) if _gs > 0.05 else 0.0
+        metrics_total["gen_ms"] = round(metrics_total["gen_ms"], 1)
+        metrics_total["total_ms"] = round(metrics_total["total_ms"], 1)
         data = {
             "id": sid,
             "name": str(body.get("name") or old.get("name") or "未命名会话")[:80],
             "messages": saved_msgs,
-            "usage_total": old.get("usage_total") or {},
+            "usage_total": usage_total if (usage_total["prompt"] or usage_total["completion"]) else (old.get("usage_total") or {}),
+            "metrics_total": metrics_total if (metrics_total["completion"] or metrics_total["rounds"]) else (old.get("metrics_total") or {}),
             "stars": body.get("stars") if isinstance(body.get("stars"), list) else (old.get("stars") or []),
             "tags": body.get("tags") if isinstance(body.get("tags"), list) else (old.get("tags") or []),
             "pinned": body.get("pinned") if isinstance(body.get("pinned"), list) else (old.get("pinned") or []),
@@ -7928,6 +7995,18 @@ class _Handler(BaseHTTPRequestHandler):
             messages, comp_info = _compress_messages(messages, cfg, client)
             if comp_info:
                 send("compressed", comp_info)
+            # 本轮速率统计（TTFT/输出速率/输入输出，跨工具轮累计）：最后一次即为本轮终值，
+            # 供会话落盘与会话级「本会话」展示。
+            last_metrics = {}
+
+            def _on_metrics(m):
+                try:
+                    last_metrics.clear()
+                    last_metrics.update(m or {})
+                except Exception:
+                    pass
+                send("metrics", m)
+
             kwargs.update({
                 "on_reasoning": lambda t: send("reasoning", {"text": t}),
                 "on_content": lambda t: send("content", {"text": t}),
@@ -7935,6 +8014,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "on_tool": lambda n, a, r: (send("tool", {"name": n, "args": a, "result": r}), _tool_bookkeeping(n, a, r)),
                 "on_tool_duration": lambda n, d: send("tool_duration", {"name": n, "duration": d}),
                 "on_usage": lambda u: (send("usage", u), _record_usage(u, cfg, body)),
+                "on_metrics": _on_metrics,
                 "on_approval": _make_approval_cb(send, stop_event),
                 "on_ask": _make_ask_cb(send, stop_event),
                 "on_request_permission": _make_permission_cb(send, stop_event),

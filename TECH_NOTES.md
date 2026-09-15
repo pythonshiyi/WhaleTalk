@@ -98,7 +98,8 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 | `tool_start` | `{name, args}` | 工具开始 |
 | `tool` | `{name, args, result}` | 工具完成（同时写 tasklog/审计） |
 | `tool_duration` | `{name, duration}` | 工具耗时 |
-| `usage` | `{prompt, completion, cache_hit, cache_miss}` | 用量（同时累计统计） |
+| `usage` | `{prompt, completion, cache_hit, cache_miss}` | 单轮增量用量（同时累计统计落盘） |
+| `metrics` | `{rounds, prompt, completion, cache_hit, cache_miss, ttft_ms, gen_ms, total_ms, tps}` | **本轮累计**速率统计（跨工具轮；TTFT/输出速率/输入输出） |
 | `compressed` | `{removed_turns, mode, archived_path}` | 上下文已压缩 |
 | `error` | `{message}` | 错误 |
 | `done` | `{}` | 正常结束（此前自动落盘会话） |
@@ -155,6 +156,7 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 - 工具结果 >4 万字符自动落盘（`_persist_long_result`），上下文只留路径 + 摘要
 - `strict_tools`：工具 schema 严格模式（`_strictify_tools`）
 - 视觉自审：`vision_self_review` 开启时图片产出工具自动调模型审图，意见附回结果（统一模型原生多模态，能力恒可用）
+- **速率统计（TTFT / tok/s）**：`_consume_stream` 记录首个与末个增量（reasoning/content）的 `perf_counter`；`chat()` 维护 `agg` 跨工具轮累加，`on_metrics(agg)` 每轮下发（SSE `metrics`，**累计值**）。口径：`ttft_ms`=首轮首字−该轮请求发出；`gen_ms`=各轮「首字→末字」之和（**剔除**工具执行与首字等待）；`tps`=`completion / (gen_ms/1000)`（>50ms 才算）；`total_ms`=整轮墙钟（含工具）。`on_usage` 仍按**单轮增量**下发（用量落盘防重复计数）。
 
 **FIM 补全**：`fim_complete` 走 `/beta` 端点（按 base_url 缓存 client）。
 
@@ -193,6 +195,7 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 - 原子写：`persistence.atomic_json_write`（mkstemp 唯一临时文件 + os.replace）贯穿全部 JSON 落盘
 - 会话索引：`sessions_index.json` 持元数据 + 文件指纹（mtime_ns/size），列表接口毫秒级返回；写入路径钩子 `_index_session_locked` 同步更新
 - 会话后端兜底落盘：`_handle_chat_stream` 结束后 `_sanitize_messages` 清洗再保存（防坏状态落盘）
+- **会话用量/速率**：assistant 消息可选携带 `usage`（输入/输出/缓存）+ `metrics`（TTFT/gen/total/tps）；`_save_session` 按白名单保留二者，并对全部消息汇总 `usage_total` + `metrics_total`（append 场景整体重算，天然累计）；`_load_session_messages` 原样回传，前端每条回复底部小条 + 「上下文→用量」本会话段展示。旧会话缺字段时自动跳过（向后兼容）
 
 ## 13. 鲸语大脑（brainkit.py / brain_api.py）
 
