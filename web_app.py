@@ -160,122 +160,88 @@ def _shortcuts_exist():
         return False
 
 
-def _make_tray(stop_cb):
-    """系统托盘：打开界面 / 自启开关 / 提示音开关 / 桌面快捷方式 / 服务信息 / 退出。"""
-    import threading
+_MUTEX_HANDLE = None
+
+
+def _single_instance_held():
+    """进程级单实例互斥（Windows 命名 Mutex）。
+
+    返回 True 表示**已有另一个启动器持有**（通常是正在启动服务、尚未就绪）。
+    句柄保存在模块级，进程存活期间不释放。非 Windows / 异常一律返回 False（不阻断）。
+    """
+    global _MUTEX_HANDLE
+    if os.name != "nt":
+        return False
     try:
-        import pystray
-        from pystray import Menu, MenuItem
-        from PIL import Image, ImageDraw
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.CreateMutexW(None, False, "Local\\WhaleTalk_SingleInstance")
+        _MUTEX_HANDLE = h
+        return k.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+    except Exception:
+        return False
+
+
+def _start_tray(port, stop_cb):
+    """启动系统托盘（委托 tray.TrayController）。返回控制器或 None。"""
+    try:
+        import threading
+        import tray as tray_mod
+        import api_server
     except Exception as e:
         print(f"[托盘] 不可用：{e}（--no-tray 可跳过）")
         return None
 
-    def icon_img():
-        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.ellipse([6, 14, 58, 56], fill=(14, 165, 233, 255))
-        d.ellipse([12, 20, 52, 50], fill=(56, 189, 248, 255))
-        d.arc([24, 30, 40, 48], start=200, end=340, fill=(255, 255, 255, 230), width=3)
-        return img
-
-    def _cfg():
+    def _open_path(p):
         try:
-            import config_utils
-            return config_utils.load_config()
-        except Exception:
-            return {}
-
-    def on_open(icon, item):
-        _open_browser(API_PORT)
-
-    def on_autostart(icon, item):
-        try:
-            import api_server
-            cfg = _cfg()
-            cur = bool(cfg.get("autostart", False))
-            ok = api_server._apply_autostart(not cur)
-            if ok:
-                cfg["autostart"] = not cur
-                import config_utils
-                config_utils.save_config(cfg)
-        except Exception:
-            pass
-        try:
-            icon.update_menu()
+            if p and os.path.exists(p):
+                os.startfile(p)  # noqa: S606  # Windows 打开文件/目录
         except Exception:
             pass
 
-    def on_sound(icon, item):
+    def _cleanup():
         try:
-            cfg = _cfg()
-            cfg["completion_sound"] = not bool(cfg.get("completion_sound", True))
-            import config_utils
-            config_utils.save_config(cfg)
-        except Exception:
-            pass
-        try:
-            icon.update_menu()
+            import deepseek_client as dc
+            dc.cleanup_idle_processes()
         except Exception:
             pass
 
-    def on_mini(icon, item):
+    def _check_update():
         try:
-            cfg = _cfg()
-            cfg["silent_start"] = not bool(cfg.get("silent_start", False))
-            import config_utils
-            config_utils.save_config(cfg)
+            import webbrowser
+            import config_defaults
+            url = str(config_defaults.UPDATE_URL or "")
+            url = url.replace("api.github.com/repos/", "github.com/").replace("/releases/latest", "/releases")
+            if url:
+                webbrowser.open(url)
         except Exception:
             pass
+
+    def _about():
         try:
-            icon.update_menu()
+            import config_defaults
+            tray_mod.notify(APP_NAME, f"版本 v{config_defaults.VERSION}")
         except Exception:
             pass
 
-    def on_shortcut(icon, item):
-        ok = _create_shortcuts()
-        try:
-            icon.visible = False
-            icon.visible = True
-        except Exception:
-            pass
-        return ok
-
-    def on_quit(icon, item):
-        icon.stop()
-        try:
-            stop_cb()
-        except Exception:
-            pass
-        os._exit(0)
-
-    def autostart_text(item):
-        return "🚀 开机自启：开" if _cfg().get("autostart", False) else "🚀 开机自启：关"
-
-    def sound_text(item):
-        return "🔔 完成提示音：开" if _cfg().get("completion_sound", True) else "🔔 完成提示音：关"
-
-    def mini_text(item):
-        return "🖥 静默启动（不弹浏览器）：开" if _cfg().get("silent_start", False) else "🖥 静默启动（不弹浏览器）：关"
-
+    ctl = tray_mod.TrayController(
+        port,
+        open_ui=lambda: _open_browser(port),
+        open_workspace=lambda: _open_path(api_server.WORKSPACE_DIR),
+        open_data=lambda: _open_path(api_server.DATA_DIR),
+        open_log=lambda: _open_path(os.path.join(api_server.DATA_DIR, "logs")),
+        cleanup=_cleanup,
+        check_update=_check_update,
+        about=_about,
+        quit_cb=stop_cb,
+        apply_autostart=lambda v: api_server._apply_autostart(v),
+    )
     try:
-        menu = Menu(
-            MenuItem("🌐 打开界面", on_open, default=True),
-            Menu.SEPARATOR,
-            MenuItem(autostart_text, on_autostart),
-            MenuItem(sound_text, on_sound),
-            MenuItem(mini_text, on_mini),
-            Menu.SEPARATOR,
-            MenuItem("📌 桌面快捷方式", on_shortcut),
-            Menu.SEPARATOR,
-            MenuItem(f"服务 http://127.0.0.1:{API_PORT}", None),
-            MenuItem("✕ 退出", on_quit),
-        )
-        tray = pystray.Icon("whaletalk", icon_img(), APP_NAME, menu)
-        return tray
-    except Exception as e:
-        print(f"[托盘] 启动失败：{e}")
-        return None
+        tray_mod.set_status_provider(api_server._status)
+    except Exception:
+        pass
+    threading.Thread(target=ctl.run, daemon=True).start()
+    return ctl
 
 
 # ── WebUI 构建保障 ──────────────────────────────
@@ -684,6 +650,15 @@ def _serve_forever(port, open_browser=False, tray=True):
                 _open_browser(port)
                 print(f"服务已在运行：http://127.0.0.1:{port}（已打开界面，本进程退出）")
             return 0
+        if _single_instance_held():
+            # 另一个启动器正在起服务（尚未就绪）：等待其就绪，仅打开界面后退出，避免双起
+            for _ in range(40):
+                if _probe_existing(port):
+                    if open_browser:
+                        _open_browser(port)
+                    print(f"另一实例正在启动，已定位到服务：http://127.0.0.1:{port}")
+                    return 0
+                time.sleep(0.5)
         port, _, err = _start_api(port)
         if err:
             print(f"API 启动失败: {err}")
@@ -694,10 +669,8 @@ def _serve_forever(port, open_browser=False, tray=True):
     print("提示：左上角/设置页可关闭「自动打开浏览器」改为静默启动")
 
     stop_cb = api_server.stop_server
-    tray_icon = _make_tray(stop_cb) if tray else None
-    if tray_icon is not None:
-        import threading
-        threading.Thread(target=tray_icon.run, daemon=True).start()
+    if tray:
+        _start_tray(port, stop_cb)
 
     try:
         while True:

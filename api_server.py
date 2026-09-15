@@ -4936,6 +4936,11 @@ def _notify_completed(ok=True):
                 dc.notify_desktop("鲸语 WhaleTalk", summary, fallback_sound=sound_on)
             except Exception:
                 pass
+            try:
+                import tray as _tray  # 托盘气泡（无托盘时内部静默返回 False）
+                _tray.notify("鲸语 WhaleTalk", summary)
+            except Exception:
+                pass
         threading.Thread(target=_toast, daemon=True).start()
     except Exception:
         pass
