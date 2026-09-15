@@ -2,6 +2,19 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.11.1（未发版追加）—— 🛡 自我完整性提示说人话 + trust_kernel CLI 编码兜底
+
+- **背景**：状态栏「内核 N 项待确认」过于隐晦。它来自**信任内核**——「决定 AI 能做什么」的代码
+  （`permissions`/`security`/`crypto`/`snapshot`/`trust_kernel`）被改动且未声明；**是提醒而非错误**
+  （常见于仓库更新带来的功能变化，如本机基线记录的是旧版 `trust_kernel.py`）。
+- **UI 优化**：状态栏改为「🛡 自我完整性：N 处代码改动待确认」，**可点击**弹出说明面板——列出改动文件、
+  给出 `diff/accept/restore` 命令、一键复制确认命令；支持 Esc / 点击外部关闭。
+- **CLI 修复**：`trust_kernel.py` 在 GBK 控制台（重定向）下打印 ✅/❌ 会 `UnicodeEncodeError` 崩溃 →
+  `__main__` 处对 stdout/stderr `reconfigure(errors="replace")` 兜底。
+- **验证**：`npm run typecheck` + `build` + `test` 全绿；`trust_kernel.py accept --all` 不再崩溃，
+  `status` 归为 `ok`（changed 为空）。
+
+
 ## v3.11.1（未发版追加）—— 📋 修复聊天消息不可选中/复制
 
 - **根因**：`theme.css` 给 `body` 设了全局 `user-select: none`（界面防误选）；助手正文 `.md` 有

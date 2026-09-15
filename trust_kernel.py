@@ -1028,4 +1028,10 @@ def main(argv=None):
 
 if __name__ == "__main__":
     import sys
+    # 控制台非 UTF 编码（如 GBK 重定向）下，✅/❌ 等字符会 UnicodeEncodeError 崩溃 → replace 兜底
+    for _n in ("stdout", "stderr"):
+        try:
+            getattr(sys, _n).reconfigure(errors="replace")
+        except Exception:
+            pass
     sys.exit(main())
