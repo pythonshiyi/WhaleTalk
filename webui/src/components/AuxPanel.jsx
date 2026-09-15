@@ -209,10 +209,13 @@ function FilesTab({ onInject, active, onBadge }) {
           onDoubleClick={() => !missing && openFile(p)}>
           {meta.name}
         </span>
-        {!missing && (
-          <span className="fx-meta">
-            {meta.size_label || ""}
-            {(meta.mtime_label || meta.mtime) ? ` · ${meta.mtime_label || fmtRel(meta.mtime)}` : ""}
+        {!missing && (meta.size_label || meta.mtime_label || meta.mtime) && (
+          <span
+            className="fx-meta"
+            title={`${meta.size_label || ""}${(meta.mtime_label || meta.mtime) ? " · " + (meta.mtime_label || fmtRel(meta.mtime)) : ""}`.trim()}
+          >
+            {meta.size_label && <span className="fx-size">{meta.size_label}</span>}
+            {(meta.mtime_label || meta.mtime) && <span className="fx-time">{meta.mtime_label || fmtRel(meta.mtime)}</span>}
           </span>
         )}
         <span className="fx-acts">

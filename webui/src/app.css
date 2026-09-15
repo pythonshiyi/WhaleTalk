@@ -3253,17 +3253,34 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .fx-group-title svg { color: var(--text-3); }
 .fx-group-n { margin-left: auto; font-weight: 500; color: var(--text-3); }
-.fx-row { display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 4px; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--text-2); }
+.fx-row { position: relative; display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 4px; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--text-2); }
 .fx-row:hover { background: var(--bg-hover); }
 .fx-ico { display: inline-grid; place-items: center; color: var(--text-3); flex-shrink: 0; }
 .fx-fav { width: 20px; height: 20px; display: inline-grid; place-items: center; background: none; border: none; cursor: pointer; color: var(--text-3); opacity: .35; border-radius: var(--r-sm); transition: var(--t-colors); }
 .fx-fav:hover { opacity: 1; color: var(--warn-text); }
 .fx-fav.on { opacity: 1; color: var(--warn-text); }
 .fx-fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-1); }
-.fx-meta { font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono); flex-shrink: 0; }
-.fx-acts { margin-left: auto; display: inline-flex; gap: 1px; flex-shrink: 0; opacity: 0; transition: opacity .15s var(--ease); }
+/* 标题优先：名称占主位；空间不足时先缩/隐时间，再缩/隐大小，最后才省略名称 */
+.fx-meta { display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; overflow: hidden; font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono); }
+.fx-size { white-space: nowrap; flex-shrink: 0; }
+.fx-time { white-space: nowrap; flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 操作按钮悬浮覆盖（不再长期占据行宽，把空间让给标题） */
+.fx-acts {
+  position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; gap: 1px;
+  padding-left: 14px; border-radius: var(--r-sm);
+  background: linear-gradient(90deg, transparent, var(--bg-1) 35%);
+  opacity: 0; pointer-events: none; transition: opacity .15s var(--ease);
+}
 .fx-acts .fx-act { opacity: 1; }
-.fx-row:hover .fx-acts, .fx-row:focus-within .fx-acts { opacity: 1; }
+.fx-row:hover .fx-acts, .fx-row:focus-within .fx-acts { opacity: 1; pointer-events: auto; }
+/* 容器查询：窄优先砍时间，再砍大小 */
+.aux-panel { container-type: inline-size; container-name: auxpanel; }
+@container auxpanel (max-width: 340px) { .fx-time { display: none; } }
+@container auxpanel (max-width: 290px) { .fx-size { display: none; } }
+@media (hover: none) {
+  .fx-acts { position: static; transform: none; opacity: 1; pointer-events: auto; background: none; padding-left: 0; }
+}
 .fx-act { width: 22px; height: 22px; display: inline-grid; place-items: center; background: none; border: none; cursor: pointer; color: var(--text-3); border-radius: var(--r-sm); transition: var(--t-colors); }
 .fx-act:hover { color: var(--brand-strong); background: var(--bg-3); }
 .fx-dir { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 4px; background: none; border: none; cursor: pointer; color: var(--text-1); font-size: var(--fs-xs); padding: 0 2px; text-align: left; border-radius: var(--r-sm); }
