@@ -2,6 +2,21 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.11.2（未发版追加）—— 🧪 修复测试污染真实大脑记忆库（隔离 BRAIN_DIR）
+
+- **现象**：记忆库出现「这是一条偏好 / 这是一条事实 / 去重测试条目 / 张三负责项目A的联调 /
+  新版本结论 / 记得每周五备份数据库 / 磁盘持久化条目」等无意义条目。
+- **根因**：`tests/test_tools_memory.py` 等测试只隔离了 `dc.MEMORY_FILE`（临时 memory.json），
+  但 `write_memory` 还会经 `_brain_sync_memory` 写入 **`brainkit.BRAIN_DIR`（默认 = 仓库级 `brain/`）**
+  ——该路径**未被隔离** → 测试夹具落进了真实大脑记忆库（实测 13 条中 9 条为测试垃圾）。
+- **修复**：`tests/conftest.py` 新增 autouse 夹具 `_isolate_brain`，把 `brainkit` 的
+  `BRAIN_DIR/MEMORIES_DIR/THINKING_DIR/ARCHIVE_DIR/KEYS_DIR/MEMORY_JSONL/…` 全部 monkeypatch
+  到 `tmp_path/brain`——**任何测试都不得触碰真实 `brain/`**；夹具退出自动还原。
+- **数据清理**：已删除真实大脑中 9 条测试夹具（保留 2 条真实记忆：视觉设计经验、自我形象设计定稿）；
+  `brainkit status` 指纹完好、记忆条目 2 份。
+- **验证**：全量 `pytest` **584 passed** 后 `brain/memories/memory.jsonl` 仍为 **2 条**（无新增污染）。
+
+
 ## v3.11.1（2026-09-15）—— 🏷 正式发布：设计/作图能力批次 + 自我洞察 + 前端精修
 
 **版本号 3.11.0 → 3.11.1。** 本版把 v3.11.0 之后累计的多个「未发版追加」批次一并固化发布，
