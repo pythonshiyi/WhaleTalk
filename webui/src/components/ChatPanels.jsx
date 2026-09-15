@@ -1,4 +1,5 @@
 import React from "react";
+import { Icon } from "./icons.jsx";
 
 // ── ChatPage 的浮层面板集（P0-3 拆分）─────────────────
 // 纯 JSX 机械提取：所有状态与回调仍在 ChatPage，经 props 传入；
@@ -67,20 +68,20 @@ export function CmdPanel({
         />
         <div className="cmd-list">
           {[
-            { icon: "💬", label: "新对话", act: () => { onClose(); onNewChat(); } },
-            { icon: "🔍", label: "全局搜索", act: () => { onClose(); onOpenSearch(); } },
-            { icon: "⏱", label: "定时任务（工作台）", act: () => { onClose(); onGoWorkbench && onGoWorkbench(); } },
-            { icon: "🕐", label: "会话轨迹", act: () => { onClose(); onOpenTimeline(); } },
-            { icon: "🔄", label: "回复变体", act: () => { onClose(); onOpenVariants(); } },
-            { icon: "✂", label: "FIM 代码补全", act: () => { onClose(); onOpenFim(); } },
-            { icon: "⭐", label: "收藏与固定", act: () => { onClose(); onOpenStar(); } },
-            { icon: "📋", label: "导出当前会话", act: () => { onClose(); onExport(); } },
-            { icon: "⚙", label: "设置", act: () => { onClose(); onGoSettings && onGoSettings(); } },
+            { icon: "message", label: "新对话", act: () => { onClose(); onNewChat(); } },
+            { icon: "search", label: "全局搜索", act: () => { onClose(); onOpenSearch(); } },
+            { icon: "calendar", label: "定时任务（工作台）", act: () => { onClose(); onGoWorkbench && onGoWorkbench(); } },
+            { icon: "clock", label: "会话轨迹", act: () => { onClose(); onOpenTimeline(); } },
+            { icon: "layers", label: "回复变体", act: () => { onClose(); onOpenVariants(); } },
+            { icon: "zap", label: "FIM 代码补全", act: () => { onClose(); onOpenFim(); } },
+            { icon: "star", label: "收藏与固定", act: () => { onClose(); onOpenStar(); } },
+            { icon: "download", label: "导出当前会话", act: () => { onClose(); onExport(); } },
+            { icon: "settings", label: "设置", act: () => { onClose(); onGoSettings && onGoSettings(); } },
           ]
             .filter((c) => !query || c.label.includes(query))
             .map((c, i) => (
               <div className="cmd-item" key={i} onClick={c.act}>
-                <span>{c.icon}</span>
+                <span className="cmd-item-ic"><Icon name={c.icon} size={15} /></span>
                 <span>{c.label}</span>
               </div>
             ))}

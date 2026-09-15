@@ -3385,3 +3385,80 @@ button { -webkit-tap-highlight-color: transparent; }
 .px-cwd { width: 100%; margin-top: var(--sp-1); font-size: var(--fs-xs); }
 .px-head { display: flex; align-items: center; gap: 6px; margin-bottom: var(--sp-2); }
 
+/* ═══════════════════════════════════════════════════════════════
+   全站统一 · 控件基线（对齐「控制台 2.0」设计语言）
+   把控制台的下划线页签 / 分区标题节奏 / 卡片处理 / 图标按钮，延伸到全站页面，
+   消除「各页各写一套」的视觉漂移。位于文件末尾，覆盖上方旧规则。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 1) 页签：全站统一下划线式（能力中心/自主/大脑/上下文/会话筛选） */
+.ab-tabs, .au-tabs, .brain-tabs, .ctx-tabs, .sl-tabs {
+  display: flex; gap: var(--sp-1); flex-wrap: wrap; align-items: center;
+  border: none; border-bottom: 1px solid var(--border);
+  margin-bottom: var(--sp-4);
+}
+.ab-tab, .au-tab, .brain-tab, .ctx-tab, .sl-tab {
+  position: relative;
+  padding: 9px 12px 8px;
+  border: none; border-radius: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: var(--fs-xs); font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+  transition: var(--t-colors);
+}
+.ab-tab:hover, .au-tab:hover, .brain-tab:hover, .ctx-tab:hover, .sl-tab:hover { color: var(--text-1); }
+.ab-tab-on, .au-tab-on, .brain-tab.on, .ctx-tab-on, .sl-tab-on {
+  color: var(--brand-strong); background: none; border: none;
+}
+.ab-tab-on::after, .au-tab-on::after, .brain-tab.on::after, .ctx-tab-on::after, .sl-tab-on::after {
+  content: ""; position: absolute; left: 8%; right: 8%; bottom: -1px;
+  height: 2px; border-radius: 2px 2px 0 0; background: var(--brand);
+}
+
+/* 2) 分区/卡片标题：统一「图标 + 标题 + 右侧」节拍 */
+.px-group-title, .au-card-title, .wb-card-title, .set-group-title, .svc-title, .page-block-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: var(--fs-xs); font-weight: 700; letter-spacing: .2px;
+  color: var(--text-2);
+  margin-bottom: var(--sp-3);
+}
+
+/* 3) 卡片：统一圆角/边框/投影（背景各页保持以维持层级） */
+.wb-card, .set-card, .au-card, .pm-card, .plugin-card, .domain-card, .preset-card,
+.deps-card, .brain-card, .svc-actions, .theme-card, .evo-card {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
+}
+.wb-card:hover, .set-card:hover, .au-card:hover, .pm-card:hover, .plugin-card:hover,
+.domain-card:hover, .preset-card:hover, .brain-card:hover, .evo-card:hover {
+  border-color: var(--border-strong);
+}
+
+/* 4) 最小操作层（图标/文字小按钮）：统一圆角与反馈 */
+.msg-op, .pm-op, .sl-act, .fx-act, .act-prod .msg-op {
+  border-radius: var(--r-sm);
+  transition: var(--t-colors);
+}
+.msg-op:hover, .pm-op:hover { background: var(--bg-hover); }
+
+/* 5) 页面壳节奏 */
+.page-head { margin-bottom: var(--sp-5); }
+.page-head p { color: var(--text-3); font-size: var(--fs-sm); }
+
+/* 6) 左侧主导航：与图标系统/控制台气质对齐（激活态加左侧品牌条） */
+.sb-item { position: relative; }
+.sb-item-on { background: var(--bg-active); }
+
+/* 7) 图标对齐（页签/标题/导航行内 SVG 与文字基线一致） */
+.ab-tab svg, .au-tab svg, .brain-tab svg, .ctx-tab svg, .sl-tab svg,
+.au-card-title svg, .wb-card-title svg, .set-nav-item svg, .cmd-item svg,
+.confirm-head b svg, .px-group-title svg, .set-group-title svg {
+  flex-shrink: 0; vertical-align: -2px;
+}
+.set-nav-icon { display: inline-grid; place-items: center; }
+.cmd-item-ic { display: inline-grid; place-items: center; width: 18px; color: var(--text-3); }
+.cmd-item:hover .cmd-item-ic { color: var(--brand-strong); }
+
+

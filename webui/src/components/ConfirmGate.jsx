@@ -1,5 +1,6 @@
 import React from "react";
 import { useFocusTrap } from "../useFocusTrap.js";
+import { Icon } from "./icons.jsx";
 
 // ── 确认门 / 面向用户选择器（对齐真实项目：ask_user 询问 + 审批）──
 // type: "ask" | "approval"
@@ -83,12 +84,12 @@ export default function ConfirmGate({ req, onRespond }) {
       <div ref={cardRef} className="confirm-card" role="dialog" aria-modal="true"
         aria-label={isAsk ? "Agent 询问" : "权限确认"}>
         <div className="confirm-head">
-          <b>{isAsk ? "🤔 Agent 需要你确认" : "🛡 权限请求"}</b>
+          <b><Icon name={isAsk ? "help" : "shield"} size={15} /> {isAsk ? "Agent 需要你确认" : "权限请求"}</b>
           <span className="confirm-head-right">
             <span className={`confirm-timer ${expired ? "confirm-timer-over" : ""}`}>
               {expired ? "已超时" : `${seconds}s`}
             </span>
-            <button className="confirm-x" title="关闭并跳过" aria-label="关闭" onClick={dismiss}>✕</button>
+            <button className="confirm-x" title="关闭并跳过" aria-label="关闭" onClick={dismiss}><Icon name="x" size={14} /></button>
           </span>
         </div>
 

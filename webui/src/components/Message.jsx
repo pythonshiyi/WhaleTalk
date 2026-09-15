@@ -6,6 +6,7 @@ import PixelDocViewer from "./PixelDocViewer.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
+import { Icon } from "./icons.jsx";
 
 import { silentWarn } from "../quiet.js";
 // 表格内嵌预览（CSV/XLSX）：分页展示，不超过后端返回的 rows 上限
@@ -192,15 +193,15 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
         <div className="msg-ops">
           {time && <span className="msg-time">{time}</span>}
           <button className="msg-op" title="复制" aria-label="复制" onClick={copy}>
-            {copied ? "✓ 已复制" : "📋"}
+            <Icon name="copy" size={14} />
           </button>
-          <button className="msg-op" title={isPinned ? "取消固定" : "固定（压缩时保留进摘要）"} onClick={() => onPin && onPin()}>
-            {isPinned ? "📌" : "📌"}
+          <button className="msg-op" title={isPinned ? "取消固定" : "固定（压缩时保留进摘要）"} aria-label="固定" onClick={() => onPin && onPin()}>
+            <Icon name="pin" size={14} fill={isPinned ? "currentColor" : "none"} />
           </button>
-          <button className="msg-op" title="从此分叉为新会话" onClick={() => onFork && onFork()}>🔀</button>
-          <button className="msg-op" title="编辑并重发" onClick={() => onEdit && onEdit()}>✏️</button>
-          <button className="msg-op" title="引用此消息回复" onClick={() => onQuote && onQuote()}>💬</button>
-          <button className="msg-op" title="重新发送" onClick={() => onResend && onResend(msg.text)}>↻</button>
+          <button className="msg-op" title="从此分叉为新会话" aria-label="分叉" onClick={() => onFork && onFork()}><Icon name="git-branch" size={14} /></button>
+          <button className="msg-op" title="编辑并重发" aria-label="编辑" onClick={() => onEdit && onEdit()}><Icon name="pencil" size={14} /></button>
+          <button className="msg-op" title="引用此消息回复" aria-label="引用" onClick={() => onQuote && onQuote()}><Icon name="quote" size={14} /></button>
+          <button className="msg-op" title="重新发送" aria-label="重新发送" onClick={() => onResend && onResend(msg.text)}><Icon name="rotate" size={14} /></button>
         </div>
       </div>
     );
@@ -264,20 +265,20 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
         })()}
         {!msg.streaming && msg.text && (
           <div className="msg-ops">
-            <button className="msg-op" title="复制回复" onClick={copy}>
-              {copied ? "✓ 已复制" : "📋"}
+            <button className="msg-op" title="复制回复" aria-label="复制" onClick={copy}>
+              <Icon name={copied ? "check" : "copy"} size={14} />
             </button>
-            <button className="msg-op" title={err ? ("朗读失败：" + err) : loading ? "正在合成语音…" : speaking ? "⏹ 停止朗读" : "🔊 朗读回复（服务端合成，跟随语音设置）"} style={err ? { color: "var(--danger-text)" } : undefined} onClick={toggleSpeak}>
-              {err ? "⚠" : loading ? "⏳" : speaking ? "⏹" : "🔊"}
+            <button className="msg-op" title={err ? ("朗读失败：" + err) : loading ? "正在合成语音…" : speaking ? "停止朗读" : "朗读回复（服务端合成，跟随语音设置）"} aria-label="朗读" style={err ? { color: "var(--danger-text)" } : undefined} onClick={toggleSpeak}>
+              <Icon name={err ? "warning" : speaking ? "stop" : "volume"} size={14} />
             </button>
-            <button className="msg-op" title={isStarred ? "取消收藏" : "收藏"} onClick={() => onStar && onStar()}>
-              {isStarred ? "⭐" : "☆"}
+            <button className="msg-op" title={isStarred ? "取消收藏" : "收藏"} aria-label="收藏" onClick={() => onStar && onStar()}>
+              <Icon name="star" size={14} fill={isStarred ? "currentColor" : "none"} />
             </button>
-            <button className="msg-op" title="引用此消息回复" onClick={() => onQuote && onQuote()}>💬</button>
-            <button className="msg-op" title="编辑此消息并继续" onClick={() => onEdit && onEdit()}>✏️</button>
-            <button className="msg-op" title="重新生成（旧版存变体）" onClick={() => onRegenerate && onRegenerate()}>🔄</button>
-            <button className="msg-op" title="继续生成（Beta 续写）" onClick={() => onContinue && onContinue()}>▶ 继续</button>
-            <button className="msg-op" title="从此分叉为新会话" onClick={() => onFork && onFork()}>🔀</button>
+            <button className="msg-op" title="引用此消息回复" aria-label="引用" onClick={() => onQuote && onQuote()}><Icon name="quote" size={14} /></button>
+            <button className="msg-op" title="编辑此消息并继续" aria-label="编辑" onClick={() => onEdit && onEdit()}><Icon name="pencil" size={14} /></button>
+            <button className="msg-op" title="重新生成（旧版存变体）" aria-label="重新生成" onClick={() => onRegenerate && onRegenerate()}><Icon name="rotate" size={14} /></button>
+            <button className="msg-op" title="继续生成（Beta 续写）" aria-label="继续" onClick={() => onContinue && onContinue()}><Icon name="play" size={14} /> 继续</button>
+            <button className="msg-op" title="从此分叉为新会话" aria-label="分叉" onClick={() => onFork && onFork()}><Icon name="git-branch" size={14} /></button>
           </div>
         )}
       </div>

@@ -1,5 +1,6 @@
 import React from "react";
 import EmptyState from "./EmptyState.jsx";
+import { Icon } from "./icons.jsx";
 
 export default function ContextPanel({ data, onClose, loading = false, err = "" }) {
   const [tab, setTab] = React.useState("工具");
@@ -14,9 +15,9 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
         </button>
       </div>
       <div className="ctx-tabs" role="tablist">
-        {["工具", "记忆", "用量"].map((t) => (
-          <button key={t} role="tab" aria-selected={tab === t} className={`ctx-tab ${tab === t ? "ctx-tab-on" : ""}`} onClick={() => setTab(t)}>
-            {t}
+        {[{ id: "工具", icon: "grid" }, { id: "记忆", icon: "book" }, { id: "用量", icon: "chart" }].map((t) => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} className={`ctx-tab ${tab === t.id ? "ctx-tab-on" : ""}`} onClick={() => setTab(t.id)}>
+            <Icon name={t.icon} size={14} /> {t.id}
           </button>
         ))}
       </div>

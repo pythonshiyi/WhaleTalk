@@ -3,6 +3,7 @@ import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { enqueueSpeak, invalidateVoiceConfig, playTestTone, enableVoiceInterrupt, disableVoiceInterrupt } from "../ttsUtil.js";
 import { SkeletonCard, SkeletonList } from "./Skeleton.jsx";
+import { Icon } from "./icons.jsx";
 
 import { silentWarn } from "../quiet.js";
 
@@ -1043,13 +1044,13 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
     );
 
   const TABS = [
-    { id: "model", label: "🎛 模型与网关" },
-    { id: "service", label: "🔌 外部服务" },
-    { id: "persona", label: "🧠 人格与工具" },
-    { id: "notice", label: "🔔 通知与安全" },
-    { id: "look", label: "🎨 外观" },
-    { id: "deps", label: "🔌 可选能力" },
-    { id: "adv", label: "⚙ 高级" },
+    { id: "model", icon: "sliders", text: "模型与网关" },
+    { id: "service", icon: "server", text: "外部服务" },
+    { id: "persona", icon: "brain", text: "人格与工具" },
+    { id: "notice", icon: "bell", text: "通知与安全" },
+    { id: "look", icon: "palette", text: "外观" },
+    { id: "deps", icon: "package", text: "可选能力" },
+    { id: "adv", icon: "settings", text: "高级" },
   ];
 
   return (
@@ -1150,17 +1151,12 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
           )}
           <div className="set-layout">
             <div className="set-nav" role="tablist" aria-label="设置分类">
-              {TABS.map((t) => {
-                const sp = t.label.indexOf(" ");
-                const icon = sp > 0 ? t.label.slice(0, sp) : "•";
-                const text = sp > 0 ? t.label.slice(sp + 1) : t.label;
-                return (
-                  <button key={t.id} role="tab" aria-selected={tab === t.id} className={`set-nav-item ${tab === t.id ? "set-nav-item-on" : ""}`} onClick={() => setTab(t.id)}>
-                    <span className="set-nav-icon" aria-hidden="true">{icon}</span>
-                    <span>{text}</span>
-                  </button>
-                );
-              })}
+              {TABS.map((t) => (
+                <button key={t.id} role="tab" aria-selected={tab === t.id} className={`set-nav-item ${tab === t.id ? "set-nav-item-on" : ""}`} onClick={() => setTab(t.id)}>
+                  <span className="set-nav-icon" aria-hidden="true"><Icon name={t.icon} size={16} /></span>
+                  <span>{t.text}</span>
+                </button>
+              ))}
             </div>
             <div className="set-content">
               <SearchCtx.Provider value={q}>

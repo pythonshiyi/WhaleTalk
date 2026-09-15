@@ -2,6 +2,7 @@ import React from "react";
 import * as api from "../api.js";
 import { SkeletonList } from "./Skeleton.jsx";
 import { useFocusTrap } from "../useFocusTrap.js";
+import { Icon } from "./icons.jsx";
 
 // Esc 关闭：对话框/弹层统一的键盘出口
 function useEsc(onClose) {
@@ -361,13 +362,13 @@ export default function PluginsPage({ onApply }) {
       </div>
       <div className="ab-tabs">
         <button className={`ab-tab ${tab === "gallery" ? "ab-tab-on" : ""}`} onClick={() => setTab("gallery")}>
-          🖼 画廊（{gallery.length}）
+          <Icon name="image" size={15} /> 画廊（{gallery.length}）
         </button>
         <button className={`ab-tab ${tab === "market" ? "ab-tab-on" : ""}`} onClick={() => setTab("market")}>
-          🌐 市场（{market.length}）
+          <Icon name="globe" size={15} /> 市场（{market.length}）
         </button>
         <button className={`ab-tab ${tab === "installed" ? "ab-tab-on" : ""}`} onClick={() => setTab("installed")}>
-          📦 已安装（{installed.length}）
+          <Icon name="package" size={15} /> 已安装（{installed.length}）
         </button>
       </div>
 

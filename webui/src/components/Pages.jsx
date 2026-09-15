@@ -4,6 +4,7 @@ import * as api from "../api.js";
 import ToolTest from "./ToolTest.jsx";
 import EmptyState from "./EmptyState.jsx";
 import { SkeletonPage } from "./Skeleton.jsx";
+import { Icon } from "./icons.jsx";
 
 import { silentWarn } from "../quiet.js";
 
@@ -44,10 +45,10 @@ export function AbilitiesPage() {
       </div>
       <div className="ab-tabs">
         <button className={`ab-tab ${tab === "tools" ? "ab-tab-on" : ""}`} onClick={() => setTab("tools")}>
-          🧰 工具库（{total}）
+          <Icon name="grid" size={15} /> 工具库（{total}）
         </button>
         <button className={`ab-tab ${tab === "perms" ? "ab-tab-on" : ""}`} onClick={() => setTab("perms")}>
-          🔓 权限 · 黑名单
+          <Icon name="shield" size={15} /> 权限 · 黑名单
         </button>
       </div>
       {tab === "tools" && (
@@ -133,7 +134,7 @@ function KnowledgeBaseBlock() {
   };
   return (
     <div className="wb-card" style={{ marginTop: 16 }}>
-      <div className="wb-card-title">📚 知识库 RAG（带引用源）</div>
+      <div className="wb-card-title"><Icon name="book" size={14} /> 知识库 RAG（带引用源）</div>
       <div className="empty-tip" style={{ marginBottom: 6 }}>
         {kberr
           ? `已建立索引：${kberr}`
@@ -568,7 +569,7 @@ export function PermissionsPage() {
   return (
     <div className="page">
       <div className="page-head">
-        <h1>🔓 权限</h1>
+        <h1>权限</h1>
         <p>自由优先：默认放行 + 黑名单。AI 拥有全部行动能力，只按你禁止的拦截。</p>
       </div>
       <div className={`perm-mode-banner ${perms.full_auto ? "perm-mode-task" : ""}`}>
@@ -656,7 +657,7 @@ export function TasksPage() {
       )}
       {templates.length > 0 && (
         <>
-          <div className="wb-card-title">任务模板（{templates.length}）</div>
+          <div className="wb-card-title"><Icon name="list" size={14} /> 任务模板（{templates.length}）</div>
           <div className="task-grid">
             {templates.map((t, i) => (
               <div className="wb-card task-card" key={i}>
@@ -710,7 +711,7 @@ export function FilesPage() {
         <h1>文件与产物</h1>
         <p>{files ? `工作目录：${files.active_dir}` : "最近产物 · 工作区文件"}</p>
       </div>
-      <div className="wb-card-title">最近产物（{files?.recent?.length || 0}）</div>
+      <div className="wb-card-title"><Icon name="package" size={14} /> 最近产物（{files?.recent?.length || 0}）</div>
       <div className="files-list">
         {err && <div className="empty-tip is-err">{err}</div>}
         {(files ? files.recent || [] : []).map((r, i) => (
@@ -870,7 +871,7 @@ export function SystemPage() {
         <p>用量 · 安全 · 依赖 · 工作目录</p>
       </div>
       <div className="wb-card">
-        <div className="wb-card-title">账户与用量</div>
+        <div className="wb-card-title"><Icon name="chart" size={14} /> 账户与用量</div>
         <div className="sys-row"><span>累计输入</span><b>{(u.prompt || 0).toLocaleString()} tokens</b></div>
         <div className="sys-row"><span>累计输出</span><b>{(u.completion || 0).toLocaleString()} tokens</b></div>
         <div className="sys-row"><span>缓存命中</span><b className="ok-text">{(u.cache_hit || 0).toLocaleString()}</b></div>
@@ -879,7 +880,7 @@ export function SystemPage() {
         {status?.peak_hour && <div className="sys-row"><span>高峰时段</span><b className="warn-text">⏰ 高峰</b></div>}
       </div>
       <div className="wb-card" style={{ marginTop: 12 }}>
-        <div className="wb-card-title">工作模式与安全</div>
+        <div className="wb-card-title"><Icon name="shield" size={14} /> 工作模式与安全</div>
         <div className="sys-row"><span>工作模式</span><b>{status?.mode === "task" ? "🚀 任务模式：全部工具自动可用" : "💬 对话模式：不调用任何工具"}</b></div>
         <div className="sys-row"><span>隐私模式</span><b>{status?.privacy ? "🔒 开启" : "关闭"}</b></div>
         <div className="sys-row"><span>工作目录</span><b className="sys-path">{status?.active_dir || ""}</b></div>
@@ -931,7 +932,7 @@ function SchedulesBlock() {
 
   return (
     <div className="wb-card">
-      <div className="wb-card-title">⏰ 计划与定时任务（{schedules.filter((s) => s.enabled !== false).length} 启用）</div>
+      <div className="wb-card-title"><Icon name="list" size={14} /> ⏰ 计划与定时任务（{schedules.filter((s) => s.enabled !== false).length} 启用）</div>
       <div className="sched-list">
         {!loaded && <div className="empty-tip is-loading">正在加载定时任务…</div>}
         {loaded && err && <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={refetch}>重试</button></div>}
@@ -1145,7 +1146,7 @@ export function WorkbenchPage({ onApply, onPickSession }) {
       {/* 主网格：左 快捷行动 + 右 进行中 */}
       <div className="wb-main-grid">
         <div className="wb-card wb-act">
-          <div className="wb-card-title">⚡ 快捷行动</div>
+          <div className="wb-card-title"><Icon name="list" size={14} /> 快捷行动</div>
           <div className="wb-act-grid">
             {quickActs.map((p) => (
               <button
@@ -1180,7 +1181,7 @@ export function WorkbenchPage({ onApply, onPickSession }) {
 
         <div className="wb-side">
           <div className="wb-card">
-            <div className="wb-card-title">⏳ 进行中</div>
+            <div className="wb-card-title"><Icon name="list" size={14} /> ⏳ 进行中</div>
             {checkpoint ? (
               <div className="wb-checkpoint">
                 <div className="wb-cp-head">
@@ -1209,7 +1210,7 @@ export function WorkbenchPage({ onApply, onPickSession }) {
             )}
           </div>
           <div className="wb-card">
-            <div className="wb-card-title">ℹ 快速了解</div>
+            <div className="wb-card-title"><Icon name="list" size={14} /> ℹ 快速了解</div>
             <div className="wb-facts">
               <div className="wb-fact"><span>模型</span><b>{status ? status.model || "…" : "…"}</b></div>
               <div className="wb-fact"><span>累计输入</span><b>{(u.prompt || 0).toLocaleString()}</b></div>
@@ -1222,7 +1223,7 @@ export function WorkbenchPage({ onApply, onPickSession }) {
       {/* 底部双栏：最近会话 + 最近产物 */}
       <div className="wb-bottom-grid">
         <div className="wb-card">
-          <div className="wb-card-title">💬 最近会话（{sessions.length}）</div>
+          <div className="wb-card-title"><Icon name="list" size={14} /> 最近会话（{sessions.length}）</div>
           <div className="wb-sess-list">
             {sessions.map((s) => (
               <div className="wb-sess-item" key={s.id} onClick={() => onPickSession && onPickSession(s.id)}>
@@ -1239,7 +1240,7 @@ export function WorkbenchPage({ onApply, onPickSession }) {
         </div>
 
         <div className="wb-card">
-          <div className="wb-card-title">📦 最近产物（{recentFiles.length}）</div>
+          <div className="wb-card-title"><Icon name="package" size={14} /> 最近产物（{recentFiles.length}）</div>
           <div className="wb-file-list">
             {recentFiles.slice(0, 6).map((p) => (
               <div className="wb-file-item" key={p}>

@@ -2,6 +2,7 @@ import React from "react";
 import * as api from "../api.js";
 import EmptyState from "./EmptyState.jsx";
 import { SkeletonList } from "./Skeleton.jsx";
+import { Icon } from "./icons.jsx";
 
 function EvTab({ onToast }) {
   const [evs, setEvs] = React.useState(null);
@@ -123,7 +124,7 @@ function EvTab({ onToast }) {
   return (
     <div className="au-col">
       <div className="au-card">
-        <div className="au-card-title">📋 进化提案（create_evolution）</div>
+        <div className="au-card-title"><Icon name="sparkles" size={14} /> 进化提案（create_evolution）</div>
         {evs === null ? (
           <SkeletonList rows={2} />
         ) : evs.length === 0 ? (
@@ -173,7 +174,7 @@ function EvTab({ onToast }) {
       </div>
 
       <div className="au-card">
-        <div className="au-card-title">🗄 已忽略的提案（软删除 · 可恢复）</div>
+        <div className="au-card-title"><Icon name="archive" size={14} /> 已忽略的提案（软删除 · 可恢复）</div>
         {ignored.length === 0 ? (
           <div className="empty-tip">
             没有被忽略的提案。忽略只会归档到「已忽略」，不再删除——历史上一次「忽略」曾永久吃掉 4 份提案。
@@ -196,7 +197,7 @@ function EvTab({ onToast }) {
       </div>
 
       <div className="au-card">
-        <div className="au-card-title">🔀 自我进化分支（self_evolve）</div>
+        <div className="au-card-title"><Icon name="git-branch" size={14} /> 自我进化分支（self_evolve）</div>
         {branches === null ? (
           <SkeletonList rows={2} />
         ) : branches.length === 0 ? (
@@ -284,7 +285,7 @@ function ApprovalTab({ onToast }) {
   const resultCls = (r) => (r === "允许" || r === "已回答" ? "ok-text" : r === "拒绝" ? "warn-text" : "pm-cat");
   return (
     <div className="au-card">
-      <div className="au-card-title">🛡 审批与询问记录（最近 200 条）</div>
+      <div className="au-card-title"><Icon name="shield-check" size={14} /> 审批与询问记录（最近 200 条）</div>
       {items === null ? (
         <SkeletonList rows={3} />
       ) : err ? (
@@ -339,7 +340,7 @@ function ActivityTab({ onToast }) {
   return (
     <div className="au-col">
       <div className="au-card">
-        <div className="au-card-title">🗂 最近任务（tasklog · AI 干了什么）</div>
+        <div className="au-card-title"><Icon name="list" size={14} /> 最近任务（tasklog · AI 干了什么）</div>
         {tasks === null ? (
           <SkeletonList rows={2} />
         ) : tasks.length === 0 ? (
@@ -361,7 +362,7 @@ function ActivityTab({ onToast }) {
         )}
       </div>
       <div className="au-card">
-        <div className="au-card-title">🧾 审计日志（最近 200 条）</div>
+        <div className="au-card-title"><Icon name="book-open" size={14} /> 审计日志（最近 200 条）</div>
         {audit === null ? (
           <SkeletonList rows={2} />
         ) : audit.length === 0 ? (
@@ -417,7 +418,7 @@ function SelfTab({ onToast }) {
   return (
     <div className="au-col">
       <div className="au-card">
-        <div className="au-card-title">🧠 核心自我状态（self_profile · 跨会话连续）</div>
+        <div className="au-card-title"><Icon name="brain" size={14} /> 核心自我状态（self_profile · 跨会话连续）</div>
         {profile === null ? (
           <SkeletonList rows={2} />
         ) : (
@@ -425,7 +426,7 @@ function SelfTab({ onToast }) {
         )}
       </div>
       <div className="au-card">
-        <div className="au-card-title">💥 失败模式库（AI 犯过的错 · 下次自动规避）</div>
+        <div className="au-card-title"><Icon name="warning" size={14} /> 失败模式库（AI 犯过的错 · 下次自动规避）</div>
         {fstats && (
           <div className="pm-cat" style={{ marginBottom: 8 }}>
             未消解 {fstats.unresolved} · 已消解 {fstats.resolved} · 复现多次 {fstats.recurring}
@@ -515,7 +516,7 @@ function GrowthTab({ onToast }) {
   return (
     <div className="au-col">
       <div className="au-card">
-        <div className="au-card-title">📊 能力热力图（我用得最多 / 最薄弱的能力）</div>
+        <div className="au-card-title"><Icon name="chart" size={14} /> 能力热力图（我用得最多 / 最薄弱的能力）</div>
         <div className="pm-cat" style={{ marginBottom: 8 }}>
           <select className="au-select" value={days} onChange={(e) => setDays(Number(e.target.value))}>
             <option value={7}>近 7 天</option>
@@ -574,7 +575,7 @@ function GrowthTab({ onToast }) {
       </div>
 
       <div className="au-card">
-        <div className="au-card-title">📋 自我述职（近 7 天 · AI 的自我复盘）</div>
+        <div className="au-card-title"><Icon name="calendar" size={14} /> 自我述职（近 7 天 · AI 的自我复盘）</div>
         {rep === null ? (
           <SkeletonList rows={2} />
         ) : (
@@ -631,7 +632,7 @@ function GrowthTab({ onToast }) {
       </div>
 
       <div className="au-card">
-        <div className="au-card-title">🛡 信任内核故事线（谁改过我的护栏 · 可回滚）</div>
+        <div className="au-card-title"><Icon name="shield" size={14} /> 信任内核故事线（谁改过我的护栏 · 可回滚）</div>
         {trust === null ? (
           <SkeletonList rows={2} />
         ) : (
@@ -674,11 +675,11 @@ export default function AutonomyPage() {
     return () => clearTimeout(t);
   }, [tip]);
   const tabs = [
-    { id: "evolve", label: "🧬 进化管理" },
-    { id: "growth", label: "🌱 成长" },
-    { id: "approval", label: "🛡 审批记录" },
-    { id: "activity", label: "📜 行为日志" },
-    { id: "self", label: "🧠 自我状态" },
+    { id: "evolve", icon: "sparkles", label: "进化管理" },
+    { id: "growth", icon: "trending-up", label: "成长" },
+    { id: "approval", icon: "shield-check", label: "审批记录" },
+    { id: "activity", icon: "list", label: "行为日志" },
+    { id: "self", icon: "brain", label: "自我状态" },
   ];
   return (
     <div className="page">
@@ -689,7 +690,7 @@ export default function AutonomyPage() {
       <div className="au-tabs" role="tablist">
         {tabs.map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "au-tab au-tab-on" : "au-tab"} onClick={() => setTab(t.id)}>
-            {t.label}
+            <Icon name={t.icon} size={15} /> {t.label}
           </button>
         ))}
         {tip && <span className="au-tip">{tip}</span>}
