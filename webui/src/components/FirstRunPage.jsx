@@ -131,7 +131,7 @@ export default function FirstRunPage({ onDone }) {
   const itemLabel = { fontSize: "var(--fs-sm)", fontWeight: 600, color: "var(--text-1)" };
   const itemDesc = { fontSize: "var(--fs-xs)", color: "var(--text-2)", marginTop: 2, lineHeight: 1.5 };
   const chip = (color) => ({ fontSize: "var(--fs-3xs)", padding: "1px 8px", borderRadius: "var(--r-full)", background: "var(--bg-3)", color: "var(--text-2)", marginLeft: 8, whiteSpace: "nowrap" });
-  const chipOk = { ...chip(), background: "var(--ok-soft)", color: "var(--ok)" };
+  const chipOk = { ...chip(), background: "var(--ok-soft)", color: "var(--ok-text)" };
 
   return (
     <div
@@ -166,7 +166,7 @@ export default function FirstRunPage({ onDone }) {
         </div>
 
         {err && (
-          <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--danger-soft)", color: "var(--danger)", fontSize: "var(--fs-sm)", marginBottom: 16 }}>
+          <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--danger-soft)", color: "var(--danger-text)", fontSize: "var(--fs-sm)", marginBottom: 16 }}>
             {err}
           </div>
         )}
@@ -181,7 +181,7 @@ export default function FirstRunPage({ onDone }) {
                   <span style={chip()}>自动安装中（{prog.done}/{prog.total}）…</span>
                 )}
                 {phase === "done" && failed.length === 0 && <span style={chipOk}>✓ 全部就绪</span>}
-                {phase === "done" && failed.length > 0 && <span style={{ ...chip(), background: "var(--danger-soft)", color: "var(--danger)" }}>⚠ {failed.length} 项失败</span>}
+                {phase === "done" && failed.length > 0 && <span style={{ ...chip(), background: "var(--danger-soft)", color: "var(--danger-text)" }}>⚠ {failed.length} 项失败</span>}
               </div>
 
               {/* 进度区 */}
@@ -218,17 +218,17 @@ export default function FirstRunPage({ onDone }) {
               )}
 
               {phase === "done" && failed.length === 0 && (
-                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--ok-soft)", color: "var(--ok)", fontSize: "var(--fs-sm)", marginBottom: 10 }}>
+                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--ok-soft)", color: "var(--ok-text)", fontSize: "var(--fs-sm)", marginBottom: 10 }}>
                   ✅ 核心组件全部就绪，正在进入鲸语…
                 </div>
               )}
               {phase === "done" && failed.length > 0 && (
-                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--warn-soft)", color: "var(--warn)", fontSize: "var(--fs-sm)", marginBottom: 10 }}>
+                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--warn-soft)", color: "var(--warn-text)", fontSize: "var(--fs-sm)", marginBottom: 10 }}>
                   ⚠ 以下核心组件安装失败：<b>{failed.join("、")}</b>。可重试失败项，或稍后在「设置 → 常规组件」重试。
                 </div>
               )}
               {autoErr && (
-                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--danger-soft)", color: "var(--danger)", fontSize: "var(--fs-sm)", marginBottom: 10 }}>
+                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--danger-soft)", color: "var(--danger-text)", fontSize: "var(--fs-sm)", marginBottom: 10 }}>
                   {autoErr}
                 </div>
               )}

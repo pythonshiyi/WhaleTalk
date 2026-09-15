@@ -19,6 +19,15 @@ import extractProducts from "../extractProducts.js";
 
 import { silentWarn } from "../quiet.js";
 
+// 响应式：窄屏下侧栏/面板以「浮层抽屉」呈现（见 app.css 的 @media 规则）。
+// 初次挂载即按视口决定默认开合，避免窄屏一进来就被抽屉+蒙层盖住对话。
+// SSR 安全：window 缺失时按宽屏处理。
+function mq(query) {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia(query).matches
+    : false;
+}
+
 // 落盘用消息链：与 buildMessageChain 结构一致，但额外携带 usage/metrics（速率统计），
 // 且**仅用于保存**——绝不送入模型（避免未知字段导致 API 400）。
 function toSaveMessages(msgs) {
@@ -375,7 +384,8 @@ function useBackendChat({
               if (done) return;  // 已被 finish/其他错误终结，防重复处理
               done = true;       // 错误即终结：短路 streamChat resolve 后误走 finish(true)
               flushNow();
-              updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, text: (x.text || "") + "\n\n⚠️ 后端错误：" + e, streaming: false } : x)));
+              silentWarn(e, "ChatPage.stream");
+              updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, text: (x.text || "") + "\n\n⚠️ 生成中断：后端返回错误，请重试或检查「设置 → 网关/API Key」。", streaming: false } : x)));
               setBusy(false);
               setGenState({ on: false, text: "" });
               setGenTps(0);
@@ -596,8 +606,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [msgs, setMsgs] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
   const [ctxOpen, setCtxOpen] = React.useState(false);
-  const [listOpen, setListOpen] = React.useState(true);
-  const [auxOpen, setAuxOpen] = React.useState(true);
+  const [listOpen, setListOpen] = React.useState(() => !mq("(max-width: 860px)"));
+  const [auxOpen, setAuxOpen] = React.useState(() => !mq("(max-width: 1000px)"));
   const [auxTab, setAuxTab] = React.useState("params");
   const focusActivity = React.useCallback(() => setAuxTab("activity"), []);
   const [promptReq, setPromptReq] = React.useState(null);
@@ -624,6 +634,46 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [batchTpl, setBatchTpl] = React.useState("请处理以下文件：{file}");
   // 长会话「回到最新」浮钮：向上翻阅后出现，避免手动拖到底
   const [showJump, setShowJump] = React.useState(false);
+  // 输入区实测高度：供「回到最新」浮钮定位（避免硬编码 bottom 遮挡多行输入/附件）
+  const [composerH, setComposerH] = React.useState(0);
+  const composerDockRef = React.useRef(null);
+  React.useEffect(() => {
+    const el = composerDockRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(() => setComposerH(el.offsetHeight || 0));
+    ro.observe(el);
+    setComposerH(el.offsetHeight || 0);
+    return () => ro.disconnect();
+  }, []);
+
+  // 视口由宽变窄时自动收起内联侧栏/面板（转为抽屉，避免遮挡对话）；
+  // 仅在跨越断点那一刻收起，不干扰用户在窄屏下主动打开。
+  React.useEffect(() => {
+    let wasNarrowList = mq("(max-width: 860px)");
+    let wasNarrowAux = mq("(max-width: 1000px)");
+    const onResize = () => {
+      const narrowList = mq("(max-width: 860px)");
+      const narrowAux = mq("(max-width: 1000px)");
+      if (narrowList && !wasNarrowList) setListOpen(false);
+      if (narrowAux && !wasNarrowAux) setAuxOpen(false);
+      wasNarrowList = narrowList;
+      wasNarrowAux = narrowAux;
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Esc 关闭已打开的抽屉（会话列表/控制台/上下文）——此前只能点遮罩或开关
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (mq("(max-width: 860px)")) setListOpen(false);
+      if (mq("(max-width: 1000px)")) setAuxOpen(false);
+      setCtxOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // ── 活动镜像：把"最近一次工具链"喂给侧栏「🔧 活动」标签 ──
   // 取最新的 assistant 消息（含工具或正在流式）作为实时活动；工具执行从聊天流"搬"到侧栏，
@@ -1215,7 +1265,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     try {
       const d = await api.searchSessions(searchQuery.trim(), { type: searchType });
       setSearchResults(d.results || []);
-    } catch (e) { silentWarn(e, "ChatPage"); }
+    } catch (e) { silentWarn(e, "ChatPage"); toast("搜索失败：后端未响应，请稍后重试"); }
     setSearchBusy(false);
   };
 
@@ -1227,7 +1277,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     try {
       const d = await api.searchSessions(q);
       setSearchResults(d.results || []);
-    } catch (e) { silentWarn(e, "ChatPage"); }
+    } catch (e) { silentWarn(e, "ChatPage"); toast("搜索失败：后端未响应，请稍后重试"); }
     setSearchBusy(false);
   };
 
@@ -1262,7 +1312,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       return;
     }
     const el = document.querySelector(`[data-msg-idx="${idx}"]`);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (el) el.scrollIntoView({ behavior: mq("(prefers-reduced-motion: reduce)") ? "auto" : "smooth", block: "center" });
   };
 
   const onRenameSession = async (id, name) => {
@@ -1292,7 +1342,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       const { parseImportedText } = await import("../exporters.js");
       const parsed = parseImportedText(raw).filter((m) => m && ["user", "assistant", "system", "tool"].includes(m.role)).slice(0, 2000);
       if (!parsed.length) {
-        alert("未解析到有效消息（支持 JSON 数组 / {\"messages\":[...]} / JSONL）");
+        toast("未解析到有效消息（支持 JSON 数组 / {\"messages\":[...]} / JSONL）");
         return;
       }
       const userMsg = parsed.find((m) => m.role === "user");
@@ -1341,7 +1391,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     pendingScrollRef.current = null;
     const t = setTimeout(() => {
       const el = document.querySelector(`[data-msg-idx="${idx}"]`);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (el) el.scrollIntoView({ behavior: mq("(prefers-reduced-motion: reduce)") ? "auto" : "smooth", block: "center" });
     }, 60);
     return () => clearTimeout(t);
   }, [renderStart]);
@@ -1371,7 +1421,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         )}
         <div className="chat-main">
           <div className="chat-header">
-            <button className="icon-btn" title="会话列表" onClick={() => setListOpen(!listOpen)}>
+            <button className="icon-btn" title="会话列表" aria-label="会话列表" onClick={() => setListOpen(!listOpen)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M4 6h16M4 12h16M4 18h16" />
               </svg>
@@ -1389,52 +1439,54 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
               </span>
             </div>
             <div className="chat-header-right">
-                          <button className="icon-btn" title="批量任务" onClick={() => setBatchPanel(true)}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <button className="icon-btn" title="批量任务" aria-label="批量任务" onClick={() => setBatchPanel(true)}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3M16 21h3a2 2 0 002-2v-3" />
               </svg>
             </button>
-            <button className="icon-btn" title="会话轨迹" onClick={() => setTimelinePanel(!timelinePanel)}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <button className="icon-btn" title="会话轨迹" aria-label="会话轨迹" onClick={() => setTimelinePanel(!timelinePanel)}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="9" />
                 <path d="M12 7v5l3 2" />
               </svg>
             </button>
-            <button className="icon-btn" title="回复变体" onClick={openVariants}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <button className="icon-btn" title="回复变体" aria-label="回复变体" onClick={openVariants}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M4 6h16M4 12h16M4 18h7" />
               </svg>
             </button>
-            <button className="icon-btn" title="FIM 代码补全" onClick={() => setFimPanel(true)}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <button className="icon-btn" title="FIM 代码补全" aria-label="FIM 代码补全" onClick={() => setFimPanel(true)}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
               </svg>
             </button>
-            <button className="icon-btn" title="全局搜索" onClick={() => setSearchPanel(!searchPanel)}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <button className="icon-btn" title="全局搜索" aria-label="全局搜索" onClick={() => setSearchPanel(!searchPanel)}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <circle cx="11" cy="11" r="7" />
                 <path d="M21 21l-4-4" />
               </svg>
             </button>
-            <button className="icon-btn" title="多选消息" onClick={toggleMulti} style={{ color: multiSel ? "var(--brand-strong)" : undefined }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <button className="icon-btn" title="多选消息" aria-label="多选消息" onClick={toggleMulti} style={{ color: multiSel ? "var(--brand-strong)" : undefined }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
                 </svg>
               </button>
-              <button className="icon-btn" title="收藏与固定" onClick={toggleStarPanel}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+              <button className="icon-btn" title="收藏与固定" aria-label="收藏与固定" onClick={toggleStarPanel}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
                   <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
                 </svg>
               </button>
-              <div className="mode-switch" title="工作模式">
+              <div className="mode-switch" role="group" aria-label="工作模式">
                 <button
                   className={`mode-btn ${!isTask ? "mode-on" : ""}`}
+                  aria-pressed={!isTask}
                   onClick={() => isTask && switchMode("dialog")}
                 >
                   💬 对话模式
                 </button>
                 <button
                   className={`mode-btn ${isTask ? "mode-on" : ""}`}
+                  aria-pressed={isTask}
                   onClick={() => !isTask && switchMode("task")}
                 >
                   🚀 任务模式
@@ -1461,13 +1513,13 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
               <span className={`header-chip ${dataMode === "backend" ? "header-chip-brand" : ""}`}>
                 {dataMode === "backend" ? "已连接" : "未连接"}
               </span>
-              <button className="icon-btn" title="控制台（参数/文件/进程）" onClick={() => setAuxOpen(!auxOpen)}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <button className="icon-btn" title="控制台（参数/文件/进程）" aria-label="控制台（参数/文件/进程）" onClick={() => setAuxOpen(!auxOpen)}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="3" y="3" width="18" height="18" rx="2" />
                   <path d="M3 9h18M3 15h18M9 3v18" />
                 </svg>
               </button>
-              <button className="icon-btn" title="上下文面板" onClick={() => setCtxOpen(!ctxOpen)}>
+              <button className="icon-btn" title="上下文面板" aria-label="上下文面板" onClick={() => setCtxOpen(!ctxOpen)}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="3" y="4" width="18" height="16" rx="2" />
                   <path d="M3 9h18M9 4v16" />
@@ -1479,6 +1531,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
           <div
             className="chat-scroll"
             ref={scrollRef}
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
             data-density={density}
             style={{ fontSize: `${fontSize}px` }}
             onScroll={(e) => {
@@ -1499,7 +1554,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             )}
             {msgs.length === 0 && (
               <div className="chat-empty">
-                <div className="empty-whale">🐳</div>
+                <div className="empty-whale" aria-hidden="true">🐳</div>
                 <h1>{isTask ? "今天想做点什么？" : "随便聊聊"}</h1>
                 <p>
                   {isTask
@@ -1531,7 +1586,11 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                   key={gi}
                   data-msg-idx={gi}
                   className={`msg-wrap ${multiSel && multiSel.has(gi) ? "msg-wrap-selected" : ""}`}
+                  role={multiSel ? "checkbox" : undefined}
+                  aria-checked={multiSel ? multiSel.has(gi) : undefined}
+                  tabIndex={multiSel ? 0 : undefined}
                   onClick={multiSel ? () => toggleSelect(gi) : undefined}
+                  onKeyDown={multiSel ? (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleSelect(gi); } } : undefined}
                 >
                   <Message
                     msg={m}
@@ -1554,6 +1613,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             <button
               className="jump-bottom"
               title="回到最新"
+              style={composerH ? { bottom: composerH + 14 } : undefined}
               onClick={() => {
                 const sc = scrollRef.current;
                 if (sc) sc.scrollTop = sc.scrollHeight;
@@ -1567,12 +1627,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             </button>
           )}
 
-          <Composer ref={composerRef} busy={busy} onSend={onSend} onStop={onStop} isTask={isTask} />
+          <div className="composer-dock" ref={composerDockRef}>
+            <Composer ref={composerRef} busy={busy} onSend={onSend} onStop={onStop} isTask={isTask} />
+          </div>
         </div>
 
         {ctxOpen && <div className="drawer-scrim scrim-ctx" onClick={() => setCtxOpen(false)} />}
         {ctxOpen && (
-          <ContextPanel data={{ ...(ctx || {}), session: sessionStats }} onClose={() => setCtxOpen(false)} />
+          <ContextPanel data={{ ...(ctx || {}), session: sessionStats }} loading={!ctx && !loadErr} err={loadErr || ""} onClose={() => setCtxOpen(false)} />
         )}
 
         {auxOpen && <div className="drawer-scrim scrim-aux" onClick={() => setAuxOpen(false)} />}

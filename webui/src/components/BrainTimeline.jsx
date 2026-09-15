@@ -4,9 +4,9 @@ import * as api from "../api.js";
 // ── U1 认知时间轴：把「记忆 / 决策 / 时光备份」合成一条可按时间排序、按类别筛选的叙事线 ──
 // 让散落面板变成"大脑的自我成长叙事"——契合"大脑是可延续的自我"的定位。
 const KIND_META = {
-  memory: { label: "记忆", emoji: "📝", color: "var(--accent, #4a8cf7)" },
-  decision: { label: "决策", emoji: "🎯", color: "var(--ok, #2e9e5b)" },
-  snapshot: { label: "时光备份", emoji: "📦", color: "var(--warn, #d99a1b)" },
+  memory: { label: "记忆", emoji: "📝", color: "var(--brand)" },
+  decision: { label: "决策", emoji: "🎯", color: "var(--ok-text)" },
+  snapshot: { label: "时光备份", emoji: "📦", color: "var(--warn-text)" },
 };
 
 function normTs(ts) {
@@ -79,7 +79,7 @@ function BrainTimeline({ snapshots = [] }) {
 
   return (
     <div>
-      {err && <div className="sched-text" style={{ color: "var(--danger)" }}>⚠ {err}</div>}
+      {err && <div className="sched-text" style={{ color: "var(--danger-text)" }}>⚠ {err}</div>}
       {/* 类别筛选 + 类型筛选 */}
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
         {Object.keys(KIND_META).map((k) => (

@@ -15,6 +15,11 @@
   --danger-soft: rgba(239, 68, 68, 0.14);
   --warn: #f59e0b;
   --warn-soft: rgba(245, 158, 11, 0.15);
+  /* 语义色深端（用于渐变收尾：横幅/停止键等彩色底）。三主题共用深值，
+     白字在其上可达 AA。 */
+  --danger-strong: #b91c1c;
+  --ok-strong: #059669;
+  --warn-strong: #b45309;
 
   /* 语义色 RGB 分量（供 rgba(var(--x-rgb), a) 主题感知引用） */
   --brand-rgb: 14, 165, 233;
@@ -23,6 +28,30 @@
   --danger-rgb: 239, 68, 68;
   --warn-rgb: 245, 158, 11;
 
+  /* 彩色底上的前景色（对比度）：亮蓝/亮绿底（深色主题）用深字，浅色主题品牌底用白字。
+     横幅走深色渐变（danger/ok/warn 深端），统一用白字。 */
+  --text-on-brand: #04121f;
+  --text-on-ok: #04121f;
+  --on-banner: #ffffff;
+  --on-banner-soft: rgba(255, 255, 255, .18);
+  --on-banner-soft-hover: rgba(255, 255, 255, .3);
+  --on-banner-track: rgba(255, 255, 255, .28);
+  --on-banner-border: rgba(255, 255, 255, .5);
+
+  /* 语义色「当文字用」的可读变体：深色主题=原色；浅色主题在各自主题块内加深。 */
+  --ok-text: var(--ok);
+  --warn-text: var(--warn);
+  --danger-text: var(--danger);
+
+  /* 代码块 chrome（复制键/语言标签）：代码块恒为深底，三主题统一用半透明白，
+     避免浅色主题下误用 --bg-2(#fff) 变成白底白块的错位。 */
+  --code-chrome-bg: rgba(255, 255, 255, .08);
+  --code-chrome-bg-hover: rgba(255, 255, 255, .16);
+  --code-chrome-border: rgba(255, 255, 255, .18);
+  --code-chrome-text: #aab8d4;
+
+  --r-2xs: 3px;
+  --r-xs: 4px;
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
@@ -36,6 +65,7 @@
   --sp-5: 24px;
   --sp-6: 32px;
 
+  --fs-4xs: 9px;
   --fs-3xs: 10px;
   --fs-2xs: 11px;
   --fs-xs: 12px;
@@ -44,6 +74,7 @@
   --fs-lg: 16px;
   --fs-xl: 20px;
   --fs-2xl: 26px;
+  --fs-3xl: 30px;
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -52,7 +83,7 @@
   /* 动效时长标尺（统一节奏，避免各处 0.15/0.18/0.22 杂乱） */
   --dur-fast: .15s;
   --dur: .2s;
-  --dur-slow: .32s;
+  --dur-slow: .24s;
 
   /* 统一交互过渡（颜色/阴影/位移）。此前 44 处 `transition: background-color, color, … .18s`
      是非法简写——每个属性各自 0s，只有最后的 transform 真正生效，导致 hover 变色是瞬跳。
@@ -112,7 +143,7 @@
   --brand-soft: rgba(14, 165, 233, 0.14);
   --ai: #a78bfa;
   --brand-rgb: 14, 165, 233;
-  --ai-rgb: 139, 92, 246;
+  --ai-rgb: 167, 139, 250;
 
   --scroll-thumb: rgba(140, 165, 255, 0.16);
   --scroll-thumb-hover: rgba(140, 165, 255, 0.30);
@@ -208,7 +239,7 @@
 
   --text-1: #182640;
   --text-2: #4d5d7c;
-  --text-3: #7486a5;
+  --text-3: #5b6b88;
   --text-link: #0284c7;
 
   --brand: #0284c7;
@@ -217,6 +248,12 @@
   --ai: #7c3aed;
   --brand-rgb: 2, 132, 199;
   --ai-rgb: 124, 58, 237;
+
+  /* 浅色主题：品牌蓝足够深，白字可读；语义色当文字须加深才达 AA。 */
+  --text-on-brand: #ffffff;
+  --ok-text: #047857;
+  --warn-text: #b45309;
+  --danger-text: #b91c1c;
 
   --scroll-thumb: rgba(30, 64, 110, 0.22);
   --scroll-thumb-hover: rgba(30, 64, 110, 0.38);
@@ -277,6 +314,8 @@ select, input, textarea { font-family: inherit; }
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+  /* 平滑滚动也需要尊重「减弱动态效果」 */
+  .chat-scroll { scroll-behavior: auto !important; }
 }
 
 /* ═══ 语义别名令牌（供历史/脑组件引用） ═════════════ */

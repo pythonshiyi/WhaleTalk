@@ -68,7 +68,19 @@ export default function ToolCard({ tool, status, args, result, cost, duration })
 
   return (
     <div className={`tool-card tool-${status} ${open ? "tool-open" : ""}`}>
-      <div className="tool-card-head" onClick={() => status !== "running" && setOpen(!open)}>
+      <div
+        className="tool-card-head"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={() => status !== "running" && setOpen(!open)}
+        onKeyDown={(e) => {
+          if ((e.key === "Enter" || e.key === " ") && status !== "running") {
+            e.preventDefault();
+            setOpen(!open);
+          }
+        }}
+      >
         <span className="tool-icon" style={{ color: "var(--ai)" }}>
           <Icon />
         </span>

@@ -54,7 +54,7 @@ function BrainGraph() {
     return { nodes, edges };
   }, [data]);
 
-  if (err) return <div className="sched-text" style={{ color: "var(--danger)" }}>⚠ {err}</div>;
+  if (err) return <div className="sched-text" style={{ color: "var(--danger-text)" }}>⚠ {err}</div>;
   if (!data) return <div className="skeleton" style={{ width: "100%", height: 220, borderRadius: "var(--r-lg)" }} />;
   if (layout.nodes.length === 0)
     return <div className="sched-text" style={{ opacity: 0.7 }}>还没有实体节点——给记忆标注实体/关系后会在这里出现知识图谱。</div>;
@@ -74,14 +74,14 @@ function BrainGraph() {
             onMouseEnter={() => setActive({ x: nd.x, y: nd.y, name: nd.name, types: (nd.types || []).join("、"), deg: nd.deg })}
             onMouseMove={() => setActive({ x: nd.x, y: nd.y, name: nd.name, types: (nd.types || []).join("、"), deg: nd.deg })}
             style={{ cursor: "pointer" }}>
-            <circle cx={nd.x} cy={nd.y} r={nd.r} fill="var(--accent, #4a8cf7)" opacity={0.85} stroke="var(--bg, #fff)" strokeWidth={1} />
+            <circle cx={nd.x} cy={nd.y} r={nd.r} fill="var(--brand)" opacity={0.85} stroke="var(--bg-0)" strokeWidth={1} />
             <text x={nd.x} y={nd.y + 4} textAnchor="middle" fontSize={nd.r > 14 ? 11 : 10} fontWeight={600}
               fill="var(--text-1)" style={{ pointerEvents: "none" }}>{String(nd.name).length > 10 ? String(nd.name).slice(0, 10) + "…" : nd.name}</text>
           </g>
         ))}
         {active && (
           <g transform={`translate(${Math.min(Math.max(active.x, 70), W - 150)}, ${Math.max(active.y - 48, 10)})`}>
-            <rect x="-6" y="-6" width={150} height={38} rx={6} fill="var(--panel, #222)" opacity={0.95} stroke="var(--border-strong)" strokeWidth={0.5} />
+            <rect x="-6" y="-6" width={150} height={38} rx={6} fill="var(--bg-2)" opacity={0.95} stroke="var(--border-strong)" strokeWidth={0.5} />
             <text x="0" y="6" fontSize={11} fontWeight={600} fill="var(--text-1)">{active.name}</text>
             <text x="0" y="21" fontSize={10} fill="var(--text-2)">{active.types || "无类型"}{active.deg ? ` · 关联 ${active.deg}` : ""}</text>
           </g>

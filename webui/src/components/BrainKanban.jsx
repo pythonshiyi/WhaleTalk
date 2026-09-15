@@ -39,7 +39,7 @@ function BrainKanban() {
 
   return (
     <div>
-      {err && <div className="sched-text" style={{ color: "var(--danger)", marginBottom: 8 }}>⚠ {err}</div>}
+      {err && <div className="sched-text" style={{ color: "var(--danger-text)", marginBottom: 8 }}>⚠ {err}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, alignItems: "start" }}>
         {COLS.map((c) => (
           <div key={c.key} style={{ background: "var(--panel)", borderRadius: "var(--r-sm)", padding: 8 }}>

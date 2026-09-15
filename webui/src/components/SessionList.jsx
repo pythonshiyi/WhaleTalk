@@ -118,12 +118,12 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
             onChange={(e) => setQ(e.target.value)}
           />
         </div>
-        <button className="icon-btn" title={multiMode ? "退出多选" : "多选会话"} onClick={toggleMulti} style={{ color: multiMode ? "var(--brand-strong)" : undefined }}>
+        <button className="icon-btn" title={multiMode ? "退出多选" : "多选会话"} aria-label={multiMode ? "退出多选" : "多选会话"} onClick={toggleMulti} style={{ color: multiMode ? "var(--brand-strong)" : undefined }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
           </svg>
         </button>
-        <button className="icon-btn" title="收起" onClick={onClose}>
+        <button className="icon-btn" title="收起" aria-label="收起" onClick={onClose}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <path d="M15 18l-6-6 6-6" />
           </svg>
@@ -134,7 +134,7 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
         <div className="sl-multi-bar">
           <span className="sl-multi-count">已选 {selected.size} 个</span>
           <button className="msg-op" onClick={selectAll}>全选</button>
-          <button className="msg-op" style={{ color: "var(--danger)" }} disabled={!selected.size} onClick={batchDelete}>
+          <button className="msg-op" style={{ color: "var(--danger-text)" }} disabled={!selected.size} onClick={batchDelete}>
             🗑 删除（{selected.size}）
           </button>
           <button className="msg-op" onClick={toggleMulti}>✕ 退出</button>
@@ -190,8 +190,17 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
           return (
             <div
               key={s.id}
+              role="button"
+              tabIndex={0}
               className={`sl-item ${activeId === s.id ? "sl-item-on" : ""} ${multiMode ? "sl-item-multi" : ""} ${isSel ? "sl-item-selected" : ""}`}
               onClick={() => (multiMode ? toggleSel(s.id) : onPick(s.id))}
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  multiMode ? toggleSel(s.id) : onPick(s.id);
+                }
+              }}
               onDoubleClick={() => {
                 if (!multiMode) {
                   setEditingId(s.id);

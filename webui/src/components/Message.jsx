@@ -106,7 +106,19 @@ function ThinkBlock({ text, streaming }) {
   }, [streaming]);
   return (
     <div className={`think-block ${open ? "think-open" : ""}`}>
-      <div className="think-head" onClick={() => setOpen(!open)}>
+      <div
+        className="think-head"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen(!open);
+          }
+        }}
+      >
         <span className="think-dot" />
         <span>思考过程</span>
         {streaming && <span className="think-streaming">进行中</span>}
@@ -193,7 +205,7 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
 
   return (
     <div className="msg msg-assistant">
-      <div className="msg-avatar">
+      <div className="msg-avatar" aria-hidden="true">
         <Whale />
       </div>
       <div className="msg-body">
@@ -252,7 +264,7 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
             <button className="msg-op" title="复制回复" onClick={copy}>
               {copied ? "✓ 已复制" : "📋"}
             </button>
-            <button className="msg-op" title={err ? ("朗读失败：" + err) : loading ? "正在合成语音…" : speaking ? "⏹ 停止朗读" : "🔊 朗读回复（服务端合成，跟随语音设置）"} style={err ? { color: "var(--danger)" } : undefined} onClick={toggleSpeak}>
+            <button className="msg-op" title={err ? ("朗读失败：" + err) : loading ? "正在合成语音…" : speaking ? "⏹ 停止朗读" : "🔊 朗读回复（服务端合成，跟随语音设置）"} style={err ? { color: "var(--danger-text)" } : undefined} onClick={toggleSpeak}>
               {err ? "⚠" : loading ? "⏳" : speaking ? "⏹" : "🔊"}
             </button>
             <button className="msg-op" title={isStarred ? "取消收藏" : "收藏"} onClick={() => onStar && onStar()}>

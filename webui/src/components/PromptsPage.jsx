@@ -40,6 +40,7 @@ export default function PromptsPage({ onApply }) {
   const [src, setSrc] = React.useState("all");
   const [editing, setEditing] = React.useState(null);
   const [tip, setTip] = React.useState("");
+  const [err, setErr] = React.useState("");
   const fileRef = React.useRef(null);
 
   const flash = (t) => {
@@ -48,11 +49,13 @@ export default function PromptsPage({ onApply }) {
   };
 
   const load = React.useCallback(async () => {
+    setErr("");
     try {
       const list = await api.getPrompts();
       setItems(Array.isArray(list) ? list : []);
     } catch {
       setItems([]);
+      setErr("指令库加载失败（后端未连接或接口异常）");
     }
     try {
       const sk = await api.getPluginSkills();
@@ -220,32 +223,41 @@ export default function PromptsPage({ onApply }) {
       </div>
 
       <div className="pm-wrap">
-        <aside className="pm-side">
+        <aside className="pm-side" role="tablist" aria-label="指令来源与分类">
           <div className="pm-side-title">来源</div>
           {SOURCES.map((s) => (
-            <div
+            <button
               key={s.id}
+              role="tab"
+              aria-selected={src === s.id}
               className={`pm-side-item ${src === s.id ? "pm-side-on" : ""}`}
               onClick={() => setSrc(s.id)}
             >
               {s.label}
-            </div>
+            </button>
           ))}
           <div className="pm-side-title">分类</div>
           {cats.map((c) => (
-            <div
+            <button
               key={c}
+              role="tab"
+              aria-selected={cat === c}
               className={`pm-side-item ${cat === c ? "pm-side-on" : ""}`}
               onClick={() => setCat(c)}
             >
               {c}
-            </div>
+            </button>
           ))}
         </aside>
 
         <main className="pm-main">
           {!items && <SkeletonList rows={4} />}
-          {items && filtered.length === 0 && (
+          {items && err && (
+            <div className="empty-tip is-err">
+              {err}　<button className="msg-op" onClick={load}>重试</button>
+            </div>
+          )}
+          {items && !err && filtered.length === 0 && (
             <div className="empty-tip">没有匹配的指令（换个筛选条件，或点「＋ 新建指令」）</div>
           )}
           <div className="pm-grid">

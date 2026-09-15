@@ -27,7 +27,7 @@ function BrainHealth() {
   };
   React.useEffect(() => { runDoctor(false); }, []);
 
-  if (err) return <div className="sched-text" style={{ color: "var(--danger)" }}>⚠ {err}</div>;
+  if (err) return <div className="sched-text" style={{ color: "var(--danger-text)" }}>⚠ {err}</div>;
   if (!health)
     return (
       <div style={{ display: "flex", gap: 18, alignItems: "center", padding: "6px 2px" }}>

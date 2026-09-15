@@ -182,7 +182,7 @@ function FilesTab({ onInject }) {
         <div key={p} className="fx-row" style={{ paddingLeft: 6 + depth * 14 }}>
           <button className={`fx-fav ${isFav(p) ? "fx-fav-on" : ""}`} title={isFav(p) ? "取消收藏" : "收藏文件夹"}
             onClick={(ev) => { ev.stopPropagation(); toggleFav(p); }}>{favIcon(p)}</button>
-          <button className="fx-dir" title={p} onClick={() => toggle(p)}>
+              <button className="fx-dir" title={p} aria-expanded={!!expanded[p]} onClick={() => toggle(p)}>
             {expanded[p] ? "▾" : "▸"} 📁 {e.name}
           </button>
           <button className="fx-act" title="打开该文件夹" onClick={() => openDir(p)}>⌖</button>
@@ -273,7 +273,7 @@ function FilesTab({ onInject }) {
               if (q && !e.name.toLowerCase().includes(q.toLowerCase())) {
                 // 搜索模式下仅展开含匹配项的目录
                 return e.is_dir ? <React.Fragment key={e.path}><div style={{ paddingLeft: 6 }} className="fx-row">
-                  <button className="fx-dir" onClick={() => toggle(e.path)}>{expanded[e.path] ? "▾" : "▸"} 📁 {e.name}</button>
+                  <button className="fx-dir" aria-expanded={!!expanded[e.path]} onClick={() => toggle(e.path)}>{expanded[e.path] ? "▾" : "▸"} 📁 {e.name}</button>
                 </div>{renderDir(e.path, 0)}</React.Fragment> : null;
               }
               return (
@@ -670,7 +670,7 @@ function ActivityTab({ activity, products, onOpenChatTools, onGoFiles, onInject 
             const isRun = s.status === "running";
             return (
               <div key={i} className={"act-item " + (isOpen ? "act-open " : "") + s.status}>
-                <button className="act-row" onClick={() => setExpanded(isOpen ? null : i)}>
+                <button className="act-row" aria-expanded={isOpen} onClick={() => setExpanded(isOpen ? null : i)}>
                   <span className="act-icon">
                     {isRun ? <span className="act-spin" /> : s.status === "done" ? "✓" : s.status === "failed" ? "✕" : "…"}
                   </span>
@@ -723,15 +723,15 @@ export default function AuxPanel({ onClose, onInjectFile, activity, products, on
           </svg>
         </button>
       </div>
-      <div className="aux-tabs">
-        <button className={`aux-tab-btn ${curTab === "activity" ? "aux-tab-on" : ""}`}
+      <div className="aux-tabs" role="tablist">
+        <button role="tab" aria-selected={curTab === "activity"} className={`aux-tab-btn ${curTab === "activity" ? "aux-tab-on" : ""}`}
           onClick={() => setCurTab("activity")}
           title="AI 工具调用链（实时，点开看细节）">🔧 活动
           {activity && activity.streaming && <span className="aux-tab-dot" aria-hidden="true" />}
         </button>
-        <button className={`aux-tab-btn ${curTab === "params" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("params")}>🎛 参数</button>
-        <button className={`aux-tab-btn ${curTab === "files" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("files")}>📂 文件</button>
-        <button className={`aux-tab-btn ${curTab === "procs" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("procs")}>⚙ 进程</button>
+        <button role="tab" aria-selected={curTab === "params"} className={`aux-tab-btn ${curTab === "params" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("params")}>🎛 参数</button>
+        <button role="tab" aria-selected={curTab === "files"} className={`aux-tab-btn ${curTab === "files" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("files")}>📂 文件</button>
+        <button role="tab" aria-selected={curTab === "procs"} className={`aux-tab-btn ${curTab === "procs" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("procs")}>⚙ 进程</button>
       </div>
       <div className="aux-body">
         {curTab === "activity" && <ActivityTab activity={activity} products={products || []} onOpenChatTools={onOpenChat} onGoFiles={() => setCurTab("files")} onInject={onInjectFile} />}

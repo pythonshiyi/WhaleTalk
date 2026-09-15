@@ -3,6 +3,7 @@ import * as api from "../api.js";
 import formatToolResult from "../formatToolResult.js";
 
 import { silentWarn } from "../quiet.js";
+import { useFocusTrap } from "../useFocusTrap.js";
 // ── 能力测试台：JSON Schema → 表单 → 直调工具 ────────
 function Field({ name, prop, value, onChange, required }) {
   const type = prop.type || "string";
@@ -90,14 +91,17 @@ export default function ToolTest({ name, onClose }) {
   const [values, setValues] = React.useState({});
   const [result, setResult] = React.useState("");
   const [running, setRunning] = React.useState(false);
+  const [err, setErr] = React.useState("");
+  const panelRef = React.useRef(null);
+  useFocusTrap(panelRef);
 
   React.useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const s = await api.getToolSchema(name);
-        if (alive && s) setSchema(s);
-      } catch (e) { silentWarn(e, "ToolTest"); }
+        if (alive) { if (s) setSchema(s); else setErr("工具定义读取失败"); }
+      } catch (e) { silentWarn(e, "ToolTest"); if (alive) setErr("工具定义读取失败（后端未连接）"); }
     })();
     return () => {
       alive = false;
@@ -112,9 +116,8 @@ export default function ToolTest({ name, onClose }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  if (!schema) return null;
-  const props = schema.parameters?.properties || {};
-  const required = schema.parameters?.required || [];
+  const props = schema ? (schema.parameters?.properties || {}) : {};
+  const required = schema ? (schema.parameters?.required || []) : [];
 
   const invoke = async () => {
     setRunning(true);
@@ -130,11 +133,11 @@ export default function ToolTest({ name, onClose }) {
 
   return (
     <div className="confirm-mask" onClick={onClose}>
-      <div className="tf-panel" onClick={(e) => e.stopPropagation()}>
+      <div ref={panelRef} className="tf-panel" role="dialog" aria-modal="true" aria-label={name} onClick={(e) => e.stopPropagation()}>
         <div className="confirm-head">
           <b>
             🔧 {name}
-            <span className="tf-custom">{schema.custom ? "（自定义/交互工具，请对话中触发）" : "（测试台直调）"}</span>
+            {schema && <span className="tf-custom">{schema.custom ? "（自定义/交互工具，请对话中触发）" : "（测试台直调）"}</span>}
           </b>
           <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -142,6 +145,12 @@ export default function ToolTest({ name, onClose }) {
             </svg>
           </button>
         </div>
+        {!schema ? (
+          err
+            ? <div className="empty-tip is-err">{err}</div>
+            : <div className="empty-tip is-loading">正在读取工具定义…</div>
+        ) : (
+        <>
         <div className="tf-desc-line">{schema.description}</div>
         <div className="tf-fields">
           {Object.keys(props).length === 0 && <div className="empty-tip">该工具无参数，直接点击执行</div>}
@@ -175,6 +184,8 @@ export default function ToolTest({ name, onClose }) {
             </div>
             <pre>{result}</pre>
           </div>
+        )}
+        </>
         )}
       </div>
     </div>

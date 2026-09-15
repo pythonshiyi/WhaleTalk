@@ -2,7 +2,62 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.11.1（未发版追加）—— 🎨 前端 UI 精修（P0→P2 三批）
+
+**主题：不追新功能，只把已有界面的边界与细节打磨到一致。** 三次审计（令牌合规 /
+三态与无障碍 / 响应式与动效）定位 120+ 处问题，分三批修复；仅动 `webui/` 与设计文档，
+不改任何后端契约。
+
+### P0 · 正确性与可达性
+
+- **悬停操作可达**：`.msg-ops`/`.sl-item-actions`/`.md-code-copy`/`.fx-act` 原 `opacity:0`+`:hover`
+  揭示，触屏与键盘完全够不到 → 增 `:focus-within` + `@media (hover:none)` 恒显；会话行/工具卡/
+  思考块等 `div onClick` 补 `role`/`tabIndex`/Enter·Space
+- **窄屏抽屉**：`listOpen`/`auxOpen` 默认 `true` 却在 ≤1000/860px 变浮层遮挡对话 →
+  按 `matchMedia` 初始化 + 跨断点自动收起
+- **浅色主题对比度**：新增 `--text-on-brand`/`--ok-text`/`--warn-text`/`--danger-text` 等令牌，
+  语义色当文字一律走可读变体；北极冰 `--text-3` 调深；修深色主题白字于亮蓝底的对比不足
+- **三态不再造假**：`BrainBlock` 加载中不再闪「创造大脑」；`Prompts/Autonomy/Tasks` 等
+  失败不再伪装成空态/成功态，统一 `empty-tip.is-err` + 重试
+- **动效功能 bug**：开关旋钮改 `transform`（原 `left` 不在过渡属性中→瞬移）；6 处
+  `transition: … var(--ease, 0.2s)`（缓动误当时长→无效）→ `--t-colors`；消除重复入场动画
+
+### P1 · 一致性收敛
+
+- 去掉 **109 处**冗余令牌兜底；裸 hex 仅剩已登记的主题预览色块
+- 值保持地把 **456 处**间距、全部可映射的字号/圆角吸附到 `--sp-*`/`--fs-*`/`--r-*`；
+  新增 `--fs-4xs/--fs-3xl`、`--r-2xs/--r-xs`、`--dur-slow` 收敛到 ≤240ms
+- 组件归一：卡片圆角、Tab 家族（`ab/au/brain`）、图标尺寸、阴影；新增
+  `--danger-strong/--ok-strong/--warn-strong` 承接横幅渐变端点
+- 响应式补 ≤1100px 顶栏换行、抽屉宽度钳制、grid `minmax(min(320px,100%),1fr)`、横幅换行
+- 进度条 `width`→`transform: scaleX`；`box-shadow` 呼吸→伪元素 `transform/opacity` 光环
+
+### P2 · 无障碍与错误反馈
+
+- **语义**：流式正文 `role="log" aria-live="polite"`；状态条 `role="status"`；
+  折叠项 `aria-expanded`；图标按钮 `aria-label`；标签组 `role="tablist"/"tab"+aria-selected`；
+  装饰元素 `aria-hidden`；模式切换 `aria-pressed`
+- **弹层**：`role="dialog" aria-modal` + Esc + `useFocusTrap` 焦点陷阱（PluginsPage/ToolTest/
+  AutonomyPage/Overlay）；ChatPage 抽屉支持 Esc 关闭
+- **错误反馈**：清除全部 `alert()`（插件装卸/进化采纳/记忆增删/导入校验）→ 页内 tip/toast；
+  流式报错不再把原始技术文本写进助手气泡
+- **微交互**：修复 `.slash-menu` 滚动条拇指不可见；代码块 chrome 改恒深底令牌（修浅色主题白底错位）；
+  「回到最新」浮钮按输入区实测高度定位（不再硬编码 `bottom:152px`）
+
+### ✅ 验证
+
+`npm run typecheck` + 7 套 node 测试 + `npm run build` 全绿；
+`python tools/check_docs.py` 数字一致（151 工具 / 96 端点 / v3.11.0）。
+真机深浅主题目检与触屏/键盘走查建议在浏览器端复验。
+
+### 📄 设计系统
+
+`docs/DESIGN_SYSTEM.md` 增补：可访问性前景令牌表（§1b）、`--r-2xs/--r-xs`/`--fs-4xs/3xl`
+/`--dur-slow` 标尺、三态与无障碍评审 Checklist、已登记例外（`exporters.js` 模板、主题预览色块、
+超大图标字号、少量历史微调间距）。
+
 ## v3.11.1（未发版追加）—— 🌱 自我洞察批次：能力热力图 · 自我述职 · 信任内核故事线
+
 
 **主题：让智能体「看见自己」。** 原料早已存在（tasklog / 失败库 / 成功模式 /
 技能结晶 / 预激活命中 / 大脑决策目标 / 信任账本），缺的是把它们变成自我认知的一环。

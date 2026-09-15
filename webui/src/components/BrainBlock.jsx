@@ -29,6 +29,7 @@ function BrainBlock() {
   const [genesis, setGenesis] = React.useState("");
   const [createWithKeyring, setCreateWithKeyring] = React.useState(true);
   const [connErr, setConnErr] = React.useState("");
+  const [loading, setLoading] = React.useState(true);
   const [acc, setAcc] = React.useState(""); // merge | migrate | cleanup
   const [mirrorDir, setMirrorDir] = React.useState(""); // B5 异地备份目录
   const [tlOpen, setTlOpen] = React.useState(false); // U1 认知时间轴（懒加载，默认折叠）
@@ -75,6 +76,7 @@ function BrainBlock() {
       setConnErr(why);
       if (!quiet) setMsg(why);
     }
+    setLoading(false);
   };
   React.useEffect(() => { load(true); }, []);
 
@@ -225,17 +227,26 @@ function BrainBlock() {
     <div className="sched-line1" style={{ marginBottom: 12 }}>
       <b style={{ fontSize: 15, letterSpacing: 0.5 }}>⬡ 鲸语大脑</b>
       <span className="sched-action" style={{ fontSize: "var(--fs-xs)" }}>
-        {noBrain ? "尚未诞生" : `已存活 ${fmtT(b.created_at).slice(0, 10)} 起 · v${b.current_version || 0}`}
+        {loading ? "读取中…" : noBrain ? "尚未诞生" : `已存活 ${fmtT(b.created_at).slice(0, 10)} 起 · v${b.current_version || 0}`}
       </span>
       <button className="msg-op" onClick={() => load(false)}>刷新</button>
     </div>
   );
 
+  if (loading) {
+    return (
+      <div className="svc-actions" style={{ display: "block" }}>
+        {head}
+        <div className="empty-tip is-loading">正在读取大脑状态…</div>
+      </div>
+    );
+  }
+
   if (connErr) {
     return (
       <div className="svc-actions" style={{ display: "block" }}>
         {head}
-        <div className="sched-text" style={{ color: "var(--danger)" }}>
+        <div className="sched-text" style={{ color: "var(--danger-text)" }}>
           ⚠ {connErr}
           <div style={{ marginTop: 6 }}><button className="msg-op" onClick={() => load(false)}>重试</button></div>
         </div>
@@ -379,7 +390,7 @@ function BrainBlock() {
         <div className="brain-card-title">
           <span>🗓 认知时间轴</span>
           <i>把记忆、决策、时光备份按时间铺成一条线——回看大脑一路怎么长</i>
-          <button className="msg-op" style={{ marginLeft: "auto" }} onClick={() => setTlOpen(!tlOpen)}>
+          <button className="msg-op" style={{ marginLeft: "auto" }} aria-expanded={tlOpen} onClick={() => setTlOpen(!tlOpen)}>
             {tlOpen ? "收起" : "展开"}
           </button>
         </div>
@@ -495,7 +506,7 @@ function BrainBlock() {
 
         {/* 融合两段记忆 */}
         <div className={`acc-item ${acc === "merge" ? "open" : ""}`}>
-          <button className="acc-head" onClick={() => setAcc(acc === "merge" ? "" : "merge")}>
+          <button className="acc-head" aria-expanded={acc === "merge"} onClick={() => setAcc(acc === "merge" ? "" : "merge")}>
             <span className="acc-arrow">▸</span> 融合两段记忆（分支合并）
             <span className="acc-desc">把两个时光备份的经历合成一个</span>
           </button>
@@ -530,13 +541,13 @@ function BrainBlock() {
                     <span className="tl-dot" style={{ background: "var(--warn)" }} /> 分支 v{mergeB}
                     {preview.lca_found
                       ? <span style={{ opacity: 0.8 }}>→ 找到共同祖先，可做三路合并（更安全）</span>
-                      : <span style={{ color: "var(--warn)" }}>→ 未找到共同祖先（历史快照缺失），将做双路合并</span>}
+                      : <span style={{ color: "var(--warn-text)" }}>→ 未找到共同祖先（历史快照缺失），将做双路合并</span>}
                   </div>
                   {preview.conflict_count >= 0 && (
                     <div style={{ marginTop: 6, fontSize: "var(--fs-xs)" }}>
                       {preview.conflict_count === 0
-                        ? <span style={{ color: "var(--ok)" }}>✓ 预演无冲突，可直接融合</span>
-                        : <span style={{ color: "var(--warn)" }}>⚠ 预演将产生 {preview.conflict_count} 条待裁决冲突：</span>}
+                        ? <span style={{ color: "var(--ok-text)" }}>✓ 预演无冲突，可直接融合</span>
+                        : <span style={{ color: "var(--warn-text)" }}>⚠ 预演将产生 {preview.conflict_count} 条待裁决冲突：</span>}
                       {(preview.conflicts_preview || []).length > 0 && (
                         <div style={{ marginTop: 4, paddingLeft: 10, opacity: 0.85 }}>
                           {preview.conflicts_preview.map((c) => <div key={c.id}>• {c.file}</div>)}
@@ -578,7 +589,7 @@ function BrainBlock() {
 
         {/* 迁徙到新设备 */}
         <div className={`acc-item ${acc === "migrate" ? "open" : ""}`}>
-          <button className="acc-head" onClick={() => setAcc(acc === "migrate" ? "" : "migrate")}>
+          <button className="acc-head" aria-expanded={acc === "migrate"} onClick={() => setAcc(acc === "migrate" ? "" : "migrate")}>
             <span className="acc-arrow">▸</span> 迁徙到新设备（免密密钥）
             <span className="acc-desc">把大脑带去另一台电脑，免密解锁</span>
           </button>
@@ -600,7 +611,7 @@ function BrainBlock() {
 
         {/* 分享与多大脑 */}
         <div className={`acc-item ${acc === "share" ? "open" : ""}`}>
-          <button className="acc-head" onClick={() => { setAcc(acc === "share" ? "" : "share"); if (acc !== "share") loadDirs(); }}>
+          <button className="acc-head" aria-expanded={acc === "share"} onClick={() => { setAcc(acc === "share" ? "" : "share"); if (acc !== "share") loadDirs(); }}>
             <span className="acc-arrow">▸</span> 分享大脑 · 多大脑切换
             <span className="acc-desc">脱敏导出记忆精华分享；在多个大脑之间切换</span>
           </button>
@@ -632,7 +643,7 @@ function BrainBlock() {
 
         {/* 维护清理 */}
         <div className={`acc-item ${acc === "cleanup" ? "open" : ""}`}>
-          <button className="acc-head" onClick={() => setAcc(acc === "cleanup" ? "" : "cleanup")}>
+          <button className="acc-head" aria-expanded={acc === "cleanup"} onClick={() => setAcc(acc === "cleanup" ? "" : "cleanup")}>
             <span className="acc-arrow">▸</span> 维护清理
             <span className="acc-desc">清理融合残留与过期备份，保留最近 2 份</span>
           </button>

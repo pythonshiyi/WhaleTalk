@@ -4,7 +4,7 @@ import React from "react";
 export default function EmptyState({ icon = "🫧", title, hint, children, compact }) {
   return (
     <div className={`empty-state ${compact ? "empty-state-compact" : ""}`}>
-      <div className="empty-state-icon">{icon}</div>
+      <div className="empty-state-icon" aria-hidden="true">{icon}</div>
       {title && <div className="empty-state-title">{title}</div>}
       {hint && <div className="empty-state-hint">{hint}</div>}
       {children && <div className="empty-state-action">{children}</div>}

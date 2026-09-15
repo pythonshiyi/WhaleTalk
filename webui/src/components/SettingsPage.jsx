@@ -94,10 +94,20 @@ function NumInput({ value, onChange, min, max, step }) {
 // ── 配置方案（API Key + 网关 + 模型 组合一键切换）──────
 function ProfilesBlock({ onTip }) {
   const [data, setData] = React.useState(null);
+  const [err, setErr] = React.useState("");
   const [nameDraft, setNameDraft] = React.useState("");
-  const load = () => api.getProfiles().catch(() => null).then((d) => d && setData(d));
+  const load = () => { setErr(""); return api.getProfiles().then((d) => d && setData(d)).catch(() => setErr("配置方案加载失败（后端未连接）")); };
   React.useEffect(() => { load(); }, []);
-  if (!data) return null;
+  if (!data) {
+    return (
+      <div className="svc-group">
+        <div className="svc-title">🗂 配置方案（API Key + 网关 + 模型 整套切换）</div>
+        {err
+          ? <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
+          : <div className="empty-tip is-loading">正在加载配置方案…</div>}
+      </div>
+    );
+  }
   const act = async (action, name) => {
     const d = await api.profileAction(action, name).catch(() => null);
     if (d && d.ok) {
@@ -241,11 +251,18 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
 // ── 外部服务（邮件/IM/Webhook/数据库/图片/接收端）──────
 function ServicesTab({ cfg, onTip }) {
   const [svc, setSvc] = React.useState(null);
+  const [err, setErr] = React.useState("");
   const [saving, setSaving] = React.useState(false);
-  React.useEffect(() => {
-    api.getServices().catch(() => null).then((d) => d && setSvc(d));
+  const load = React.useCallback(() => {
+    setErr("");
+    return api.getServices().then((d) => d && setSvc(d)).catch(() => setErr("外部服务加载失败（后端未连接）"));
   }, []);
-  if (!svc) return <SkeletonList rows={4} />;
+  React.useEffect(() => { load(); }, [load]);
+  if (!svc) {
+    return err
+      ? <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
+      : <SkeletonList rows={4} />;
+  }
 
   const field = (group, key) => (svc[group] || {})[key] || "";
   const setField = (group, key, val) =>
@@ -417,7 +434,7 @@ function AdvancedTab({ cfg, saveField, onReset, onGoPrompts }) {
       </div>
       <div className="svc-group">
         <div className="svc-title">♻️ 恢复默认</div>
-        <button className="confirm-btn" style={{ color: "var(--danger)" }} onClick={onReset}>
+        <button className="confirm-btn" style={{ color: "var(--danger-text)" }} onClick={onReset}>
           恢复全部默认配置（保留 API Key）
         </button>
       </div>
@@ -467,9 +484,12 @@ function BackupBlock() {
 // ── C2 更新检查 ────────────────────────────────────
 function UpdateBlock() {
   const [info, setInfo] = React.useState(null);
+  const [err, setErr] = React.useState("");
   const check = async () => {
+    setErr("");
     const d = await api.getUpdateCheck().catch(() => null);
     if (d) setInfo(d);
+    else setErr("更新检查失败（后端未连接）");
   };
   React.useEffect(() => { check(); }, []);
   return (
@@ -477,7 +497,7 @@ function UpdateBlock() {
       <div className="sched-line1">
         <b>🚀 更新检查</b>
         <span className="sched-action">
-          {info ? `当前 v${info.current} · ${info.has_update ? `新版 v${info.latest} 可用` : "已是最新"}` : "检查中…"}
+          {info ? `当前 v${info.current} · ${info.has_update ? `新版 v${info.latest} 可用` : "已是最新"}` : err || "检查中…"}
         </span>
         <button className="msg-op" onClick={check}>检查</button>
       </div>
@@ -525,7 +545,7 @@ function CleanupBlock() {
           </button>
         ))}
       </div>
-      <button className="confirm-btn" style={{ color: "var(--danger)" }} disabled={!items.length} onClick={doClean}>
+      <button className="confirm-btn" style={{ color: "var(--danger-text)" }} disabled={!items.length} onClick={doClean}>
         执行清理（{items.length} 项）
       </button>
       {tip && <div className="px-tip">{tip}</div>}
@@ -632,7 +652,7 @@ function DepsBlock() {
         <div className="deps-stat">
           <b>{allOk}/{allTotal}</b>
           <span>已就绪</span>
-          <div className="deps-progress"><i style={{ width: pct + "%" }} /></div>
+          <div className="deps-progress"><i style={{ transform: `scaleX(${(pct || 0) / 100})` }} /></div>
         </div>
       </div>
 
@@ -702,16 +722,25 @@ function DepsBlock() {
 // ── B1 流程管理 ────────────────────────────────────
 function WorkflowsBlock() {
   const [wfs, setWfs] = React.useState(null);
+  const [err, setErr] = React.useState("");
+  const [tip, setTip] = React.useState("");
   const [name, setName] = React.useState("");
   const [steps, setSteps] = React.useState("");
-  React.useEffect(() => {
-    api.getWorkflows().catch(() => null).then((d) => d && setWfs(d.workflows || {}));
+  const load = React.useCallback(() => {
+    setErr("");
+    return api.getWorkflows().then((d) => d && setWfs(d.workflows || {})).catch(() => setErr("流程加载失败（后端未连接）"));
   }, []);
-  if (!wfs) return <SkeletonList rows={3} />;
+  React.useEffect(() => { load(); }, [load]);
+  if (!wfs) {
+    return err
+      ? <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
+      : <SkeletonList rows={3} />;
+  }
 
   const save = async (data) => {
     const d = await api.saveWorkflows(data).catch(() => null);
     if (d && d.ok) setWfs(data);
+    else { setTip("❌ 保存失败"); setTimeout(() => setTip(""), 2500); }
   };
 
   const add = () => {
@@ -725,10 +754,11 @@ function WorkflowsBlock() {
   const run = async (n) => {
     try {
       await api.invokeTool("run_workflow", { name: n });
-      alert("已触发流程执行（后台运行）");
+      setTip("✅ 已触发流程执行（后台运行）");
     } catch (e) {
-      alert(`执行失败：${e.message}`);
+      setTip("❌ 执行失败：" + (e && e.message ? e.message : ""));
     }
+    setTimeout(() => setTip(""), 3000);
   };
 
   return (
@@ -749,6 +779,7 @@ function WorkflowsBlock() {
         <input className="set-select set-combo" placeholder="步骤（每行一步）" value={steps} onChange={(e) => setSteps(e.target.value)} />
         <button className="confirm-btn confirm-primary" onClick={add}>＋ 添加</button>
       </div>
+      {tip && <div className="px-tip">{tip}</div>}
     </div>
   );
 }
@@ -756,10 +787,17 @@ function WorkflowsBlock() {
 // ── B2 检查点 ──────────────────────────────────────
 function CheckpointBlock() {
   const [cp, setCp] = React.useState(null);
-  React.useEffect(() => {
-    api.getCheckpoint().catch(() => null).then((d) => d && setCp(d));
+  const [err, setErr] = React.useState("");
+  const load = React.useCallback(() => {
+    setErr("");
+    return api.getCheckpoint().then((d) => d && setCp(d)).catch(() => setErr("检查点加载失败（后端未连接）"));
   }, []);
-  if (!cp) return <SkeletonList rows={3} />;
+  React.useEffect(() => { load(); }, [load]);
+  if (!cp) {
+    return err
+      ? <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
+      : <SkeletonList rows={3} />;
+  }
   const has = cp && (cp.name || cp.status || cp.pending);
   return (
     <div className="svc-actions" style={{ display: "block" }}>
@@ -782,10 +820,21 @@ function CheckpointBlock() {
 // ── B5 知识库 ──────────────────────────────────────
 function KnowledgeBlock() {
   const [kb, setKb] = React.useState(null);
-  React.useEffect(() => {
-    api.getKnowledge().catch(() => null).then((d) => d && setKb(d));
+  const [err, setErr] = React.useState("");
+  const load = React.useCallback(() => {
+    setErr("");
+    return api.getKnowledge().then((d) => d && setKb(d)).catch(() => setErr("知识库加载失败（后端未连接）"));
   }, []);
-  if (!kb) return null;
+  React.useEffect(() => { load(); }, [load]);
+  if (!kb) {
+    return (
+      <div className="svc-actions" style={{ display: "block" }}>
+        {err
+          ? <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
+          : <div className="empty-tip is-loading">正在加载知识库…</div>}
+      </div>
+    );
+  }
   return (
     <div className="svc-actions" style={{ display: "block" }}>
       <div className="sched-line1">
@@ -872,7 +921,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
         window.location.hash = "";
         setTimeout(() => {
           const el = document.querySelector(".svc-group");
-          if (el) el.scrollIntoView({ behavior: "smooth" });
+          if (el) el.scrollIntoView({ behavior: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
         }, 120);
       }
     } catch (e) { silentWarn(e, "SettingsPage"); }
@@ -927,16 +976,21 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
 
   const saveField = async (patch, silent = false) => {
     setCfg((c) => ({ ...c, ...patch }));
+    let d = null;
     try {
-      const d = await api.saveConfig(patch).catch(() => null);
-      if (d && d.ok && !silent) {
-        setTip("已保存");
-        setTimeout(() => setTip(""), 1500);
-      }
-      return d;
+      d = await api.saveConfig(patch);
     } catch {
-      return null;
+      d = null;
     }
+    if (!(d && d.ok)) {
+      // 失败绝不静默：否则用户以为设置已生效（乐观更新已改本地 cfg）
+      setTip("❌ 保存失败，请检查后端连接后重试");
+      setTimeout(() => setTip(""), 3000);
+    } else if (!silent) {
+      setTip("已保存");
+      setTimeout(() => setTip(""), 1500);
+    }
+    return d;
   };
 
   const applyPreset = async (preset) => {
@@ -945,6 +999,9 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
       setCfg((c) => ({ ...c, ...preset.cfg }));
       setTip(`已应用预设「${preset.name}」`);
       setTimeout(() => setTip(""), 2000);
+    } else {
+      setTip("❌ 预设应用失败，请稍后重试");
+      setTimeout(() => setTip(""), 3000);
     }
   };
 
@@ -1092,14 +1149,14 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
             )
           )}
           <div className="set-layout">
-            <div className="set-nav">
+            <div className="set-nav" role="tablist" aria-label="设置分类">
               {TABS.map((t) => {
                 const sp = t.label.indexOf(" ");
                 const icon = sp > 0 ? t.label.slice(0, sp) : "•";
                 const text = sp > 0 ? t.label.slice(sp + 1) : t.label;
                 return (
-                  <button key={t.id} className={`set-nav-item ${tab === t.id ? "set-nav-item-on" : ""}`} onClick={() => setTab(t.id)}>
-                    <span className="set-nav-icon">{icon}</span>
+                  <button key={t.id} role="tab" aria-selected={tab === t.id} className={`set-nav-item ${tab === t.id ? "set-nav-item-on" : ""}`} onClick={() => setTab(t.id)}>
+                    <span className="set-nav-icon" aria-hidden="true">{icon}</span>
                     <span>{text}</span>
                   </button>
                 );

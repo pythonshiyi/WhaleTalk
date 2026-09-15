@@ -29,6 +29,19 @@
 软底（`--*-soft`）与 RGB 分量（`--*-rgb`）配套使用：底色用 `var(--X-soft)`，需要透明度叠加用 `rgba(var(--X-rgb),a)`。
 语义别名（`--accent≈--brand`、`--success≈--ok`、`--panel≈--bg-2`、`--bg≈--bg-0`）为兼容历史组件，**新代码用规范名**。
 
+### 1b. 可访问性前景令牌（彩色底上的文字，2026-09 补）
+
+| 令牌 | 用途 | 取值策略 |
+|---|---|---|
+| `--text-on-brand` | 品牌渐变按钮/圆点上的前景 | 深色主题=深墨蓝（亮蓝底），北极冰=白（深蓝底） |
+| `--text-on-ok` | 成功色实底上的前景 | 深墨蓝（#10b981 亮绿底，三主题通用） |
+| `--on-banner` / `--on-banner-soft` / `--on-banner-soft-hover` / `--on-banner-track` / `--on-banner-border` | 顶部横幅（danger/ok/warn 深渐变）上的白字与半透明白控件 | 三主题统一白 |
+| `--ok-text` / `--warn-text` / `--danger-text` | **语义色当「正文文字」用**时的可读变体 | 深色主题=原色；北极冰加深（ok `#047857` / warn `#b45309` / danger `#b91c1c`） |
+
+> 规则：`var(--ok)` 等语义色只用于**色块/图标底**；一旦作为**文字前景**，必须用 `--ok-text` 等变体，
+> 否则北极冰下对比度不足 AA。浅色主题 `--text-3` 已由 `#7486a5` 调深至 `#5b6b88`。
+
+
 ## 2. 表面 / 边框 / 阴影
 
 | 令牌 | 含义 | 层级 |
@@ -46,11 +59,11 @@
 
 | 族 | 令牌 | 建议 |
 |---|---|---|
-| 圆角 | `--r-sm 6 / --r-md 10 / --r-lg 14 / --r-xl 18 / --r-full 999` | 卡片 `--r-lg`，控件 `--r-sm/md` |
-| 间距 | `--sp-1..6 = 4/8/12/16/24/32px` | 组内小、组间大 |
-| 字号 | `--fs-xs 12 / sm 13 / md 14 / lg 16 / xl 20 / 2xl 26` | 正文 `--fs-md`，说明 `--fs-sm`，弱 `--fs-xs` |
+| 圆角 | `--r-2xs 3 / --r-xs 4 / --r-sm 6 / --r-md 10 / --r-lg 14 / --r-xl 18 / --r-full 999` | 卡片 `--r-lg`，控件 `--r-sm/md`，进度条/勾选框等微元素 `--r-2xs/--r-xs` |
+| 间距 | `--sp-1..6 = 4/8/12/16/24/32px`（8px 网格） | 组内小、组间大 |
+| 字号 | `--fs-4xs 9 / 3xs 10 / 2xs 11 / xs 12 / sm 13 / md 14 / lg 16 / xl 20 / 2xl 26 / 3xl 30` | 正文 `--fs-md`，说明 `--fs-sm`，弱 `--fs-xs`，微标签 `--fs-4xs/3xs` |
 | 字体 | `--font-ui`（界面）/ `--font-mono`（代码/数字） | 代码/行号用 mono |
-| 动效 | `--ease = cubic-bezier(.22,1,.36,1)` | 时长 120–240ms；只动 transform/opacity；尊重 `prefers-reduced-motion` |
+| 动效 | `--ease = cubic-bezier(.22,1,.36,1)`；时长 `--dur-fast .15 / --dur .2 / --dur-slow .24` | 时长 ≤240ms；只动 transform/opacity；尊重 `prefers-reduced-motion`（含平滑滚动） |
 
 ## 4. 代码高亮（恒深底，跨主题亮色系）
 
@@ -76,10 +89,15 @@
 - [ ] 动效：只动 transform/opacity，时长≤240ms；`reduced-motion` 下应完全静止
 - [ ] 文本：正文用 `--text-1`，勿用 `--text-1` 之外的近似色替代；代码走 mono
 - [ ] 键盘可达：Tab 顺序合理，弹窗可 Esc/✕ 关闭，不出现"无出口"态
+- [ ] 悬停操作：`opacity:0` + `:hover` 揭示的操作（消息操作/会话操作/复制）必须同时支持 `:focus-within`（键盘）与 `@media (hover:none)`（触屏）恒显
+- [ ] 语义/无障碍：图标-only 按钮有 `aria-label`；折叠项有 `aria-expanded`；标签组 `role="tablist"`+`role="tab"`+`aria-selected`；弹层 `role="dialog"`+`aria-modal`+Esc+焦点陷阱（`useFocusTrap`）；流式正文 `role="log" aria-live="polite"`，状态条 `role="status"`
+- [ ] 三态一致：加载用 `.empty-tip.is-loading` 或 Skeleton；错误用 `.empty-tip.is-err`（含 `⚠` 自动前缀）+ 重试；空态用 `EmptyState`/`.empty-tip`；**错误不得复用空态文案**
 - [ ] 深/浅主题：至少切星海 + 北极冰目检一次
 
 ## 7. 维护约定
 
 - 新增组件样式放 `app.css` 对应 `═══` 区段下（见文件顶部 TOC 索引）。
 - 新增令牌：先在 `theme.css` 定义（三主题都要给值），勿只在组件内联 `var(--x, #兜底)`——历史教训：幽灵变量静默落 hex 兜底、不随主题。
+- **已登记例外（硬编码色值，勿再复制）**：① `exporters.js` 导出独立 HTML 模板——运行时无 `:root`，须内置色值；② `SettingsPage.jsx` 主题预览色块与 `app.css` 的 `.px-theme-dot`——预览需展示各主题原始底色，非当前主题令牌。新增例外请在此登记。
+- **已登记例外（尺寸）**：① 超大字（`.welcome-logo 64` / `.app-boot-whale 56` / `.empty-whale 52` / `.wmode-icon 36`）为图标/emoji 视觉尺寸，非文字排版层级，不纳入 `--fs-*`；② 少量 6/7/9/10/14/18px 间距为历史微调，新代码请用 `--sp-*` 8px 网格，勿再新增裸值。
 - 全局改 `transition` 只列具体属性，勿用 `all`。

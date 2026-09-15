@@ -36,13 +36,14 @@ const REQUEST_TIMEOUT = 15000;
  * tool_duration→name+duration；usage→usage 对象；compressed→removed_turns 等；
  * ask/approval→rid/kind/提示语；error→message。
  * @typedef {Object} SSEEvent
- * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"compressed"|"ask_request"|"approval_request"|"done"|"error"} type 事件类型
+ * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"ask_request"|"approval_request"|"done"|"error"} type 事件类型
  * @property {string} [text] 增量文本
  * @property {string} [name] 工具名
  * @property {Object} [args] 工具参数
  * @property {Object} [result] 工具结果
  * @property {number} [duration] 工具耗时（秒）
  * @property {{prompt:number, completion:number, cache_hit:number, cache_miss:number}} [usage] token 用量与缓存命中
+ * @property {Object} [metrics] 实时速率统计（首次字延迟/输出 tok/s 等）
  * @property {{removed_turns:number, mode:string, archived_path?:string}} [compressed] 上下文压缩信息
  * @property {string} [rid] 审批/询问请求 id（回传 /v1/respond）
  * @property {string} [kind] 审批类别（ask/approval）
@@ -58,6 +59,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {(ev:SSEEvent)=>void} [onTool] 工具完成（同时后端已写 tasklog/审计）
  * @property {(ev:SSEEvent)=>void} [onToolDuration] 工具耗时
  * @property {(ev:SSEEvent)=>void} [onUsage] 用量与缓存命中（同时后端已累计统计）
+ * @property {(ev:SSEEvent)=>void} [onMetrics] 实时速率统计（每条回复）
  * @property {(ev:SSEEvent)=>void} [onCompressed] 上下文已压缩
  * @property {(ev:SSEEvent)=>void} [onAskRequest] 询问（需 POST /v1/respond 回传）
  * @property {(ev:SSEEvent)=>void} [onApprovalRequest] 审批请求
@@ -77,6 +79,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {boolean} [quiet_mode] 纯净对话总开关（关闭记忆/自我/大脑注入）
  * @property {string} [continue_prefix] 续写前缀（从该文本继续）
  * @property {string} [session_id] 已有会话 id（携带则后端生成后自动落盘）
+ * @property {string} [gw_session] 网关会话 id（第三方/OpenCode Go 网关的 x-opencode-session 头）
  */
 
 /**

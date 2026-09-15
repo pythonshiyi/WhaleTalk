@@ -59,7 +59,7 @@ export function AbilitiesPage() {
               onClick={() => setOpen(open === d.name ? null : d.name)}
             >
               <div className="domain-head">
-                <span className="domain-icon" style={{ background: `${d.color || "#38bdf8"}22` }}>{d.icon || "🧩"}</span>
+                <span className="domain-icon" style={{ background: d.color ? `${d.color}22` : "var(--brand-soft)" }}>{d.icon || "🧩"}</span>
                 <div className="domain-meta">
                   <b>{d.name}</b>
                   <span className="domain-count">{d.count} 项能力</span>
@@ -79,7 +79,7 @@ export function AbilitiesPage() {
                         setTestTool(t.name);
                       }}
                     >
-                      <span className="cap-dot" style={{ background: d.color || "#38bdf8" }} />
+                      <span className="cap-dot" style={{ background: d.color || "var(--brand)" }} />
                       <span className="cap-name">{t.name}</span>
                       <span className="cap-desc">{String(t.description || "").slice(0, 34)}</span>
                       <span className={t.enabled ? "cap-on" : "cap-off"}>{t.enabled ? "开" : "关"}</span>
@@ -107,8 +107,9 @@ function KnowledgeBaseBlock() {
   const [kquery, setKquery] = React.useState("");
   const [khits, setKhits] = React.useState(null);
   const [kerr, setKerr] = React.useState("");
+  const [kberr, setKberr] = React.useState("");
   const [kbusy, setKbusy] = React.useState(false);
-  React.useEffect(() => { api.getKnowledge().then((d) => d && setKb(d)).catch(() => {}); }, []);
+  React.useEffect(() => { api.getKnowledge().then((d) => d && setKb(d)).catch(() => setKberr("知识库状态读取失败（后端未连接）")); }, []);
   const doSearch = async () => {
     if (!kquery.trim() || kbusy) return;
     setKerr("");
@@ -134,7 +135,9 @@ function KnowledgeBaseBlock() {
     <div className="wb-card" style={{ marginTop: 16 }}>
       <div className="wb-card-title">📚 知识库 RAG（带引用源）</div>
       <div className="empty-tip" style={{ marginBottom: 6 }}>
-        已建立索引：{kb ? (kb.indexed ? ` ${(kb.files || []).length} 个文件` : "未建立") : "查询中…"}
+        {kberr
+          ? `已建立索引：${kberr}`
+          : `已建立索引：${kb ? (kb.indexed ? ` ${(kb.files || []).length} 个文件` : "未建立") : "查询中…"}`}
         {kb && kb.files && kb.files.length > 0 && <span style={{ opacity: .6 }}>（{kb.files.slice(0, 3).join(" · ")}…）</span>}
       </div>
       <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
@@ -173,6 +176,8 @@ export function MemoryPage({ embedded }) {
   const [adding, setAdding] = React.useState(false);
   const [addText, setAddText] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [tip, setTip] = React.useState("");
+  const flash = (t) => { setTip(t); setTimeout(() => setTip(""), 3000); };
 
   const load = React.useCallback(async (query) => {
     try {
@@ -215,39 +220,30 @@ export function MemoryPage({ embedded }) {
 
   const doUpdate = async (id, patch) => {
     setBusy(true);
-    try {
-      await api.brainMemoryAction({ action: "update", id, ...patch }).catch(() => null);
-      setEditingId(null);
-      load(q);
-    } catch (e) {
-      setErr(e.message);
-    }
+    const r = await api.brainMemoryAction({ action: "update", id, ...patch }).catch(() => null);
+    if (r && r.ok !== false) { setEditingId(null); load(q); }
+    else flash("❌ 保存失败（后端未响应）");
     setBusy(false);
   };
 
   const doDelete = async (id) => {
     if (!window.confirm("删除这条记忆？")) return;
     setBusy(true);
-    try {
-      await api.brainMemoryAction({ action: "delete", id }).catch(() => null);
-      load(q);
-    } catch (e) {
-      setErr(e.message);
-    }
+    const r = await api.brainMemoryAction({ action: "delete", id }).catch(() => null);
+    if (r && r.ok !== false) load(q);
+    else flash("❌ 删除失败（后端未响应）");
     setBusy(false);
   };
 
   const doAdd = async () => {
     if (!addText.trim()) return;
     setBusy(true);
-    try {
-      await api.brainMemoryAction({ action: "add", text: addText.trim(), type: "备忘", importance: 3 }).catch(() => null);
+    const r = await api.brainMemoryAction({ action: "add", text: addText.trim(), type: "备忘", importance: 3 }).catch(() => null);
+    if (r && r.ok !== false) {
       setAddText("");
       setAdding(false);
       load(q);
-    } catch (e) {
-      setErr(e.message);
-    }
+    } else flash("❌ 添加失败（后端未响应）");
     setBusy(false);
   };
 
@@ -306,13 +302,9 @@ export function MemoryPage({ embedded }) {
           style={{ fontSize: "var(--fs-xs)" }}
           onClick={async () => {
             setBusy(true);
-            try {
-              const r = await api.brainAction({ action: "consolidate" }).catch(() => null);
-              alert(r?.message || "巩固完成");
-              load(q);
-            } catch (e) {
-              setErr(e.message);
-            }
+            const r = await api.brainAction({ action: "consolidate" }).catch(() => null);
+            flash(r?.message || "🧹 睡眠巩固已触发");
+            load(q);
             setBusy(false);
           }}
         >
@@ -320,11 +312,15 @@ export function MemoryPage({ embedded }) {
         </button>
       </div>
       <div className="mem-list">
+        {tip && <div className="px-tip" style={{ textAlign: "left", marginBottom: 6 }}>{tip}</div>}
+        {memories === null && !err && (
+          <div className="empty-tip is-loading">正在加载记忆…</div>
+        )}
         {items.map((m) => (
           <div className={`mem-card mem-card-lg ${m.importance >= 4 ? "mem-card-star" : ""}`} key={m.id}>
             <div className="mem-card-head">
               <span className="mem-id">{m.type || "记忆"}</span>
-              {m.importance >= 4 && <span className="mem-tag" style={{ background: "var(--warn-soft)", color: "var(--warn)" }}>★ 重要</span>}
+              {m.importance >= 4 && <span className="mem-tag" style={{ background: "var(--warn-soft)", color: "var(--warn-text)" }}>★ 重要</span>}
               <span className="mem-tag">{m.source || "手动"}</span>
               {m.ts && <span className="mem-time">{String(m.ts).slice(0, 16).replace("T", " ")}</span>}
             </div>
@@ -356,11 +352,11 @@ export function MemoryPage({ embedded }) {
             <div className="mem-card-foot" style={{ display: "flex", gap: 8, marginTop: 6 }}>
               <button className="msg-op" disabled={busy} onClick={() => star(m)}>{m.importance >= 4 ? "☆ 取消重要" : "★ 标记重要"}</button>
               <button className="msg-op" disabled={busy} onClick={() => { setEditingId(m.id); setEditText(m.text || ""); setEditType(m.type || ""); setEditImportance(Number(m.importance) || 3); }}>✏️ 编辑</button>
-              <button className="msg-op" style={{ color: "var(--danger)" }} disabled={busy} onClick={() => doDelete(m.id)}>🗑 删除</button>
+              <button className="msg-op" style={{ color: "var(--danger-text)" }} disabled={busy} onClick={() => doDelete(m.id)}>🗑 删除</button>
             </div>
           </div>
         ))}
-        {items.length === 0 && (
+        {(memories !== null || err) && items.length === 0 && (
           err ? (
             <EmptyState icon="⚠️" title="记忆加载失败" hint={err} compact />
           ) : (
@@ -403,8 +399,8 @@ function BrainGoals() {
         <div key={g.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12.5, color: "var(--text-1)" }}>
           <span style={{ flex: 1 }}>{g.title}</span>
           {g.progress && <span style={{ color: "var(--brand)", fontSize: "var(--fs-2xs)" }}>{g.progress}</span>}
-          <button className="msg-op" style={{ color: "var(--ok)" }} onClick={() => act("goals-update", { id: g.id, status: "done" })}>✓ 完成</button>
-          <button className="msg-op" style={{ color: "var(--danger)" }} onClick={() => act("goals-delete", { id: g.id })}>✕</button>
+          <button className="msg-op" style={{ color: "var(--ok-text)" }} onClick={() => act("goals-update", { id: g.id, status: "done" })}>✓ 完成</button>
+          <button className="msg-op" style={{ color: "var(--danger-text)" }} onClick={() => act("goals-delete", { id: g.id })}>✕</button>
         </div>
       ))}
       {showAdd ? (
@@ -505,20 +501,24 @@ export function PermissionsPage() {
   const [perms, setPerms] = React.useState(null);
   const [savedTip, setSavedTip] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState("");
 
-  React.useEffect(() => {
-    let alive = true;
-    (async () => {
-      const d = await api.getPermissions().catch(() => null);
-      if (alive && d) setPerms(d);
-    })();
-    return () => {
-      alive = false;
-    };
+  const load = React.useCallback(async () => {
+    setErr("");
+    const d = await api.getPermissions().catch(() => null);
+    if (d) setPerms(d);
+    else setErr("权限设置加载失败（后端未连接）");
   }, []);
+  React.useEffect(() => { load(); }, [load]);
 
   if (!perms) {
-    return <SkeletonPage title="权限" hint="正在加载权限设置…" />;
+    return (
+      <div className="page">
+        {err
+          ? <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
+          : <SkeletonPage title="权限" hint="正在加载权限设置…" />}
+      </div>
+    );
   }
 
   const update = async (key, items) => {
@@ -539,14 +539,14 @@ export function PermissionsPage() {
       key: "blocked_dirs",
       title: "禁目录（filesystem.blocked_dirs）",
       desc: "命中路径的文件操作直接拒绝",
-      color: "var(--danger)",
+      color: "var(--danger-text)",
       placeholder: "输入禁用的目录路径，Enter 添加",
     },
     {
       key: "shell_blocklist",
       title: "禁命令（shell.blocklist）",
       desc: "命中命令名的 run_command 拒绝",
-      color: "var(--warn)",
+      color: "var(--warn-text)",
       placeholder: "输入禁用的命令名，Enter 添加",
     },
     {
@@ -624,16 +624,19 @@ export function PermissionsPage() {
 // ── 任务与模板 ────────────────────────────────────
 export function TasksPage() {
   const [tasks, setTasks] = React.useState(null);
-  React.useEffect(() => {
-    let alive = true;
-    (async () => {
-      const d = await api.getTasks().catch(() => null);
-      if (alive && d) setTasks(d);
-    })();
-    return () => {
-      alive = false;
-    };
+  const [loading, setLoading] = React.useState(true);
+  const [err, setErr] = React.useState("");
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    setErr("");
+    const d = await api.getTasks().catch(() => null);
+    if (d) setTasks(d);
+    else setErr("任务模板加载失败：后端未连接，请启动服务后重试");
+    setLoading(false);
   }, []);
+  React.useEffect(() => {
+    load();
+  }, [load]);
   const templates = tasks?.templates || [];
   const playground = tasks?.playground || [];
   return (
@@ -642,6 +645,15 @@ export function TasksPage() {
         <h1>任务与模板</h1>
         <p>Agent 任务模板 · 试玩任务 · 全部在任务模式下执行</p>
       </div>
+      {loading && <div className="empty-tip is-loading">正在加载任务模板…</div>}
+      {!loading && err && (
+        <div className="empty-tip is-err">
+          {err}　<button className="msg-op" onClick={load}>重试</button>
+        </div>
+      )}
+      {!loading && !err && templates.length === 0 && playground.length === 0 && (
+        <div className="empty-tip">暂时没有可用的任务模板。</div>
+      )}
       {templates.length > 0 && (
         <>
           <div className="wb-card-title">任务模板（{templates.length}）</div>
@@ -668,7 +680,6 @@ export function TasksPage() {
           </div>
         </>
       )}
-      {!tasks && <div className="empty-tip is-err">任务模板加载失败：后端未连接，请启动服务后刷新</div>}
     </div>
   );
 }
@@ -727,10 +738,16 @@ export function EvolutionPage() {
   const [evos, setEvos] = React.useState(null);
   const [detail, setDetail] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  const [tip, setTip] = React.useState("");
+  const [err, setErr] = React.useState("");
+
+  const flash = (t) => { setTip(t); setTimeout(() => setTip(""), 3200); };
 
   const load = React.useCallback(async () => {
+    setErr("");
     const d = await api.getEvolutions().catch(() => null);
-    if (d) setEvos(d.evolutions);
+    if (d) setEvos(d.evolutions || []);
+    else setErr("进化提案加载失败（后端未连接）");
   }, []);
 
   React.useEffect(() => {
@@ -743,11 +760,11 @@ export function EvolutionPage() {
     const r = await api.applyEvolution(name).catch(() => null);
     setBusy(false);
     if (r && r.ok) {
-      alert(`已采纳：${r.applied.length} 个文件（原文件备份 .evobak，重启后生效）`);
+      flash(`✅ 已采纳：${r.applied.length} 个文件（原文件备份 .evobak，重启后生效）`);
       setDetail(null);
       load();
-    } else if (r && r.error) {
-      alert(`失败：${r.error}`);
+    } else {
+      flash(`❌ 失败：${(r && r.error) || "后端未响应"}`);
     }
   };
 
@@ -759,14 +776,15 @@ export function EvolutionPage() {
     if (r && r.ok) {
       setDetail(null);
       load();
-    } else if (r && r.error) {
-      alert(`失败：${r.error}`);
+    } else {
+      flash(`❌ 失败：${(r && r.error) || "后端未响应"}`);
     }
   };
 
   const showDetail = async (name) => {
     const d = await api.getEvolutionDetail(name).catch(() => null);
     if (d && d.files) setDetail(d);
+    else flash("❌ 方案读取失败");
   };
 
   return (
@@ -794,6 +812,9 @@ export function EvolutionPage() {
       )}
       {!detail && (
         <div className="evo-list">
+          {tip && <div className="px-tip" style={{ textAlign: "left", marginBottom: 8 }}>{tip}</div>}
+          {err && <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>}
+          {!err && evos === null && <div className="empty-tip is-loading">正在加载进化提案…</div>}
           {(evos || []).map((e) => (
             <div className={`evo-card ${e.applied ? "evo-applied" : ""}`} key={e.name}>
               <div className="evo-line1">
@@ -805,12 +826,12 @@ export function EvolutionPage() {
                 <div className="evo-actions">
                   <button className="msg-op" onClick={() => showDetail(e.name)}>🔍 差异预览</button>
                   <button className="msg-op" disabled={busy} onClick={() => apply(e.name)}>✅ 采纳</button>
-                  <button className="msg-op" style={{ color: "var(--danger)" }} disabled={busy} onClick={() => ignore(e.name)}>🗑 忽略</button>
+                  <button className="msg-op" style={{ color: "var(--danger-text)" }} disabled={busy} onClick={() => ignore(e.name)}>🗑 忽略</button>
                 </div>
               )}
             </div>
           ))}
-          {(!evos || evos.length === 0) && <EmptyState icon="💡" title="还没有进化提案" hint="AI 自我审查后会在这里自动生成改进提案。" compact />}
+          {!err && evos && evos.length === 0 && <EmptyState icon="💡" title="还没有进化提案" hint="AI 自我审查后会在这里自动生成改进提案。" compact />}
         </div>
       )}
     </div>
@@ -820,17 +841,28 @@ export function EvolutionPage() {
 // ── 系统 ──────────────────────────────────────────
 export function SystemPage() {
   const [status, setStatus] = React.useState(null);
-  React.useEffect(() => {
-    let alive = true;
-    (async () => {
-      const s = await api.getStatus().catch(() => null);
-      if (alive && s) setStatus(s);
-    })();
-    return () => {
-      alive = false;
-    };
+  const [err, setErr] = React.useState("");
+  const load = React.useCallback(async () => {
+    setErr("");
+    const s = await api.getStatus().catch(() => null);
+    if (s) setStatus(s);
+    else setErr("系统状态加载失败（后端未连接）");
   }, []);
+  React.useEffect(() => { load(); }, [load]);
   const u = status?.usage_total || {};
+  if (!status) {
+    return (
+      <div className="page">
+        <div className="page-head">
+          <h1>系统</h1>
+          <p>用量 · 安全 · 依赖 · 工作目录</p>
+        </div>
+        {err
+          ? <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
+          : <div className="empty-tip is-loading">正在加载系统状态…</div>}
+      </div>
+    );
+  }
   return (
     <div className="page">
       <div className="page-head">
@@ -859,9 +891,14 @@ export function SystemPage() {
 // ── 定时任务（A2）──────────────────────────────────
 function SchedulesBlock() {
   const [schedules, setSchedules] = React.useState([]);
+  const [loaded, setLoaded] = React.useState(false);
+  const [err, setErr] = React.useState("");
   const [newS, setNewS] = React.useState({ action: "message", time: "09:00", text: "", name: "", off_peak: false, every: "", cron: "" });
 
-  const refetch = () => api.getSchedules().then((d) => d && setSchedules(d.schedules || [])).catch(() => {});
+  const refetch = () => api.getSchedules()
+    .then((d) => { setSchedules((d && d.schedules) || []); setErr(""); })
+    .catch(() => setErr("定时任务加载失败（后端未连接）"))
+    .finally(() => setLoaded(true));
   React.useEffect(() => {
     refetch();
   }, []);
@@ -871,7 +908,7 @@ function SchedulesBlock() {
     try {
       await api.saveSchedules(items);
       refetch();  // 重新拉取，拿到后端计算的 next_run
-    } catch (e) { silentWarn(e, "Pages"); }
+    } catch (e) { silentWarn(e, "Pages"); setErr("保存失败：后端未连接"); }
   };
 
   const add = () => {
@@ -896,6 +933,8 @@ function SchedulesBlock() {
     <div className="wb-card">
       <div className="wb-card-title">⏰ 计划与定时任务（{schedules.filter((s) => s.enabled !== false).length} 启用）</div>
       <div className="sched-list">
+        {!loaded && <div className="empty-tip is-loading">正在加载定时任务…</div>}
+        {loaded && err && <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={refetch}>重试</button></div>}
         {schedules.map((s, i) => (
           <div className="sched-item" key={i}>
             <div className="sched-line1">
@@ -912,7 +951,7 @@ function SchedulesBlock() {
             {s.text && <div className="sched-text">{s.text}</div>}
           </div>
         ))}
-        {schedules.length === 0 && <EmptyState icon="⏰" title="还没有定时任务" hint="AI 用 schedule_task 工具也能创建定时任务。" compact />}
+        {loaded && !err && schedules.length === 0 && <EmptyState icon="⏰" title="还没有定时任务" hint="AI 用 schedule_task 工具也能创建定时任务。" compact />}
       </div>
       <div className="sched-form">
         <input className="set-select set-combo" placeholder="名称（可选）" value={newS.name} onChange={(e) => setNewS({ ...newS, name: e.target.value })} />

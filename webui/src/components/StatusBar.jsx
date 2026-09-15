@@ -100,8 +100,8 @@ export default function StatusBar({ mode, onSwitchMode, generating, generatingTe
           <span className="status-dot" />
           <span className="status-dot-core" />
         </span>
-        <span className="status-whale">🐋</span>
-        <span className="status-text-wrap">{display}</span>
+        <span className="status-whale" aria-hidden="true">🐋</span>
+        <span className="status-text-wrap" role="status" aria-live="polite">{display}</span>
       </div>
       <div className="status-right">
         <span className="st-right-text" title={status ? `模型 ${status.model} · 角色 ${status.role} · 场景 ${status.scenario} · 思考档 ${status.thinking}` : undefined}>

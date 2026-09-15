@@ -65,7 +65,7 @@ export default function InstallBanner() {
       <div className="app-banner-inner">
         <span className="app-banner-title">🐋 正在初始化组件</span>
         <div className="app-banner-bar">
-          <i style={{ width: pct + "%" }} />
+          <i style={{ transform: `scaleX(${(pct || 0) / 100})` }} />
         </div>
         <span className="app-banner-step">
           {st.done}/{st.total} · {st.current || "准备中…"}

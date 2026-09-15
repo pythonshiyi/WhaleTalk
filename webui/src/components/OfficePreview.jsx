@@ -135,7 +135,7 @@ export function EditableTable({ path, name, header = [], rows = [], total = 0 })
         <button className="msg-op" onClick={save} disabled={busy || nDirty === 0} style={nDirty > 0 && !busy ? { borderColor: "var(--brand)", color: "var(--brand)" } : undefined}>
           {busy ? "保存中…" : (nDirty > 0 ? `保存 ${nDirty} 处修改` : "保存修改")}
         </button>
-        {saved && <span style={{ color: "var(--ok)" }}>✓ 已就地保存（xlsx_edit）</span>}
+        {saved && <span style={{ color: "var(--ok-text)" }}>✓ 已就地保存（xlsx_edit）</span>}
         {msg && !saved && <span style={{ opacity: .75 }}>{msg}</span>}
       </div>
     </div>

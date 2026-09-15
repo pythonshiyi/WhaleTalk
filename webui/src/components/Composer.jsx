@@ -387,7 +387,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       )}
       <div className="composer">
         <div className="composer-tools">
-          <button className="cbtn" title="添加图片" disabled={uploading} onClick={() => fileRef.current?.click()}>
+          <button className="cbtn" title="添加图片" aria-label="添加图片" disabled={uploading} onClick={() => fileRef.current?.click()}>
             {uploading ? (
               <span className="tool-spin" style={{ width: 13, height: 13 }} />
             ) : (
@@ -410,7 +410,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
             }}
           />
           <div className="dir-box">
-            <button className="cbtn" title="工作目录" onClick={toggleDir}>
+            <button className="cbtn" title="工作目录" aria-label="工作目录" aria-expanded={dirOpen} onClick={toggleDir}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
               </svg>
@@ -434,7 +434,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
             )}
           </div>
           <div className="prompt-box">
-            <button className="cbtn" title="指令" onClick={() => setPromptOpen(!promptOpen)}>
+            <button className="cbtn" title="指令" aria-label="指令" aria-expanded={promptOpen} onClick={() => setPromptOpen(!promptOpen)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
               </svg>
@@ -459,7 +459,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
             )}
           </div>
           <div className="slash-box">
-            <button className="cbtn" title="斜杠命令" onClick={() => setSlashOpen(!slashOpen)}>
+            <button className="cbtn" title="斜杠命令" aria-label="斜杠命令" aria-expanded={slashOpen} onClick={() => setSlashOpen(!slashOpen)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M4 9h16M4 15h16" />
               </svg>

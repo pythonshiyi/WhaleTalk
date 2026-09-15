@@ -77,7 +77,7 @@ export default function PixelDocViewer({ path, ext }) {
   return (
     <div style={{ marginTop: 4 }}>
       {state.status === "loading" && <div style={{ opacity: .7, fontSize: "var(--fs-xs)" }}>正在加载文档渲染…</div>}
-      {state.status === "err" && <div style={{ opacity: .8, fontSize: "var(--fs-xs)", color: "var(--danger,#c0392b)" }}>⚠ {state.err}</div>}
+      {state.status === "err" && <div style={{ opacity: .8, fontSize: "var(--fs-xs)", color: "var(--danger-text)" }}>⚠ {state.err}</div>}
       <div ref={ref} style={{ marginTop: 4 }} />
     </div>
   );

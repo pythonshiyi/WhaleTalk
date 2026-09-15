@@ -1,6 +1,16 @@
 import React from "react";
 import * as api from "../api.js";
 import { SkeletonList } from "./Skeleton.jsx";
+import { useFocusTrap } from "../useFocusTrap.js";
+
+// Esc 关闭：对话框/弹层统一的键盘出口
+function useEsc(onClose) {
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+}
 
 // ── AI 插件设计工坊 ────────────────────────────────
 function StudioModal({ onClose, onInstalled }) {
@@ -11,6 +21,9 @@ function StudioModal({ onClose, onInstalled }) {
   const [pluginJson, setPluginJson] = React.useState("");
   const [error, setError] = React.useState("");
   const [okMsg, setOkMsg] = React.useState("");
+  const panelRef = React.useRef(null);
+  useFocusTrap(panelRef);
+  useEsc(onClose);
 
   const generate = async () => {
     if (!desc.trim() || busy) return;
@@ -61,7 +74,7 @@ function StudioModal({ onClose, onInstalled }) {
 
   return (
     <div className="confirm-mask" onClick={onClose}>
-      <div className="tf-panel studio-panel" onClick={(e) => e.stopPropagation()}>
+      <div ref={panelRef} className="tf-panel studio-panel" role="dialog" aria-modal="true" aria-label="AI 插件设计工坊" onClick={(e) => e.stopPropagation()}>
         <div className="confirm-head">
           <b>🧩 AI 插件设计工坊</b>
           <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
@@ -101,7 +114,7 @@ function StudioModal({ onClose, onInstalled }) {
             {busy ? "AI 生成中…" : "✨ AI 生成"}
           </button>
         </div>
-        {error && <div className="tf-result"><pre style={{ color: "var(--danger)" }}>{error}</pre></div>}
+        {error && <div className="tf-result"><pre style={{ color: "var(--danger-text)" }}>{error}</pre></div>}
         {okMsg && <div className="px-tip" style={{ textAlign: "center", paddingTop: 8 }}>{okMsg}</div>}
         {pluginJson && (
           <>
@@ -126,23 +139,35 @@ function StudioModal({ onClose, onInstalled }) {
 
 function DetailOverlay({ name, onClose }) {
   const [d, setD] = React.useState(null);
+  const [err, setErr] = React.useState("");
+  const panelRef = React.useRef(null);
+  useFocusTrap(panelRef);
+  useEsc(onClose);
   React.useEffect(() => {
     let alive = true;
-    api.getPluginDetail(name).then((x) => alive && x && setD(x)).catch(() => {});
+    setErr("");
+    api.getPluginDetail(name)
+      .then((x) => { if (alive) { if (x) setD(x); else setErr("插件详情读取失败"); } })
+      .catch(() => { if (alive) setErr("插件详情读取失败（后端未连接）"); });
     return () => {
       alive = false;
     };
   }, [name]);
-  if (!d) return null;
   return (
     <div className="confirm-mask" onClick={onClose}>
-      <div className="tf-panel" onClick={(e) => e.stopPropagation()}>
+      <div ref={panelRef} className="tf-panel" role="dialog" aria-modal="true" aria-label={name || "插件详情"} onClick={(e) => e.stopPropagation()}>
         <div className="confirm-head">
-          <b>🧩 {d.name} <span className="tf-custom">v{d.version} · by {d.author}</span></b>
+          <b>🧩 {d ? d.name : name} {d && <span className="tf-custom">v{d.version} · by {d.author}</span>}</b>
           <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>
+        {!d ? (
+          err
+            ? <div className="empty-tip is-err">{err}</div>
+            : <div className="empty-tip is-loading">正在读取插件详情…</div>
+        ) : (
+        <>
         <div className="tf-desc-line">{d.description}</div>
         <div className="perm-chips" style={{ marginBottom: 10 }}>
           <span className="sl-tag c-brand">{d.kind}</span>
@@ -157,7 +182,7 @@ function DetailOverlay({ name, onClose }) {
         <div className="perm-groups">
           {(d.tools || []).length > 0 && (
             <div className="perm-group"><b style={{ fontSize: "var(--fs-xs)" }}>🔧 工具（{(d.tools || []).length}）</b>
-              <div className="perm-chips">{d.tools.map((t) => <span className="perm-chip" key={t} style={{ color: "var(--brand)", borderColor: "rgba(14,165,233,.4)" }}>{t}</span>)}</div>
+              <div className="perm-chips">{d.tools.map((t) => <span className="perm-chip" key={t} style={{ color: "var(--brand)", borderColor: "rgba(var(--brand-rgb), .4)" }}>{t}</span>)}</div>
             </div>
           )}
           {(d.skills || []).length > 0 && (
@@ -186,6 +211,8 @@ function DetailOverlay({ name, onClose }) {
             </div>
           )}
         </div>
+        </>
+        )}
       </div>
     </div>
   );
@@ -241,11 +268,13 @@ export default function PluginsPage({ onApply }) {
         setTip(`✅ 已安装「${d.name}」（校验：${d.verified || "sha256"}${d.tier ? " · " + (TIER_META[d.tier]?.label || d.tier) : ""}）`);
         setTimeout(() => setTip(""), 2600);
         load();
-      } else if (d && d.error) {
-        alert(`安装被拒绝：${d.error}`);
+      } else {
+        setTip(`❌ 安装被拒绝：${(d && d.error) || "未知原因"}`);
+        setTimeout(() => setTip(""), 3000);
       }
     } catch (e) {
-      alert(`安装失败：${e.message}`);
+      setTip(`❌ 安装失败：${e && e.message ? e.message : ""}`);
+      setTimeout(() => setTip(""), 3000);
     }
     setBusy("");
   };
@@ -258,11 +287,13 @@ export default function PluginsPage({ onApply }) {
         setTip(`${action === "install" ? "已安装" : action === "uninstall" ? "已卸载" : action === "enable" ? "已启用" : "已停用"}「${name}」`);
         setTimeout(() => setTip(""), 2000);
         load();
-      } else if (d && d.error) {
-        alert(d.error);
+      } else {
+        setTip(`❌ ${(d && d.error) || "操作失败"}`);
+        setTimeout(() => setTip(""), 3000);
       }
     } catch (e) {
-      alert(`操作失败：${e.message}`);
+      setTip(`❌ 操作失败：${e && e.message ? e.message : ""}`);
+      setTimeout(() => setTip(""), 3000);
     }
     setBusy("");
   };
@@ -434,7 +465,7 @@ export default function PluginsPage({ onApply }) {
                   <button className="msg-op" disabled={busy === p.name} onClick={() => act(p.name, p.enabled ? "disable" : "enable")}>
                     {p.enabled ? "⏸ 停用" : "▶ 启用"}
                   </button>
-                  <button className="msg-op" style={{ color: "var(--danger)" }} disabled={busy === p.name} onClick={() => act(p.name, "uninstall")}>
+                  <button className="msg-op" style={{ color: "var(--danger-text)" }} disabled={busy === p.name} onClick={() => act(p.name, "uninstall")}>
                     🗑 卸载
                   </button>
                 </div>

@@ -15,7 +15,7 @@ export default function Overlay({ title, onClose, children, wide }) {
 
   return (
     <div className="overlay-mask" onClick={onClose}>
-      <div ref={panelRef} className={`overlay-panel ${wide ? "overlay-wide" : ""}`} onClick={(e) => e.stopPropagation()}>
+      <div ref={panelRef} className={`overlay-panel ${wide ? "overlay-wide" : ""}`} role="dialog" aria-modal="true" aria-label={title || "对话框"} onClick={(e) => e.stopPropagation()}>
         <div className="overlay-head">
           <b>{title}</b>
           <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">

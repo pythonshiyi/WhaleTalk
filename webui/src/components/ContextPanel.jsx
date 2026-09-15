@@ -1,7 +1,7 @@
 import React from "react";
 import EmptyState from "./EmptyState.jsx";
 
-export default function ContextPanel({ data, onClose }) {
+export default function ContextPanel({ data, onClose, loading = false, err = "" }) {
   const [tab, setTab] = React.useState("工具");
   return (
     <aside className="ctx-panel">
@@ -13,17 +13,26 @@ export default function ContextPanel({ data, onClose }) {
           </svg>
         </button>
       </div>
-      <div className="ctx-tabs">
+      <div className="ctx-tabs" role="tablist">
         {["工具", "记忆", "用量"].map((t) => (
-          <button key={t} className={`ctx-tab ${tab === t ? "ctx-tab-on" : ""}`} onClick={() => setTab(t)}>
+          <button key={t} role="tab" aria-selected={tab === t} className={`ctx-tab ${tab === t ? "ctx-tab-on" : ""}`} onClick={() => setTab(t)}>
             {t}
           </button>
         ))}
       </div>
 
       <div className="ctx-body">
+        {loading ? (
+          <div className="empty-tip is-loading">正在读取上下文…</div>
+        ) : err ? (
+          <div className="empty-tip is-err">{err}</div>
+        ) : (
+        <>
         {tab === "工具" && (() => {
           const tools = (data && data.tools) || [];
+          if (tools.length === 0) {
+            return <EmptyState compact icon="🔧" title="上下文尚未装配" hint="发起一次对话后，这里会显示已激活/未激活的工具。" />;
+          }
           const on = tools.filter((t) => t.state === "on");
           const off = tools.filter((t) => t.state === "off");
           return (
@@ -74,6 +83,9 @@ export default function ContextPanel({ data, onClose }) {
           const su = (s && s.usage) || {};
           const sessionCachePct = su.prompt > 0 ? Math.round(((su.cache_hit || 0) / su.prompt) * 100) : 0;
           const hitRate = Math.min(100, Math.max(0, parseFloat(String(usage.cached || "").replace("%", "")) || 0));
+          if (!usage.prompt && !usage.completion && (!s || !s.turns)) {
+            return <EmptyState compact icon="📊" title="暂无用量数据" hint="完成一次对话后，这里会显示 token 用量与缓存命中率。" />;
+          }
           return (
             <div className="usage">
               {s && s.turns > 0 && (
@@ -93,12 +105,14 @@ export default function ContextPanel({ data, onClose }) {
               <div className="usage-row"><span>前缀缓存命中率</span><b className="usage-ok">{usage.cached || "—"}</b></div>
               <div className="usage-row"><span>本月成本</span><b>¥{Number(usage.cost || 0).toFixed(2)}</b></div>
               <div className="usage-bar">
-                <div className="usage-bar-fill" style={{ width: `${hitRate}%` }} />
+                <div className="usage-bar-fill" style={{ transform: `scaleX(${hitRate / 100})` }} />
               </div>
               <div className="usage-bar-label">前缀缓存命中率 {Math.round(hitRate)}%</div>
             </div>
           );
         })()}
+        </>
+        )}
       </div>
     </aside>
   );

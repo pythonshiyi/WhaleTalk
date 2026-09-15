@@ -10,6 +10,7 @@ function EvTab({ onToast }) {
   const [detail, setDetail] = React.useState(null); // {name, stat, diff}
   const [evoDetail, setEvoDetail] = React.useState(null); // 提案方案全文
   const [loading, setLoading] = React.useState(false);
+  const [detailBusy, setDetailBusy] = React.useState(false);
 
   const load = React.useCallback(async () => {
     const [e, b] = await Promise.all([api.getEvolutions().catch(() => null), api.getEvolveBranches().catch(() => null)]);
@@ -21,6 +22,14 @@ function EvTab({ onToast }) {
   React.useEffect(() => {
     load();
   }, [load]);
+
+  // Esc 关闭详情/方案弹层（此前仅能点遮罩或 ✕）
+  React.useEffect(() => {
+    if (!evoDetail && !detail) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") { setEvoDetail(null); setDetail(null); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [evoDetail, detail]);
 
   const act = async (fn, okMsg) => {
     if (loading) return; // 防重复提交
@@ -41,6 +50,7 @@ function EvTab({ onToast }) {
 
   const showDiff = async (name) => {
     setDetail(null);
+    setDetailBusy(true);
     try {
       const d = await api.getEvolveBranchDetail(name);
       if (d && (d.stat || d.diff)) {
@@ -51,10 +61,12 @@ function EvTab({ onToast }) {
     } catch {
       onToast && onToast("读取 diff 失败");
     }
+    setDetailBusy(false);
   };
 
   const showProposal = async (name) => {
     setEvoDetail(null);
+    setDetailBusy(true);
     try {
       const d = await api.getEvolutionDetail(name);
       if (d && d.files) {
@@ -65,6 +77,7 @@ function EvTab({ onToast }) {
     } catch {
       onToast && onToast("读取方案失败");
     }
+    setDetailBusy(false);
   };
 
   const confirmIgnore = async (name) => {
@@ -210,9 +223,15 @@ function EvTab({ onToast }) {
         )}
       </div>
 
+      {detailBusy && (
+        <div className="au-detail-overlay">
+          <div className="au-detail"><div className="empty-tip is-loading">正在读取…</div></div>
+        </div>
+      )}
+
       {evoDetail && (
         <div className="au-detail-overlay" onClick={() => setEvoDetail(null)}>
-          <div className="au-detail" onClick={(e) => e.stopPropagation()}>
+          <div className="au-detail" role="dialog" aria-modal="true" aria-label="进化方案全文" onClick={(e) => e.stopPropagation()}>
             <div className="au-detail-head">
               <b>方案 · {evoDetail.title || evoDetail.name}</b>
               <button className="pm-op" onClick={() => setEvoDetail(null)}>✕</button>
@@ -237,7 +256,7 @@ function EvTab({ onToast }) {
 
       {detail && (
         <div className="au-detail-overlay" onClick={() => setDetail(null)}>
-          <div className="au-detail" onClick={(e) => e.stopPropagation()}>
+          <div className="au-detail" role="dialog" aria-modal="true" aria-label="分支 diff" onClick={(e) => e.stopPropagation()}>
             <div className="au-detail-head">
               <b>diff · {detail.name}</b>
               <button className="pm-op" onClick={() => setDetail(null)}>✕</button>
@@ -253,15 +272,23 @@ function EvTab({ onToast }) {
 
 function ApprovalTab({ onToast }) {
   const [items, setItems] = React.useState(null);
-  React.useEffect(() => {
-    api.getApprovals().then((d) => setItems(d && d.approvals ? d.approvals : [])).catch(() => setItems([]));
+  const [err, setErr] = React.useState("");
+  const load = React.useCallback(() => {
+    setErr("");
+    return api
+      .getApprovals()
+      .then((d) => setItems(d && d.approvals ? d.approvals : []))
+      .catch(() => { setItems([]); setErr("审批记录加载失败（后端未连接）"); });
   }, []);
+  React.useEffect(() => { load(); }, [load]);
   const resultCls = (r) => (r === "允许" || r === "已回答" ? "ok-text" : r === "拒绝" ? "warn-text" : "pm-cat");
   return (
     <div className="au-card">
       <div className="au-card-title">🛡 审批与询问记录（最近 200 条）</div>
       {items === null ? (
         <SkeletonList rows={3} />
+      ) : err ? (
+        <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
       ) : items.length === 0 ? (
         <EmptyState icon="📋" title="还没有审批记录" hint="AI 请求权限或向你提问时，记录会出现在这里。" compact />
       ) : (
@@ -287,12 +314,28 @@ function ApprovalTab({ onToast }) {
 function ActivityTab({ onToast }) {
   const [tasks, setTasks] = React.useState(null);
   const [audit, setAudit] = React.useState(null);
-  React.useEffect(() => {
-    Promise.all([api.getTasklog().catch(() => null), api.getAudit().catch(() => null)]).then(([t, a]) => {
-      setTasks(t && t.tasks ? t.tasks : []);
-      setAudit(a && a.entries ? a.entries : []);
-    });
+  const [err, setErr] = React.useState("");
+  const load = React.useCallback(() => {
+    setErr("");
+    return Promise.all([api.getTasklog(), api.getAudit()])
+      .then(([t, a]) => {
+        setTasks(t && t.tasks ? t.tasks : []);
+        setAudit(a && a.entries ? a.entries : []);
+      })
+      .catch(() => {
+        setTasks([]);
+        setAudit([]);
+        setErr("活动记录加载失败（后端未连接）");
+      });
   }, []);
+  React.useEffect(() => { load(); }, [load]);
+  if (err) {
+    return (
+      <div className="au-col">
+        <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
+      </div>
+    );
+  }
   return (
     <div className="au-col">
       <div className="au-card">
@@ -335,6 +378,7 @@ function SelfTab({ onToast }) {
   const [profile, setProfile] = React.useState(null);
   const [failures, setFailures] = React.useState(null);
   const [fstats, setFstats] = React.useState(null);
+  const [ferr, setFerr] = React.useState("");
   const [showResolved, setShowResolved] = React.useState(false);
 
   const loadFailures = React.useCallback(async () => {
@@ -350,8 +394,13 @@ function SelfTab({ onToast }) {
   React.useEffect(() => {
     Promise.all([api.getSelfProfile().catch(() => null), api.getFailures().catch(() => null)]).then(([p, f]) => {
       setProfile(p && p.text ? p.text : "（自我状态为空）");
-      setFailures(f && f.failures ? f.failures : []);
-      setFstats(f && f.stats ? f.stats : null);
+      if (f && f.failures) {
+        setFailures(f.failures);
+        setFstats(f.stats ? f.stats : null);
+      } else {
+        setFailures([]);
+        setFerr("失败模式库加载失败（后端未连接）");
+      }
     });
   }, []);
 
@@ -388,6 +437,8 @@ function SelfTab({ onToast }) {
         )}
         {failures === null ? (
           <SkeletonList rows={2} />
+        ) : ferr ? (
+          <div className="empty-tip is-err">{ferr}</div>
         ) : shown.length === 0 ? (
           <EmptyState
             icon="✅"
@@ -428,13 +479,19 @@ function GrowthTab({ onToast }) {
   const [hm, setHm] = React.useState(null);
   const [rep, setRep] = React.useState(null);
   const [trust, setTrust] = React.useState(null);
+  const [err, setErr] = React.useState("");
 
   const load = React.useCallback(async () => {
+    setErr("");
     const [h, r, t] = await Promise.all([
       api.getHeatmap(days).catch(() => null),
       api.getSelfReport(7).catch(() => null),
       api.getTrustTimeline().catch(() => null),
     ]);
+    if (!h && !r && !t) {
+      setErr("成长数据加载失败（后端未连接）");
+      return;
+    }
     setHm(h && h.heatmap ? h.heatmap : null);
     setRep(r && r.report ? r.report : null);
     setTrust(t || null);
@@ -446,6 +503,14 @@ function GrowthTab({ onToast }) {
 
   const maxCalls = hm && hm.tools && hm.tools.length ? Math.max(1, ...hm.tools.map((t) => t.calls || 0)) : 1;
   const hmTools = hm ? (hm.tools || []).filter((t) => (t.calls || 0) > 0).slice(0, 12) : [];
+
+  if (err) {
+    return (
+      <div className="au-col">
+        <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
+      </div>
+    );
+  }
 
   return (
     <div className="au-col">
@@ -480,7 +545,7 @@ function GrowthTab({ onToast }) {
                         {t.failure_hits ? ` · 失败 ${t.failure_hits} 次` : ""}
                       </span>
                       <div className="au-bar" title={`${t.calls} 次`}>
-                        <div className="au-bar-fill" style={{ width: `${Math.round((t.calls / maxCalls) * 100)}%` }} />
+                        <div className="au-bar-fill" style={{ transform: `scaleX(${(t.calls || 0) / maxCalls})` }} />
                       </div>
                     </div>
                   </div>
@@ -621,9 +686,9 @@ export default function AutonomyPage() {
         <h1>自主</h1>
         <p>AI 自主能力的观察与管理窗口 · 进化 · 成长 · 审批 · 行为 · 自我</p>
       </div>
-      <div className="au-tabs">
+      <div className="au-tabs" role="tablist">
         {tabs.map((t) => (
-          <button key={t.id} className={tab === t.id ? "au-tab au-tab-on" : "au-tab"} onClick={() => setTab(t.id)}>
+          <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "au-tab au-tab-on" : "au-tab"} onClick={() => setTab(t.id)}>
             {t.label}
           </button>
         ))}
