@@ -2,6 +2,16 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.11.1（未发版追加）—— 📋 修复聊天消息不可选中/复制
+
+- **根因**：`theme.css` 给 `body` 设了全局 `user-select: none`（界面防误选）；助手正文 `.md` 有
+  `user-select: text` 覆盖，但**用户消息气泡 `.msg-user-bubble` 未覆盖** → 用户消息不可选中、
+  浏览器右键「复制」置灰；且用户消息操作条**没有复制按钮**。
+- **修复**：`.msg-user-bubble` 与 `.msg-body` 增加 `user-select: text`（含 `-webkit-`）；
+  用户消息操作条新增「📋 复制」按钮（复用统一样式与「✓ 已复制」反馈）。
+- **验证**：`npm run typecheck` + `npm run build` + `npm test` 全绿。
+
+
 ## v3.11.1（未发版追加）—— 🎨 设计/作图/排版/PDF/表格 能力批次（离线全家桶 · 工具 151 → 154）
 
 **主题：给已很强的「代码即设计」补上缺的零部件与质量门禁**（不重造，只增强）。

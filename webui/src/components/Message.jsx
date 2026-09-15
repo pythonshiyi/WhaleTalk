@@ -191,6 +191,9 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
         <div className="msg-user-avatar">我</div>
         <div className="msg-ops">
           {time && <span className="msg-time">{time}</span>}
+          <button className="msg-op" title="复制" aria-label="复制" onClick={copy}>
+            {copied ? "✓ 已复制" : "📋"}
+          </button>
           <button className="msg-op" title={isPinned ? "取消固定" : "固定（压缩时保留进摘要）"} onClick={() => onPin && onPin()}>
             {isPinned ? "📌" : "📌"}
           </button>

@@ -260,10 +260,13 @@ button {
   background: var(--bubble-bg);
   border: 1px solid var(--brand-soft);
   border-radius: var(--r-xl) var(--r-xl) 6px var(--r-xl);
-  padding: 10px var(--sp-4);
+  padding: 10px 16px;
   font-size: var(--fs-md);
   line-height: 1.6;
   white-space: pre-wrap;
+  /* 全局 body 为 user-select:none（界面防误选）；消息正文必须可选中/右键复制 */
+  user-select: text;
+  -webkit-user-select: text;
   box-shadow: 0 2px 12px rgba(var(--brand-rgb),.08);
 }
 .msg-user-avatar {
@@ -287,7 +290,7 @@ button {
   box-shadow: 0 0 0 4px rgba(var(--brand-rgb),.05), 0 3px 10px rgba(var(--brand-rgb),.14);
 }
 .msg-avatar svg { width: 17px; height: 17px; }
-.msg-body { flex: 1; min-width: 0; max-width: 860px; }
+.msg-body { flex: 1; min-width: 0; max-width: 860px; user-select: text; -webkit-user-select: text; }
 
 /* 思考块 */
 .think-block {
