@@ -61,14 +61,23 @@ def status_lines(st):
     return lines
 
 
-def tooltip_text(st, port=None):
-    """托盘悬停提示：应用名 · 运行中 · 端口 · 模型。"""
-    parts = [APP_NAME, "运行中"]
+def tooltip_text(st, port=None, version=None):
+    """托盘悬停提示：应用名 [v版本] · 运行中 · 端口 · 模型。"""
+    name = APP_NAME + (f" v{version}" if version else "")
+    parts = [name, "运行中"]
     if port:
         parts.append(f"127.0.0.1:{port}")
     if st and st.get("model"):
         parts.append(str(st["model"]))
     return " · ".join(parts)
+
+
+def _app_version():
+    try:
+        import config_defaults
+        return str(config_defaults.VERSION)
+    except Exception:
+        return ""
 
 
 def trust_unconfirmed(st):
@@ -162,6 +171,7 @@ class TrayController:
         self._icon = None
         self._stop = threading.Event()
         self._last_trust = None
+        self.version = _app_version()
 
     # —— 开关回调 ——
     def _toggle(self, key, value):
@@ -221,7 +231,9 @@ class TrayController:
         if self._icon is None:
             return
         try:
-            self._icon.title = tooltip_text(st, self.port)
+            self._icon.title = tooltip_text(st, self.port, self.version)
+            # 状态区文本是构建菜单时固化的——必须重建菜单才能刷新（update_menu 只刷勾选态）
+            self._icon.menu = self._build_menu()
             self._icon.update_menu()
         except Exception:
             pass
@@ -243,7 +255,8 @@ class TrayController:
         st = self._st
         items = []
         # 状态区（只读）
-        items.append(MenuItem(f"● 运行中 · 127.0.0.1:{self.port}", None))
+        ver = f" · v{self.version}" if self.version else ""
+        items.append(MenuItem(f"● 运行中 · 127.0.0.1:{self.port}{ver}", None))
         for label, val in status_lines(st):
             items.append(MenuItem(f"{label}：{val}", None))
         items.append(Menu.SEPARATOR)
