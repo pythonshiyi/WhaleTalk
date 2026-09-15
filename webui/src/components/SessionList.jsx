@@ -1,5 +1,6 @@
 import React from "react";
 import EmptyState from "./EmptyState.jsx";
+import { Icon } from "./icons.jsx";
 
 import { silentWarn } from "../quiet.js";
 import { tagColorClass } from "../tagColor.js";
@@ -135,9 +136,9 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
           <span className="sl-multi-count">已选 {selected.size} 个</span>
           <button className="msg-op" onClick={selectAll}>全选</button>
           <button className="msg-op" style={{ color: "var(--danger-text)" }} disabled={!selected.size} onClick={batchDelete}>
-            🗑 删除（{selected.size}）
+            <Icon name="trash" size={13} /> 删除（{selected.size}）
           </button>
-          <button className="msg-op" onClick={toggleMulti}>✕ 退出</button>
+          <button className="msg-op" onClick={toggleMulti}><Icon name="x" size={13} /> 退出</button>
         </div>
       )}
 
@@ -150,7 +151,7 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
               onClick={() => setTagFilter(tagFilter === t ? null : t)}
             >
               {t}
-              {tagFilter === t && <span className="sl-tag-x">✕</span>}
+              {tagFilter === t && <span className="sl-tag-x"><Icon name="x" size={10} /></span>}
             </button>
           ))}
         </div>
@@ -158,16 +159,16 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
 
       <div className="sl-new">
         <button className="sl-new-btn" onClick={() => onPick(null)}>
-          <span className="sl-new-plus">＋</span> 新对话
+          <Icon name="plus" size={15} /> 新对话
         </button>
       </div>
 
       <div className="sl-actions">
         <button className="sl-action" onClick={() => fileRef.current?.click()} title="导入会话（JSON/JSONL）">
-          ⬆ 导入
+          <Icon name="upload" size={13} /> 导入
         </button>
         <button className="sl-action" onClick={onExport} title="导出当前会话（MD/TXT/HTML/JSONL）">
-          ⬇ 导出
+          <Icon name="download" size={13} /> 导出
         </button>
         <input ref={fileRef} type="file" accept=".json,.jsonl,.txt,.md" style={{ display: "none" }} onChange={(e) => {
           const f = e.target.files && e.target.files[0];
@@ -179,7 +180,7 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
       <div className="sl-items">
         {filtered.length === 0 && (
           <EmptyState
-            icon="💬"
+            icon="message"
             title={sessions.length === 0 ? "还没有会话" : "没有匹配的会话"}
             hint={sessions.length === 0 ? "点击上方「新对话」开始，或直接在下方向 AI 提问。" : "换个关键词或标签再试试。"}
             compact
@@ -228,13 +229,13 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
                 ) : (
                   <b>{s.title}</b>
                 )}
-                {s.pinned && <span className="sl-pin">📌</span>}
+                {s.pinned && <span className="sl-pin" aria-hidden="true"><Icon name="pin" size={11} fill="currentColor" /></span>}
                 {!multiMode && (
                   <span className="sl-item-actions">
-                    <button className="sl-act" title={s.pinned ? "取消置顶" : "置顶"} onClick={(e) => { e.stopPropagation(); onPin && onPin(s.id, !s.pinned); }}>📌</button>
-                    <button className="sl-act" title="重命名" onClick={(e) => { e.stopPropagation(); setEditingId(s.id); setEditValue(s.title); }}>✏️</button>
-                    <button className="sl-act" title="编辑标签" onClick={(e) => { e.stopPropagation(); setTaggingId(s.id); setTagValue((s.tags || []).join(",")); }}>🏷</button>
-                    <button className="sl-act" title="删除会话" onClick={(e) => { e.stopPropagation(); if (window.confirm(`删除会话「${s.title}」？`)) onDelete && onDelete(s.id); }}>🗑</button>
+                    <button className="sl-act" title={s.pinned ? "取消置顶" : "置顶"} aria-label="置顶" onClick={(e) => { e.stopPropagation(); onPin && onPin(s.id, !s.pinned); }}><Icon name="pin" size={13} fill={s.pinned ? "currentColor" : "none"} /></button>
+                    <button className="sl-act" title="重命名" aria-label="重命名" onClick={(e) => { e.stopPropagation(); setEditingId(s.id); setEditValue(s.title); }}><Icon name="pencil" size={13} /></button>
+                    <button className="sl-act" title="编辑标签" aria-label="编辑标签" onClick={(e) => { e.stopPropagation(); setTaggingId(s.id); setTagValue((s.tags || []).join(",")); }}><Icon name="filter" size={13} /></button>
+                    <button className="sl-act" title="删除会话" aria-label="删除会话" onClick={(e) => { e.stopPropagation(); if (window.confirm(`删除会话「${s.title}」？`)) onDelete && onDelete(s.id); }}><Icon name="trash" size={13} /></button>
                   </span>
                 )}
               </div>

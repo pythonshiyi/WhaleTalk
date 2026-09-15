@@ -1,6 +1,7 @@
 import React from "react";
 import * as api from "../api.js";
 import { ToastContext } from "./FlashToast.jsx";
+import { Icon } from "./icons.jsx";
 
 import { silentWarn } from "../quiet.js";
 const SLASH_COMMANDS = [
@@ -375,7 +376,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
         <div className="composer-att">
           {attachments.map((a) => (
             <span className="att-chip" key={a.id || a.path}>
-              🖼 {a.name}
+              <Icon name="image" size={13} /> {a.name}
               <button
                 title="移除附件"
                 aria-label="移除附件"
@@ -418,16 +419,16 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
             {dirOpen && (
               <div className="dir-menu">
                 <div className="dir-current" title={dirs?.active_dir}>
-                  📁 {dirs?.active_dir || "加载中…"}
+                  <Icon name="folder" size={13} /> {dirs?.active_dir || "加载中…"}
                 </div>
                 {(dirs?.subdirs || []).map((s) => (
                   <div className="dir-item" key={s} onClick={() => pickDir(s)}>
-                    📂 {s.split(/[\\/]/).pop()}
+                    <Icon name="folder-open" size={13} /> {s.split(/[\\/]/).pop()}
                   </div>
                 ))}
                 {(dirs?.allowed_dirs || []).filter((a) => a !== dirs?.active_dir).map((a) => (
                   <div className="dir-item" key={a} onClick={() => pickDir(a)}>
-                    🗂 {a}
+                    <Icon name="archive" size={13} /> {a}
                   </div>
                 ))}
               </div>

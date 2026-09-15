@@ -128,7 +128,7 @@ function EvTab({ onToast }) {
         {evs === null ? (
           <SkeletonList rows={2} />
         ) : evs.length === 0 ? (
-          <EmptyState icon="💡" title="还没有进化提案" hint="让 AI 用 create_evolution 提出改进方案（如：对 X 提出改进提案），方案会出现在这里供你审阅采纳。" compact />
+          <EmptyState icon="sparkles" title="还没有进化提案" hint="让 AI 用 create_evolution 提出改进方案（如：对 X 提出改进提案），方案会出现在这里供你审阅采纳。" compact />
         ) : (
           <div className="au-list">
             {evs.map((e) => (
@@ -291,7 +291,7 @@ function ApprovalTab({ onToast }) {
       ) : err ? (
         <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
       ) : items.length === 0 ? (
-        <EmptyState icon="📋" title="还没有审批记录" hint="AI 请求权限或向你提问时，记录会出现在这里。" compact />
+        <EmptyState icon="list" title="还没有审批记录" hint="AI 请求权限或向你提问时，记录会出现在这里。" compact />
       ) : (
         <div className="au-list">
           {items.map((a, i) => (
@@ -344,7 +344,7 @@ function ActivityTab({ onToast }) {
         {tasks === null ? (
           <SkeletonList rows={2} />
         ) : tasks.length === 0 ? (
-          <EmptyState icon="🗂" title="暂无任务记录" hint="AI 完成任务后，它的工具链会记录在这里。" compact />
+          <EmptyState icon="folder" title="暂无任务记录" hint="AI 完成任务后，它的工具链会记录在这里。" compact />
         ) : (
           <div className="au-list">
             {[...tasks].reverse().map((t, i) => (
@@ -366,7 +366,7 @@ function ActivityTab({ onToast }) {
         {audit === null ? (
           <SkeletonList rows={2} />
         ) : audit.length === 0 ? (
-          <EmptyState icon="🧾" title="暂无审计记录" hint="工具调用审计未开启或尚未产生记录。" compact />
+          <EmptyState icon="list" title="暂无审计记录" hint="工具调用审计未开启或尚未产生记录。" compact />
         ) : (
           <div className="au-audit">{audit.map((l, i) => <code key={i}>{l}</code>)}</div>
         )}
@@ -442,7 +442,7 @@ function SelfTab({ onToast }) {
           <div className="empty-tip is-err">{ferr}</div>
         ) : shown.length === 0 ? (
           <EmptyState
-            icon="✅"
+            icon="check"
             title={showResolved ? "暂无失败记录" : "没有未消解的失败记录"}
             hint="失败会自动沉淀并去重；同一工具连续成功 2 次后自动消解，不再注入上下文。"
             compact
@@ -534,7 +534,7 @@ function GrowthTab({ onToast }) {
               {(hm.summary || {}).distinct_tools || 0} 个工具 · 平均链长 {(hm.summary || {}).avg_chain_len || 0}
             </div>
             {hmTools.length === 0 ? (
-              <EmptyState icon="📊" title="这段时间还没有任务链记录" hint="完成任务后，能力热力图会把用得最多/最薄弱的能力画出来。" compact />
+              <EmptyState icon="chart" title="这段时间还没有任务链记录" hint="完成任务后，能力热力图会把用得最多/最薄弱的能力画出来。" compact />
             ) : (
               <div className="au-list">
                 {hmTools.map((t) => (
@@ -642,7 +642,7 @@ function GrowthTab({ onToast }) {
               （mode：{trust.mode || "report"}）
             </div>
             {(trust.timeline || []).length === 0 ? (
-              <EmptyState icon="🛡" title="内核从未被改动" hint="授权相关代码（permissions / security / crypto / snapshot）自建立以来保持一致。" compact />
+              <EmptyState icon="shield" title="内核从未被改动" hint="授权相关代码（permissions / security / crypto / snapshot）自建立以来保持一致。" compact />
             ) : (
               <div className="au-list">
                 {(trust.timeline || []).slice(0, 30).map((e, i) => (

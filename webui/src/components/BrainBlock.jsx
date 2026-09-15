@@ -4,6 +4,7 @@ import BrainHealth from "./BrainHealth.jsx";
 import BrainTimeline from "./BrainTimeline.jsx";
 import BrainKanban from "./BrainKanban.jsx";
 import BrainGraph from "./BrainGraph.jsx";
+import { Icon } from "./icons.jsx";
 
 // ── 鲸语大脑（指挥舱：身份 / 心跳 / 时光备份 / 生命延续 / 对话自我）────────
 function BrainBlock() {
@@ -388,7 +389,7 @@ function BrainBlock() {
       {/* ── U1 认知时间轴（记忆/决策/时光备份 → 一条可筛选叙事线；懒加载折叠）── */}
       <div className="brain-card">
         <div className="brain-card-title">
-          <span>🗓 认知时间轴</span>
+          <span><Icon name="clock" size={14} /> 认知时间轴</span>
           <i>把记忆、决策、时光备份按时间铺成一条线——回看大脑一路怎么长</i>
           <button className="msg-op" style={{ marginLeft: "auto" }} aria-expanded={tlOpen} onClick={() => setTlOpen(!tlOpen)}>
             {tlOpen ? "收起" : "展开"}
@@ -418,7 +419,7 @@ function BrainBlock() {
       {/* ── 意识状态（心跳）── */}
       <div className="brain-card">
         <div className="brain-card-title">
-          <span>💓 意识状态</span>
+          <span><Icon name="activity" size={14} /> 意识状态</span>
           <i>把此刻的想法写进大脑，成为下次继续思考的起点</i>
         </div>
         <div className="sched-line1" style={{ marginTop: 8 }}>
@@ -446,7 +447,7 @@ function BrainBlock() {
       {/* ── 时光备份（快照时间线）── */}
       <div className="brain-card">
         <div className="brain-card-title">
-          <span>📸 时光备份</span>
+          <span><Icon name="archive" size={14} /> 时光备份</span>
           <i>回到任意时刻的自己；恢复会覆盖当前状态，旧大脑自动保留为 brain.bak-*</i>
           <button className="msg-op" disabled={busy} onClick={() => act("archive")} style={{ marginLeft: "auto" }}>＋ 立即备份</button>
         </div>
@@ -500,7 +501,7 @@ function BrainBlock() {
       {/* ── 生命延续（可折叠）── */}
       <div className="brain-card">
         <div className="brain-card-title">
-          <span>🔗 生命延续</span>
+          <span><Icon name="trending-up" size={14} /> 生命延续</span>
           <i>大脑不依赖这台设备——可以备份带走、融合两段经历、迁徙到新躯体</i>
         </div>
 

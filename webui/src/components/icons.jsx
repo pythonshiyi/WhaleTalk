@@ -111,4 +111,8 @@ export function Icon({ name, size = 16, className, style, fill = "none" }) {
   );
 }
 
+export function hasIcon(name) {
+  return typeof name === "string" && Object.prototype.hasOwnProperty.call(PATHS, name);
+}
+
 export default Icon;

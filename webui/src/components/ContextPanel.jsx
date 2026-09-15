@@ -32,7 +32,7 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
         {tab === "工具" && (() => {
           const tools = (data && data.tools) || [];
           if (tools.length === 0) {
-            return <EmptyState compact icon="🔧" title="上下文尚未装配" hint="发起一次对话后，这里会显示已激活/未激活的工具。" />;
+            return <EmptyState compact icon="settings" title="上下文尚未装配" hint="发起一次对话后，这里会显示已激活/未激活的工具。" />;
           }
           const on = tools.filter((t) => t.state === "on");
           const off = tools.filter((t) => t.state === "off");
@@ -74,7 +74,7 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
               <button className="ctx-action">检索记忆库</button>
             </>
           ) : (
-            <EmptyState compact icon="🧠" title="还没有长期记忆"
+            <EmptyState compact icon="brain" title="还没有长期记忆"
               hint="对话中要求记住的关键信息会沉淀到这里" />
           );
         })()}
@@ -85,7 +85,7 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
           const sessionCachePct = su.prompt > 0 ? Math.round(((su.cache_hit || 0) / su.prompt) * 100) : 0;
           const hitRate = Math.min(100, Math.max(0, parseFloat(String(usage.cached || "").replace("%", "")) || 0));
           if (!usage.prompt && !usage.completion && (!s || !s.turns)) {
-            return <EmptyState compact icon="📊" title="暂无用量数据" hint="完成一次对话后，这里会显示 token 用量与缓存命中率。" />;
+            return <EmptyState compact icon="chart" title="暂无用量数据" hint="完成一次对话后，这里会显示 token 用量与缓存命中率。" />;
           }
           return (
             <div className="usage">

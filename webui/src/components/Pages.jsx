@@ -359,9 +359,9 @@ export function MemoryPage({ embedded }) {
         ))}
         {(memories !== null || err) && items.length === 0 && (
           err ? (
-            <EmptyState icon="⚠️" title="记忆加载失败" hint={err} compact />
+            <EmptyState icon="warning" title="记忆加载失败" hint={err} compact />
           ) : (
-            <EmptyState icon="🧠" title="大脑记忆库还是空的" hint="对话中记录的重要事实会自动同步到这里；点右上角「记录一条记忆」或与 AI 多聊几次，记忆就开始生长。" compact />
+            <EmptyState icon="brain" title="大脑记忆库还是空的" hint="对话中记录的重要事实会自动同步到这里；点右上角「记录一条记忆」或与 AI 多聊几次，记忆就开始生长。" compact />
           )
         )}
       </div>
@@ -718,7 +718,7 @@ export function FilesPage() {
           <div className="files-row" key={i}>📦 {r}</div>
         ))}
         {!err && files && (files.recent || []).length === 0 && (
-          <EmptyState icon="📦" title="还没有产物" hint="工具生成的文件会自动出现在这里。" compact />
+          <EmptyState icon="package" title="还没有产物" hint="工具生成的文件会自动出现在这里。" compact />
         )}
       </div>
       <div className="wb-card-title" style={{ marginTop: 16 }}>工作区（{files?.entries?.length || 0} 项）</div>
@@ -832,7 +832,7 @@ export function EvolutionPage() {
               )}
             </div>
           ))}
-          {!err && evos && evos.length === 0 && <EmptyState icon="💡" title="还没有进化提案" hint="AI 自我审查后会在这里自动生成改进提案。" compact />}
+          {!err && evos && evos.length === 0 && <EmptyState icon="sparkles" title="还没有进化提案" hint="AI 自我审查后会在这里自动生成改进提案。" compact />}
         </div>
       )}
     </div>
@@ -1175,7 +1175,7 @@ export function WorkbenchPage({ onApply, onPickSession }) {
             ))}
           </div>
           {quickActs.length === 0 && tplEntries.length === 0 && (
-            <EmptyState icon="⚡" title="还没有快捷行动" hint="在「指令库」添加指令，或使用后高频指令会自动出现在这里。" compact />
+            <EmptyState icon="zap" title="还没有快捷行动" hint="在「指令库」添加指令，或使用后高频指令会自动出现在这里。" compact />
           )}
         </div>
 
@@ -1252,7 +1252,7 @@ export function WorkbenchPage({ onApply, onPickSession }) {
                 </div>
               </div>
             ))}
-            {recentFiles.length === 0 && <EmptyState icon="📦" title="还没有产物" hint="AI 生成的文件会出现在这里。" compact />}
+            {recentFiles.length === 0 && <EmptyState icon="package" title="还没有产物" hint="AI 生成的文件会出现在这里。" compact />}
           </div>
         </div>
       </div>

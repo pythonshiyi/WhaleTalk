@@ -17,7 +17,7 @@ function TablePreview({ header = [], rows = [], total = 0, name = "" }) {
   const cur = rows.slice(pg * PER, pg * PER + PER);
   return (
     <div style={{ marginTop: 4 }}>
-      <div style={{ opacity: .8, marginBottom: 4 }}>📊 {name}（{total > 0 ? total + " 行" : rows.length + " 行"}）</div>
+      <div style={{ opacity: .8, marginBottom: 4, display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="table" size={13} /> {name}（{total > 0 ? total + " 行" : rows.length + " 行"}）</div>
       <div style={{ overflow: "auto", maxHeight: 300, border: "1px solid var(--border)", borderRadius: "var(--r-md)" }}>
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "var(--fs-sm)" }}>{header.length > 0 && (
           <thead><tr>{(header || []).map((h, i) => (
@@ -63,8 +63,9 @@ function TaskProgress({ tools, streaming }) {
       background: "var(--bg-2)", fontSize: "var(--fs-sm)",
       color: "var(--text-1)", display: "flex", alignItems: "center", gap: 10,
     }}>
-      <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>
-        {streaming && (!done || running) ? "⏳ 任务进行中" : done >= total && total ? "✅ 任务完成" : "🔄 任务"}
+      <span style={{ fontWeight: 600, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <Icon name={streaming && (!done || running) ? "clock" : (done >= total && total ? "check" : "rotate")} size={14} />
+        {streaming && (!done || running) ? "任务进行中" : done >= total && total ? "任务完成" : "任务"}
       </span>
       <span style={{ flex: 1 }}>
         <div style={{ height: 6, borderRadius: 3, background: "var(--bg-3)", overflow: "hidden" }}>
@@ -186,7 +187,7 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
     return (
       <div className="msg msg-user">
         <div className="msg-user-bubble">
-          {isPinned && <span className="msg-flag msg-flag-pin">📌</span>}
+          {isPinned && <span className="msg-flag msg-flag-pin" aria-hidden="true"><Icon name="pin" size={12} fill="currentColor" /></span>}
           {msg.text}
         </div>
         <div className="msg-user-avatar">我</div>
@@ -215,8 +216,8 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
       <div className="msg-body">
         <div className="msg-head">
           <span className="msg-role">助手</span>
-          {isStarred && <span className="msg-flag-emoji" title="已收藏">⭐</span>}
-          {isPinned && <span className="msg-flag-emoji" title="已固定">📌</span>}
+          {isStarred && <span className="msg-flag-emoji" title="已收藏" aria-hidden="true"><Icon name="star" size={13} fill="currentColor" /></span>}
+          {isPinned && <span className="msg-flag-emoji" title="已固定" aria-hidden="true"><Icon name="pin" size={13} fill="currentColor" /></span>}
           {time && <span className="msg-time">{time}</span>}
         </div>
         {msg.think && (
@@ -235,7 +236,7 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
               onClick={() => onFocusActivity && onFocusActivity()}
               title="在右侧『活动』查看工具详情与产物"
             >
-              <span className="tool-summary-icon">🔧</span>
+              <span className="tool-summary-icon"><Icon name="settings" size={14} /></span>
               <span className="tool-summary-text">
                 {msg.streaming
                   ? `AI 正在调用工具（${msg.tools.length} 步）…`
