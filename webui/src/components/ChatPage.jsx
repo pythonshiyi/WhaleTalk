@@ -28,6 +28,9 @@ function mq(query) {
     : false;
 }
 
+// 工具参数中的「路径类」键：这些键的值若为绝对路径，视为本会话产物来源。
+const PRODUCT_PATH_KEYS = ["path", "output", "file", "filename", "dst", "dest", "target", "dir", "out"];
+
 // 落盘用消息链：与 buildMessageChain 结构一致，但额外携带 usage/metrics（速率统计），
 // 且**仅用于保存**——绝不送入模型（避免未知字段导致 API 400）。
 function toSaveMessages(msgs) {
@@ -713,8 +716,19 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       const m = msgs[i];
       if (!m || m.role === "user") continue;
       const textParts = [m.text || ""];
-      (m.tools || []).forEach((t) => { if (t.result) textParts.push(String(t.result)); });
-      const paths = extractProducts(textParts.join("\n"));
+      (m.tools || []).forEach((t) => {
+        if (t.result) textParts.push(String(t.result));
+        // 工具「参数」里的目标路径同样是产物来源（write_file.path / html_to_pdf.output /
+        // image_process.output / run_python 代码里写出的路径…）——只取路径类键，不整坨 JSON，
+        // 避免把文件内容里引用的路径误当产物。
+        const a = t.args;
+        if (a && typeof a === "object") {
+          for (const k of PRODUCT_PATH_KEYS) if (a[k]) textParts.push(String(a[k]));
+          if (Array.isArray(a.paths)) textParts.push(a.paths.join("\n"));
+          if (typeof a.code === "string") textParts.push(a.code);
+        }
+      });
+      const paths = extractProducts(textParts.join("\n"), 0);
       for (const p of paths) {
         if (seen.has(p)) continue;
         seen.add(p);
