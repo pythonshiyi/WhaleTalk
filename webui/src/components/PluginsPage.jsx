@@ -1,5 +1,6 @@
 import React from "react";
 import * as api from "../api.js";
+import { SkeletonList } from "./Skeleton.jsx";
 
 // ── AI 插件设计工坊 ────────────────────────────────
 function StudioModal({ onClose, onInstalled }) {
@@ -63,7 +64,7 @@ function StudioModal({ onClose, onInstalled }) {
       <div className="tf-panel studio-panel" onClick={(e) => e.stopPropagation()}>
         <div className="confirm-head">
           <b>🧩 AI 插件设计工坊</b>
-          <button className="icon-btn" onClick={onClose}>
+          <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>
@@ -138,7 +139,7 @@ function DetailOverlay({ name, onClose }) {
       <div className="tf-panel" onClick={(e) => e.stopPropagation()}>
         <div className="confirm-head">
           <b>🧩 {d.name} <span className="tf-custom">v{d.version} · by {d.author}</span></b>
-          <button className="icon-btn" onClick={onClose}>
+          <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>
@@ -155,32 +156,32 @@ function DetailOverlay({ name, onClose }) {
         </div>
         <div className="perm-groups">
           {(d.tools || []).length > 0 && (
-            <div className="perm-group"><b style={{ fontSize: 12 }}>🔧 工具（{(d.tools || []).length}）</b>
+            <div className="perm-group"><b style={{ fontSize: "var(--fs-xs)" }}>🔧 工具（{(d.tools || []).length}）</b>
               <div className="perm-chips">{d.tools.map((t) => <span className="perm-chip" key={t} style={{ color: "var(--brand)", borderColor: "rgba(14,165,233,.4)" }}>{t}</span>)}</div>
             </div>
           )}
           {(d.skills || []).length > 0 && (
-            <div className="perm-group"><b style={{ fontSize: 12 }}>⚡ 技能（{(d.skills || []).length}）</b>
+            <div className="perm-group"><b style={{ fontSize: "var(--fs-xs)" }}>⚡ 技能（{(d.skills || []).length}）</b>
               <div className="perm-chips">{d.skills.map((s) => <span className="perm-chip" key={s}>{s}</span>)}</div>
             </div>
           )}
           {(d.workflows || []).length > 0 && (
-            <div className="perm-group"><b style={{ fontSize: 12 }}>🔄 流程（{(d.workflows || []).length}）</b>
+            <div className="perm-group"><b style={{ fontSize: "var(--fs-xs)" }}>🔄 流程（{(d.workflows || []).length}）</b>
               <div className="perm-chips">{d.workflows.map((w) => <span className="perm-chip" key={w}>{w}</span>)}</div>
             </div>
           )}
           {d.app_entry && (
-            <div className="perm-group"><b style={{ fontSize: 12 }}>📦 应用入口</b>
+            <div className="perm-group"><b style={{ fontSize: "var(--fs-xs)" }}>📦 应用入口</b>
               <div className="sched-text" style={{ fontFamily: "var(--font-mono)" }}>{d.app_entry}</div>
             </div>
           )}
           {(d.files || []).length > 0 && (
-            <div className="perm-group"><b style={{ fontSize: 12 }}>📁 自带文件（{(d.files || []).length}）</b>
+            <div className="perm-group"><b style={{ fontSize: "var(--fs-xs)" }}>📁 自带文件（{(d.files || []).length}）</b>
               <div className="perm-chips">{d.files.map((f) => <span className="perm-chip" key={f}>{f}</span>)}</div>
             </div>
           )}
           {(d.rating || {}).count != null && (
-            <div className="perm-group"><b style={{ fontSize: 12 }}>⭐ 评分</b>
+            <div className="perm-group"><b style={{ fontSize: "var(--fs-xs)" }}>⭐ 评分</b>
               <div className="sched-text">{d.rating.average?.toFixed(1) || "—"} / 5（{d.rating.count} 人评价）</div>
             </div>
           )}
@@ -207,6 +208,7 @@ export default function PluginsPage({ onApply }) {
   const [tip, setTip] = React.useState("");
   const [studioOpen, setStudioOpen] = React.useState(false);
   const [err, setErr] = React.useState("");
+  const [loaded, setLoaded] = React.useState(false);
 
   const load = async () => {
     const d = await api.getPlugins().catch(() => null);
@@ -225,6 +227,7 @@ export default function PluginsPage({ onApply }) {
       setMarket([]);
       setMarketInfo({ source: m.source, error: m.error });
     }
+    setLoaded(true);
   };
   React.useEffect(() => {
     load();
@@ -345,21 +348,23 @@ export default function PluginsPage({ onApply }) {
             </button>
           </div>
           {err && <div className="empty-tip is-err">{err}</div>}
+          {!loaded && !err && <SkeletonList rows={4} />}
           <div className="plugin-grid">
             {gallery.map((p) => <Card key={p.name} p={p} />)}
           </div>
-          {!err && gallery.length === 0 && <div className="empty-tip">画廊暂无插件</div>}
+          {!err && loaded && gallery.length === 0 && <div className="empty-tip">画廊暂无插件</div>}
         </>
       )}
 
       {tab === "market" && (
         <>
           <div className="market-bar" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <span style={{ fontSize: 12, opacity: .8 }}>
+            <span style={{ fontSize: "var(--fs-xs)", opacity: .8 }}>
               {marketInfo.signature_enforced ? "🔒 已强制 Ed25519 签名校验" : "🔒 下载后 SHA-256 校验"} · 来源 {marketInfo.source}
             </span>
           </div>
           {marketInfo.error && <div className="empty-tip is-err">市场索引不可用：{marketInfo.error}</div>}
+          {!loaded && !marketInfo.error && <SkeletonList rows={4} />}
           <div className="plugin-grid">
             {market.map((p) => {
               const tm = TIER_META[p.tier] || TIER_META.community;
@@ -396,7 +401,7 @@ export default function PluginsPage({ onApply }) {
                 </div>
               );
             })}
-            {!marketInfo.error && market.length === 0 && <div className="empty-tip">市场暂无插件</div>}
+            {!marketInfo.error && loaded && market.length === 0 && <div className="empty-tip">市场暂无插件</div>}
           </div>
         </>
       )}
@@ -404,8 +409,9 @@ export default function PluginsPage({ onApply }) {
       {tab === "installed" && (
         <>
           {err && <div className="empty-tip is-err">{err}</div>}
+          {!loaded && !err && <SkeletonList rows={4} />}
         <div className="plugin-grid">
-          {installed.length === 0 && <div className="empty-tip">暂无已安装插件——去画廊安装或 AI 工坊生成</div>}
+          {loaded && installed.length === 0 && <div className="empty-tip">暂无已安装插件——去画廊安装或 AI 工坊生成</div>}
           {installed.map((p) => (
             <div className={`plugin-card ${p.enabled ? "plugin-on" : ""}`} key={p.name}>
               <div className="plugin-head">

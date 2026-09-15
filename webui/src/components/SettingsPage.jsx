@@ -2,6 +2,7 @@ import React from "react";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { enqueueSpeak, invalidateVoiceConfig, playTestTone, enableVoiceInterrupt, disableVoiceInterrupt } from "../ttsUtil.js";
+import { SkeletonCard, SkeletonList } from "./Skeleton.jsx";
 
 import { silentWarn } from "../quiet.js";
 
@@ -62,7 +63,13 @@ function Row({ label, desc, children }) {
 function Toggle({ on, onClick, label, desc }) {
   return (
     <Row label={label} desc={desc}>
-      <button className={`toggle ${on ? "toggle-on" : ""}`} onClick={onClick}>
+      <button
+        className={`toggle ${on ? "toggle-on" : ""}`}
+        role="switch"
+        aria-checked={!!on}
+        aria-label={label}
+        onClick={onClick}
+      >
         <span className="toggle-knob" />
       </button>
     </Row>
@@ -182,7 +189,7 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
         </Row>
       )}
       {!hasPiper && (
-        <div className="svc-note" style={{ fontSize: 12, color: "var(--text-3)", padding: "2px 0 10px" }}>
+        <div className="svc-note" style={{ fontSize: "var(--fs-xs)", color: "var(--text-3)", padding: "2px 0 10px" }}>
           💡 想要完全本地离线的自然语音？到 <b>「🔌 可选能力 → Piper 本地语音」</b> 一键安装（自动装依赖并下载中文模型，之后断网也能朗读）。
         </div>
       )}
@@ -233,16 +240,19 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
 // ── 外部服务（邮件/IM/Webhook/数据库/图片/接收端）──────
 function ServicesTab({ cfg, onTip }) {
   const [svc, setSvc] = React.useState(null);
+  const [saving, setSaving] = React.useState(false);
   React.useEffect(() => {
     api.getServices().catch(() => null).then((d) => d && setSvc(d));
   }, []);
-  if (!svc) return <div className="empty-tip">加载外部服务配置…</div>;
+  if (!svc) return <SkeletonList rows={4} />;
 
   const field = (group, key) => (svc[group] || {})[key] || "";
   const setField = (group, key, val) =>
     setSvc((s) => ({ ...s, [group]: { ...(s[group] || {}), [key]: val } }));
 
   const save = async () => {
+    if (saving) return; // 防重复提交
+    setSaving(true);
     const r = await api.saveServices({
       webhooks: svc.webhooks || {},
       im: svc.im || {},
@@ -253,6 +263,7 @@ function ServicesTab({ cfg, onTip }) {
       inbound: svc.inbound || {},
     }).catch(() => null);
     if (r && r.ok) onTip("外部服务已保存（敏感字段加密存储）");
+    setSaving(false);
   };
 
   const EmRow = ({ label, placeholder, group, key, desc, type }) => (
@@ -304,7 +315,7 @@ function ServicesTab({ cfg, onTip }) {
           };
           return (
             <div key={kind}>
-              <div className="svc-title" style={{ fontSize: 11 }}>{kind === "mysql" ? "MySQL" : "PostgreSQL"}</div>
+              <div className="svc-title" style={{ fontSize: "var(--fs-2xs)" }}>{kind === "mysql" ? "MySQL" : "PostgreSQL"}</div>
               <Row label="主机">
                 <input className="set-select set-combo" placeholder="127.0.0.1" value={conn.host || ""} onChange={(e) => setConn("host", e.target.value)} />
               </Row>
@@ -348,7 +359,7 @@ function ServicesTab({ cfg, onTip }) {
         <Toggle on={!!(svc.agent_mail || {}).enabled} label="启用" onClick={() => setField("agent_mail", "enabled", !(svc.agent_mail || {}).enabled)} />
         <EmRow label="CLI 路径" group="agent_mail" key="cli" placeholder="agently-cli" />
       </div>
-      <button className="confirm-btn confirm-primary" onClick={save}>💾 保存外部服务</button>
+      <button className="confirm-btn confirm-primary" onClick={save} disabled={saving}>{saving ? "保存中…" : "💾 保存外部服务"}</button>
     </div>
   );
 }
@@ -695,7 +706,7 @@ function WorkflowsBlock() {
   React.useEffect(() => {
     api.getWorkflows().catch(() => null).then((d) => d && setWfs(d.workflows || {}));
   }, []);
-  if (!wfs) return <div className="empty-tip">加载流程…</div>;
+  if (!wfs) return <SkeletonList rows={3} />;
 
   const save = async (data) => {
     const d = await api.saveWorkflows(data).catch(() => null);
@@ -747,7 +758,7 @@ function CheckpointBlock() {
   React.useEffect(() => {
     api.getCheckpoint().catch(() => null).then((d) => d && setCp(d));
   }, []);
-  if (!cp) return <div className="empty-tip">加载检查点…</div>;
+  if (!cp) return <SkeletonList rows={3} />;
   const has = cp && (cp.name || cp.status || cp.pending);
   return (
     <div className="svc-actions" style={{ display: "block" }}>
@@ -949,7 +960,26 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
     }
   };
 
-  if (!cfg) return <div className="page"><div className="page-head"><h1>设置</h1><p>加载中…</p></div>{loadErr && <div className="set-saved-tip" style={{ color: "var(--danger)" }}>{loadErr}<button className="msg-op" style={{ marginLeft: 8 }} onClick={() => window.location.reload()}>重试</button></div>}</div>;
+  if (!cfg)
+    return (
+      <div className="page">
+        <div className="page-head">
+          <h1>设置</h1>
+          <p>正在加载配置…</p>
+        </div>
+        {loadErr && (
+          <div className="set-load-error">
+            <span>⚠ {loadErr}</span>
+            <button className="msg-op" style={{ marginLeft: "auto" }} onClick={() => window.location.reload()}>重试</button>
+          </div>
+        )}
+        <div className="skeleton-stack" style={{ maxWidth: 640 }}>
+          <SkeletonCard lines={3} />
+          <SkeletonCard lines={2} />
+          <SkeletonCard lines={3} />
+        </div>
+      </div>
+    );
 
   const TABS = [
     { id: "model", label: "🎛 模型与网关" },
@@ -990,10 +1020,10 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
           <ProfilesBlock onTip={setTip} />
           <div className="svc-title" style={{ marginTop: 16 }}>核心设置</div>
           <div className="set-card">
-            <div className="svc-title" style={{ fontSize: 12, opacity: .7, marginBottom: 4 }}>🔀 供应商网关（模型无关 · 一键切换）</div>
+            <div className="svc-title" style={{ fontSize: "var(--fs-xs)", opacity: .7, marginBottom: 4 }}>🔀 供应商网关（模型无关 · 一键切换）</div>
             <div className="preset-grid" style={{ marginBottom: 6 }}>
               {PROVIDER_PRESETS.map((p) => (
-                <button key={p.id} className="preset-card" style={{ fontSize: 11 }} title={`${p.base} · 推荐模型 ${p.model}`} onClick={() => applyProvider(p)}>
+                <button key={p.id} className="preset-card" style={{ fontSize: "var(--fs-2xs)" }} title={`${p.base} · 推荐模型 ${p.model}`} onClick={() => applyProvider(p)}>
                   <b>{p.name}</b>
                   <span>{p.desc} · {p.model}</span>
                 </button>
@@ -1159,8 +1189,8 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                 </Row>
                 <div className="svc-group" style={{ marginTop: 8 }}>
                   <div className="svc-title">🛠 自定义角色管理</div>
-                  {roles.filter((r) => !["通用角色", "智能体", "翻译官", "代码评审专家", "面试官", "写作润色师", "心理咨询伙伴", "周报助手"].includes(r.name)).map((r, i) => (
-                    <div className="svc-prompt-row" key={i}>
+                  {roles.filter((r) => !["通用角色", "智能体", "翻译官", "代码评审专家", "面试官", "写作润色师", "心理咨询伙伴", "周报助手"].includes(r.name)).map((r) => (
+                    <div className="svc-prompt-row" key={roles.indexOf(r)}>
                       <input className="set-select set-combo" value={r.name} placeholder="角色名" onChange={(e) => setRoles(roles.map((x, j) => (j === roles.indexOf(r) ? { ...x, name: e.target.value } : x)))} />
                       <input className="set-select set-combo" value={r.prompt} placeholder="提示词" onChange={(e) => setRoles(roles.map((x, j) => (j === roles.indexOf(r) ? { ...x, prompt: e.target.value } : x)))} />
                       <button className="msg-op" onClick={async () => {

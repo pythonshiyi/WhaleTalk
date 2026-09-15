@@ -35,22 +35,9 @@ export function BackendBanner() {
   };
   if (!down) return null;
   return (
-    <div style={{
-      position: "fixed", top: 0, left: 0, right: 0, zIndex: 200,
-      background: "var(--danger, #dc2626)", color: "#fff", textAlign: "center",
-      padding: "7px 12px", fontSize: 13, fontWeight: 600,
-      boxShadow: "0 3px 10px rgba(0,0,0,.25)",
-    }}>
-      ⚠️ 后端服务未连接——请启动本机 WhaleTalk 服务，或点击右侧重试
-      <button
-        onClick={retry}
-        disabled={retrying}
-        style={{
-          marginLeft: 10, background: "rgba(255,255,255,.2)", color: "#fff",
-          border: "1px solid rgba(255,255,255,.5)", borderRadius: 6,
-          padding: "2px 10px", fontSize: 12, cursor: retrying ? "wait" : "pointer",
-        }}
-      >
+    <div className="backend-banner">
+      <span>⚠️ 后端服务未连接——请启动本机 WhaleTalk 服务，或点击右侧重试</span>
+      <button onClick={retry} disabled={retrying}>
         {retrying ? "重连中…" : "立即重连"}
       </button>
     </div>
@@ -69,15 +56,9 @@ function SpeakingPill() {
     : breathing ? "🔊 朗读中…" : (st.speaking ? "🔊 正在朗读 · 点击停止" : "⏳ 正在合成语音…");
   return (
     <div
+      className={`speak-pill ${paused ? "paused" : ""}`}
       onClick={() => (paused ? resumeSpeak() : stopSpeak())}
       title={paused ? "点击继续朗读" : "点击停止朗读"}
-      style={{
-        position: "fixed", right: 18, bottom: 84, zIndex: 60,
-        padding: "7px 14px", borderRadius: 999, cursor: "pointer",
-        fontSize: 12.5, fontWeight: 600, color: "var(--text, #eee)",
-        background: paused ? "rgba(180,140,20,.92)" : "linear-gradient(135deg,#0ea5e9,#2563eb)",
-        boxShadow: "0 4px 14px rgba(0,0,0,.35)", userSelect: "none",
-      }}
     >
       {label}
     </div>
@@ -579,6 +560,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [batchPanel, setBatchPanel] = React.useState(false);
   const [batchFiles, setBatchFiles] = React.useState("");
   const [batchTpl, setBatchTpl] = React.useState("请处理以下文件：{file}");
+  // 长会话「回到最新」浮钮：向上翻阅后出现，避免手动拖到底
+  const [showJump, setShowJump] = React.useState(false);
 
   // ── 活动镜像：把"最近一次工具链"喂给侧栏「🔧 活动」标签 ──
   // 取最新的 assistant 消息（含工具或正在流式）作为实时活动；工具执行从聊天流"搬"到侧栏，
@@ -1272,6 +1255,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     <div className="chat-page">
       <SpeakingPill />
       <div className="chat-row">
+        {listOpen && <div className="drawer-scrim scrim-list" onClick={() => setListOpen(false)} />}
         {listOpen && (
           <SessionList
             sessions={sessions}
@@ -1401,7 +1385,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             style={{ fontSize: `${fontSize}px` }}
             onScroll={(e) => {
               const el = e.currentTarget;
-              atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 120;
+              const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 120;
+              atBottomRef.current = atBottom;
+              setShowJump(!atBottom && el.scrollHeight > el.clientHeight + 240);
             }}
           >
             {multiSel && multiSel.size > 0 && (
@@ -1466,13 +1452,32 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             })}
           </div>
 
+          {showJump && msgs.length > 0 && (
+            <button
+              className="jump-bottom"
+              title="回到最新"
+              onClick={() => {
+                const sc = scrollRef.current;
+                if (sc) sc.scrollTop = sc.scrollHeight;
+                atBottomRef.current = true;
+                setShowJump(false);
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14M6 13l6 6 6-6" />
+              </svg>
+            </button>
+          )}
+
           <Composer ref={composerRef} busy={busy} onSend={onSend} onStop={onStop} isTask={isTask} />
         </div>
 
+        {ctxOpen && <div className="drawer-scrim scrim-ctx" onClick={() => setCtxOpen(false)} />}
         {ctxOpen && (
           <ContextPanel data={ctx} onClose={() => setCtxOpen(false)} />
         )}
 
+        {auxOpen && <div className="drawer-scrim scrim-aux" onClick={() => setAuxOpen(false)} />}
         {auxOpen && (
           <AuxPanel onClose={() => setAuxOpen(false)} onInjectFile={onInjectFile} activity={liveActivity}
             products={liveProducts}

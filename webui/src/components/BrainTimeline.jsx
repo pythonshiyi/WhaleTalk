@@ -88,11 +88,11 @@ function BrainTimeline({ snapshots = [] }) {
             {KIND_META[k].emoji} {KIND_META[k].label}
           </label>
         ))}
-        <select className="set-select" style={{ fontSize: 12, padding: "2px 6px" }} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+        <select className="set-select" style={{ fontSize: "var(--fs-xs)", padding: "2px 6px" }} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
           <option value="">记忆·全部类型</option>
           {memTypes.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
-        <span className="sched-text" style={{ marginLeft: "auto", fontSize: 12, opacity: 0.7 }}>
+        <span className="sched-text" style={{ marginLeft: "auto", fontSize: "var(--fs-xs)", opacity: 0.7 }}>
           {loading ? "加载中…" : `${visible.length} 个节点 · 沿时间轴回溯大脑`}
         </span>
       </div>

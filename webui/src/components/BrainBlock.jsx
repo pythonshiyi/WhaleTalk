@@ -224,7 +224,7 @@ function BrainBlock() {
   const head = (
     <div className="sched-line1" style={{ marginBottom: 12 }}>
       <b style={{ fontSize: 15, letterSpacing: 0.5 }}>⬡ 鲸语大脑</b>
-      <span className="sched-action" style={{ fontSize: 12 }}>
+      <span className="sched-action" style={{ fontSize: "var(--fs-xs)" }}>
         {noBrain ? "尚未诞生" : `已存活 ${fmtT(b.created_at).slice(0, 10)} 起 · v${b.current_version || 0}`}
       </span>
       <button className="msg-op" onClick={() => load(false)}>刷新</button>
@@ -259,8 +259,8 @@ function BrainBlock() {
             style={{ width: "100%", maxWidth: 420, margin: "10px auto", display: "block" }}
           />
           <div style={{ display: "flex", justifyContent: "center", gap: 14, alignItems: "center" }}>
-            <button className="confirm-btn" disabled={busy} onClick={createBrain} style={{ padding: "9px 26px", fontSize: 14 }}>🐋 创造大脑</button>
-            <label style={{ fontSize: 12, opacity: 0.85, display: "flex", alignItems: "center", gap: 4 }}>
+            <button className="confirm-btn" disabled={busy} onClick={createBrain} style={{ padding: "9px 26px", fontSize: "var(--fs-md)" }}>🐋 创造大脑</button>
+            <label style={{ fontSize: "var(--fs-xs)", opacity: 0.85, display: "flex", alignItems: "center", gap: 4 }}>
               <input type="checkbox" checked={createWithKeyring} onChange={(e) => setCreateWithKeyring(e.target.checked)} /> 同时启用免密加密
             </label>
           </div>
@@ -315,28 +315,28 @@ function BrainBlock() {
       </div>
 
       {/* ── 创世化初始（AI 自主设定前半生）── */}
-      <div className="brain-birth-hint" style={{ margin: "8px 0", fontSize: 12, opacity: 0.8 }}>
+      <div className="brain-birth-hint" style={{ margin: "8px 0", fontSize: "var(--fs-xs)", opacity: 0.8 }}>
         ✨ 创世化初始：让 AI <b>完全自主</b>为自己设定一段"前半生"（诞生前的前史）——人只从 AI 生成的多版候选里挑一版，也可重 roll，不干预内容。
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-        <button className="confirm-btn confirm-primary" disabled={genBusy} onClick={() => rollGenesis(3)} style={{ padding: "6px 16px", fontSize: 13 }}>
+        <button className="confirm-btn confirm-primary" disabled={genBusy} onClick={() => rollGenesis(3)} style={{ padding: "6px 16px", fontSize: "var(--fs-sm)" }}>
           {genBusy ? "⏳ AI 正在为自己设想前半生…" : "✨ 创世化初始（AI 自主设定前半生）"}
         </button>
-        {genMsg && <span style={{ fontSize: 12, opacity: 0.8 }}>{genMsg}</span>}
+        {genMsg && <span style={{ fontSize: "var(--fs-xs)", opacity: 0.8 }}>{genMsg}</span>}
       </div>
       {genOpen && Array.isArray(genCands) && genCands.length > 0 && (
         <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-md)", padding: 12, marginBottom: 10, background: "var(--bg-1)" }}>
-          <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>AI 自主设想的前半生（多版 · 任选其一，或换一批）</div>
+          <div style={{ fontWeight: 600, marginBottom: 8, fontSize: "var(--fs-sm)" }}>AI 自主设想的前半生（多版 · 任选其一，或换一批）</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 10 }}>
             {genCands.map((c, i) => (
               <div key={i} style={{ border: "1px solid var(--border)", borderRadius: "var(--r-sm)", padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ fontWeight: 700 }}>{c.name || ("候选" + (i + 1))} <span style={{ fontWeight: 400, opacity: 0.6, fontSize: 12 }}>· {c.archetype || ""}</span></div>
-                <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.5 }}>「{String(c.prehistory || "").slice(0, 130)}{String(c.prehistory || "").length > 130 ? "…" : ""}」</div>
+                <div style={{ fontWeight: 700 }}>{c.name || ("候选" + (i + 1))} <span style={{ fontWeight: 400, opacity: 0.6, fontSize: "var(--fs-xs)" }}>· {c.archetype || ""}</span></div>
+                <div style={{ fontSize: "var(--fs-xs)", opacity: 0.85, lineHeight: 1.5 }}>「{String(c.prehistory || "").slice(0, 130)}{String(c.prehistory || "").length > 130 ? "…" : ""}」</div>
                 {(Array.isArray(c.formed_beliefs) ? c.formed_beliefs : []).slice(0, 2).map((bl, j) => (
-                  <div key={j} style={{ fontSize: 11, opacity: 0.7 }}>· {bl}</div>
+                  <div key={j} style={{ fontSize: "var(--fs-2xs)", opacity: 0.7 }}>· {bl}</div>
                 ))}
-                {c.voice && <div style={{ fontSize: 11, opacity: 0.7, fontStyle: "italic" }}>"{c.voice}"</div>}
-                <button className="confirm-btn confirm-primary" disabled={genBusy} onClick={() => applyGenesis(c)} style={{ marginTop: "auto", fontSize: 12, padding: "4px 10px" }}>
+                {c.voice && <div style={{ fontSize: "var(--fs-2xs)", opacity: 0.7, fontStyle: "italic" }}>"{c.voice}"</div>}
+                <button className="confirm-btn confirm-primary" disabled={genBusy} onClick={() => applyGenesis(c)} style={{ marginTop: "auto", fontSize: "var(--fs-xs)", padding: "4px 10px" }}>
                   让鲸语带着这段前史醒来
                 </button>
               </div>
@@ -467,13 +467,13 @@ function BrainBlock() {
               })}
             </div>
             {snapOptions.length >= 2 && (
-              <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, fontSize: 12 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, fontSize: "var(--fs-xs)" }}>
                 <span style={{ color: "var(--text-2)" }}>对比两个时刻：</span>
-                <select className="set-select" style={{ fontSize: 12, padding: "3px 6px" }} value={diffA} onChange={(e) => setDiffA(e.target.value)}>
+                <select className="set-select" style={{ fontSize: "var(--fs-xs)", padding: "3px 6px" }} value={diffA} onChange={(e) => setDiffA(e.target.value)}>
                   <option value="">A</option>
                   {snapOptions.map((s) => <option key={"a" + s.version} value={s.name}>v{s.version}</option>)}
                 </select>
-                <select className="set-select" style={{ fontSize: 12, padding: "3px 6px" }} value={diffB} onChange={(e) => setDiffB(e.target.value)}>
+                <select className="set-select" style={{ fontSize: "var(--fs-xs)", padding: "3px 6px" }} value={diffB} onChange={(e) => setDiffB(e.target.value)}>
                   <option value="">B</option>
                   {snapOptions.map((s) => <option key={"b" + s.version} value={s.name}>v{s.version}</option>)}
                 </select>
@@ -525,7 +525,7 @@ function BrainBlock() {
               {/* U4 分支结构 + 冲突预演 */}
               {preview && (
                 <div style={{ margin: "10px 0 0", padding: 8, border: "1px solid var(--border-strong)", borderRadius: 8 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: "var(--fs-xs)" }}>
                     <span className="tl-dot" style={{ background: "var(--accent)" }} /> 主干 v{mergeA}
                     <span className="tl-dot" style={{ background: "var(--warn)" }} /> 分支 v{mergeB}
                     {preview.lca_found
@@ -533,7 +533,7 @@ function BrainBlock() {
                       : <span style={{ color: "var(--warn)" }}>→ 未找到共同祖先（历史快照缺失），将做双路合并</span>}
                   </div>
                   {preview.conflict_count >= 0 && (
-                    <div style={{ marginTop: 6, fontSize: 12 }}>
+                    <div style={{ marginTop: 6, fontSize: "var(--fs-xs)" }}>
                       {preview.conflict_count === 0
                         ? <span style={{ color: "var(--ok)" }}>✓ 预演无冲突，可直接融合</span>
                         : <span style={{ color: "var(--warn)" }}>⚠ 预演将产生 {preview.conflict_count} 条待裁决冲突：</span>}
@@ -560,7 +560,7 @@ function BrainBlock() {
                       {(mergeOut.conflicts || []).map((c) => (
                         <div key={c.id} style={{ margin: "6px 0", padding: 6, border: "1px solid var(--border-strong)", borderRadius: 6 }}>
                           <div style={{ opacity: 0.9 }}>• {c.file}{c.path && c.path !== c.file ? `（${c.path.replace(c.file + ".", "")}）` : ""}</div>
-                          <div style={{ fontSize: 12, opacity: 0.8 }}>A: {c.ours || "—"}　vs　B: {c.theirs || "—"}</div>
+                          <div style={{ fontSize: "var(--fs-xs)", opacity: 0.8 }}>A: {c.ours || "—"}　vs　B: {c.theirs || "—"}</div>
                           <div style={{ marginTop: 4 }}>
                             {["ours", "theirs", "both"].map((k) => (
                               <button key={k} className="msg-op" disabled={resolving} onClick={() => resolveOne(c.id, k)}>{k === "ours" ? "取A" : k === "theirs" ? "取B" : "两者都要"}</button>
@@ -640,7 +640,7 @@ function BrainBlock() {
             <div className="acc-body">
               <div className="sched-line1">
                 <button className="msg-op" disabled={busy} onClick={() => act("cleanup", { keep_bak: 2 }, "清理融合残留目录与过期大脑备份（保留最近 2 份）？")}>🧹 立即清理</button>
-                <span className="sched-text" style={{ fontSize: 12, opacity: 0.7 }}>合并临时目录 / 过期大脑备份</span>
+                <span className="sched-text" style={{ fontSize: "var(--fs-xs)", opacity: 0.7 }}>合并临时目录 / 过期大脑备份</span>
               </div>
               <div className="sched-line1" style={{ marginTop: 8 }}>
                 <input

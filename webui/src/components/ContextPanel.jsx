@@ -7,7 +7,7 @@ export default function ContextPanel({ data, onClose }) {
     <aside className="ctx-panel">
       <div className="ctx-head">
         <b>上下文</b>
-        <button className="icon-btn" onClick={onClose}>
+        <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <path d="M18 6L6 18M6 6l12 12" />
           </svg>

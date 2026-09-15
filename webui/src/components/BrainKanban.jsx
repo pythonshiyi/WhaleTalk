@@ -43,19 +43,19 @@ function BrainKanban() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, alignItems: "start" }}>
         {COLS.map((c) => (
           <div key={c.key} style={{ background: "var(--panel)", borderRadius: "var(--r-sm)", padding: 8 }}>
-            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>
+            <div style={{ fontWeight: 600, fontSize: "var(--fs-sm)", marginBottom: 6 }}>
               {c.title} <span style={{ opacity: 0.6 }}>({grouped[c.key].length})</span>
             </div>
             {grouped[c.key].length === 0 && (
-              <div className="sched-text" style={{ opacity: 0.5, fontSize: 12, padding: "4px 2px" }}>空</div>
+              <div className="sched-text" style={{ opacity: 0.5, fontSize: "var(--fs-xs)", padding: "4px 2px" }}>空</div>
             )}
             {grouped[c.key].map((dc) => (
               <div key={dc.id} className="mem-card" style={{ marginBottom: 6, padding: 8 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 500 }}>{dc.decision}</div>
-                {dc.reason && <div style={{ fontSize: 11, opacity: 0.7, marginTop: 2 }}>理由：{dc.reason}</div>}
-                {dc.expected && <div style={{ fontSize: 11, opacity: 0.7 }}>预期：{dc.expected}</div>}
-                {dc.outcome && <div style={{ fontSize: 11, opacity: 0.8, marginTop: 2 }}>实际：{dc.outcome}</div>}
-                <div style={{ fontSize: 10, opacity: 0.5, marginTop: 3 }}>{fmt(dc.ts)}</div>
+                {dc.reason && <div style={{ fontSize: "var(--fs-2xs)", opacity: 0.7, marginTop: 2 }}>理由：{dc.reason}</div>}
+                {dc.expected && <div style={{ fontSize: "var(--fs-2xs)", opacity: 0.7 }}>预期：{dc.expected}</div>}
+                {dc.outcome && <div style={{ fontSize: "var(--fs-2xs)", opacity: 0.8, marginTop: 2 }}>实际：{dc.outcome}</div>}
+                <div style={{ fontSize: "var(--fs-3xs)", opacity: 0.5, marginTop: 3 }}>{fmt(dc.ts)}</div>
                 {c.key === "open" && <OpenCardResolver onResolve={resolve} />}
               </div>
             ))}
@@ -78,10 +78,10 @@ function OpenCardResolver({ onResolve }) {
         placeholder="实际结果"
         value={outcome}
         onChange={(e) => setOutcome(e.target.value)}
-        style={{ width: "100%", fontSize: 12, marginBottom: 4 }}
+        style={{ width: "100%", fontSize: "var(--fs-xs)", marginBottom: 4 }}
       />
       <div style={{ display: "flex", gap: 4 }}>
-        <select className="set-select" style={{ flex: 1, fontSize: 12 }} value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select className="set-select" style={{ flex: 1, fontSize: "var(--fs-xs)" }} value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="kept">✓ 采纳</option>
           <option value="reversed">↺ 反转</option>
         </select>

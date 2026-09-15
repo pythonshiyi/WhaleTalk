@@ -3,6 +3,7 @@ import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import ToolTest from "./ToolTest.jsx";
 import EmptyState from "./EmptyState.jsx";
+import { SkeletonPage } from "./Skeleton.jsx";
 
 import { silentWarn } from "../quiet.js";
 
@@ -106,17 +107,27 @@ function KnowledgeBaseBlock() {
   const [kquery, setKquery] = React.useState("");
   const [khits, setKhits] = React.useState(null);
   const [kerr, setKerr] = React.useState("");
+  const [kbusy, setKbusy] = React.useState(false);
   React.useEffect(() => { api.getKnowledge().then((d) => d && setKb(d)).catch(() => {}); }, []);
   const doSearch = async () => {
-    if (!kquery.trim()) return;
+    if (!kquery.trim() || kbusy) return;
     setKerr("");
+    setKbusy(true);
     try {
       const d = await api.searchKnowledge(kquery, 5).catch(() => null);
-      setKhits(d.hits || []);
-      if (!d.hits || d.hits.length === 0) setKerr("知识库未命中相关内容（可先建立索引）");
+      if (!d) {
+        setKerr("检索失败：后端未响应");
+        setKhits(null);
+        return;
+      }
+      const hits = Array.isArray(d.hits) ? d.hits : [];
+      setKhits(hits);
+      if (hits.length === 0) setKerr("知识库未命中相关内容（可先建立索引）");
     } catch (e) {
       setKerr((e && e.message) || "检索失败");
       setKhits(null);
+    } finally {
+      setKbusy(false);
     }
   };
   return (
@@ -129,7 +140,7 @@ function KnowledgeBaseBlock() {
       <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
         <input className="set-select set-combo" placeholder="输入问题，如「我们服务器的部署步骤」" value={kquery}
           onChange={(e) => setKquery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} />
-        <button className="confirm-btn confirm-primary" onClick={doSearch}>🔍 检索</button>
+        <button className="confirm-btn confirm-primary" onClick={doSearch} disabled={kbusy}>{kbusy ? "检索中…" : "🔍 检索"}</button>
       </div>
       {kerr && <div className="empty-tip is-err">{kerr}</div>}
       {khits && khits.length > 0 && (
@@ -139,7 +150,7 @@ function KnowledgeBaseBlock() {
               <div className="mem-card-head">
                 <span className="mem-id">{h.path ? String(h.path).split(/[\\/]/).pop() : "命中"}</span>
                 <span className="mem-tag">相似度 {h.score}</span>
-                {h.path && <span className="mem-time" style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }} title={h.path}>{h.path}</span>}
+                {h.path && <span className="mem-time" style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "var(--fs-2xs)" }} title={h.path}>{h.path}</span>}
               </div>
               <div className="mem-text">{h.snippet || h.text}</div>
             </div>
@@ -276,7 +287,7 @@ export function MemoryPage({ embedded }) {
         ) : (
           <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input
-              style={{ width: 320, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: 13 }}
+              style={{ width: 320, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: "var(--fs-sm)" }}
               placeholder="要记住的内容…"
               value={addText}
               onChange={(e) => setAddText(e.target.value)}
@@ -292,7 +303,7 @@ export function MemoryPage({ embedded }) {
       <div style={{ display: "flex", justifyContent: "flex-end", margin: "4px 0 8px" }}>
         <button
           className="confirm-btn"
-          style={{ fontSize: 12 }}
+          style={{ fontSize: "var(--fs-xs)" }}
           onClick={async () => {
             setBusy(true);
             try {
@@ -320,15 +331,15 @@ export function MemoryPage({ embedded }) {
             {editingId === m.id ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "4px 0" }}>
                 <textarea
-                  style={{ width: "100%", minHeight: 60, padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: 13 }}
+                  style={{ width: "100%", minHeight: 60, padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: "var(--fs-sm)" }}
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
                 />
                 <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   类型：
-                  <input style={{ width: 120, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: 12 }} value={editType} onChange={(e) => setEditType(e.target.value)} />
+                  <input style={{ width: 120, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: "var(--fs-xs)" }} value={editType} onChange={(e) => setEditType(e.target.value)} />
                   重要度：
-                  <select className="set-select" style={{ fontSize: 12, padding: "4px 6px" }} value={editImportance} onChange={(e) => setEditImportance(Number(e.target.value))}>
+                  <select className="set-select" style={{ fontSize: "var(--fs-xs)", padding: "4px 6px" }} value={editImportance} onChange={(e) => setEditImportance(Number(e.target.value))}>
                     <option value={1}>1 低</option>
                     <option value={2}>2</option>
                     <option value={3}>3 普通</option>
@@ -387,11 +398,11 @@ function BrainGoals() {
   if (active.length === 0 && !showAdd) return null;
   return (
     <div style={{ margin: "4px 0 10px", padding: "10px 14px", borderRadius: 12, background: "var(--bg-1)", border: "1px solid var(--border)" }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-1)", marginBottom: 6 }}>🎯 进行中目标（对话中自动注入）</div>
+      <div style={{ fontSize: "var(--fs-xs)", fontWeight: 600, color: "var(--text-1)", marginBottom: 6 }}>🎯 进行中目标（对话中自动注入）</div>
       {active.map((g) => (
         <div key={g.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12.5, color: "var(--text-1)" }}>
           <span style={{ flex: 1 }}>{g.title}</span>
-          {g.progress && <span style={{ color: "var(--brand)", fontSize: 11 }}>{g.progress}</span>}
+          {g.progress && <span style={{ color: "var(--brand)", fontSize: "var(--fs-2xs)" }}>{g.progress}</span>}
           <button className="msg-op" style={{ color: "var(--ok)" }} onClick={() => act("goals-update", { id: g.id, status: "done" })}>✓ 完成</button>
           <button className="msg-op" style={{ color: "var(--danger)" }} onClick={() => act("goals-delete", { id: g.id })}>✕</button>
         </div>
@@ -412,7 +423,7 @@ function BrainGoals() {
             }}
             autoFocus
           />
-          <button className="confirm-btn confirm-primary" style={{ fontSize: 12 }} onClick={() => { act("goals-add", { title: newTitle.trim() }); setNewTitle(""); setShowAdd(false); }}>保存</button>
+          <button className="confirm-btn confirm-primary" style={{ fontSize: "var(--fs-xs)" }} onClick={() => { act("goals-add", { title: newTitle.trim() }); setNewTitle(""); setShowAdd(false); }}>保存</button>
         </span>
       ) : (
         <button className="msg-op" onClick={() => setShowAdd(true)}>＋ 添加目标</button>
@@ -507,11 +518,7 @@ export function PermissionsPage() {
   }, []);
 
   if (!perms) {
-    return (
-      <div className="page">
-        <div className="page-head"><h1>权限</h1><p>加载中…</p></div>
-      </div>
-    );
+    return <SkeletonPage title="权限" hint="正在加载权限设置…" />;
   }
 
   const update = async (key, items) => {

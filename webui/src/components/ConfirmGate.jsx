@@ -1,4 +1,5 @@
 import React from "react";
+import { useFocusTrap } from "../useFocusTrap.js";
 
 // ── 确认门 / 面向用户选择器（对齐真实项目：ask_user 询问 + 审批）──
 // type: "ask" | "approval"
@@ -34,6 +35,10 @@ export default function ConfirmGate({ req, onRespond }) {
     const iv = setInterval(() => setSeconds((s) => Math.max(0, s - 1)), 1000);
     return () => clearInterval(iv);
   }, [req]);
+
+  // 焦点陷阱：Tab 只在弹窗内循环，关闭后归还焦点
+  const cardRef = React.useRef(null);
+  useFocusTrap(cardRef, !!req);
 
   if (!req) return null;
 
@@ -75,7 +80,7 @@ export default function ConfirmGate({ req, onRespond }) {
 
   return (
     <div className="confirm-mask" onClick={handleMaskClick}>
-      <div className="confirm-card" role="dialog" aria-modal="true"
+      <div ref={cardRef} className="confirm-card" role="dialog" aria-modal="true"
         aria-label={isAsk ? "Agent 询问" : "权限确认"}>
         <div className="confirm-head">
           <b>{isAsk ? "🤔 Agent 需要你确认" : "🛡 权限请求"}</b>

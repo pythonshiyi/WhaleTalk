@@ -1,6 +1,7 @@
 import React from "react";
 import * as api from "../api.js";
 import Overlay from "./Overlay.jsx";
+import { SkeletonList } from "./Skeleton.jsx";
 
 // ── 指令库：用户指令 + 内置模板的统一管理与调用入口 ──
 // 数据同源 prompts.json（老数据仅 name/text 也能正常显示），内置模板只读、可复制到我的指令。
@@ -243,7 +244,7 @@ export default function PromptsPage({ onApply }) {
         </aside>
 
         <main className="pm-main">
-          {!items && <div className="empty-tip is-loading">加载中…</div>}
+          {!items && <SkeletonList rows={4} />}
           {items && filtered.length === 0 && (
             <div className="empty-tip">没有匹配的指令（换个筛选条件，或点「＋ 新建指令」）</div>
           )}

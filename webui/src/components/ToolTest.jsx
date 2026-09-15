@@ -13,7 +13,13 @@ function Field({ name, prop, value, onChange, required }) {
     return (
       <label className="tf-row tf-bool">
         <span className="tf-name">{name}{required && <em className="tf-req">*</em>}</span>
-        <button className={`toggle ${value ? "toggle-on" : ""}`} onClick={() => onChange(!value)}>
+        <button
+          className={`toggle ${value ? "toggle-on" : ""}`}
+          role="switch"
+          aria-checked={!!value}
+          aria-label={name}
+          onClick={() => onChange(!value)}
+        >
           <span className="toggle-knob" />
         </button>
         <span className="tf-desc">{desc}</span>
@@ -130,7 +136,7 @@ export default function ToolTest({ name, onClose }) {
             🔧 {name}
             <span className="tf-custom">{schema.custom ? "（自定义/交互工具，请对话中触发）" : "（测试台直调）"}</span>
           </b>
-          <button className="icon-btn" onClick={onClose}>
+          <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M18 6L6 18M6 6l12 12" />
             </svg>

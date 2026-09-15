@@ -21,7 +21,7 @@ const LazyPages = {
   autonomy: lazy(() => import("./components/AutonomyPage.jsx")),
 };
 const PageFallback = () => (
-  <div className="page" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", color: "var(--text-3)", fontSize: "var(--fs-sm)" }}>
+  <div className="page-fallback">
     <span className="page-loading-dot" aria-hidden="true" /> 加载中…
   </div>
 );
@@ -155,6 +155,7 @@ export default function App() {
     // 后端暂未就绪（硬依赖安装中）→ 每 2s 重试，就绪后自动进入正确页面。
     let alive = true;
     let tries = 0;
+    let timer = null;
     const check = async () => {
       if (!alive) return;
       try {
@@ -163,13 +164,14 @@ export default function App() {
       } catch {
         if (!alive) return;
         tries += 1;
-        if (tries < 30) setTimeout(check, 2000);
+        if (tries < 30) timer = setTimeout(check, 2000);
         else setFirstRun(false); // 后端长时间不可用：进主界面由 BackendBanner 提示
       }
     };
     check();
     return () => {
       alive = false;
+      clearTimeout(timer); // 卸载时停掉重试链，避免悬挂定时器
     };
   }, []);
 
@@ -183,8 +185,9 @@ export default function App() {
   // 首次启动：全屏依赖安装向导（装完/跳过 → 刷新进入主界面）
   if (firstRun === null) {
     return (
-      <div className="app" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
-        <div style={{ color: "var(--text-3)", fontSize: 13 }}>正在初始化…</div>
+      <div className="app-boot">
+        <div className="app-boot-whale" aria-hidden="true">🐋</div>
+        <div className="app-boot-text">正在初始化…</div>
       </div>
     );
   }

@@ -35,7 +35,7 @@ function TablePreview({ header = [], rows = [], total = 0, name = "" }) {
         </table>
       </div>
       {pages > 1 && (
-        <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
+        <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", fontSize: "var(--fs-xs)" }}>
           <button className="msg-op" onClick={() => setPg(Math.max(0, pg - 1))} disabled={pg === 0}>‹</button>
           <span style={{ opacity: .8 }}>{pg + 1}/{pages}</span>
           <button className="msg-op" onClick={() => setPg(Math.min(pages - 1, pg + 1))} disabled={pg >= pages - 1}>›</button>

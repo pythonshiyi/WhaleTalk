@@ -1,6 +1,7 @@
 import React from "react";
 import * as api from "../api.js";
 import EmptyState from "./EmptyState.jsx";
+import { SkeletonList } from "./Skeleton.jsx";
 
 function EvTab({ onToast }) {
   const [evs, setEvs] = React.useState(null);
@@ -22,6 +23,8 @@ function EvTab({ onToast }) {
   }, [load]);
 
   const act = async (fn, okMsg) => {
+    if (loading) return; // 防重复提交
+    setLoading(true);
     try {
       const r = await fn();
       if (r && r.ok) {
@@ -33,6 +36,7 @@ function EvTab({ onToast }) {
     } catch {
       onToast && onToast("操作失败：后端未响应");
     }
+    setLoading(false);
   };
 
   const showDiff = async (name) => {
@@ -87,6 +91,8 @@ function EvTab({ onToast }) {
 
   const confirmDelete = async (name) => {
     if (!window.confirm(`确认删除分支 ${name}？删除后无法恢复。`)) return;
+    if (loading) return; // 防重复提交
+    setLoading(true);
     try {
       const r = await api.deleteEvolveBranch(name);
       if (r && r.ok) {
@@ -98,6 +104,7 @@ function EvTab({ onToast }) {
     } catch {
       onToast && onToast("删除失败：后端未响应");
     }
+    setLoading(false);
   };
 
   return (
@@ -105,7 +112,7 @@ function EvTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">📋 进化提案（create_evolution）</div>
         {evs === null ? (
-          <div className="empty-tip is-loading">加载中…</div>
+          <SkeletonList rows={2} />
         ) : evs.length === 0 ? (
           <EmptyState icon="💡" title="还没有进化提案" hint="让 AI 用 create_evolution 提出改进方案（如：对 X 提出改进提案），方案会出现在这里供你审阅采纳。" compact />
         ) : (
@@ -137,11 +144,11 @@ function EvTab({ onToast }) {
                   </div>
                 </div>
                 <div className="au-item-ops">
-                  <button className="pm-op" onClick={() => showProposal(e.name)}>查看方案</button>
+                  <button className="pm-op" disabled={loading} onClick={() => showProposal(e.name)}>查看方案</button>
                   {!e.applied && (
                     <>
-                      <button className="pm-op" onClick={() => act(() => api.applyEvolution(e.name), `已采纳 ${e.name}`)}>采纳</button>
-                      <button className="pm-op pm-op-danger" onClick={() => confirmIgnore(e.name)}>忽略</button>
+                      <button className="pm-op" disabled={loading} onClick={() => act(() => api.applyEvolution(e.name), `已采纳 ${e.name}`)}>采纳</button>
+                      <button className="pm-op pm-op-danger" disabled={loading} onClick={() => confirmIgnore(e.name)}>忽略</button>
                     </>
                   )}
                   {e.applied && <span className="pm-badge">已采纳</span>}
@@ -167,7 +174,7 @@ function EvTab({ onToast }) {
                   <span className="pm-cat">忽略于 {g.mtime} · 内容完整保留</span>
                 </div>
                 <div className="au-item-ops">
-                  <button className="pm-op" onClick={() => act(() => api.restoreEvolution(g.archived), `已恢复 ${g.origin}`)}>恢复</button>
+                  <button className="pm-op" disabled={loading} onClick={() => act(() => api.restoreEvolution(g.archived), `已恢复 ${g.origin}`)}>恢复</button>
                 </div>
               </div>
             ))}
@@ -178,7 +185,7 @@ function EvTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">🔀 自我进化分支（self_evolve）</div>
         {branches === null ? (
-          <div className="empty-tip is-loading">加载中…</div>
+          <SkeletonList rows={2} />
         ) : branches.length === 0 ? (
           <EmptyState icon="🌿" title="还没有改进分支" hint="AI 用 self_evolve 提交的改进分支会出现在这里，可查看 diff 后合并。" compact />
         ) : (
@@ -193,9 +200,9 @@ function EvTab({ onToast }) {
                   <div className="au-subject">{b.subject}</div>
                 </div>
                 <div className="au-item-ops">
-                  <button className="pm-op" onClick={() => showDiff(b.name)}>查看 diff</button>
+                  <button className="pm-op" disabled={loading} onClick={() => showDiff(b.name)}>查看 diff</button>
                   <button className="pm-op" disabled={loading} onClick={() => confirmMerge(b.name)}>合并</button>
-                  <button className="pm-op pm-op-danger" onClick={() => confirmDelete(b.name)}>删除</button>
+                  <button className="pm-op pm-op-danger" disabled={loading} onClick={() => confirmDelete(b.name)}>删除</button>
                 </div>
               </div>
             ))}
@@ -254,7 +261,7 @@ function ApprovalTab({ onToast }) {
     <div className="au-card">
       <div className="au-card-title">🛡 审批与询问记录（最近 200 条）</div>
       {items === null ? (
-        <div className="empty-tip is-loading">加载中…</div>
+        <SkeletonList rows={3} />
       ) : items.length === 0 ? (
         <EmptyState icon="📋" title="还没有审批记录" hint="AI 请求权限或向你提问时，记录会出现在这里。" compact />
       ) : (
@@ -291,9 +298,9 @@ function ActivityTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">🗂 最近任务（tasklog · AI 干了什么）</div>
         {tasks === null ? (
-          <div className="empty-tip is-loading">加载中…</div>
+          <SkeletonList rows={2} />
         ) : tasks.length === 0 ? (
-          <div className="empty-tip">暂无任务记录</div>
+          <EmptyState icon="🗂" title="暂无任务记录" hint="AI 完成任务后，它的工具链会记录在这里。" compact />
         ) : (
           <div className="au-list">
             {[...tasks].reverse().map((t, i) => (
@@ -313,9 +320,9 @@ function ActivityTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">🧾 审计日志（最近 200 条）</div>
         {audit === null ? (
-          <div className="empty-tip is-loading">加载中…</div>
+          <SkeletonList rows={2} />
         ) : audit.length === 0 ? (
-          <div className="empty-tip">暂无审计记录（工具调用审计未开启或尚未产生）</div>
+          <EmptyState icon="🧾" title="暂无审计记录" hint="工具调用审计未开启或尚未产生记录。" compact />
         ) : (
           <div className="au-audit">{audit.map((l, i) => <code key={i}>{l}</code>)}</div>
         )}
@@ -363,7 +370,7 @@ function SelfTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">🧠 核心自我状态（self_profile · 跨会话连续）</div>
         {profile === null ? (
-          <div className="empty-tip is-loading">加载中…</div>
+          <SkeletonList rows={2} />
         ) : (
           <pre className="au-profile">{profile}</pre>
         )}
@@ -380,9 +387,14 @@ function SelfTab({ onToast }) {
           </div>
         )}
         {failures === null ? (
-          <div className="empty-tip is-loading">加载中…</div>
+          <SkeletonList rows={2} />
         ) : shown.length === 0 ? (
-          <div className="empty-tip">暂无{showResolved ? "" : "未消解的"}失败记录</div>
+          <EmptyState
+            icon="✅"
+            title={showResolved ? "暂无失败记录" : "没有未消解的失败记录"}
+            hint="失败会自动沉淀并去重；同一工具连续成功 2 次后自动消解，不再注入上下文。"
+            compact
+          />
         ) : (
           <div className="au-list">
             {shown.map((f, i) => (
@@ -448,7 +460,7 @@ function GrowthTab({ onToast }) {
           </select>
         </div>
         {hm === null ? (
-          <div className="empty-tip is-loading">加载中…</div>
+          <SkeletonList rows={2} />
         ) : (
           <>
             <div className="au-subject">
@@ -456,7 +468,7 @@ function GrowthTab({ onToast }) {
               {(hm.summary || {}).distinct_tools || 0} 个工具 · 平均链长 {(hm.summary || {}).avg_chain_len || 0}
             </div>
             {hmTools.length === 0 ? (
-              <div className="empty-tip">这段时间还没有任务链记录</div>
+              <EmptyState icon="📊" title="这段时间还没有任务链记录" hint="完成任务后，能力热力图会把用得最多/最薄弱的能力画出来。" compact />
             ) : (
               <div className="au-list">
                 {hmTools.map((t) => (
@@ -499,7 +511,7 @@ function GrowthTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">📋 自我述职（近 7 天 · AI 的自我复盘）</div>
         {rep === null ? (
-          <div className="empty-tip is-loading">加载中…</div>
+          <SkeletonList rows={2} />
         ) : (
           <>
             <div className="au-subject">
@@ -556,7 +568,7 @@ function GrowthTab({ onToast }) {
       <div className="au-card">
         <div className="au-card-title">🛡 信任内核故事线（谁改过我的护栏 · 可回滚）</div>
         {trust === null ? (
-          <div className="empty-tip is-loading">加载中…</div>
+          <SkeletonList rows={2} />
         ) : (
           <>
             <div className="au-subject">
@@ -564,7 +576,7 @@ function GrowthTab({ onToast }) {
               （mode：{trust.mode || "report"}）
             </div>
             {(trust.timeline || []).length === 0 ? (
-              <div className="empty-tip">暂无改动记录（内核自建立以来未被改动）</div>
+              <EmptyState icon="🛡" title="内核从未被改动" hint="授权相关代码（permissions / security / crypto / snapshot）自建立以来保持一致。" compact />
             ) : (
               <div className="au-list">
                 {(trust.timeline || []).slice(0, 30).map((e, i) => (

@@ -181,7 +181,8 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       try {
         const r = await api.uploadImage(b64, file.name);
         if (r && r.path) {
-          setAttachments((a) => [...a, { path: r.path, name: r.name }]);
+          const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          setAttachments((a) => [...a, { id, path: r.path, name: r.name }]);
           if (r.note) toast("🖼 " + r.note);
         }
       } catch (e) { silentWarn(e, "Composer"); }
@@ -372,10 +373,14 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     <div className="composer-wrap">
       {attachments.length > 0 && (
         <div className="composer-att">
-          {attachments.map((a, i) => (
-            <span className="att-chip" key={i}>
+          {attachments.map((a) => (
+            <span className="att-chip" key={a.id || a.path}>
               🖼 {a.name}
-              <button onClick={() => setAttachments(attachments.filter((_, j) => j !== i))}>×</button>
+              <button
+                title="移除附件"
+                aria-label="移除附件"
+                onClick={() => setAttachments(attachments.filter((x) => (x.id || x.path) !== (a.id || a.path)))}
+              >×</button>
             </span>
           ))}
         </div>

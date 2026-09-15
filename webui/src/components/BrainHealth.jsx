@@ -28,10 +28,19 @@ function BrainHealth() {
   React.useEffect(() => { runDoctor(false); }, []);
 
   if (err) return <div className="sched-text" style={{ color: "var(--danger)" }}>⚠ {err}</div>;
-  if (!health) return <div className="sched-text" style={{ opacity: 0.7 }}>体检中…</div>;
+  if (!health)
+    return (
+      <div style={{ display: "flex", gap: 18, alignItems: "center", padding: "6px 2px" }}>
+        <div className="skeleton" style={{ width: 86, height: 86, borderRadius: "50%", flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div className="skeleton skeleton-line" style={{ width: "38%", height: 14, marginBottom: 10 }} />
+          <div className="skeleton skeleton-line" style={{ width: "82%" }} />
+        </div>
+      </div>
+    );
 
   const score = health.score ?? 0;
-  const scoreColor = score >= 85 ? "var(--ok, #2e9e5b)" : score >= 60 ? "var(--warn, #d99a1b)" : "var(--danger)";
+  const scoreColor = score >= 85 ? "var(--ok)" : score >= 60 ? "var(--warn)" : "var(--danger)";
 
   return (
     <div style={{ padding: "6px 2px" }}>
@@ -51,8 +60,8 @@ function BrainHealth() {
           </div>
         </div>
         <div style={{ flex: 1, minWidth: 220 }}>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>大脑健康度</div>
-          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
+          <div style={{ fontWeight: 600, fontSize: "var(--fs-md)" }}>大脑健康度</div>
+          <div style={{ fontSize: "var(--fs-xs)", opacity: 0.75, marginTop: 2 }}>
             记忆 {health.memories ?? 0} · 陈旧 {health.stale ?? 0} · 疑似重复 {health.dups ?? 0} ·
             未回执决策 {health.open_decisions ?? 0} · 快照 {health.snapshots ?? 0}
             {health.open_conflicts ? ` · 冲突 ${health.open_conflicts}` : ""}
@@ -68,7 +77,7 @@ function BrainHealth() {
         </div>
       </div>
       {(health.problems || []).length > 0 ? (
-        <ul style={{ margin: "12px 0 0", paddingLeft: 18, fontSize: 12, opacity: 0.9 }}>
+        <ul style={{ margin: "12px 0 0", paddingLeft: 18, fontSize: "var(--fs-xs)", opacity: 0.9 }}>
           {(health.problems || []).map((p, i) => (
             <li key={i} style={{ margin: "3px 0" }}>{p}</li>
           ))}

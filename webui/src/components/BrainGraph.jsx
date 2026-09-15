@@ -36,6 +36,8 @@ function BrainGraph() {
       const dd = deg[en.name] || 0;
       return {
         ...en,
+        // 名称兜底：实体缺 name 时不至于渲染崩溃 / key 缺失
+        name: en.name || en.id || `ent-${i}`,
         x: CX + R * Math.cos(ang),
         y: CY + R * Math.sin(ang),
         r: 8 + (dd / maxDeg) * 18,
@@ -53,7 +55,7 @@ function BrainGraph() {
   }, [data]);
 
   if (err) return <div className="sched-text" style={{ color: "var(--danger)" }}>⚠ {err}</div>;
-  if (!data) return <div className="sched-text" style={{ opacity: 0.7 }}>图谱生成中…</div>;
+  if (!data) return <div className="skeleton" style={{ width: "100%", height: 220, borderRadius: "var(--r-lg)" }} />;
   if (layout.nodes.length === 0)
     return <div className="sched-text" style={{ opacity: 0.7 }}>还没有实体节点——给记忆标注实体/关系后会在这里出现知识图谱。</div>;
 
@@ -67,17 +69,14 @@ function BrainGraph() {
             stroke="var(--border-strong)" strokeWidth={1.5} opacity={0.5} />
         ))}
         {/* 节点 */}
-        {layout.nodes.map((nd) => (
-          <g key={nd.id}
+        {layout.nodes.map((nd, i) => (
+          <g key={nd.id || nd.name || i}
             onMouseEnter={() => setActive({ x: nd.x, y: nd.y, name: nd.name, types: (nd.types || []).join("、"), deg: nd.deg })}
-            onMouseMove={(ev) => {
-              const b = ev.currentTarget.ownerSVGElement.getBoundingClientRect();
-              setActive({ x: nd.x, y: nd.y, name: nd.name, types: (nd.types || []).join("、"), deg: nd.deg });
-            }}
+            onMouseMove={() => setActive({ x: nd.x, y: nd.y, name: nd.name, types: (nd.types || []).join("、"), deg: nd.deg })}
             style={{ cursor: "pointer" }}>
             <circle cx={nd.x} cy={nd.y} r={nd.r} fill="var(--accent, #4a8cf7)" opacity={0.85} stroke="var(--bg, #fff)" strokeWidth={1} />
             <text x={nd.x} y={nd.y + 4} textAnchor="middle" fontSize={nd.r > 14 ? 11 : 10} fontWeight={600}
-              fill="var(--text-1)" style={{ pointerEvents: "none" }}>{nd.name.length > 10 ? nd.name.slice(0, 10) + "…" : nd.name}</text>
+              fill="var(--text-1)" style={{ pointerEvents: "none" }}>{String(nd.name).length > 10 ? String(nd.name).slice(0, 10) + "…" : nd.name}</text>
           </g>
         ))}
         {active && (
@@ -88,7 +87,7 @@ function BrainGraph() {
           </g>
         )}
       </svg>
-      <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
+      <div style={{ fontSize: "var(--fs-2xs)", opacity: 0.6, marginTop: 4 }}>
         {layout.nodes.length} 个实体 · {layout.edges.length} 条关系 —— 悬停查看节点；在记忆里标注 entities/relations 会在此生长图谱。
       </div>
     </div>

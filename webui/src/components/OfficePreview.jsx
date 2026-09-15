@@ -112,15 +112,15 @@ export function EditableTable({ path, name, header = [], rows = [], total = 0 })
                   const cell = r[ci] || { v: "", dirty: false };
                   return (
                     <td key={ci} style={{
-                      padding: "2px 4px", borderBottom: "1px solid rgba(128,140,160,.12)",
-                      background: cell.dirty ? "rgba(255,214,102,.25)" : undefined,
+                      padding: "2px 4px", borderBottom: "1px solid var(--border)",
+                      background: cell.dirty ? "var(--warn-soft)" : undefined,
                       minWidth: 60,
                     }}>
                       <input
                         value={cell.v}
                         onChange={(e) => setVal(ri, ci, e.target.value)}
-                        style={{ width: "100%", boxSizing: "border-box", border: "1px solid transparent", background: "transparent", fontSize: 12, padding: "2px 2px", outline: "none" }}
-                        onFocus={(e) => (e.target.style.border = "1px solid var(--accent, #4a8cf7)", e.target.style.background = "rgba(74,140,247,.06)")}
+                        style={{ width: "100%", boxSizing: "border-box", border: "1px solid transparent", background: "transparent", fontSize: "var(--fs-xs)", padding: "2px 2px", outline: "none" }}
+                        onFocus={(e) => (e.target.style.border = "1px solid var(--brand)", e.target.style.background = "var(--brand-soft)")}
                         onBlur={(e) => (e.target.style.border = "1px solid transparent", e.target.style.background = "transparent")}
                       />
                     </td>
@@ -131,11 +131,11 @@ export function EditableTable({ path, name, header = [], rows = [], total = 0 })
           </tbody>
         </table>
       </div>
-      <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", fontSize: 12, flexWrap: "wrap" }}>
-        <button className="msg-op" onClick={save} disabled={busy || nDirty === 0} style={nDirty > 0 && !busy ? { borderColor: "var(--accent, #4a8cf7)", color: "var(--accent, #4a8cf7)" } : undefined}>
+      <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", fontSize: "var(--fs-xs)", flexWrap: "wrap" }}>
+        <button className="msg-op" onClick={save} disabled={busy || nDirty === 0} style={nDirty > 0 && !busy ? { borderColor: "var(--brand)", color: "var(--brand)" } : undefined}>
           {busy ? "保存中…" : (nDirty > 0 ? `保存 ${nDirty} 处修改` : "保存修改")}
         </button>
-        {saved && <span style={{ color: "var(--success, #2e9e5b)" }}>✓ 已就地保存（xlsx_edit）</span>}
+        {saved && <span style={{ color: "var(--ok)" }}>✓ 已就地保存（xlsx_edit）</span>}
         {msg && !saved && <span style={{ opacity: .75 }}>{msg}</span>}
       </div>
     </div>
@@ -210,8 +210,8 @@ export function DocxEditable({ path, name, content = "" }) {
               )}
             </div>
             {editing === i ? (
-              <div style={{ display: "flex", gap: 6, flexDirection: "column", border: "1px solid var(--accent,#4a8cf7)", borderRadius: 6, padding: 4 }}>
-                <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={Math.max(1, Math.min(6, String(draft).split("\n").length + 1))} style={{ width: "100%", boxSizing: "border-box", fontSize: 12, fontFamily: "inherit" }} />
+              <div style={{ display: "flex", gap: 6, flexDirection: "column", border: "1px solid var(--brand)", borderRadius: "var(--r-sm)", padding: 4 }}>
+                <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={Math.max(1, Math.min(6, String(draft).split("\n").length + 1))} style={{ width: "100%", boxSizing: "border-box", fontSize: "var(--fs-xs)", fontFamily: "inherit" }} />
                 <div style={{ display: "flex", gap: 6 }}>
                   <button className="msg-op" onClick={() => replaceBlock(i)} disabled={busy}>{busy ? "保存中…" : "保存替换"}</button>
                   <button className="msg-op" onClick={() => setEditing(null)}>取消</button>
@@ -223,7 +223,7 @@ export function DocxEditable({ path, name, content = "" }) {
           </div>
         ))}
       </div>
-      {msg && <div style={{ marginTop: 4, fontSize: 12, opacity: .75 }}>{msg}</div>}
+      {msg && <div style={{ marginTop: 4, fontSize: "var(--fs-xs)", opacity: .75 }}>{msg}</div>}
     </div>
   );
 }

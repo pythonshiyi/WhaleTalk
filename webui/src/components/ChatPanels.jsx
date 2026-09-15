@@ -4,15 +4,27 @@ import React from "react";
 // 纯 JSX 机械提取：所有状态与回调仍在 ChatPage，经 props 传入；
 // 渲染结构与行为与拆分前完全一致。共 7 个面板：批量任务 / 命令 / 轨迹 / FIM / 变体 / 搜索 / 收藏。
 
+// 浮层通用：Esc 关闭（对话框的标准预期，此前仅命令面板支持）。
+// 必须在各组件早退 `if (!open) return null` 之前调用，保证 Hook 调用顺序稳定。
+function useEsc(open, onClose) {
+  React.useEffect(() => {
+    if (!open) return;
+    const h = (e) => { if (e.key === "Escape") onClose && onClose(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [open, onClose]);
+}
+
 // 📦 批量任务：多文件 + 指令模板 → 组装为一条批量指令塞入输入框
 export function BatchPanel({ open, onClose, files, onFiles, tpl, onTpl, onDo }) {
+  useEsc(open, onClose);
   if (!open) return null;
   return (
     <div className="overlay-mask" onClick={onClose}>
       <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
         <div className="overlay-head">
           <b>📦 批量任务</b>
-          <button className="icon-btn" onClick={onClose}>
+          <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>
@@ -35,6 +47,7 @@ export function CmdPanel({
   open, onClose, query, onQuery, onSearch,
   onNewChat, onOpenSearch, onGoWorkbench, onOpenTimeline, onOpenVariants, onOpenFim, onOpenStar, onExport, onGoSettings,
 }) {
+  useEsc(open, onClose);
   if (!open) return null;
   return (
     <div className="confirm-mask" onClick={onClose}>
@@ -79,13 +92,14 @@ export function CmdPanel({
 
 // 🕐 会话轨迹：全部消息一览，点击跳转
 export function TimelinePanel({ open, onClose, msgs, onGoto }) {
+  useEsc(open, onClose);
   if (!open) return null;
   return (
     <div className="overlay-mask" onClick={onClose}>
       <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
         <div className="overlay-head">
           <b>🕐 会话轨迹（{msgs.length} 条）</b>
-          <button className="icon-btn" onClick={onClose}>
+          <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>
@@ -111,13 +125,14 @@ export function TimelinePanel({ open, onClose, msgs, onGoto }) {
 
 // ✂ FIM 代码补全（Beta）：前后缀 → 补全结果，可一键插入输入框
 export function FimPanel({ open, onClose, prompt, onPrompt, suffix, onSuffix, result, busy, onDo, onInsert }) {
+  useEsc(open, onClose);
   if (!open) return null;
   return (
     <div className="overlay-mask" onClick={onClose}>
       <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
         <div className="overlay-head">
           <b>✂ FIM 代码补全（Beta）</b>
-          <button className="icon-btn" onClick={onClose}>
+          <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>
@@ -146,13 +161,14 @@ export function FimPanel({ open, onClose, prompt, onPrompt, suffix, onSuffix, re
 
 // 🔄 回复变体：重新生成时旧回复自动存档，可浏览/恢复
 export function VariantPanel({ open, onClose, variants, onRestore }) {
+  useEsc(open, onClose);
   if (!open) return null;
   return (
     <div className="overlay-mask" onClick={onClose}>
       <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
         <div className="overlay-head">
           <b>🔄 回复变体（{variants.length} 版）</b>
-          <button className="icon-btn" onClick={onClose}>
+          <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>
@@ -175,13 +191,14 @@ export function VariantPanel({ open, onClose, variants, onRestore }) {
 export function SearchPanel({
   open, onClose, query, onQuery, type, onType, results, onResults, busy, onBusy, onSearch, onOpen,
 }) {
+  useEsc(open, onClose);
   if (!open) return null;
   return (
     <div className="overlay-mask" onClick={onClose}>
       <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
         <div className="overlay-head">
           <b>🔍 全局搜索</b>
-          <button className="icon-btn" onClick={onClose}>
+          <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>
@@ -222,13 +239,14 @@ export function SearchPanel({
 
 // ⭐ 收藏与固定：查看/取消收藏与固定消息（压缩时固定内容保留进摘要）
 export function StarPanel({ open, onClose, msgs, onStar, onPin, onGoto }) {
+  useEsc(open, onClose);
   if (!open) return null;
   return (
     <div className="overlay-mask" onClick={onClose}>
       <div className="overlay-panel" onClick={(e) => e.stopPropagation()}>
         <div className="overlay-head">
           <b>⭐ 收藏与固定</b>
-          <button className="icon-btn" onClick={onClose}>
+          <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>

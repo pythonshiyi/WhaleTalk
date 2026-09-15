@@ -22,7 +22,7 @@ function TeamRunSteps({ result }) {
         {steps.map((s, i) => (
           <li key={i} style={{ marginBottom: 6 }}>
             <b>[{s.role}]</b> {s.task}
-            {s.output && <div style={{ opacity: .85, whiteSpace: "pre-wrap", fontSize: 12, margin: "3px 0" }}>{String(s.output).slice(0, 300)}</div>}
+            {s.output && <div style={{ opacity: .85, whiteSpace: "pre-wrap", fontSize: "var(--fs-xs)", margin: "3px 0" }}>{String(s.output).slice(0, 300)}</div>}
           </li>
         ))}
       </ol>

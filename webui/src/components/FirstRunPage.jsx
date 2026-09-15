@@ -125,12 +125,12 @@ export default function FirstRunPage({ onDone }) {
     boxShadow: "var(--shadow-3)",
     padding: "28px 32px",
   };
-  const sub = { margin: "8px 0 20px", fontSize: 13, color: "var(--text-2)", lineHeight: 1.6 };
-  const groupTitle = { fontSize: 13, fontWeight: 700, color: "var(--text-1)", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 };
+  const sub = { margin: "8px 0 20px", fontSize: "var(--fs-sm)", color: "var(--text-2)", lineHeight: 1.6 };
+  const groupTitle = { fontSize: "var(--fs-sm)", fontWeight: 700, color: "var(--text-1)", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 };
   const item = { display: "flex", alignItems: "flex-start", gap: 10, padding: "9px 12px", borderRadius: 10, background: "var(--bg-1)", border: "1px solid var(--border)", marginBottom: 6 };
-  const itemLabel = { fontSize: 13, fontWeight: 600, color: "var(--text-1)" };
-  const itemDesc = { fontSize: 12, color: "var(--text-2)", marginTop: 2, lineHeight: 1.5 };
-  const chip = (color) => ({ fontSize: 10, padding: "1px 8px", borderRadius: "var(--r-full)", background: "var(--bg-3)", color: "var(--text-2)", marginLeft: 8, whiteSpace: "nowrap" });
+  const itemLabel = { fontSize: "var(--fs-sm)", fontWeight: 600, color: "var(--text-1)" };
+  const itemDesc = { fontSize: "var(--fs-xs)", color: "var(--text-2)", marginTop: 2, lineHeight: 1.5 };
+  const chip = (color) => ({ fontSize: "var(--fs-3xs)", padding: "1px 8px", borderRadius: "var(--r-full)", background: "var(--bg-3)", color: "var(--text-2)", marginLeft: 8, whiteSpace: "nowrap" });
   const chipOk = { ...chip(), background: "var(--ok-soft)", color: "var(--ok)" };
 
   return (
@@ -151,13 +151,13 @@ export default function FirstRunPage({ onDone }) {
           <span style={{ fontSize: 30 }}>🐋</span>
           <div style={{ flex: 1 }}>
             <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "var(--text-1)" }}>欢迎使用鲸语</h1>
-            <p style={{ ...sub, margin: "2px 0 0", fontSize: 12 }}>
+            <p style={{ ...sub, margin: "2px 0 0", fontSize: "var(--fs-xs)" }}>
               首次启动正在自动安装核心组件，完成后自动进入。
             </p>
           </div>
           <button
             className="confirm-btn"
-            style={{ fontSize: 12, padding: "4px 12px" }}
+            style={{ fontSize: "var(--fs-xs)", padding: "4px 12px" }}
             onClick={finish}
             disabled={phase === "installing"}
           >
@@ -166,7 +166,7 @@ export default function FirstRunPage({ onDone }) {
         </div>
 
         {err && (
-          <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--danger-soft)", color: "var(--danger)", fontSize: 13, marginBottom: 16 }}>
+          <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--danger-soft)", color: "var(--danger)", fontSize: "var(--fs-sm)", marginBottom: 16 }}>
             {err}
           </div>
         )}
@@ -187,7 +187,7 @@ export default function FirstRunPage({ onDone }) {
               {/* 进度区 */}
               {phase === "installing" && (
                 <div style={{ padding: "12px 14px", borderRadius: 12, background: "var(--bg-1)", border: "1px solid var(--border)", marginBottom: 10 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)", marginBottom: 6 }}>
+                  <div style={{ fontSize: "var(--fs-sm)", fontWeight: 600, color: "var(--text-1)", marginBottom: 6 }}>
                     {prog.current ? `正在安装：${prog.current}` : "准备安装…"}
                   </div>
                   <div style={{ height: 8, borderRadius: 4, background: "var(--bg-3)", overflow: "hidden" }}>
@@ -206,7 +206,7 @@ export default function FirstRunPage({ onDone }) {
                       maxHeight: 150,
                       overflowY: "auto",
                       fontFamily: "var(--font-mono)",
-                      fontSize: 11,
+                      fontSize: "var(--fs-2xs)",
                       color: "var(--text-2)",
                       whiteSpace: "pre-wrap",
                       lineHeight: 1.5,
@@ -218,24 +218,24 @@ export default function FirstRunPage({ onDone }) {
               )}
 
               {phase === "done" && failed.length === 0 && (
-                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--ok-soft)", color: "var(--ok)", fontSize: 13, marginBottom: 10 }}>
+                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--ok-soft)", color: "var(--ok)", fontSize: "var(--fs-sm)", marginBottom: 10 }}>
                   ✅ 核心组件全部就绪，正在进入鲸语…
                 </div>
               )}
               {phase === "done" && failed.length > 0 && (
-                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--warn-soft)", color: "var(--warn)", fontSize: 13, marginBottom: 10 }}>
+                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--warn-soft)", color: "var(--warn)", fontSize: "var(--fs-sm)", marginBottom: 10 }}>
                   ⚠ 以下核心组件安装失败：<b>{failed.join("、")}</b>。可重试失败项，或稍后在「设置 → 常规组件」重试。
                 </div>
               )}
               {autoErr && (
-                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--danger-soft)", color: "var(--danger)", fontSize: 13, marginBottom: 10 }}>
+                <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--danger-soft)", color: "var(--danger)", fontSize: "var(--fs-sm)", marginBottom: 10 }}>
                   {autoErr}
                 </div>
               )}
 
               {/* 已就绪清单（折叠展示） */}
               {phase !== "installing" && (
-                <div style={{ fontSize: 11, color: "var(--text-3)" }}>
+                <div style={{ fontSize: "var(--fs-2xs)", color: "var(--text-3)" }}>
                   {coreOk.length > 0 && <div style={{ marginBottom: 4 }}>✓ 已就绪 {coreOk.length} 项：{coreOk.map((c) => c.label).join("、")}</div>}
                   {coreMiss.length > 0 && <div>⏳ 待安装 {coreMiss.length} 项（自动安装中）</div>}
                 </div>
@@ -285,7 +285,7 @@ export default function FirstRunPage({ onDone }) {
 
             {/* 默认自由说明：任务模式 = 无限权限，黑名单主导（默认空 = 0 限制），可随时切换 */}
             {phase === "done" && (
-              <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: "var(--bg-1)", border: "1px solid var(--border)", fontSize: 12, color: "var(--text-2)", lineHeight: 1.6 }}>
+              <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: "var(--bg-1)", border: "1px solid var(--border)", fontSize: "var(--fs-xs)", color: "var(--text-2)", lineHeight: 1.6 }}>
                 🚀 <b style={{ color: "var(--text-1)" }}>默认任务模式（法无禁止皆可为）</b>：AI 拥有完整行动能力，
                 黑名单为唯一限制来源（默认空 = 零限制）。你可在「权限」页添加黑名单 / 审批清单
                 （均带一键开关），或随时切换「💬 对话模式」收紧权限。
@@ -296,8 +296,8 @@ export default function FirstRunPage({ onDone }) {
 
         {!data && !err && (
           <div style={{ padding: 40, textAlign: "center", color: "var(--text-3)" }}>
-            <div style={{ fontSize: 13, marginBottom: 8 }}>正在初始化…</div>
-            <div style={{ fontSize: 11 }}>（首次启动需先安装核心组件，请稍候）</div>
+            <div style={{ fontSize: "var(--fs-sm)", marginBottom: 8 }}>正在初始化…</div>
+            <div style={{ fontSize: "var(--fs-2xs)" }}>（首次启动需先安装核心组件，请稍候）</div>
           </div>
         )}
       </div>

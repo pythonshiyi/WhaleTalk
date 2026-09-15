@@ -36,6 +36,8 @@
   --sp-5: 24px;
   --sp-6: 32px;
 
+  --fs-3xs: 10px;
+  --fs-2xs: 11px;
   --fs-xs: 12px;
   --fs-sm: 13px;
   --fs-md: 14px;
@@ -44,6 +46,42 @@
   --fs-2xl: 26px;
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* 动效时长标尺（统一节奏，避免各处 0.15/0.18/0.22 杂乱） */
+  --dur-fast: .15s;
+  --dur: .2s;
+  --dur-slow: .32s;
+
+  /* 统一交互过渡（颜色/阴影/位移）。此前 44 处 `transition: background-color, color, … .18s`
+     是非法简写——每个属性各自 0s，只有最后的 transform 真正生效，导致 hover 变色是瞬跳。
+     收敛为单一令牌，所有可交互控件的反馈节奏一致且真正生效。 */
+  --t-colors:
+    background-color var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    opacity var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+
+  /* 层级标尺（避免各处魔法 z-index 互相打架） */
+  --z-panel: 5;
+  --z-sticky: 10;
+  --z-sidebar: 40;   /* 侧栏（hover 覆盖式展开时需高于内容面板） */
+  --z-popover: 50;   /* 输入区弹出菜单（斜杠/目录/指令） */
+  --z-drawer: 60;
+  --z-banner: 90;    /* 顶部全局横幅：位于浮层/模态之下，对话框打开时被正确覆盖 */
+  --z-mask: 100;
+  --z-modal: 120;
+  --z-toast: 200;
+
+  /* 品牌渐变与光晕（供主按钮/激活态统一取用，避免各处 var(--brand),var(--brand) 重复） */
+  --grad-brand: linear-gradient(135deg, var(--brand), var(--brand-strong));
+  --grad-surface: linear-gradient(180deg, rgba(var(--brand-rgb), .05), transparent);
+  --ring: 0 0 0 3px rgba(var(--brand-rgb), .14);
+  --ring-strong: 0 0 0 4px rgba(var(--brand-rgb), .22);
+  --inset-hi: inset 0 1px 0 rgba(255, 255, 255, .06);
 
   /* 字体栈：西文优先（各平台最优系统字体）、中文优雅回退；全部本机字体，离线零依赖 */
   --font-ui: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
@@ -97,6 +135,11 @@
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-3: 0 20px 60px rgba(0, 0, 0, 0.55);
+  --mask: rgba(3, 7, 16, 0.62);
+  --mask-strong: rgba(2, 4, 10, 0.78);
+  --glass: rgba(10, 14, 24, 0.72);
+  --selection: rgba(14, 165, 233, 0.35);
+  --grad-hero: radial-gradient(120% 140% at 85% -20%, rgba(var(--brand-rgb), .22), transparent 55%);
 }
 
 /* ── 深海蓝：深蓝底 + 亮湖蓝 ────────────────────── */
@@ -144,6 +187,11 @@
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.5);
   --shadow-3: 0 20px 60px rgba(0, 0, 0, 0.6);
+  --mask: rgba(2, 10, 20, 0.62);
+  --mask-strong: rgba(1, 6, 14, 0.78);
+  --glass: rgba(4, 26, 48, 0.72);
+  --selection: rgba(34, 200, 255, 0.35);
+  --grad-hero: radial-gradient(120% 140% at 85% -20%, rgba(var(--brand-rgb), .24), transparent 55%);
 }
 
 /* ── 北极冰：纯白系（中性无蓝调，适合长时间阅读） ─────────────── */
@@ -191,6 +239,11 @@
   --shadow-1: 0 1px 3px rgba(30, 64, 110, 0.12);
   --shadow-2: 0 10px 28px rgba(30, 64, 110, 0.16);
   --shadow-3: 0 24px 64px rgba(30, 64, 110, 0.22);
+  --mask: rgba(30, 45, 70, 0.30);
+  --mask-strong: rgba(20, 32, 52, 0.46);
+  --glass: rgba(255, 255, 255, 0.78);
+  --selection: rgba(2, 132, 199, 0.22);
+  --grad-hero: radial-gradient(120% 140% at 85% -20%, rgba(var(--brand-rgb), .12), transparent 55%);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -215,7 +268,7 @@ body {
 
 select, input, textarea { font-family: inherit; }
 
-::selection { background: rgba(14, 165, 233, 0.35); }
+::selection { background: var(--selection); color: var(--text-1); }
 
 /* ═══ 无障碍：尊重系统「减弱动态效果」 ═════════════ */
 @media (prefers-reduced-motion: reduce) {

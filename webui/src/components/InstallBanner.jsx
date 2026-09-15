@@ -49,82 +49,25 @@ export default function InstallBanner() {
   const pct = st.total ? Math.min(100, Math.round((st.done / st.total) * 100)) : 0;
 
   if (phase === "done") {
-    return (
-      <div
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          zIndex: 201,
-          background: "#16a34a",
-          color: "#fff",
-          textAlign: "center",
-          padding: "10px 12px",
-          fontSize: 14,
-          fontWeight: 700,
-          boxShadow: "0 3px 10px rgba(0,0,0,.25)",
-          animation: "wtd-banner-in .35s",
-        }}
-      >
-        🎉 全部依赖安装完成，鲸语已完整就绪
-      </div>
-    );
+    return <div className="app-banner app-banner-done">🎉 全部依赖安装完成，鲸语已完整就绪</div>;
   }
 
   if (phase === "warn") {
     return (
-      <div
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          zIndex: 201,
-          background: "#b45309",
-          color: "#fff",
-          textAlign: "center",
-          padding: "10px 12px",
-          fontSize: 13,
-          fontWeight: 600,
-          boxShadow: "0 3px 10px rgba(0,0,0,.25)",
-          animation: "wtd-banner-in .35s",
-        }}
-      >
+      <div className="app-banner app-banner-warn">
         ⚠ {st.nFail} 个组件安装失败（可在 设置 → 依赖与能力 中重试），其余已就绪
       </div>
     );
   }
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        zIndex: 201,
-        background: "linear-gradient(90deg, #0284c7, #2563eb)",
-        color: "#fff",
-        padding: "9px 16px",
-        boxShadow: "0 3px 10px rgba(0,0,0,.25)",
-        animation: "wtd-banner-in .35s",
-      }}
-    >
-      <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ fontSize: 14, fontWeight: 700, whiteSpace: "nowrap" }}>🐋 正在初始化组件</span>
-        <div style={{ flex: 1, height: 8, background: "rgba(255,255,255,.28)", borderRadius: 99, overflow: "hidden" }}>
-          <div
-            style={{
-              height: "100%",
-              width: pct + "%",
-              background: "#fff",
-              borderRadius: 99,
-              transition: "width .4s ease",
-            }}
-          />
+    <div className="app-banner app-banner-install">
+      <div className="app-banner-inner">
+        <span className="app-banner-title">🐋 正在初始化组件</span>
+        <div className="app-banner-bar">
+          <i style={{ width: pct + "%" }} />
         </div>
-        <span style={{ fontSize: 13, whiteSpace: "nowrap", opacity: 0.95 }}>
+        <span className="app-banner-step">
           {st.done}/{st.total} · {st.current || "准备中…"}
         </span>
       </div>
