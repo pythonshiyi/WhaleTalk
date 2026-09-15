@@ -14,9 +14,31 @@ FIM `prefix`、strict 工具 schema、/user/balance）在第三方 OpenAI 兼容
 """
 import pytest
 
+import config_utils
 import deepseek_client as dc
 
 CUSTOM = "https://opencode.ai/zen/go/v1"
+
+
+# ── 0. 网关地址规范化（用户误粘完整端点） ─────────────────────────
+def test_normalize_base_url_strips_chat_completions():
+    assert dc.normalize_base_url(CUSTOM + "/chat/completions") == CUSTOM
+    assert dc.normalize_base_url(CUSTOM + "/chat/completions/") == CUSTOM
+    assert dc.normalize_base_url("https://api.deepseek.com/chat/completions") == "https://api.deepseek.com"
+    # 正常地址/版本段保持不变
+    assert dc.normalize_base_url(CUSTOM) == CUSTOM
+    assert dc.normalize_base_url("https://api.deepseek.com") == "https://api.deepseek.com"
+    assert dc.normalize_base_url("https://api.deepseek.com/") == "https://api.deepseek.com"
+
+
+def test_config_normalize_strips_full_endpoint():
+    cfg = config_utils.normalize_config({"base_url": CUSTOM + "/chat/completions", "model": "deepseek-flash"})
+    assert cfg["base_url"] == CUSTOM
+
+
+def test_client_normalizes_base_url():
+    c = dc.DeepSeekClient(api_key="sk-test", base_url=CUSTOM + "/chat/completions", model="deepseek-flash")
+    assert c.base_url == CUSTOM
 
 
 # ── 1. 端点判定 ───────────────────────────────────────────────────
@@ -64,3 +86,14 @@ def test_fim_rejected_on_custom_gateway():
 def test_check_balance_guarded_on_custom_gateway():
     r = dc.check_balance("sk-test", base_url=CUSTOM)
     assert isinstance(r, dict) and "error" in r
+
+
+# ── 5. HTML 错误页 → 友好提示（不再把整页 HTML 抛给用户） ─────────
+def test_friendly_error_detects_html_gateway_page():
+    import api_server
+
+    msg = api_server._friendly_error(RuntimeError("<!DOCTYPE html><html lang='en'>404 Not Found"))
+    assert "网关" in msg and "/chat/completions" in msg
+    # 双拼路径也能识别
+    msg2 = api_server._friendly_error(RuntimeError("Error 404 ... /chat/completions/chat/completions"))
+    assert "网关" in msg2

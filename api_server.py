@@ -2292,6 +2292,12 @@ def _friendly_error(e):
     """官方错误码 → 中文可操作提示；未映射的异常脱敏后回传。"""
     s = str(e)
     low = s.lower()
+    # 网关/base_url 配置错误：返回网页（HTML）或被拼成 .../chat/completions/chat/completions
+    if "<!doctype" in low or "<html" in low or "/chat/completions/chat/completions" in low:
+        return ("网关返回了网页而非接口数据（常见原因：网关地址被填成了完整端点，"
+                "或模型名不受该网关支持）。请到 设置 → 模型与网关：把「API 网关」只填到版本段，"
+                "如 https://opencode.ai/zen/go/v1（不要带 /chat/completions），"
+                "并确认模型名是网关支持的 OpenAI 兼容模型（如 deepseek-flash）。")
     if "429" in low or "rate limit" in low or "too many requests" in low:
         return "请求过于频繁（限速）——请稍等片刻再试"
     if "401" in low or "invalid api key" in low or "authentication" in low or "unauthorized" in low:

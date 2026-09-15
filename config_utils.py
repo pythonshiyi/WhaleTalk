@@ -107,6 +107,12 @@ def normalize_config(cfg):
     base_url = str(cfg.get("base_url", "")).strip()
     if not (base_url.startswith("http://") or base_url.startswith("https://")):
         base_url = DEFAULT_BASE_URL
+    # 兼容：把「完整端点」粘进网关地址（.../chat/completions）会让 SDK 再拼一次 → 404。
+    # 统一去掉尾部 /chat/completions（保留 /v1 等版本段）。
+    try:
+        base_url = _dc.normalize_base_url(base_url) or DEFAULT_BASE_URL
+    except Exception:
+        pass
     cfg["base_url"] = base_url
 
     # 模型名归一：官方已下线旧模型并统一为 V4.1 Flash（原生多模态），旧模型名

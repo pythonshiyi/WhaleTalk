@@ -230,6 +230,22 @@ def _tool_executor_for(name):
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 
 
+def normalize_base_url(base_url):
+    """规范化网关地址。
+
+    用户常把**完整端点**粘进「API 网关地址」（如
+    `https://opencode.ai/zen/go/v1/chat/completions`）。OpenAI SDK 会在
+    base_url 之后自动追加 `/chat/completions`，若 base_url 已包含该段就会拼成
+    `.../chat/completions/chat/completions` → 网关返回 404/HTML 错误页。
+    这里去掉末尾的 `/chat/completions`（及多余斜杠），保留版本段（如 `/v1`）。
+    """
+    b = str(base_url or "").strip()
+    if not b:
+        return b
+    b = re.sub(r"/chat/completions/?$", "", b, flags=re.IGNORECASE)
+    return b.rstrip("/")
+
+
 def is_official_endpoint(base_url):
     """是否为 DeepSeek 官方端点。
 
@@ -238,8 +254,7 @@ def is_official_endpoint(base_url):
     OpenAI 兼容网关（OpenAI / OpenCode Go / Kimi / 智谱 / Ollama …）不支持
     这些字段，硬发可能被 400 拒绝。非官方网关一律降级为通用采样参数。
     """
-    b = str(base_url or "").strip().lower()
-    b = b.rstrip("/")
+    b = normalize_base_url(base_url).lower()
     if b.endswith("/beta"):
         b = b[: -len("/beta")]
     return b in ("https://api.deepseek.com", "http://api.deepseek.com",
@@ -3932,6 +3947,8 @@ def _strictify_tools(tools):
 class DeepSeekClient:
     def __init__(self, api_key, base_url=DEFAULT_BASE_URL, model=DEFAULT_MODEL, timeout=120.0):
         self.api_key = api_key
+        # 规范化：去掉用户误粘的 /chat/completions 尾巴（否则 SDK 会再拼一次）
+        base_url = normalize_base_url(base_url) or DEFAULT_BASE_URL
         self.base_url = base_url
         self.model = model
         self.timeout = timeout
