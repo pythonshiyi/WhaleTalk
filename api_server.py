@@ -1931,6 +1931,9 @@ def _processes():
         for name, entry in dc.snapshot_processes():
             out[name] = {
                 "pid": entry.get("pid"),
+                "name": entry.get("name") or name,
+                "command": entry.get("command") or "",
+                "cwd": entry.get("cwd") or "",
                 "started": str(entry.get("started") or ""),
                 "exited": bool(entry.get("exited")),
                 "code": entry.get("code"),

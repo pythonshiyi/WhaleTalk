@@ -679,10 +679,13 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   // 取最新的 assistant 消息（含工具或正在流式）作为实时活动；工具执行从聊天流"搬"到侧栏，
   // 聊天正文只保留精简摘要。streaming=true 时侧栏自动切到活动标签并显示进行中。
   const liveActivity = React.useMemo(() => {
-    const last = [...msgs].reverse().find((m) =>
-      m && m.role === "assistant" && ((m.tools && m.tools.length > 0) || m.streaming)
-    );
-    if (!last) return { steps: [], streaming: false, text: "" };
+    let idx = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m && m.role === "assistant" && ((m.tools && m.tools.length > 0) || m.streaming)) { idx = i; break; }
+    }
+    if (idx < 0) return { steps: [], streaming: false, text: "", taskId: -1 };
+    const last = msgs[idx];
     const steps = (last.tools || []).map((t) => ({
       tool: t.tool || "?",
       status: t.status || (last.streaming ? "running" : "done"),
@@ -694,6 +697,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       steps,
       streaming: !!last.streaming,
       text: last.text || "",
+      // 稳定任务标识：同一条 assistant 消息内不变，新消息即新任务 → 供活动面板重置展开态
+      taskId: idx,
       label: last.streaming ? "AI 正在执行" : "最近一次工具调用",
     };
   }, [msgs]);

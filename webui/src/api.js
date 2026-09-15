@@ -920,9 +920,12 @@ export async function listProcesses() {
   return api("/v1/processes");
 }
 
-/** @param {string} command @returns {Promise<any>} 启动进程 */
-export async function startProcess(command) {
-  return api("/v1/processes/start", { method: "POST", body: JSON.stringify({ command }) });
+/** @param {string} command @param {{name?:string, cwd?:string}} [opts] @returns {Promise<any>} 启动进程 */
+export async function startProcess(command, opts = {}) {
+  const body = /** @type {any} */ ({ command });
+  if (opts && opts.name) body.name = opts.name;
+  if (opts && opts.cwd) body.cwd = opts.cwd;
+  return api("/v1/processes/start", { method: "POST", body: JSON.stringify(body) });
 }
 
 /** @param {string} name @returns {Promise<any>} 停止进程 */

@@ -1038,6 +1038,8 @@ def start_process(command, name="", cwd=""):
             "proc": proc,
             "pid": proc.pid,
             "name": proc_name,
+            "command": cmd,
+            "cwd": workdir or _dc.WORKING_DIR or permissions.WORKSPACE_DIR or "",
             "started": datetime.now().strftime("%H:%M:%S"),
             "started_ts": time.time(),
             "exited": False,

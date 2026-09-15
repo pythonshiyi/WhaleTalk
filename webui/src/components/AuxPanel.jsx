@@ -3,6 +3,7 @@ import * as api from "../api.js";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 
 import { silentWarn } from "../quiet.js";
+
 // ── 启动即预取（不等打开面板才加载）──────────────────
 const PREFETCHED = {
   cfg: null,
@@ -20,7 +21,28 @@ const prefetchPromise = (() => {
   return Promise.all([grab("cfg", "getConfig"), grab("ctx", "getContext"), grab("st", "getStatus")]);
 })();
 
-// ═══ 第四栏 · 控制台（参数 / 文件 / 进程）══════
+// ── 可见感知轮询：仅在「页签激活 + 文档可见」时拉取；切回即刷新一次 ──
+// 常驻挂载的页签不再无条件轮询，也不因切换而丢失展开/滚动状态。
+function useVisiblePolling(fn, interval, active) {
+  const fnRef = React.useRef(fn);
+  fnRef.current = fn;
+  React.useEffect(() => {
+    if (!active) return undefined;
+    const tick = () => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") fnRef.current();
+    };
+    tick();
+    const iv = setInterval(tick, interval);
+    const onVis = () => { if (document.visibilityState === "visible") fnRef.current(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [active, interval]);
+}
+
+// ═══ 第四栏 · 控制台（活动 / 参数 / 文件 / 进程）══════
 
 // ── 常用小组件 ─────────────────────────────────────
 function Group({ title, children, right }) {
@@ -64,8 +86,15 @@ function TglRow({ label, hint, on, onClick }) {
   );
 }
 
+// 复制到剪贴板（带兜底）
+function copyText(text) {
+  const s = String(text == null ? "" : text);
+  if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(s);
+  return Promise.reject(new Error("clipboard unavailable"));
+}
+
 // ── 📂 文件：树 + 最近产物（打开/定位/注入）──────────
-function FilesTab({ onInject }) {
+function FilesTab({ onInject, active, onBadge }) {
   const [roots, setRoots] = React.useState(null);
   const [expanded, setExpanded] = React.useState({});
   const [children, setChildren] = React.useState({});
@@ -80,19 +109,18 @@ function FilesTab({ onInject }) {
       const d = await api.listFiles();
       if (d) {
         setRoots(d);
-        // 建收藏 path→meta 映射
         const m = {};
         (d.favs || []).forEach((f) => { m[f.path] = f; });
         setFavs(m);
+        setErr("");
       } else if (showLoading) setErr("文件列表加载失败：后端未连接");
-    } catch (e) { if (showLoading) setErr("文件列表加载失败：后端未连接"); }
+    } catch {
+      if (showLoading) setErr("文件列表加载失败：后端未连接");
+    }
   }, []);
 
-  React.useEffect(() => {
-    load(true);
-    const iv = setInterval(() => load(false), 8000); // 新产物自动跟出
-    return () => clearInterval(iv);
-  }, [load]);
+  // 仅当「文件」页签激活时轮询；切回即刷新
+  useVisiblePolling(() => load(false), 8000, active);
 
   const flashErr = (e) => { setErr(e && e.message ? e.message : "操作失败"); setTimeout(() => setErr(""), 3000); };
   const openFile = async (path) => {
@@ -109,14 +137,12 @@ function FilesTab({ onInject }) {
   const toggleFav = async (path) => {
     try {
       const r = await api.favFile(path);
-      // 乐观更新本地收藏
       setFavs((prev) => {
         const next = { ...(prev || {}) };
         if (r.faved) next[path] = { path, name: String(path).split(/[\\/]/).pop() };
         else delete next[path];
         return next;
       });
-      // 后台刷新真实数据（含目录树 faved 标记）
       setTimeout(() => load(false), 200);
     } catch (e) { flashErr(e); }
   };
@@ -136,7 +162,7 @@ function FilesTab({ onInject }) {
             return nv;
           });
         }
-      } catch (e) { silentWarn(e, "AuxPanel"); }
+      } catch (e) { silentWarn(e, "AuxPanel"); flashErr(e); }
       setLoading((l) => ({ ...l, [path]: false }));
     }
   };
@@ -144,13 +170,13 @@ function FilesTab({ onInject }) {
   const favIcon = (path) => (favs && favs[path] ? "★" : "☆");
   const isFav = (path) => !!(favs && favs[path]);
 
-  // ── 一行文件：图标 + 收藏 + 名称(+状态) + 操作 ──
   const fileRow = (meta, indent) => {
     const p = meta.path;
     const missing = meta.exists === false;
     return (
       <div className={`fx-row ${missing ? "fx-missing" : ""}`} style={{ paddingLeft: 6 + (indent || 0) * 14 }}>
         <button className={`fx-fav ${isFav(p) ? "fx-fav-on" : ""}`} title={isFav(p) ? "取消收藏" : "收藏"}
+          aria-label={isFav(p) ? "取消收藏" : "收藏"}
           onClick={(e) => { e.stopPropagation(); toggleFav(p); }}>
           {favIcon(p)}
         </button>
@@ -173,7 +199,6 @@ function FilesTab({ onInject }) {
     );
   };
 
-  // 目录树项（含收藏星）
   const entry = (e, depth) => {
     if (!e || !e.path) return null;
     const p = e.path;
@@ -181,8 +206,9 @@ function FilesTab({ onInject }) {
       return (
         <div key={p} className="fx-row" style={{ paddingLeft: 6 + depth * 14 }}>
           <button className={`fx-fav ${isFav(p) ? "fx-fav-on" : ""}`} title={isFav(p) ? "取消收藏" : "收藏文件夹"}
+            aria-label={isFav(p) ? "取消收藏" : "收藏"}
             onClick={(ev) => { ev.stopPropagation(); toggleFav(p); }}>{favIcon(p)}</button>
-              <button className="fx-dir" title={p} aria-expanded={!!expanded[p]} onClick={() => toggle(p)}>
+          <button className="fx-dir" title={p} aria-expanded={!!expanded[p]} onClick={() => toggle(p)}>
             {expanded[p] ? "▾" : "▸"} 📁 {e.name}
           </button>
           <button className="fx-act" title="打开该文件夹" onClick={() => openDir(p)}>⌖</button>
@@ -196,8 +222,9 @@ function FilesTab({ onInject }) {
     if (!expanded[path]) return null;
     const items = children[path];
     if (!items) return <div className="fx-row fx-hint" style={{ paddingLeft: 20 + depth * 14 }}>{loading[path] ? "加载中…" : "空"}</div>;
+    const lq = q.toLowerCase();
     return items
-      .filter((e) => !q || e.name.toLowerCase().includes(q.toLowerCase()))
+      .filter((e) => !q || e.name.toLowerCase().includes(lq))
       .map((e) => (
         <React.Fragment key={e.path}>
           {entry(e, depth + 1)}
@@ -207,7 +234,7 @@ function FilesTab({ onInject }) {
   };
 
   const now = Date.now();
-  const justCut = 2 * 60 * 1000; // 刚刚 = <2min
+  const justCut = 2 * 60 * 1000;
   const dayCut = 24 * 3600 * 1000;
   const bucket = (m) => {
     const t = m.mtime ? m.mtime * 1000 : (m.mtime_epoch ? m.mtime_epoch * 1000 : 0);
@@ -216,21 +243,18 @@ function FilesTab({ onInject }) {
     if (now - t < dayCut && new Date(t).getDate() === new Date().getDate()) return "today";
     return "old";
   };
-  const fmtRel = (m) => {
-    if (!m) return "";
-    const t = m.mtime ? m.mtime * 1000 : m;
-    if (typeof m !== "number") return m; // 已是标签
-    const d = new Date(t);
-    return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  };
 
-  // 收藏列表（含缺省展开树里的收藏项）
   const favList = favs ? Object.values(favs) : [];
   const recent = roots ? roots.recent || [] : [];
-  const recentFiltered = recent.filter((m) => !q || (m.name || "").toLowerCase().includes(q.toLowerCase()));
+  const lq = q.toLowerCase();
+  const recentFiltered = recent.filter((m) => !q || (m.name || "").toLowerCase().includes(lq));
   const just = recentFiltered.filter((m) => bucket(m) === "just");
   const today = recentFiltered.filter((m) => bucket(m) === "today");
   const older = recentFiltered.filter((m) => bucket(m) === "old" && m.exists);
+
+  // 徽标：新鲜产物（刚刚 + 今天）
+  const freshCount = just.length + today.length;
+  React.useEffect(() => { if (onBadge) onBadge("files", freshCount); }, [freshCount, onBadge]);
 
   const group = (title, list, emptyHint) => (
     <div key={title}>
@@ -241,14 +265,14 @@ function FilesTab({ onInject }) {
     </div>
   );
 
-  const showTree = !q || true; // 搜索时仍显示树（树内已过滤）
-
   return (
     <div className="aux-tab">
       <div className="fx-search">
-        <input className="fx-q" placeholder="搜索文件/目录…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <button className="msg-op" title="刷新" onClick={() => load(true)}>⟳</button>
+        <input className="fx-q" placeholder="搜索文件/目录…" aria-label="搜索文件或目录" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button className="msg-op" title="刷新" aria-label="刷新文件列表" onClick={() => load(true)}>⟳</button>
       </div>
+      {!roots && !err && <div className="empty-tip is-loading">正在加载文件…</div>}
+      {err && <div className="empty-tip is-err">{err}</div>}
       {roots && (
         <>
           <div className="fx-root" style={{ marginTop: 2 }}>
@@ -266,15 +290,19 @@ function FilesTab({ onInject }) {
           )}
 
           <div className="fx-root">🗂 全部文件</div>
-          {showTree && (roots.entries || []).filter((e) => !q || e.name.toLowerCase().includes(q.toLowerCase())).length === 0 && q ? (
-            <div className="fx-hint">工作区无匹配项</div>
-          ) : (
-            (roots.entries || []).map((e) => {
-              if (q && !e.name.toLowerCase().includes(q.toLowerCase())) {
-                // 搜索模式下仅展开含匹配项的目录
-                return e.is_dir ? <React.Fragment key={e.path}><div style={{ paddingLeft: 6 }} className="fx-row">
-                  <button className="fx-dir" aria-expanded={!!expanded[e.path]} onClick={() => toggle(e.path)}>{expanded[e.path] ? "▾" : "▸"} 📁 {e.name}</button>
-                </div>{renderDir(e.path, 0)}</React.Fragment> : null;
+          {(() => {
+            const rootEntries = (roots.entries || []).filter((e) => !q || e.name.toLowerCase().includes(lq));
+            if (q && rootEntries.length === 0) return <div className="fx-hint">工作区无匹配项</div>;
+            return (roots.entries || []).map((e) => {
+              if (q && !e.name.toLowerCase().includes(lq)) {
+                return e.is_dir ? (
+                  <React.Fragment key={e.path}>
+                    <div style={{ paddingLeft: 6 }} className="fx-row">
+                      <button className="fx-dir" aria-expanded={!!expanded[e.path]} onClick={() => toggle(e.path)}>{expanded[e.path] ? "▾" : "▸"} 📁 {e.name}</button>
+                    </div>
+                    {renderDir(e.path, 0)}
+                  </React.Fragment>
+                ) : null;
               }
               return (
                 <React.Fragment key={e.path}>
@@ -282,58 +310,93 @@ function FilesTab({ onInject }) {
                   {e.is_dir && renderDir(e.path, 0)}
                 </React.Fragment>
               );
-            })
-          )}
+            });
+          })()}
         </>
       )}
-      {!roots && <div className="fx-hint">加载中…</div>}
-      {err && <div className="fx-hint fx-err">{err}</div>}
     </div>
   );
 }
 
+// fmtRel：把后端可能给的 "MM-DD HH:MM" 标签或 epoch(秒) 统一成相对/绝对时间串
+function fmtRel(m) {
+  if (!m) return "";
+  if (typeof m !== "number") return m; // 已是标签
+  const t = m < 1e12 ? m * 1000 : m;
+  const d = new Date(t);
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
 
 // ── ⚙ 进程：终端输出 ───────────────────────────────
-function ProcessesTab({ onInject }) {
+function ProcessesTab({ active, onBadge }) {
   const [procs, setProcs] = React.useState({});
   const [current, setCurrent] = React.useState(null);
   const [follow, setFollow] = React.useState(true);
   const [cmd, setCmd] = React.useState("");
+  const [cwd, setCwd] = React.useState("");
+  const [adv, setAdv] = React.useState(false);
+  const [tip, setTip] = React.useState("");
+  const [hist, setHist] = React.useState([]);   // 用户启动过的命令（旧→新）
+  const [histIdx, setHistIdx] = React.useState(-1);
+  const [cleared, setCleared] = React.useState(0); // 本地清屏游标
 
-  React.useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const d = await api.listProcesses();
-        if (!alive) return;
-        setProcs(d.processes || {});
-        setCurrent((c) => (c && d.processes[c] ? c : Object.keys(d.processes)[0] || null));
-      } catch (e) { silentWarn(e, "AuxPanel"); }
-    };
-    load();
-    const iv = setInterval(load, 3000);
-    return () => {
-      alive = false;
-      clearInterval(iv);
-    };
+  const load = React.useCallback(async () => {
+    try {
+      const d = await api.listProcesses();
+      setProcs(d.processes || {});
+      setCurrent((c) => (c && d.processes[c] ? c : Object.keys(d.processes)[0] || null));
+    } catch (e) { silentWarn(e, "AuxPanel"); }
   }, []);
 
+  useVisiblePolling(load, 2500, active);
+
   const cur = current ? procs[current] : null;
-  const lines = cur?.lines || [];
+  const allLines = cur?.lines || [];
+  const lines = cleared > 0 ? allLines.slice(cleared) : allLines;
+
+  // 徽标：运行中的进程数
+  const running = Object.values(procs).filter((p) => p && !p.exited).length;
+  React.useEffect(() => { if (onBadge) onBadge("procs", running); }, [running, onBadge]);
+
+  React.useEffect(() => { setCleared(0); }, [current]);
+
+  const flash = (t) => { setTip(t); setTimeout(() => setTip(""), 3000); };
 
   const stop = async () => {
     if (!current) return;
     try {
-      await api.stopProcess(current);
-    } catch (e) { silentWarn(e, "AuxPanel"); }
+      const r = await api.stopProcess(current);
+      if (r && r.ok === false) flash("❌ " + (r.error || "停止失败"));
+    } catch (e) { flash("❌ 停止失败：" + (e && e.message ? e.message : "")); }
   };
 
   const start = async () => {
-    if (!cmd.trim()) return;
+    const c = cmd.trim();
+    if (!c) return;
     try {
-      const r = await api.startProcess(cmd.trim());
+      const r = await api.startProcess(c, { cwd: cwd.trim() || undefined });
+      if (r && r.ok === false) { flash("❌ " + (r.error || "启动失败")); return; }
+      setHist((h) => [...h, c].slice(-30));
+      setHistIdx(-1);
       setCmd("");
-    } catch (e) { silentWarn(e, "AuxPanel"); }
+    } catch (e) { flash("❌ 启动失败：" + (e && e.message ? e.message : "")); }
+  };
+
+  const onCmdKey = (e) => {
+    if (e.key === "Enter") { start(); return; }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!hist.length) return;
+      const idx = histIdx < 0 ? hist.length - 1 : Math.max(0, histIdx - 1);
+      setHistIdx(idx);
+      setCmd(hist[idx]);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (histIdx < 0) return;
+      const idx = histIdx + 1;
+      if (idx >= hist.length) { setHistIdx(-1); setCmd(""); }
+      else { setHistIdx(idx); setCmd(hist[idx]); }
+    }
   };
 
   const errPat = /Traceback|Error|ERROR|Exception|失败|错误|refused|NotImplemented/;
@@ -341,41 +404,77 @@ function ProcessesTab({ onInject }) {
   return (
     <div className="aux-tab">
       <div className="px-head">
-        <select className="set-select px-combo" value={current || ""} onChange={(e) => setCurrent(e.target.value)}>
+        <select className="set-select px-combo" aria-label="选择进程" value={current || ""} onChange={(e) => setCurrent(e.target.value)}>
           {Object.keys(procs).map((n) => (
             <option key={n} value={n}>{n}</option>
           ))}
           {Object.keys(procs).length === 0 && <option value="">无进程</option>}
         </select>
         <button className="confirm-btn px-stop" onClick={stop} disabled={!cur || cur.exited}>■ 停止</button>
-        <button className="msg-op" onClick={() => setFollow(!follow)}>{follow ? "自动跟随 ✓" : "自动跟随"}</button>
       </div>
+
       {cur && (
-        <div className="px-info">
-          pid {cur.pid} · 启动 {cur.started}
-          <span className={`px-badge ${cur.exited ? "px-badge-exit" : "px-badge-run"}`}>
-            {cur.exited ? `■ 已退出 code=${cur.code}` : "● 运行中"}
-          </span>
-        </div>
+        <>
+          <div className="px-info">
+            pid {cur.pid} · 启动 {cur.started}
+            <span className={`px-badge ${cur.exited ? "px-badge-exit" : "px-badge-run"}`}>
+              {cur.exited ? `■ 已退出 code=${cur.code}` : "● 运行中"}
+            </span>
+          </div>
+          {cur.command && (
+            <div className="px-cmd">
+              <code title={cur.command}>{cur.command}</code>
+              <button
+                className="msg-op"
+                title="以相同命令重新启动"
+                onClick={async () => {
+                  try {
+                    const r = await api.startProcess(cur.command, { cwd: cur.cwd || undefined });
+                    if (r && r.ok === false) flash("❌ " + (r.error || "重启失败"));
+                  } catch { flash("❌ 重启失败"); }
+                }}
+              >重启</button>
+            </div>
+          )}
+        </>
       )}
-      <div className="px-term" ref={(el) => {
-        if (el && follow) el.scrollTop = el.scrollHeight;
-      }}>
+
+      <div className="px-term-bar">
+        <button className="msg-op" onClick={() => setFollow(!follow)} aria-pressed={follow} title="新输出时自动滚到底">
+          {follow ? "自动跟随 ✓" : "自动跟随"}
+        </button>
+        <button className="msg-op" title="复制全部输出" onClick={() => copyText(lines.join("\n")).catch(() => flash("❌ 复制失败"))}>复制</button>
+        <button className="msg-op" title="仅清空本面板显示（不影响进程）" onClick={() => setCleared(allLines.length)}>清屏</button>
+      </div>
+
+      <div className="px-term" ref={(el) => { if (el && follow) el.scrollTop = el.scrollHeight; }}>
         {lines.length === 0 && <div className="fx-hint">暂无输出（AI 用 start_process 启动进程后显示在这里）</div>}
         {lines.map((l, i) => (
           <div key={i} className={`px-line ${errPat.test(l) ? "px-err" : l.startsWith("──") ? "px-meta" : ""}`}>{l}</div>
         ))}
       </div>
+
+      {adv && (
+        <input
+          className="tf-input px-cwd"
+          placeholder="工作目录（可选，默认工作区）"
+          value={cwd}
+          onChange={(e) => setCwd(e.target.value)}
+        />
+      )}
       <div className="px-start">
         <input
           className="tf-input"
-          placeholder="启动命令，如 python -m http.server 8000"
+          placeholder="启动命令，如 python -m http.server 8000（↑↓ 调历史）"
+          aria-label="启动命令"
           value={cmd}
           onChange={(e) => setCmd(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && start()}
+          onKeyDown={onCmdKey}
         />
+        <button className="msg-op px-adv" title="工作目录" aria-pressed={adv} onClick={() => setAdv(!adv)}>⌂</button>
         <button className="confirm-btn confirm-primary" onClick={start} disabled={!cmd.trim()}>▶</button>
       </div>
+      {tip && <div className="px-tip" style={{ color: "var(--danger-text)" }}>{tip}</div>}
     </div>
   );
 }
@@ -387,7 +486,7 @@ const THEME_CHOICES = [
   { id: "arctic", name: "北极冰", desc: "冰白底 · 深海蓝字" },
 ];
 
-function ParamsTab() {
+function ParamsTab({ active }) {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { density, setDensity, fontSize, setFontSize } = React.useContext(DisplayContext);
   const [cfg, setCfg] = React.useState(PREFETCHED.cfg);
@@ -401,11 +500,8 @@ function ParamsTab() {
 
   React.useEffect(() => {
     const apply = (d, set, fn) => {
-      if (d) {
-        set(d);
-      } else {
-        api[fn]().then((d) => d && set(d)).catch(() => setLoadErr(`「${fn}」加载失败：后端未连接`));
-      }
+      if (d) set(d);
+      else api[fn]().then((x) => x && set(x)).catch(() => setLoadErr(`「${fn}」加载失败：后端未连接`));
     };
     prefetchPromise.then(() => {
       apply(PREFETCHED.cfg, setCfg, "getConfig");
@@ -414,7 +510,13 @@ function ParamsTab() {
     });
   }, []);
 
-  // 草稿：本地编辑不落盘，点「保存」才一次性写盘并锁定
+  // 切回「参数」页签时刷新运行态统计（上下文/工具/记忆/成本），避免长期陈旧
+  React.useEffect(() => {
+    if (!active) return;
+    api.getContext().then((d) => d && setCtx(d)).catch(() => {});
+    api.getStatus().then((d) => d && setSt(d)).catch(() => {});
+  }, [active]);
+
   const edit = (patch) => setDraft((d) => ({ ...(d || {}), ...patch }));
 
   const save = async () => {
@@ -424,7 +526,7 @@ function ParamsTab() {
       const d = await api.saveConfig(draft);
       if (d && d.ok) {
         setCfg((c) => ({ ...c, ...draft }));
-        if ("model" in draft) setCustomModel(!modelOptions.includes(draft.model));
+        if ("model" in draft) setCustomModel(!cfg.models.includes(draft.model));
         setDraft(null);
         setTip("✅ 已保存并锁定");
         setTimeout(() => setTip(""), 1800);
@@ -439,20 +541,27 @@ function ParamsTab() {
     setSaving(false);
   };
 
-  // 有未保存草稿时标记（视觉提醒）
   const dirty = draft != null;
 
-  if (!cfg) return <div className="aux-tab fx-hint">{loadErr ? <><span>{loadErr}</span><button className="msg-op" style={{ marginLeft: 8 }} onClick={() => window.location.reload()}>重试</button></> : "加载中…"}</div>;
+  if (!cfg) {
+    return (
+      <div className="aux-tab">
+        {loadErr
+          ? <div className="empty-tip is-err">{loadErr}　<button className="msg-op" onClick={() => window.location.reload()}>重试</button></div>
+          : <div className="empty-tip is-loading">正在加载配置…</div>}
+      </div>
+    );
+  }
 
-  // 当前生效值 = cfg 上叠加草稿（草稿只含改过的字段，不能整体替换否则下方下拉框/输入框会丢失数据）
   const cur = { ...cfg, ...(draft || {}) };
   const modelOptions = Array.isArray(cfg.models) && cfg.models.length ? cfg.models : [];
   const ctxTools = Array.isArray(ctx?.tools) ? ctx.tools : [];
   const ctxMemCount = ctx?.memory?.count ?? (Array.isArray(ctx?.memory) ? ctx.memory.length : 0);
   const ctxUsage = ctx?.usage || {};
   const ctxPct = Math.min(100, Math.max(0, Math.round(((ctxUsage.prompt || 0) / (ctxUsage.max || 1000000 || 1)) * 100)));
-  const isDark = theme !== "arctic";
   const hasKey = cfg.has_key;
+  // 思考档开启时，采样参数由模型接管——置灰并说明，避免误解
+  const samplingLocked = !!cur.thinking && cur.thinking !== "none";
 
   const displayModes = [
     { id: "compact", name: "紧凑" },
@@ -462,7 +571,6 @@ function ParamsTab() {
 
   return (
     <div className="aux-tab">
-      {/* ── 运行状态：一眼可见 ── */}
       <div className="px-stats">
         <div className="px-stat" title="本轮上下文占用">
           <span className="px-stat-v">{ctxUsage.prompt ? `${ctxPct}%` : "—"}</span>
@@ -484,7 +592,6 @@ function ParamsTab() {
         </div>
       </div>
 
-      {/* ── 模型引擎：最高频切换 ── */}
       <Group title="⚙️ 模型引擎" right={hasKey ? <span className="px-key-ok">● Key 就绪</span> : <span className="px-key-warn">● 未配置 Key</span>}>
         <Field label="模型" hint="编辑后点「保存」生效">
           {customModel || !modelOptions.includes(cur.model) ? (
@@ -525,25 +632,28 @@ function ParamsTab() {
         </Field>
       </Group>
 
-      {/* ── 输出采样 ── */}
-      <Group title="🌡 采样参数" right={cur.thinking === "none" ? "无思考档时生效" : "思考档开启时由模型控制"}>
-        <div className="px-grid2">
+      <Group
+        title="🌡 采样参数"
+        right={samplingLocked
+          ? <span title="当前思考档开启，采样参数由模型控制；切到 none 可手动调节">由思考档接管</span>
+          : "无思考档时生效"}
+      >
+        <div className={`px-grid2 ${samplingLocked ? "px-locked" : ""}`}>
           <Field label="温度" hint="0-2">
-            <input className="tf-input px-num" type="number" step="0.1" min="0" max="2" value={cur.temperature} onChange={(e) => edit({ temperature: Number(e.target.value) })} />
+            <input className="tf-input px-num" type="number" step="0.1" min="0" max="2" disabled={samplingLocked} title={samplingLocked ? "思考档开启时由模型控制" : ""} value={cur.temperature} onChange={(e) => edit({ temperature: Number(e.target.value) })} />
           </Field>
           <Field label="Top-P" hint="0-1">
-            <input className="tf-input px-num" type="number" step="0.05" min="0" max="1" value={cur.top_p} onChange={(e) => edit({ top_p: Number(e.target.value) })} />
+            <input className="tf-input px-num" type="number" step="0.05" min="0" max="1" disabled={samplingLocked} title={samplingLocked ? "思考档开启时由模型控制" : ""} value={cur.top_p} onChange={(e) => edit({ top_p: Number(e.target.value) })} />
           </Field>
           <Field label="输出上限" hint="单次回复 tokens">
             <input className="tf-input px-num" type="number" step="1024" min="1024" max="393216" value={cur.max_tokens} onChange={(e) => edit({ max_tokens: Number(e.target.value) })} />
           </Field>
           <Field label="Seed" hint="0=随机">
-            <input className="tf-input px-num" type="number" value={cur.seed} onChange={(e) => edit({ seed: Number(e.target.value) })} />
+            <input className="tf-input px-num" type="number" disabled={samplingLocked} title={samplingLocked ? "思考档开启时由模型控制" : ""} value={cur.seed} onChange={(e) => edit({ seed: Number(e.target.value) })} />
           </Field>
         </div>
       </Group>
 
-      {/* ── 功能开关 ── */}
       <Group title="🧩 功能开关">
         <TglRow label="JSON 输出" hint="response_format，失败自动重试" on={!!cur.json_output} onClick={() => edit({ json_output: !cur.json_output })} />
         <TglRow label="Beta API" hint="前缀续写 / FIM 补全" on={!!cur.beta_api} onClick={() => edit({ beta_api: !cur.beta_api })} />
@@ -551,7 +661,6 @@ function ParamsTab() {
         <TglRow label="工具开关" hint="向模型暴露工具定义" on={!!cur.tools_enabled} onClick={() => edit({ tools_enabled: !cur.tools_enabled })} />
       </Group>
 
-      {/* ── 外观 ── */}
       <Group title="🎨 外观">
         <Field label="风格">
           <div className="px-themes">
@@ -560,6 +669,7 @@ function ParamsTab() {
                 key={t.id}
                 className={`px-theme ${theme === t.id ? "px-theme-on" : ""}`}
                 title={t.desc}
+                aria-label={`切换到${t.name}主题`}
                 onClick={() => setTheme(t.id)}
               >
                 <span className="px-theme-dot" data-t={t.id} />
@@ -582,7 +692,6 @@ function ParamsTab() {
         </div>
       </Group>
 
-      {/* ── 保存栏：点保存一次性写盘并锁定 ── */}
       <div className="px-savebar">
         <button
           className={`confirm-btn confirm-primary px-save ${dirty ? "px-save-dirty" : ""}`}
@@ -605,38 +714,57 @@ function ParamsTab() {
 }
 
 // ═══ 🔧 活动（AI 工具调用链 · 实时）═══════
-// 工具执行从聊天流"搬"到这里：聊天不再堆详细工具卡，活动区按最近一次任务实时
-// 列出每一步（名称/状态/耗时），点开某步才见参数与结果——感知与"奖励感"在，细节不刷屏。
-function ActivityTab({ activity, products, onOpenChatTools, onGoFiles, onInject }) {
+const RESULT_MAX = 2400; // 单步结果超过此长度先截断，避免大结果卡顿
+
+function ActivityTab({ activity, products, onGoFiles, onInject }) {
   const [expanded, setExpanded] = React.useState(null);
+  const [fullResult, setFullResult] = React.useState({});
+  const [prodOpen, setProdOpen] = React.useState(true);
+  const [copied, setCopied] = React.useState("");
   const steps = (activity && activity.steps) || [];
   const streaming = !!(activity && activity.streaming);
   const done = steps.filter((s) => s.status === "done").length;
   const failed = steps.filter((s) => s.status === "failed").length;
 
-  React.useEffect(() => setExpanded(null), [activity && activity.taskId]);
+  // 新任务开始时收起上一步的展开（依赖稳定 taskId，此前恒为 undefined 导致从不重置）
+  React.useEffect(() => {
+    setExpanded(null);
+    setFullResult({});
+  }, [activity && activity.taskId]);
 
-  // 会话内「产物书架」：由上层按 msgs 累计传下（新→旧，去重），新消息不冲掉旧产物
   const prodList = Array.isArray(products) ? products : [];
   const prodAct = (path, act) => {
-    if (act === "opendir") api.openDir(path);
-    else api.openFile(path);
+    const p = act === "opendir" ? api.openDir(path) : api.openFile(path);
+    p && p.catch && p.catch(() => {});
+  };
+
+  const flashCopy = (key) => { setCopied(key); setTimeout(() => setCopied(""), 1500); };
+
+  const copyStep = (s, i) => {
+    const txt = `# ${s.tool}\n参数：${s.argsText || "—"}\n结果：\n${s.result == null ? "" : String(s.result)}`;
+    copyText(txt).then(() => flashCopy("step" + i)).catch(() => {});
+  };
+  const copyAll = () => {
+    const txt = steps.map((s) => `[${s.status}] ${s.tool}${s.duration ? ` (${s.duration}s)` : ""}\n  ${s.argsText || ""}\n  ${s.result == null ? "" : String(s.result)}`).join("\n\n");
+    copyText(txt).then(() => flashCopy("all")).catch(() => {});
   };
 
   return (
     <div className="aux-tab">
       <div className={"act-products " + (prodList.length > 0 ? "act-products-pinned" : "act-products-empty")}>
         <div className="act-products-head">
-          <span className="act-products-title">📦 本会话产物（{prodList.length}）</span>
+          <button className="act-products-toggle" aria-expanded={prodOpen} onClick={() => setProdOpen(!prodOpen)}>
+            {prodOpen ? "▾" : "▸"} 📦 本会话产物（{prodList.length}）
+          </button>
           {prodList.length > 0 && onGoFiles && (
             <button className="msg-op" title="去文件栏管理" onClick={() => onGoFiles()}>去文件 ▸</button>
           )}
         </div>
-        {prodList.length > 0 ? (
+        {prodOpen && (prodList.length > 0 ? (
           <div className="act-prod-list">
-            {prodList.map((item, i) => {
+            {prodList.map((item) => {
               const path = item.path || item;
-              const nm = item.name || String(path).split(/[\/]/).pop();
+              const nm = item.name || String(path).split(/[\\/]/).pop();
               return (
                 <div className="act-prod-chip" key={path} title={path}>
                   <span className="act-prod-name">📄 {nm}</span>
@@ -649,15 +777,18 @@ function ActivityTab({ activity, products, onOpenChatTools, onGoFiles, onInject 
           </div>
         ) : (
           <div className="fx-hint">AI 写出文件后会像书架一样列在这里，反复可看。</div>
-        )}
+        ))}
       </div>
 
       <div className="px-head" style={{ marginBottom: 6 }}>
-        <b style={{ fontSize: 12.5 }}>{activity && activity.label ? activity.label : "工具活动"}</b>
+        <b className="act-title">{activity && activity.label ? activity.label : "工具活动"}</b>
         {steps.length > 0 && (
           <span className={"px-badge " + (streaming ? "px-badge-run" : failed ? "px-badge-exit" : "px-badge-ok")}>
             {streaming ? `⏳ ${done}/${steps.length}` : failed ? `⚠ ${failed} 失败` : `✓ ${steps.length} 完成`}
           </span>
+        )}
+        {steps.length > 0 && (
+          <button className="msg-op" title="复制全部步骤" onClick={copyAll}>{copied === "all" ? "已复制" : "复制全部"}</button>
         )}
       </div>
 
@@ -668,10 +799,13 @@ function ActivityTab({ activity, products, onOpenChatTools, onGoFiles, onInject 
           {steps.map((s, i) => {
             const isOpen = expanded === i;
             const isRun = s.status === "running";
+            const raw = s.result == null ? "" : String(s.result);
+            const isLong = raw.length > RESULT_MAX;
+            const shown = isLong && !fullResult[i] ? raw.slice(0, RESULT_MAX) + "\n…（已截断）" : raw;
             return (
               <div key={i} className={"act-item " + (isOpen ? "act-open " : "") + s.status}>
                 <button className="act-row" aria-expanded={isOpen} onClick={() => setExpanded(isOpen ? null : i)}>
-                  <span className="act-icon">
+                  <span className="act-icon" aria-hidden="true">
                     {isRun ? <span className="act-spin" /> : s.status === "done" ? "✓" : s.status === "failed" ? "✕" : "…"}
                   </span>
                   <span className="act-name">{s.tool}</span>
@@ -679,13 +813,23 @@ function ActivityTab({ activity, products, onOpenChatTools, onGoFiles, onInject 
                     {s.status === "done" && s.duration ? `${s.duration}s` : ""}
                     {isRun ? "执行中…" : s.status === "failed" ? "失败" : ""}
                   </span>
-                  <span className="act-chev">{isOpen ? "▾" : "▸"}</span>
+                  <span className="act-chev" aria-hidden="true">{isOpen ? "▾" : "▸"}</span>
                 </button>
                 {isOpen && (
                   <div className="act-detail">
                     {s.argsText && <div className="act-args">参数：{s.argsText}</div>}
                     {s.result != null && (
-                      <pre className="act-result">{String(s.result)}</pre>
+                      <>
+                        <pre className="act-result">{shown}</pre>
+                        <div className="act-detail-ops">
+                          {isLong && (
+                            <button className="msg-op" onClick={() => setFullResult((f) => ({ ...f, [i]: !f[i] }))}>
+                              {fullResult[i] ? "收起" : `展开全部（${raw.length} 字）`}
+                            </button>
+                          )}
+                          <button className="msg-op" onClick={() => copyStep(s, i)}>{copied === "step" + i ? "已复制" : "复制"}</button>
+                        </div>
+                      </>
                     )}
                   </div>
                 )}
@@ -697,24 +841,81 @@ function ActivityTab({ activity, products, onOpenChatTools, onGoFiles, onInject 
     </div>
   );
 }
-export default function AuxPanel({ onClose, onInjectFile, activity, products, onOpenChat, tab, onTabChange }) {
+
+// ── 面板容器：常驻挂载 4 页签（保留各自状态）+ 可见感知轮询 + 可拖拽调宽（持久化）──
+const AUX_MIN_W = 240;
+const AUX_MAX_W = 620;
+const AUX_W_KEY = "wt_aux_w";
+
+function clampWidth(w) {
+  const maxByView = typeof window !== "undefined" ? Math.max(AUX_MIN_W + 20, window.innerWidth - 480) : AUX_MAX_W;
+  return Math.min(Math.min(AUX_MAX_W, maxByView), Math.max(AUX_MIN_W, w));
+}
+
+export default function AuxPanel({ onClose, onInjectFile, activity, products, tab, onTabChange }) {
   const isControlled = tab != null && typeof onTabChange === "function";
   const [internalTab, setInternalTab] = React.useState("params");
   const curTab = isControlled ? tab : internalTab;
   const setCurTab = isControlled ? onTabChange : setInternalTab;
+
+  const [badges, setBadges] = React.useState({});
+  const onBadge = React.useCallback((id, val) => {
+    setBadges((b) => (b[id] === val ? b : { ...b, [id]: val }));
+  }, []);
+
+  // 宽度：localStorage 持久化 + 拖拽（面板在右侧，左边框为拖拽区）
+  const [width, setWidth] = React.useState(() => {
+    try {
+      const v = Number(localStorage.getItem(AUX_W_KEY));
+      return Number.isFinite(v) && v > 0 ? clampWidth(v) : 300;
+    } catch { return 300; }
+  });
+  const widthRef = React.useRef(width);
+  widthRef.current = width;
+  const startResize = (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = widthRef.current;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+    const onMove = (ev) => setWidth(clampWidth(startW + (startX - ev.clientX)));
+    const onUp = () => {
+      document.body.style.userSelect = prevUserSelect;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      try { localStorage.setItem(AUX_W_KEY, String(widthRef.current)); } catch { /* 存储不可用不致命 */ }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  // 空闲→开始执行 时自动切到「活动」（不打断执行中）
   const wasStreaming = React.useRef(false);
-  // 仅当"从空闲→开始执行"这一跳自动切到「活动」，避免执行中反复跳 tab 打扰
   const hasRun = !!(activity && activity.steps && activity.steps.length > 0 && activity.streaming);
   React.useEffect(() => {
     if (hasRun) {
       if (!wasStreaming.current) setCurTab("activity");
       wasStreaming.current = true;
     } else {
-      wasStreaming.current = false; // 任务结束/无执行 → 复位，下一任务到来再自动切
+      wasStreaming.current = false;
     }
   }, [hasRun, setCurTab]);
+
+  const activityFailed = (activity && activity.steps || []).filter((s) => s.status === "failed").length;
+  const tabBadge = (id) => {
+    const n = badges[id];
+    return Number.isFinite(n) && n > 0 ? <span className="aux-tab-badge" aria-hidden="true">{n}</span> : null;
+  };
+  const tabs = [
+    { id: "activity", label: "🔧 活动", title: "AI 工具调用链（实时，点开看细节）" },
+    { id: "params", label: "🎛 参数", title: "模型 / 采样 / 外观 / 运行状态" },
+    { id: "files", label: "📂 文件", title: "工作区文件与最近产物" },
+    { id: "procs", label: "⚙ 进程", title: "后台进程与终端输出" },
+  ];
+
   return (
-    <aside className="aux-panel">
+    <aside className="aux-panel" style={{ "--aux-w": width + "px" }}>
+      <div className="aux-resize" role="separator" aria-orientation="vertical" aria-label="调整面板宽度" onMouseDown={startResize} />
       <div className="aux-head">
         <b>控制台</b>
         <button className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">
@@ -724,20 +925,38 @@ export default function AuxPanel({ onClose, onInjectFile, activity, products, on
         </button>
       </div>
       <div className="aux-tabs" role="tablist">
-        <button role="tab" aria-selected={curTab === "activity"} className={`aux-tab-btn ${curTab === "activity" ? "aux-tab-on" : ""}`}
-          onClick={() => setCurTab("activity")}
-          title="AI 工具调用链（实时，点开看细节）">🔧 活动
-          {activity && activity.streaming && <span className="aux-tab-dot" aria-hidden="true" />}
-        </button>
-        <button role="tab" aria-selected={curTab === "params"} className={`aux-tab-btn ${curTab === "params" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("params")}>🎛 参数</button>
-        <button role="tab" aria-selected={curTab === "files"} className={`aux-tab-btn ${curTab === "files" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("files")}>📂 文件</button>
-        <button role="tab" aria-selected={curTab === "procs"} className={`aux-tab-btn ${curTab === "procs" ? "aux-tab-on" : ""}`} onClick={() => setCurTab("procs")}>⚙ 进程</button>
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            id={"auxtab-" + t.id}
+            aria-selected={curTab === t.id}
+            aria-controls={"auxpane-" + t.id}
+            className={`aux-tab-btn ${curTab === t.id ? "aux-tab-on" : ""}`}
+            onClick={() => setCurTab(t.id)}
+            title={t.title}
+          >
+            {t.label}
+            {t.id === "activity" && activity && activity.streaming && <span className="aux-tab-dot" aria-hidden="true" />}
+            {t.id === "activity" && !activity?.streaming && activityFailed > 0 && <span className="aux-tab-badge aux-tab-badge-err" aria-hidden="true">{activityFailed}</span>}
+            {t.id === "files" && tabBadge("files")}
+            {t.id === "procs" && tabBadge("procs")}
+          </button>
+        ))}
       </div>
       <div className="aux-body">
-        {curTab === "activity" && <ActivityTab activity={activity} products={products || []} onOpenChatTools={onOpenChat} onGoFiles={() => setCurTab("files")} onInject={onInjectFile} />}
-        {curTab === "params" && <ParamsTab />}
-        {curTab === "files" && <FilesTab onInject={onInjectFile} />}
-        {curTab === "procs" && <ProcessesTab />}
+        <div role="tabpanel" id="auxpane-activity" aria-labelledby="auxtab-activity" className="aux-pane" hidden={curTab !== "activity"}>
+          <ActivityTab activity={activity} products={products || []} onGoFiles={() => setCurTab("files")} onInject={onInjectFile} />
+        </div>
+        <div role="tabpanel" id="auxpane-params" aria-labelledby="auxtab-params" className="aux-pane" hidden={curTab !== "params"}>
+          <ParamsTab active={curTab === "params"} />
+        </div>
+        <div role="tabpanel" id="auxpane-files" aria-labelledby="auxtab-files" className="aux-pane" hidden={curTab !== "files"}>
+          <FilesTab onInject={onInjectFile} active={curTab === "files"} onBadge={onBadge} />
+        </div>
+        <div role="tabpanel" id="auxpane-procs" aria-labelledby="auxtab-procs" className="aux-pane" hidden={curTab !== "procs"}>
+          <ProcessesTab active={curTab === "procs"} onBadge={onBadge} />
+        </div>
       </div>
     </aside>
   );
