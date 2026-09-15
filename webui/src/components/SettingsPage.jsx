@@ -36,7 +36,7 @@ const PRESETS = [
 // 只填 base_url + 推荐 model（api_key 由用户自填）。点选即切网关。
 const PROVIDER_PRESETS = [
   { id: "deepseek", name: "🧬 DeepSeek", base: "https://api.deepseek.com", model: "deepseek-flash", desc: "官方统一模型 V4.1 Flash · 深度优化" },
-  { id: "opencode-go", name: "🦙 OpenCode Go", base: "https://opencode.ai/zen/go/v1", model: "deepseek-flash", desc: "OpenAI 兼容 · 填 OpenCode Go Key（用 /chat/completions 模型）" },
+  { id: "opencode-go", name: "🦙 OpenCode Go", base: "https://opencode.ai/zen/go/v1", model: "deepseek-flash", desc: "OpenAI 兼容 · 填 OpenCode Go Key（模型可填网关文档所示 id，如 deepseek-flash / kimi-k3 / glm-5.3）" },
   { id: "openai", name: "🟢 OpenAI", base: "https://api.openai.com/v1", model: "gpt-4o", desc: "填自己的 sk-… Key" },
   { id: "ollama", name: "🦙 Ollama 本地", base: "http://localhost:11434/v1", model: "qwen2.5", desc: "本地免费离线 · 无需 Key" },
   { id: "kimi", name: "🔴 Kimi(月之暗面)", base: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k", desc: "填 Kimi Key" },

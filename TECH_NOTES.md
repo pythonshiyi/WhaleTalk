@@ -20,6 +20,7 @@ DeepSeek 已把全部模型升级为**单一原生多模态模型**，本产品�
 
 - `thinking`（`extra_body`）、`reasoning_effort`、续写 `prefix`、strict 工具 schema —— 非官方端点**一律不下发**，改走通用采样参数（temperature/top_p）；`fim_complete`（`/beta`）与 `check_balance`（`/user/balance`）在非官方端点明确报错，不发起必然 404 的请求。
 - `api_server._client_from_cfg` 也只在官方端点追加 `/beta`（beta_api / strict_tools），避免第三方网关 404。
+- **OpenCode Go/Zen 会话头**：自 2026-09-05 起，缺 `x-opencode-session` 的请求返回 400（MissingSessionID）。`gateway_default_headers()` 对 `opencode.ai` 端点自动注入 `x-opencode-session`（按会话稳定、不透明）+ 自定义 `User-Agent`/`x-opencode-client`；`DeepSeekClient(gateway_session=…)` 由前端每会话 `gw_session` 提供（`webui/src/api.js` → `ChatPage`，与业务 `session_id` 解耦，不参与落盘）。仅对 opencode 端点生效，不污染其它网关。
 - 视觉：`deepseek-flash` 名字被识别为支持图像；其它模型名带图时回退 `VISION_MODEL`（同端点 `deepseek-flash`）。
 - 计费：`stats.py` 仍按 DeepSeek 官方价目估算，订阅制网关的费用数字仅供参考。
 - 回归：`tests/test_gateway_compat.py`。

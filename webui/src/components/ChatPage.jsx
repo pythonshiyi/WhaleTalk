@@ -18,6 +18,16 @@ import formatToolResult from "../formatToolResult.js";
 import extractProducts from "../extractProducts.js";
 
 import { silentWarn } from "../quiet.js";
+
+// 网关会话 id（不透明、按会话稳定）：供 OpenCode Go/Zen 的 x-opencode-session
+// 做路由/缓存亲和；与业务会话 id 无关，仅本标签页内有效。
+function newGwSessionId() {
+  try {
+    if (window.crypto && window.crypto.randomUUID) return "wt-" + window.crypto.randomUUID();
+  } catch { /* 忽略 */ }
+  return "wt-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+}
+
 // 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
 export function BackendBanner() {
   const [down, setDown] = React.useState(false);
@@ -106,7 +116,7 @@ function useBackendChat({
   pendingRef, historyRef,
   chatMode, webSearch, quietMode,
   onFinished, stopSignalRef, onPrompt, setGenState,
-  continueRef, sessionIdRef, toast,
+  continueRef, sessionIdRef, gwSessionRef, toast,
 }) {
 
   const updateMsgs = (fn) => {
@@ -229,6 +239,9 @@ function useBackendChat({
             quiet_mode: quietMode,
             // 已有会话继续对话时带上会话 id：后端生成完成后自动落盘（前端卸载/断连不丢结果）
             session_id: (sessionIdRef && sessionIdRef.current) || undefined,
+            // 网关会话 id（OpenCode Go/Zen 的 x-opencode-session）：每个会话稳定，
+            // 供网关做路由/缓存亲和；与业务 session_id 解耦（后端不用于落盘）。
+            gw_session: (gwSessionRef && gwSessionRef.current) || undefined,
             continue_prefix: isContinue,
           },
           {
@@ -529,6 +542,10 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   // 最新会话 id 转发给 useBackendChat（避免 effect 闭包过期）：已有会话生成完成后由后端自动落盘
   const activeIdRef = React.useRef(null);
   activeIdRef.current = activeId;
+  // 网关会话 id（OpenCode Go/Zen 的 x-opencode-session）：每次「新对话」重新生成，
+  // 同一会话内跨轮稳定。与业务 session_id 解耦，后端只用于请求头，不用于落盘。
+  const gwSessionRef = React.useRef(null);
+  if (gwSessionRef.current == null) gwSessionRef.current = newGwSessionId();
   // 实时镜像 msgs：hook 内函数式更新 + 组件体 onFinished 共用，保证续写/保存拿到最新消息
   const msgsRef = React.useRef([]);
   const [msgs, setMsgs] = React.useState([]);
@@ -708,6 +725,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     setGenState: setGenStateThrottled,
     continueRef,
     sessionIdRef: activeIdRef,
+    gwSessionRef,
     toast,
   });
 
@@ -870,6 +888,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
 
   const onPickSession = async (id) => {
     if (busy) return;
+    // 切换/新建会话 → 更换网关会话 id（新对话上下文，路由亲和按会话走）
+    gwSessionRef.current = newGwSessionId();
     setActiveId(id);
     setBackendNote("");
     if (dataMode !== "backend" || id == null) {

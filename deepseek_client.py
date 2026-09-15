@@ -11,6 +11,7 @@ import sys
 import threading
 import queue
 import time
+import uuid
 import weakref
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -244,6 +245,30 @@ def normalize_base_url(base_url):
         return b
     b = re.sub(r"/chat/completions/?$", "", b, flags=re.IGNORECASE)
     return b.rstrip("/")
+
+
+def is_opencode_endpoint(base_url):
+    """是否为 OpenCode Go/Zen 网关（需要 `x-opencode-session` 会话头）。"""
+    return "opencode.ai" in normalize_base_url(base_url).lower()
+
+
+def gateway_default_headers(base_url, session_id=None):
+    """按网关返回需注入的默认请求头。
+
+    自 2026-09-05 起，OpenCode Go/Zen 对缺少 `x-opencode-session` 的请求返回
+    400（MissingSessionID / Model is unavailable）——该头是一个**不透明、按会话
+    稳定**的 ID，用于把同一会话路由到同一后端以提升缓存命中（官方文档明确要求）。
+    同时按官方建议使用自定义 User-Agent（而非通用 SDK 名）。仅对 opencode.ai
+    生效，不污染其它网关。
+    """
+    if not is_opencode_endpoint(base_url):
+        return None
+    sid = str(session_id or "").strip() or uuid.uuid4().hex
+    return {
+        "x-opencode-session": sid,
+        "User-Agent": "WhaleTalk/3.11 (+https://whaletalk.top)",
+        "x-opencode-client": "whaletalk",
+    }
 
 
 def is_official_endpoint(base_url):
@@ -3945,7 +3970,8 @@ def _strictify_tools(tools):
 
 
 class DeepSeekClient:
-    def __init__(self, api_key, base_url=DEFAULT_BASE_URL, model=DEFAULT_MODEL, timeout=120.0):
+    def __init__(self, api_key, base_url=DEFAULT_BASE_URL, model=DEFAULT_MODEL, timeout=120.0,
+                 gateway_session=None):
         self.api_key = api_key
         # 规范化：去掉用户误粘的 /chat/completions 尾巴（否则 SDK 会再拼一次）
         base_url = normalize_base_url(base_url) or DEFAULT_BASE_URL
@@ -3955,10 +3981,13 @@ class DeepSeekClient:
         # 官方端点标记：决定是否下发 DeepSeek 专属参数（thinking / reasoning_effort
         # / prefix / strict 等）。第三方 OpenAI 兼容网关一律走通用路径。
         self.is_official = is_official_endpoint(base_url)
+        # 网关专属默认头（OpenCode Go/Zen 需 x-opencode-session；其它网关为 None）。
+        self.gateway_headers = gateway_default_headers(base_url, gateway_session)
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
             timeout=(10.0, timeout),
+            **({"default_headers": self.gateway_headers} if self.gateway_headers else {}),
         )
 
     @staticmethod

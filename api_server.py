@@ -7700,7 +7700,12 @@ class _Handler(BaseHTTPRequestHandler):
             if cfg.get("strict_tools") and not base_url.rstrip("/").endswith("/beta"):
                 base_url = base_url.rstrip("/") + "/beta"
         timeout = float(cfg.get("timeout") or 120.0)
-        client = dc.DeepSeekClient(key, base_url=base_url, model=model, timeout=timeout)
+        # 网关会话头（OpenCode Go/Zen 需要 x-opencode-session）：优先前端每会话
+        # 稳定的 gw_session，其次已有会话 id；都没有时由客户端生成随机值。
+        client = dc.DeepSeekClient(
+            key, base_url=base_url, model=model, timeout=timeout,
+            gateway_session=body.get("gw_session") or body.get("session_id") or "",
+        )
         # 注册为会话级客户端：视觉/子代理/语音/团队等工具经 get_active_client 直接复用，
         # 与本请求的网关/模型保持一致（每次对话刷新，工具不再报「没有可用客户端」）
         dc.set_active_client(client)

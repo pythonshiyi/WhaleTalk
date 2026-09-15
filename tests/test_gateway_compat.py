@@ -41,6 +41,35 @@ def test_client_normalizes_base_url():
     assert c.base_url == CUSTOM
 
 
+# ── 0b. OpenCode 会话头（x-opencode-session） ─────────────────────
+def test_is_opencode_endpoint():
+    assert dc.is_opencode_endpoint(CUSTOM) is True
+    assert dc.is_opencode_endpoint("https://opencode.ai/zen/v1") is True
+    assert dc.is_opencode_endpoint("https://api.deepseek.com") is False
+    assert dc.is_opencode_endpoint("https://api.openai.com/v1") is False
+
+
+def test_gateway_headers_only_for_opencode():
+    h = dc.gateway_default_headers(CUSTOM, "sess-123")
+    assert h and h["x-opencode-session"] == "sess-123"
+    assert "User-Agent" in h and "WhaleTalk" in h["User-Agent"]
+    # 非 opencode 网关：无额外头（不污染其它供应商）
+    assert dc.gateway_default_headers("https://api.deepseek.com", "s") is None
+
+
+def test_gateway_headers_generate_when_no_session():
+    h = dc.gateway_default_headers(CUSTOM, "")
+    assert h and h["x-opencode-session"]
+
+
+def test_client_attaches_opencode_default_headers():
+    c = dc.DeepSeekClient(api_key="sk-test", base_url=CUSTOM, model="deepseek-v4.1-flash", gateway_session="abc")
+    assert c.gateway_headers and c.gateway_headers["x-opencode-session"] == "abc"
+    # 官方端点不应带 opencode 头
+    c2 = dc.DeepSeekClient(api_key="sk-test", base_url=dc.DEFAULT_BASE_URL)
+    assert c2.gateway_headers is None
+
+
 # ── 1. 端点判定 ───────────────────────────────────────────────────
 def test_is_official_endpoint_true_cases():
     for u in (

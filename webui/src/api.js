@@ -358,14 +358,14 @@ async function api(path, opts = {}) {
  * @param {AbortSignal} [signal] 停止生成信号（前端 AbortController）
  * @returns {Promise<void>} 流结束后 resolve；HTTP 错误时 throw
  */
-export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id }, handlers, signal) {
+export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, gw_session }, handlers, signal) {
   const r = await fetch(`${getBase()}/v1/chat/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${getToken()}`,
     },
-    body: JSON.stringify({ messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id }),
+    body: JSON.stringify({ messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, gw_session }),
     signal,
   });
   if (!r.ok || !r.body) throw new Error(`chat/stream → ${r.status}`);
