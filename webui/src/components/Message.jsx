@@ -350,6 +350,15 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
         )}
         {msg.text && <Markdown text={msg.text} deferCode={msg.streaming} />}
         {msg.streaming && <span className="caret" />}
+        {msg.error && (
+          <div className="msg-error" role="alert">
+            <span className="me-icon">⚠</span>
+            <span className="me-text">{msg.error}</span>
+            {onRegenerate && (
+              <button className="me-retry" onClick={() => onRegenerate()}>重试</button>
+            )}
+          </div>
+        )}
         {!msg.streaming && msg.text && (msg.usage || msg.metrics) && (() => {
           // 统一口径：优先用「累计 metrics」（多轮工具调用正确），无则退回单轮 usage。
           const mt = msg.metrics || {};

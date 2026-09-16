@@ -18,6 +18,7 @@ import formatToolResult from "../formatToolResult.js";
 import extractProducts from "../extractProducts.js";
 
 import { silentWarn } from "../quiet.js";
+import { confirmDialog } from "../dialog.js";
 
 // 响应式：窄屏下侧栏/面板以「浮层抽屉」呈现（见 app.css 的 @media 规则）。
 // 初次挂载即按视口决定默认开合，避免窄屏一进来就被抽屉+蒙层盖住对话。
@@ -417,7 +418,8 @@ function useBackendChat({
               done = true;       // 错误即终结：短路 streamChat resolve 后误走 finish(true)
               flushNow();
               silentWarn(e, "ChatPage.stream");
-              updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, text: (x.text || "") + "\n\n⚠️ 生成中断：后端返回错误，请重试或检查「设置 → 网关/API Key」。", streaming: false } : x)));
+              // 错误写入独立字段（不并入正文）：不污染会话历史/导出，由 Message 渲染成可重试的错误块
+              updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, error: "生成中断：后端返回错误，请重试或检查「设置 → 网关 / API Key」。", streaming: false } : x)));
               setBusy(false);
               setGenState({ on: false, text: "" });
               setGenTps(0);
@@ -1372,10 +1374,10 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     });
   };
 
-  const multiDelete = () => {
+  const multiDelete = async () => {
     if (!multiSel || !multiSel.size) return;
     const idxs = [...multiSel].sort((a, b) => b - a);
-    if (!window.confirm(`删除选中的 ${idxs.length} 条消息？`)) return;
+    if (!(await confirmDialog(`删除选中的 ${idxs.length} 条消息？`, { danger: true, okText: "删除" }))) return;
     setMsgs((m) => m.filter((_, i) => !multiSel.has(i)));
     starsRef.current = new Set();
     pinsRef.current = new Set();

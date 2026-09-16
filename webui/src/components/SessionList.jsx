@@ -1,6 +1,7 @@
 import React from "react";
 import EmptyState from "./EmptyState.jsx";
 import { Icon } from "./icons.jsx";
+import { confirmDialog } from "../dialog.js";
 
 import { silentWarn } from "../quiet.js";
 import { tagColorClass } from "../tagColor.js";
@@ -103,9 +104,9 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
     const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
     setSelected(allSelected ? new Set() : new Set(allIds));
   };
-  const batchDelete = () => {
+  const batchDelete = async () => {
     if (!selected.size) return;
-    if (!window.confirm(`删除选中的 ${selected.size} 个会话？此操作不可恢复！`)) return;
+    if (!(await confirmDialog(`删除选中的 ${selected.size} 个会话？此操作不可恢复！`, { danger: true, okText: "删除" }))) return;
     onBatchDelete && onBatchDelete([...selected]);
     setSelected(new Set());
     setMultiMode(false);
@@ -242,7 +243,7 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
                     <button className="sl-act" title={s.pinned ? "取消置顶" : "置顶"} aria-label="置顶" onClick={(e) => { e.stopPropagation(); onPin && onPin(s.id, !s.pinned); }}><Icon name="pin" size={13} fill={s.pinned ? "currentColor" : "none"} /></button>
                     <button className="sl-act" title="重命名" aria-label="重命名" onClick={(e) => { e.stopPropagation(); setEditingId(s.id); setEditValue(s.title); }}><Icon name="pencil" size={13} /></button>
                     <button className="sl-act" title="编辑标签" aria-label="编辑标签" onClick={(e) => { e.stopPropagation(); setTaggingId(s.id); setTagValue((s.tags || []).join(",")); }}><Icon name="filter" size={13} /></button>
-                    <button className="sl-act" title="删除会话" aria-label="删除会话" onClick={(e) => { e.stopPropagation(); if (window.confirm(`删除会话「${s.title}」？`)) onDelete && onDelete(s.id); }}><Icon name="trash" size={13} /></button>
+                    <button className="sl-act" title="删除会话" aria-label="删除会话" onClick={async (e) => { e.stopPropagation(); if (await confirmDialog(`删除会话「${s.title}」？`, { danger: true, okText: "删除" })) onDelete && onDelete(s.id); }}><Icon name="trash" size={13} /></button>
                   </span>
                 )}
               </div>

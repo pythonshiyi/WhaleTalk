@@ -5,6 +5,7 @@ import ChatPage, { BackendBanner } from "./components/ChatPage.jsx";
 import DepsBanner from "./components/DepsBanner.jsx";
 import InstallBanner from "./components/InstallBanner.jsx";
 import { FlashProvider, ToastProvider } from "./components/FlashToast.jsx";
+import DialogHost from "./components/DialogHost.jsx";
 import * as api from "./api.js";
 
 import { silentWarn } from "./quiet.js";
@@ -208,6 +209,7 @@ export default function App() {
         <DisplayContext.Provider value={{ density, setDensity, fontSize, setFontSize }}>
           <FlashProvider>
             <ToastProvider>
+              <DialogHost />
               <div className="app">
                 <Sidebar page={page} onPage={setPage} />
                 <main className="app-main">

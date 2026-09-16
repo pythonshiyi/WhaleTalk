@@ -8,6 +8,14 @@
     <meta name="theme-color" content="#0ea5e9" />
     <meta name="apple-mobile-web-app-title" content="鲸语" />
     <title>鲸语 WhaleTalk · 本地 AI 智能体</title>
+    <script>
+      // 首帧前应用已保存主题，避免刷新时深/浅色闪烁（FOUC）。
+      // 必须在 CSS/应用脚本之前同步执行；与 App.jsx/localStorage 键保持一致。
+      try {
+        var _t = localStorage.getItem("whaletalk.theme");
+        if (_t) document.documentElement.setAttribute("data-theme", _t);
+      } catch (e) { /* 存储不可用时用默认主题 */ }
+    </script>
   </head>
   <body>
     <div id="root"></div>

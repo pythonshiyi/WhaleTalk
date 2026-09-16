@@ -2,6 +2,7 @@ import React from "react";
 import * as api from "../api.js";
 import Overlay from "./Overlay.jsx";
 import { SkeletonList } from "./Skeleton.jsx";
+import { confirmDialog } from "../dialog.js";
 
 // ── 指令库：用户指令 + 内置模板的统一管理与调用入口 ──
 // 数据同源 prompts.json（老数据仅 name/text 也能正常显示），内置模板只读、可复制到我的指令。
@@ -112,7 +113,7 @@ export default function PromptsPage({ onApply }) {
   };
 
   const remove = async (p) => {
-    if (!window.confirm(`确定删除指令「${p.name}」？`)) return;
+    if (!(await confirmDialog(`确定删除指令「${p.name}」？`, { danger: true, okText: "删除" }))) return;
     try {
       await api.deletePrompt(p.id);
       await load();
@@ -175,7 +176,7 @@ export default function PromptsPage({ onApply }) {
   };
 
   const restore = async () => {
-    if (!window.confirm("恢复内置模板：只补充你缺失的内置指令，不会覆盖你已有的修改。继续？")) return;
+    if (!(await confirmDialog("恢复内置模板：只补充你缺失的内置指令，不会覆盖你已有的修改。继续？", { okText: "恢复" }))) return;
     try {
       const r = await api.restoreBuiltinPrompts();
       await load();

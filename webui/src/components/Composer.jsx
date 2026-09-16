@@ -2,6 +2,7 @@ import React from "react";
 import * as api from "../api.js";
 import { ToastContext } from "./FlashToast.jsx";
 import { Icon } from "./icons.jsx";
+import { promptDialog } from "../dialog.js";
 
 import { silentWarn } from "../quiet.js";
 const SLASH_COMMANDS = [
@@ -82,7 +83,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   React.useEffect(() => () => { (attachmentsRef.current || []).forEach(revokeUrl); }, []);
 
   // ── 应用指令：变量填充（{{TEXT}}/{{DATE}}/{ASK:}）+ 选中文本 + 自动发送 ──
-  const applyPrompt = (p, replaceAll = false) => {
+  const applyPrompt = async (p, replaceAll = false) => {
     const ta = taRef.current;
     const sel = ta ? String(text).slice(ta.selectionStart || 0, ta.selectionEnd || 0) : "";
     const seed = sel || (replaceAll ? "" : String(text || "").trim());
@@ -90,7 +91,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       .replace(/\{\{TEXT\}\}/g, seed)
       .replace(/\{\{DATE\}\}/g, todayStr());
     for (const a of t.match(/\{ASK:([^}]+)\}/g) || []) {
-      const ans = window.prompt(a.slice(5, -1), "");
+      const ans = await promptDialog(a.slice(5, -1), "");
       t = t.replace(a, ans || "");
     }
     setSlashOpen(false);
@@ -127,6 +128,29 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     if (!q) return SLASH_COMMANDS;
     return SLASH_COMMANDS.filter((s) => `${s.cmd} ${s.desc}`.toLowerCase().includes(q));
   }, [slashQuery]);
+
+  // 斜杠菜单合并项（指令 → 内置命令 → 插件触发词）：统一键盘导航/高亮，避免三处各写一遍
+  const slashItems = React.useMemo(() => ([
+    ...slashPrompts.map((p) => ({
+      kind: "prompt", key: `p:${p.id}`,
+      label: `${p.icon ? `${p.icon} ` : ""}${p.name}`,
+      sub: p.shortcut || p.desc || String(p.text || "").slice(0, 22),
+      run: () => applyPrompt(p, true),
+    })),
+    ...slashCmds.map((s) => ({
+      kind: "cmd", key: `c:${s.cmd}`, label: s.cmd, sub: s.desc,
+      run: () => { setText(s.cmd === "/clear" ? "" : s.text); setSlashOpen(false); setSlashQuery(""); taRef.current?.focus(); },
+    })),
+    ...pluginTriggers.map((s) => ({
+      kind: "plugin", key: `g:${s}`, label: s, sub: "插件应用",
+      run: () => { setText(s + " "); setSlashOpen(false); taRef.current?.focus(); },
+    })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ]), [slashPrompts, slashCmds, pluginTriggers, text]);
+
+  // 键盘导航：斜杠菜单高亮项（空菜单/查询变化时归零）
+  const [slashIdx, setSlashIdx] = React.useState(0);
+  React.useEffect(() => { setSlashIdx(0); }, [slashQuery, slashOpen]);
 
   // ── 草稿持久化（对齐原程序：停止输入后保存，启动恢复）──
   React.useEffect(() => {
@@ -279,6 +303,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       pendingSendRef.current = { text: v, atts: attachments };
       setText("");
       clearAttachments();
+      toast("⏹ 已停止当前生成，稍后发送新消息…");
       return;
     }
     setText("");
@@ -380,7 +405,20 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   };
 
   const onKey = (e) => {
+    // 斜杠菜单开启时的键盘导航（↑↓ 选择 / Enter 确认），优先于「Enter 发送」
+    if (slashOpen && slashItems.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => Math.min(slashItems.length - 1, i + 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => Math.max(0, i - 1)); return; }
+      if (e.key === "Enter" && !e.shiftKey) {
+        if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
+        e.preventDefault();
+        slashItems[slashIdx]?.run?.();
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
+      // 输入法组合中（拼音/日文等）：回车是「选词」，绝不能当作发送
+      if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
       e.preventDefault();
       submit();
     }
@@ -543,49 +581,20 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
             </button>
             {slashOpen && (
               <div className="slash-menu">
-                {slashPrompts.map((p) => (
+                {slashItems.map((it, i) => (
                   <div
-                    className="slash-item"
-                    key={p.id}
-                    title={p.desc || ""}
-                    onClick={() => applyPrompt(p, true)}
+                    className={`slash-item ${i === slashIdx ? "slash-item-on" : ""}`}
+                    key={it.key}
+                    onMouseEnter={() => setSlashIdx(i)}
+                    onClick={() => it.run()}
                   >
-                    <b>{p.icon ? `${p.icon} ` : ""}{p.name}</b>
-                    <span>{p.shortcut || p.desc || String(p.text || "").slice(0, 22)}</span>
+                    <b>{it.label}</b>
+                    <span>{it.sub}</span>
                   </div>
                 ))}
-                {slashPrompts.length === 0 && slashQuery && (
+                {slashItems.length === 0 && slashQuery && (
                   <div className="slash-item"><span>无匹配指令</span></div>
                 )}
-                {slashCmds.map((s) => (
-                  <div
-                    className="slash-item"
-                    key={s.cmd}
-                    onClick={() => {
-                      setText(s.cmd === "/clear" ? "" : s.text);
-                      setSlashOpen(false);
-                      setSlashQuery("");
-                      taRef.current?.focus();
-                    }}
-                  >
-                    <b>{s.cmd}</b>
-                    <span>{s.desc}</span>
-                  </div>
-                ))}
-                {pluginTriggers.map((s) => (
-                  <div
-                    className="slash-item"
-                    key={s}
-                    onClick={() => {
-                      setText(s + " ");
-                      setSlashOpen(false);
-                      taRef.current?.focus();
-                    }}
-                  >
-                    <b>{s}</b>
-                    <span>插件应用</span>
-                  </div>
-                ))}
               </div>
             )}
           </div>

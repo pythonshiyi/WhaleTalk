@@ -3,6 +3,7 @@ import * as api from "../api.js";
 import EmptyState from "./EmptyState.jsx";
 import { SkeletonList } from "./Skeleton.jsx";
 import { Icon } from "./icons.jsx";
+import { confirmDialog } from "../dialog.js";
 
 function EvTab({ onToast }) {
   const [evs, setEvs] = React.useState(null);
@@ -82,12 +83,12 @@ function EvTab({ onToast }) {
   };
 
   const confirmIgnore = async (name) => {
-    if (!window.confirm(`忽略提案 ${name}？\n\n它会被归档到下方「已忽略的提案」，随时可以一键恢复——不会删除。`)) return;
+    if (!(await confirmDialog(`忽略提案 ${name}？\n\n它会被归档到下方「已忽略的提案」，随时可以一键恢复——不会删除。`, { okText: "忽略" }))) return;
     act(() => api.ignoreEvolution(name), `已忽略 ${name}（可在「已忽略的提案」恢复）`);
   };
 
   const confirmMerge = async (name) => {
-    if (!window.confirm(`确认将分支 ${name} 合入当前分支？\n合并前请先查看 diff。`)) return;
+    if (!(await confirmDialog(`确认将分支 ${name} 合入当前分支？\n合并前请先查看 diff。`, { okText: "合并" }))) return;
     setLoading(true);
     try {
       const r = await api.mergeEvolveBranch(name);
@@ -104,7 +105,7 @@ function EvTab({ onToast }) {
   };
 
   const confirmDelete = async (name) => {
-    if (!window.confirm(`确认删除分支 ${name}？删除后无法恢复。`)) return;
+    if (!(await confirmDialog(`确认删除分支 ${name}？删除后无法恢复。`, { danger: true, okText: "删除" }))) return;
     if (loading) return; // 防重复提交
     setLoading(true);
     try {

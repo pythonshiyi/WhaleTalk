@@ -5,6 +5,7 @@ import BrainTimeline from "./BrainTimeline.jsx";
 import BrainKanban from "./BrainKanban.jsx";
 import BrainGraph from "./BrainGraph.jsx";
 import { Icon } from "./icons.jsx";
+import { confirmDialog } from "../dialog.js";
 
 // ── 鲸语大脑（指挥舱：身份 / 心跳 / 时光备份 / 生命延续 / 对话自我）────────
 function BrainBlock() {
@@ -82,7 +83,7 @@ function BrainBlock() {
   React.useEffect(() => { load(true); }, []);
 
   const act = async (action, extra = {}, confirmText) => {
-    if (confirmText && !window.confirm(confirmText)) return;
+    if (confirmText && !(await confirmDialog(confirmText))) return;
     setBusy(true);
     setMsg("");
     try {
@@ -122,7 +123,7 @@ function BrainBlock() {
   };
 
   const enableKeyring = async () => {
-    if (!window.confirm("为大脑生成加密密钥（RSA-2048），之后所有时光备份自动加密、本机免密解锁？")) return;
+    if (!(await confirmDialog("为大脑生成加密密钥（RSA-2048），之后所有时光备份自动加密、本机免密解锁？", { okText: "生成密钥" }))) return;
     setBusy(true);
     const d = await api.brainAction({ action: "keyring-setup" }).catch(() => null);
     setMsg(d?.message || "请求失败");
@@ -182,7 +183,7 @@ function BrainBlock() {
 
   const adopt = async () => {
     if (!mergeOut?.dir) return;
-    if (!window.confirm("把融合结果应用为当前大脑？（旧大脑自动备份到 brain.bak-*）")) return;
+    if (!(await confirmDialog("把融合结果应用为当前大脑？（旧大脑自动备份到 brain.bak-*）", { danger: true, okText: "应用融合" }))) return;
     setBusy(true);
     const d = await api.brainAction({ action: "adopt-merge", dir: mergeOut.dir }).catch(() => null);
     setMsg(d?.message || "请求失败");

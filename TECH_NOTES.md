@@ -226,6 +226,8 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 - 消息链构造 `buildMessageChain`：tools 模式必须完整回传 assistant(reasoning_content + tool_calls) → tool 结果（官方规范）
 - **消息更新必须不可变**（`msgUpdates.js`：`makePatchLast`/`findLastToolCard`）：禁止原地改已入 state 的消息对象（`msg.text += …` / `msg.tools.push(…)` / `card.status = …`）——否则加上 `Message` 的 `React.memo` 后流式内容会静默停更，且每帧要重渲染整条列表。落盘用 `currentMsg()` 从实时镜像取终态，不要用闭包里的局部变量
 - TTS：`ttsUtil.js`（合成 + 朗读 + barge-in 说话即打断，权限门控默认关闭）
+- **应用内对话框**：`dialog.js`（`confirmDialog`/`promptDialog`，Promise 式）+ `components/DialogHost.jsx`（App 内挂载一次，支持 Esc 取消/焦点陷阱）；**禁止组件直接用 `window.confirm/prompt`**（门禁 `tests/noNativeDialogs.test.mjs`）。宿主缺失时优雅回退原生。
+- **输入法友好**：所有 Enter 提交点必须带 `isComposing`/`keyCode===229` 守卫（中文拼音选词的回车不能当发送）。主题在 `index.html` 首帧前由内联脚本按 `localStorage` 应用，避免刷新闪烁（FOUC）。
 
 ### 16.1 Markdown 渲染管线（v3.8.0 世界级渲染器）
 

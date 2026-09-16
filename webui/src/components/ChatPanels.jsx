@@ -49,42 +49,62 @@ export function CmdPanel({
   onNewChat, onOpenSearch, onGoWorkbench, onOpenTimeline, onOpenVariants, onOpenFim, onOpenStar, onExport, onGoSettings,
 }) {
   useEsc(open, onClose);
+  const [idx, setIdx] = React.useState(0);
+  const cmds = React.useMemo(() => {
+    const base = [
+      { icon: "message", label: "新对话", act: () => { onClose(); onNewChat(); } },
+      { icon: "search", label: "全局搜索", act: () => { onClose(); onOpenSearch(); } },
+      { icon: "calendar", label: "定时任务（工作台）", act: () => { onClose(); onGoWorkbench && onGoWorkbench(); } },
+      { icon: "clock", label: "会话轨迹", act: () => { onClose(); onOpenTimeline(); } },
+      { icon: "layers", label: "回复变体", act: () => { onClose(); onOpenVariants(); } },
+      { icon: "zap", label: "FIM 代码补全", act: () => { onClose(); onOpenFim(); } },
+      { icon: "star", label: "收藏与固定", act: () => { onClose(); onOpenStar(); } },
+      { icon: "download", label: "导出当前会话", act: () => { onClose(); onExport(); } },
+      { icon: "settings", label: "设置", act: () => { onClose(); onGoSettings && onGoSettings(); } },
+    ];
+    const filtered = base.filter((c) => !query || c.label.includes(query));
+    // 有查询时把「搜索会话」作为首项：回车即执行搜索（保留原有回车搜索语义）
+    return query
+      ? [{ icon: "search", label: `搜索会话「${query}」`, act: () => onSearch(query) }, ...filtered]
+      : filtered;
+  }, [query, onClose, onNewChat, onOpenSearch, onGoWorkbench, onOpenTimeline, onOpenVariants, onOpenFim, onOpenStar, onExport, onGoSettings, onSearch]);
+
+  React.useEffect(() => { setIdx(0); }, [query, open]);
+
   if (!open) return null;
+  const run = (i) => { const c = cmds[i]; if (c) c.act(); };
   return (
     <div className="confirm-mask" onClick={onClose}>
       <div className="cmd-panel" onClick={(e) => e.stopPropagation()}>
         <input
           className="cmd-input"
-          placeholder="输入命令或搜索会话…"
+          placeholder="输入命令或搜索会话…（↑↓ 选择，回车执行）"
           autoFocus
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Escape") onClose();
+            if (e.key === "Escape") { onClose(); return; }
+            if (e.key === "ArrowDown") { e.preventDefault(); setIdx((i) => Math.min(cmds.length - 1, i + 1)); return; }
+            if (e.key === "ArrowUp") { e.preventDefault(); setIdx((i) => Math.max(0, i - 1)); return; }
             if (e.key === "Enter") {
-              if (query) onSearch(query);
+              if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
+              e.preventDefault();
+              run(idx);
             }
           }}
         />
         <div className="cmd-list">
-          {[
-            { icon: "message", label: "新对话", act: () => { onClose(); onNewChat(); } },
-            { icon: "search", label: "全局搜索", act: () => { onClose(); onOpenSearch(); } },
-            { icon: "calendar", label: "定时任务（工作台）", act: () => { onClose(); onGoWorkbench && onGoWorkbench(); } },
-            { icon: "clock", label: "会话轨迹", act: () => { onClose(); onOpenTimeline(); } },
-            { icon: "layers", label: "回复变体", act: () => { onClose(); onOpenVariants(); } },
-            { icon: "zap", label: "FIM 代码补全", act: () => { onClose(); onOpenFim(); } },
-            { icon: "star", label: "收藏与固定", act: () => { onClose(); onOpenStar(); } },
-            { icon: "download", label: "导出当前会话", act: () => { onClose(); onExport(); } },
-            { icon: "settings", label: "设置", act: () => { onClose(); onGoSettings && onGoSettings(); } },
-          ]
-            .filter((c) => !query || c.label.includes(query))
-            .map((c, i) => (
-              <div className="cmd-item" key={i} onClick={c.act}>
-                <span className="cmd-item-ic"><Icon name={c.icon} size={15} /></span>
-                <span>{c.label}</span>
-              </div>
-            ))}
+          {cmds.map((c, i) => (
+            <div
+              className={`cmd-item ${i === idx ? "cmd-item-on" : ""}`}
+              key={`${c.label}-${i}`}
+              onMouseEnter={() => setIdx(i)}
+              onClick={c.act}
+            >
+              <span className="cmd-item-ic"><Icon name={c.icon} size={15} /></span>
+              <span>{c.label}</span>
+            </div>
+          ))}
         </div>
       </div>
     </div>

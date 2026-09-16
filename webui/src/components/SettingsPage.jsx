@@ -3,6 +3,7 @@ import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { enqueueSpeak, invalidateVoiceConfig, playTestTone, enableVoiceInterrupt, disableVoiceInterrupt } from "../ttsUtil.js";
 import { SkeletonCard, SkeletonList } from "./Skeleton.jsx";
+import { confirmDialog } from "../dialog.js";
 import { Icon } from "./icons.jsx";
 
 import { silentWarn } from "../quiet.js";
@@ -128,7 +129,7 @@ function ProfilesBlock({ onTip }) {
             {data.current !== p.name ? (
               <button className="confirm-btn confirm-primary" onClick={() => act("apply", p.name)}>应用</button>
             ) : <span className="set-badge">生效中</span>}
-            <button className="msg-op" title="删除方案（不影响当前配置）" onClick={() => { if (window.confirm(`删除方案「${p.name}」？`)) act("delete", p.name); }}>✕</button>
+            <button className="msg-op" title="删除方案（不影响当前配置）" onClick={async () => { if (await confirmDialog(`删除方案「${p.name}」？`, { danger: true, okText: "删除" })) act("delete", p.name); }}>✕</button>
           </div>
         </Row>
       ))}
@@ -461,7 +462,7 @@ function BackupBlock() {
     }
   };
   const del = async (name) => {
-    if (!window.confirm(`删除备份 ${name}？`)) return;
+    if (!(await confirmDialog(`删除备份 ${name}？`, { danger: true, okText: "删除" }))) return;
     const d = await api.deleteBackup(name).catch(() => null);
     if (d && d.ok) { load(); }
   };
@@ -513,7 +514,7 @@ function CleanupBlock() {
   const [tip, setTip] = React.useState("");
   const doClean = async () => {
     if (!items.length) return;
-    if (!window.confirm(`确认清理以下数据（不可恢复）？\n${items.join("、")}`)) return;
+    if (!(await confirmDialog(`确认清理以下数据（不可恢复）？\n${items.join("、")}`, { danger: true, okText: "清理" }))) return;
     const d = await api.cleanupItems(items).catch(() => null);
     if (d && d.ok) {
       setTip(`已清理：${d.removed.join("、")}`);
@@ -1015,7 +1016,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
   };
 
   const resetAll = async () => {
-    if (!window.confirm("恢复全部默认配置？（API Key 会保留）")) return;
+    if (!(await confirmDialog("恢复全部默认配置？（API Key 会保留）", { danger: true, okText: "恢复" }))) return;
     const d = await api.resetConfig().catch(() => null);
     if (d && d.ok) {
       window.location.reload();

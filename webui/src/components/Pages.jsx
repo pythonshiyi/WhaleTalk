@@ -5,6 +5,7 @@ import ToolTest from "./ToolTest.jsx";
 import EmptyState from "./EmptyState.jsx";
 import { SkeletonPage } from "./Skeleton.jsx";
 import { Icon } from "./icons.jsx";
+import { confirmDialog } from "../dialog.js";
 
 import { silentWarn } from "../quiet.js";
 
@@ -228,7 +229,7 @@ export function MemoryPage({ embedded }) {
   };
 
   const doDelete = async (id) => {
-    if (!window.confirm("删除这条记忆？")) return;
+    if (!(await confirmDialog("删除这条记忆？", { danger: true, okText: "删除" }))) return;
     setBusy(true);
     const r = await api.brainMemoryAction({ action: "delete", id }).catch(() => null);
     if (r && r.ok !== false) load(q);
@@ -756,7 +757,7 @@ export function EvolutionPage() {
   }, [load]);
 
   const apply = async (name) => {
-    if (!window.confirm(`采纳提案「${name}」？原文件将备份为 .evobak`)) return;
+    if (!(await confirmDialog(`采纳提案「${name}」？原文件将备份为 .evobak`, { okText: "采纳" }))) return;
     setBusy(true);
     const r = await api.applyEvolution(name).catch(() => null);
     setBusy(false);
@@ -770,7 +771,7 @@ export function EvolutionPage() {
   };
 
   const ignore = async (name) => {
-    if (!window.confirm(`忽略并删除提案「${name}」？`)) return;
+    if (!(await confirmDialog(`忽略并删除提案「${name}」？`, { danger: true, okText: "忽略" }))) return;
     setBusy(true);
     const r = await api.ignoreEvolution(name).catch(() => null);
     setBusy(false);

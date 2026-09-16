@@ -249,7 +249,9 @@ button {
 /* 消息流 */
 .chat-scroll {
   flex: 1; overflow-y: auto;
-  scroll-behavior: smooth;
+  /* 程序化贴底（流式每帧 scrollTop=scrollHeight）若为 smooth 会持续追赶、明显抖动；
+     改为 auto（即时），需要平滑定位处显式 scrollIntoView({behavior:"smooth"})。 */
+  scroll-behavior: auto;
   padding: var(--sp-6) 0 var(--sp-4);
 }
 .msg { display: flex; gap: var(--sp-3); padding: 10px var(--sp-6); animation: msgIn .22s var(--ease); }
@@ -690,7 +692,8 @@ button {
   font-size: var(--fs-sm); color: var(--text-1);
   transition: background .12s var(--ease);
 }
-.slash-item:hover { background: var(--bg-active); }
+.slash-item:hover, .slash-item-on { background: var(--bg-active); }
+.slash-item-on { box-shadow: inset 3px 0 0 var(--brand); }
 .slash-item b { color: var(--brand-strong); font-family: var(--font-mono); font-size: var(--fs-xs); min-width: 52px; }
 .slash-item span { color: var(--text-3); font-size: var(--fs-xs); }
 .composer-input {
@@ -1609,6 +1612,34 @@ button {
 .confirm-timeout-actions .confirm-prompt { color: var(--warn-text); }
 .confirm-danger { color: var(--danger-text); }
 
+/* ═══ 应用内对话框（confirmDialog / promptDialog） ═══════════════ */
+.dialog-mask {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  background: var(--mask-strong); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  animation: fadeIn .16s var(--ease);
+}
+.dialog-card {
+  width: min(440px, 90vw);
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  border-radius: var(--r-xl); box-shadow: var(--shadow-3);
+  padding: var(--sp-5);
+  animation: msgIn .2s var(--ease);
+}
+.dialog-title { font-size: var(--fs-lg); font-weight: 700; margin-bottom: 10px; }
+.dialog-msg {
+  font-size: var(--fs-md); color: var(--text-2); line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word; margin-bottom: var(--sp-4);
+}
+.dialog-input {
+  width: 100%; background: var(--bg-2); border: 1px solid var(--border-strong);
+  color: var(--text-1); font-size: var(--fs-md); padding: 10px 12px;
+  border-radius: var(--r-md); outline: none; margin-bottom: var(--sp-4);
+}
+.dialog-input:focus { border-color: rgba(var(--brand-rgb),.55); box-shadow: 0 0 0 3px rgba(var(--brand-rgb),.10); }
+.dialog-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+.dialog-danger { background: linear-gradient(135deg, var(--danger), #b91c1c) !important; color: #fff; }
+
 /* ═══ 指令 / 目录菜单 ════════════════════════════ */
 .prompt-box, .dir-box { position: relative; }
 .prompt-menu { width: 320px; }
@@ -1775,6 +1806,25 @@ button {
 .mm-cache { color: var(--ok-text); }
 .mm-tps { color: var(--brand-strong); font-weight: 600; }
 .mm-interrupted { color: var(--warn); }
+/* 生成中断：独立错误块（不进正文/历史），可一键重试 */
+.msg-error {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; padding: 8px 12px;
+  border: 1px solid rgba(var(--danger-rgb), .35);
+  background: var(--danger-soft);
+  border-radius: var(--r-md);
+  color: var(--danger-text); font-size: var(--fs-sm);
+}
+.me-icon { flex-shrink: 0; }
+.me-text { flex: 1; min-width: 0; }
+.me-retry {
+  flex-shrink: 0; cursor: pointer;
+  border: 1px solid rgba(var(--danger-rgb), .4);
+  background: transparent; color: var(--danger-text);
+  border-radius: var(--r-sm); padding: 2px 12px;
+  font-size: var(--fs-xs); font-weight: 600;
+}
+.me-retry:hover { background: rgba(var(--danger-rgb), .12); }
 /* 状态栏生成中实时速率 */
 .st-tps { color: var(--brand-strong); margin-left: var(--sp-2); font-family: var(--font-mono); }
 .msg-flag-emoji { font-size: var(--fs-2xs); }
@@ -2383,7 +2433,8 @@ button {
   cursor: pointer; font-size: var(--fs-sm);
   transition: background .12s var(--ease);
 }
-.cmd-item:hover { background: var(--bg-active); color: var(--brand-strong); }
+.cmd-item:hover, .cmd-item-on { background: var(--bg-active); color: var(--brand-strong); }
+.cmd-item-on { box-shadow: inset 3px 0 0 var(--brand); }
 
 /* ═══ 会话批量删除 ════════════════════════════════ */
 .sl-multi-bar {
