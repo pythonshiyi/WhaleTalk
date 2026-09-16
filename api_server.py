@@ -2419,10 +2419,12 @@ def _norm_metrics(mt):
         "completion": _safe_int(mt.get("completion")),
         "prompt": _safe_int(mt.get("prompt")),
         "cache_hit": _safe_int(mt.get("cache_hit")),
+        "cache_miss": _safe_int(mt.get("cache_miss")),
         "ttft_ms": ttft,
         "gen_ms": round(gen_ms, 1),
         "total_ms": round(total_ms, 1),
         "tps": round(tps, 1),
+        "interrupted": bool(mt.get("interrupted")),
     }
 
 
@@ -6246,10 +6248,12 @@ class _Handler(BaseHTTPRequestHandler):
         usage_total = {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0}
         metrics_total = {"rounds": 0, "completion": 0, "gen_ms": 0.0, "total_ms": 0.0, "tps": 0.0}
         for _m in saved_msgs:
-            _us = _m.get("usage") if isinstance(_m.get("usage"), dict) else {}
-            for _k in usage_total:
-                usage_total[_k] += _safe_int(_us.get(_k))
             _mt = _m.get("metrics") if isinstance(_m.get("metrics"), dict) else {}
+            _us = _m.get("usage") if isinstance(_m.get("usage"), dict) else {}
+            # 优先用「累计 metrics」（多轮工具调用正确）；旧数据无 metrics 时退回单轮 usage
+            _src = _mt if (_mt.get("completion") or _mt.get("prompt")) else _us
+            for _k in usage_total:
+                usage_total[_k] += _safe_int(_src.get(_k))
             metrics_total["rounds"] += _safe_int(_mt.get("rounds"))
             metrics_total["completion"] += _safe_int(_mt.get("completion"))
             try:

@@ -4297,6 +4297,24 @@ class DeepSeekClient:
             "cache_hit": 0, "cache_miss": 0,
             "gen_ms": 0.0, "ttft_ms": None, "total_ms": 0.0, "tps": 0.0,
         }
+
+        def _emit_metrics(interrupted=False):
+            """下发本轮累计速率统计（正常完成 / 停止 / 断线均可）。
+            停止与断线路径此前直接 return，导致前端拿不到统计——统一由此出口。"""
+            if not on_metrics:
+                return
+            payload = dict(agg)
+            payload["interrupted"] = bool(interrupted)
+            try:
+                payload["total_ms"] = round((time.perf_counter() - turn_t0) * 1000.0, 1)
+                _gs = float(payload.get("gen_ms") or 0.0) / 1000.0
+                payload["tps"] = round(float(payload.get("completion") or 0) / _gs, 1) if _gs > 0.05 else 0.0
+            except Exception:
+                pass
+            try:
+                on_metrics(payload)
+            except Exception:
+                pass
         empty_retries = 0
         plan_rejections = 0
         json_retried = False  # JSON 输出自校验重试只允许一次
@@ -4306,6 +4324,7 @@ class DeepSeekClient:
         try:
             for _ in range(rounds):
                 if stop_event and stop_event.is_set():
+                    _emit_metrics(interrupted=True)
                     return False
                 # smart_tools 阶段切换：索引阶段注入 activate_tools 点菜 + 完整能力地图；
                 # 激活后注入已激活工具的压缩 schema，并保留 activate_tools 以支持中途补激活
@@ -4383,6 +4402,7 @@ class DeepSeekClient:
                                 raise
                             logger.warning("流式连接中途断开（尚未收到内容），重试: %s", e)
                 except _StopRequested:
+                    _emit_metrics(interrupted=True)  # 停止：仍下发已产生的统计（标注已中断）
                     return False  # 停止请求：干净返回，不把半截内容当异常抛给 UI
                 except (APIConnectionError, APITimeoutError) as e:
                     # 流中途断线且已有部分增量送达 UI：不再重试（避免已显示内容重复），
@@ -4390,6 +4410,7 @@ class DeepSeekClient:
                     logger.warning("流式连接中途断开，本轮生成未完成: %s", e)
                     if on_truncated:
                         on_truncated("网络中断：本轮回复不完整")
+                    _emit_metrics(interrupted=True)  # 断线：下发部分统计
                     return False
                 round_usage = {}
                 if stream_usage is not None:
@@ -4419,8 +4440,7 @@ class DeepSeekClient:
                     agg["total_ms"] = round((round_end - turn_t0) * 1000.0, 1)
                     _gen_s = agg["gen_ms"] / 1000.0
                     agg["tps"] = round(agg["completion"] / _gen_s, 1) if _gen_s > 0.05 else 0.0
-                    if on_metrics:
-                        on_metrics(dict(agg))
+                    _emit_metrics(False)
                 except Exception:
                     pass
 
@@ -4432,6 +4452,7 @@ class DeepSeekClient:
                     logger.warning("空响应重试已达上限，按失败返回（不写入空历史）")
                     if on_truncated:
                         on_truncated("模型连续返回空响应，本轮生成失败")
+                    _emit_metrics(interrupted=True)
                     return False
                 # 本轮有内容 → 重置空响应预算（此前全轮共享，早期间歇性空响应会耗尽额度，
                 # 导致后续真正的瞬时空响应不再重试）

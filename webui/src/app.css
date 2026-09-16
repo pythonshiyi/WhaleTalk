@@ -1774,6 +1774,7 @@ button {
 .mm-item { white-space: nowrap; }
 .mm-cache { color: var(--ok-text); }
 .mm-tps { color: var(--brand-strong); font-weight: 600; }
+.mm-interrupted { color: var(--warn); }
 /* 状态栏生成中实时速率 */
 .st-tps { color: var(--brand-strong); margin-left: var(--sp-2); font-family: var(--font-mono); }
 .msg-flag-emoji { font-size: var(--fs-2xs); }

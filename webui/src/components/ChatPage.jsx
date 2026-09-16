@@ -789,15 +789,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     for (const m of msgs) {
       if (!m || m.role !== "assistant") continue;
       turns += 1;
-      const u = m.usage;
-      if (u) {
-        usage.prompt += u.prompt || 0;
-        usage.completion += u.completion || 0;
-        usage.cache_hit += u.cache_hit || 0;
-        usage.cache_miss += u.cache_miss || 0;
-      }
-      const mt = m.metrics;
-      if (mt) {
+      const mt = m.metrics || {};
+      // 统一口径：优先累计 metrics（多轮正确），无则退回单轮 usage
+      const u = (mt.prompt || mt.completion) ? mt : (m.usage || {});
+      usage.prompt += u.prompt || 0;
+      usage.completion += u.completion || 0;
+      usage.cache_hit += u.cache_hit || 0;
+      usage.cache_miss += u.cache_miss || 0;
+      if (mt.gen_ms || mt.total_ms || mt.ttft_ms != null) {
         gen_ms += mt.gen_ms || 0;
         total_ms += mt.total_ms || 0;
         if (ttft == null && mt.ttft_ms != null) ttft = mt.ttft_ms;

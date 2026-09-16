@@ -351,8 +351,9 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
         {msg.text && <Markdown text={msg.text} deferCode={msg.streaming} />}
         {msg.streaming && <span className="caret" />}
         {!msg.streaming && msg.text && (msg.usage || msg.metrics) && (() => {
-          const u = msg.usage || {};
+          // 统一口径：优先用「累计 metrics」（多轮工具调用正确），无则退回单轮 usage。
           const mt = msg.metrics || {};
+          const u = (mt.prompt || mt.completion) ? mt : (msg.usage || {});
           const cachePct = u.prompt > 0 ? Math.round((u.cache_hit || 0) / u.prompt * 100) : 0;
           return (
             <div className="msg-metrics" title="本轮用量与速率：输入/输出 tokens · 输出速率 · 首字延迟 · 总耗时">
@@ -363,6 +364,7 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
               {mt.tps > 0 && <span className="mm-item mm-tps">⚡ {mt.tps} tok/s</span>}
               {mt.ttft_ms != null && <span className="mm-item">首字 {fmtMs(mt.ttft_ms)}</span>}
               {mt.total_ms > 0 && <span className="mm-item">耗时 {fmtMs(mt.total_ms)}</span>}
+              {mt.interrupted && <span className="mm-item mm-interrupted">已中断</span>}
             </div>
           );
         })()}
