@@ -10,6 +10,8 @@
 """
 import json
 import os
+import shutil
+import subprocess
 
 import pytest
 
@@ -336,6 +338,22 @@ def test_config_typo_does_not_alarm(sandbox):
     assert res["missing"] == []
 
 
+def test_status_deep_returns_full_shape(sandbox):
+    """回归：status(deep=True) 必须返回完整字段。
+
+    曾因 deep 分支漏设 `repo_updates` → NameError 被 except 兜底吞成
+    `state=unknown`，而旧断言只看 state（unknown 也在允许集合内），故未暴露。
+    """
+    tk_, _ = sandbox
+    st = tk_.status(deep=True)
+    assert st["state"] == "ok"
+    for key in ("state", "mode", "protected", "changed", "alerts", "cosmetic_only",
+                "repo_updates", "unchanged", "last_check", "counts"):
+        assert key in st, f"status(deep) 缺少字段：{key}"
+    assert st["repo_updates"] == []
+    assert st["counts"]["baseline"] >= 1
+
+
 def test_status_never_raises_on_broken_dirs(sandbox, monkeypatch):
     tk_, _ = sandbox
     monkeypatch.setattr(tk_, "TRUST_DIR", os.path.join("Z:", "\\nonexistent", "trust"))
@@ -388,3 +406,103 @@ def test_timeline_never_raises_on_empty(sandbox, monkeypatch):
     tk_, _ = sandbox
     monkeypatch.setattr(tk_, "TRUST_DIR", os.path.join("Z:", "\\nonexistent", "trust"))
     assert tk_.timeline(10) == []
+
+
+# ── 仓库更新（git 锚点）：把 git 拉取从「自我修改」里分出来 ───────────────
+
+_GIT = shutil.which("git")
+
+
+def _git(root, *args):
+    subprocess.run([_GIT, "-C", str(root), *args], check=True,
+                   capture_output=True, text=True)
+
+
+@pytest.fixture
+def git_sandbox(tmp_path, monkeypatch):
+    """真实临时 git 仓库 + 内核文件（已提交首版）；随后引导基线。"""
+    if _GIT is None:
+        pytest.skip("需要 git 可执行文件")
+    root = tmp_path / "proj"
+    root.mkdir()
+    for name in tk.PROTECTED:
+        (root / name).write_text(f"# v1 {name}\n", encoding="utf-8")
+    _git(root, "init")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "tester")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "init")
+    monkeypatch.setattr(tk, "PROJECT_DIR", str(root))
+    monkeypatch.setattr(tk, "TRUST_DIR", str(root / "trust"))
+    import tool_hooks
+    tool_hooks.clear_kernel_cache()
+    tk.init()
+    yield tk, root
+
+
+def test_git_repo_update_auto_followed(git_sandbox):
+    """git 更新内核文件（已提交 → == HEAD）应自动跟随基线，不误报为自我修改。"""
+    tk_, root = git_sandbox
+    (root / "permissions.py").write_text("# v2 官方更新\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "update permissions")
+    assert tk_.verify()["ok"] is False            # 跟随前：与基线不一致
+    payload = tk_.boot_check()
+    assert payload["state"] == "ok"               # 跟随仓库更新 → 不再报警
+    assert payload["repo_updates"] == ["permissions.py"]
+    assert tk_.verify()["ok"] is True             # 基线已推进
+    assert (root / "trust" / "baseline" / "permissions.py").read_text(
+        encoding="utf-8") == "# v2 官方更新\n"
+    assert _incidents(root) == []                 # 不产生未声明事件
+    assert "repo_update" in [r["event"] for r in tk_.ledger_tail(5)]
+    assert tk_.status()["repo_updates"] == ["permissions.py"]
+    assert tk_.integrity_notice() == ""           # 干净：零注入
+
+
+def test_git_uncommitted_change_still_reported(git_sandbox):
+    """工作区改动（未提交，≠ HEAD）必须照常报警——自动跟随不得放行真实自我修改。"""
+    tk_, root = git_sandbox
+    (root / "security.py").write_text("# 未提交的自我修改\n", encoding="utf-8")
+    payload = tk_.boot_check()
+    assert payload["state"] == "unconfirmed"
+    assert payload["changed"] == ["security.py"]
+    assert payload["repo_updates"] == []
+    assert payload["incident"] in _incidents(root)
+    assert "security.py" in tk_.integrity_notice()
+
+
+def test_git_auto_follow_can_be_disabled(git_sandbox):
+    """配置 auto_follow_git=false 时，即使 == HEAD 也按未声明改动报告（严格模式）。"""
+    tk_, root = git_sandbox
+    (root / "trust" / "config.json").write_text(
+        json.dumps({"mode": "report", "auto_follow_git": False}, ensure_ascii=False),
+        encoding="utf-8")
+    (root / "permissions.py").write_text("# v2\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "update")
+    payload = tk_.boot_check()
+    assert payload["state"] == "unconfirmed"
+    assert payload["repo_updates"] == []
+    assert payload["changed"] == ["permissions.py"]
+
+
+def test_repeated_unconfirmed_change_deduped(git_sandbox):
+    """同一份未确认改动跨启动只留一份 incident 与一份证据副本（避免反复堆证据）。"""
+    tk_, root = git_sandbox
+    (root / "crypto.py").write_text("# 反复未确认\n", encoding="utf-8")
+    p1 = tk_.boot_check()
+    p2 = tk_.boot_check()
+    assert p1["incident"] and p1["incident"] == p2["incident"]
+    assert len(_incidents(root)) == 1
+    assert len(list((root / "trust" / "incidents").glob("*.current"))) == 1
+
+
+def test_new_change_creates_new_incident(git_sandbox):
+    """改动内容再次变化（sha 不同）时必须新建 incident，不能拿旧证据顶替。"""
+    tk_, root = git_sandbox
+    (root / "crypto.py").write_text("# 第一次\n", encoding="utf-8")
+    p1 = tk_.boot_check()
+    (root / "crypto.py").write_text("# 第二次变了\n", encoding="utf-8")
+    p2 = tk_.boot_check()
+    assert p2["incident"] != p1["incident"]
+    assert len(_incidents(root)) == 2

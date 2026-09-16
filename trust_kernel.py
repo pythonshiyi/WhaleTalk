@@ -32,6 +32,16 @@ snapshot）就是普通文件，而智能体在自己默认自由权限下可以
 - **注入时**：存在未确认改动时，在系统提示里明确告知智能体「你的内核被改过、
   尚未确认」——把「不可隐瞒」变成对话里的可见事实（干净时零 token、零干扰）。
 
+## 仓库更新 ≠ 自我修改（git 锚点）
+
+内核文件被 `git pull / checkout` 更新后，字节层面与「AI 自我修改」完全一样，
+若一律报警，正常更新会被反复误报成篡改，噪音很快淹没真正的异常。为此：
+当 `auto_follow_git`（默认开）开启且某内核文件的**工作区内容与 git HEAD 一致**
+（git 会按 autocrlf/.gitattributes 归一化行尾）时，判定为「仓库更新」——
+**自动跟随基线**（静默消音），但**不静默**：记一条账本事件 `repo_update`
+（含 HEAD 提交号）并写入 `STATUS.md`。git 不可用 / 文件未被跟踪 / 与 HEAD 不一致
+（= 真实的工作区改动）时，仍按「未声明改动」保守处理，绝不自动放行。
+
 ## 目录布局（均位于项目根 trust/）
 
     trust/config.json          可选配置：mode（report/guard）、extra_protected
@@ -67,6 +77,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 from datetime import datetime
@@ -96,6 +107,9 @@ DEFAULT_CONFIG = {
     "mode": "report",        # report=只报告（默认，开发期友好）｜guard=隔离改动并恢复基线
     "extra_protected": [],   # 追加保护（只增不减：配置无法用来「摘掉」内核文件）
     "diff_max_lines": 60,
+    # 仓库更新跟随：工作区内核文件与 git HEAD 一致时判为「git 更新」自动推进基线。
+    # 仅在该条件成立时放行（逐文件），真实工作区改动仍会报警；账本留痕不静默。
+    "auto_follow_git": True,
 }
 
 _init_done = False
@@ -179,6 +193,21 @@ def _append_line(path, obj):
         return False
 
 
+def _unique_path(path):
+    """同名文件已存在时追加 _2/_3… 后缀。
+
+    事件与证据文件名精确到「秒」，同一秒内发生两次不同改动会互相覆盖——那等于
+    抹掉证据。此处保证路径唯一（并发极小概率仍可能撞车，但已远好于必然覆盖）。
+    """
+    if not os.path.exists(path):
+        return path
+    stem, ext = os.path.splitext(path)
+    i = 2
+    while os.path.exists(f"{stem}_{i}{ext}"):
+        i += 1
+    return f"{stem}_{i}{ext}"
+
+
 # ── 路径与配置 ───────────────────────────────────────────────────────────
 
 def _config():
@@ -194,6 +223,8 @@ def _config():
             cfg["diff_max_lines"] = max(5, int(disk.get("diff_max_lines") or 60))
         except (TypeError, ValueError):
             pass
+        if "auto_follow_git" in disk:
+            cfg["auto_follow_git"] = bool(disk.get("auto_follow_git"))
     return cfg
 
 
@@ -373,6 +404,54 @@ def _update_manifest(mutate):
         return m
 
 
+def _promote_baseline(name, event="accept", actor="user", note=""):
+    """把基线推进到当前文件内容并记账（用户 accept 与 git 自动跟随共用）。"""
+    _copy_to_baseline(name)
+    entry = _entry_for(name, how=event, note=note)
+    entry["actor"] = actor
+    _update_manifest(lambda files, _n=name, _e=entry: files.__setitem__(_n, _e))
+    _append_line(_ledger_path(), {"ts": _now(), "event": event, "file": name,
+                                  "actor": actor, "note": str(note or "")[:200]})
+
+
+# ── git 锚点：把「仓库更新」从「自我修改」里分出来 ─────────────────────────
+
+def _git_head():
+    """当前 git HEAD 短 sha；非仓库 / 不可用返回 ""。"""
+    try:
+        r = subprocess.run(["git", "-C", PROJECT_DIR, "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _git_matches_head(name):
+    """工作区内核文件是否与 git HEAD 中同一文件内容一致。
+
+    git diff 会按仓库配置（core.autocrlf / .gitattributes）归一化行尾，因此
+    「仅行尾被 git 检出改写」也算一致。返回 True/False；git 不可用、非 git 仓库或
+    文件未被跟踪时返回 None（未知）——调用方据此保守处理，绝不静默放行。
+    """
+    rel = str(name).replace("\\", "/")
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", PROJECT_DIR, "ls-files", "--error-unmatch", "--", rel],
+            capture_output=True, text=True, timeout=5)
+        if tracked.returncode != 0:
+            return None
+        d = subprocess.run(
+            ["git", "-C", PROJECT_DIR, "diff", "--quiet", "HEAD", "--", rel],
+            capture_output=True, text=True, timeout=5)
+        if d.returncode == 0:
+            return True
+        if d.returncode == 1:
+            return False
+        return None
+    except Exception:
+        return None
+
+
 # ── 核对 ─────────────────────────────────────────────────────────────────
 
 def _only_eol_differs(a_path, b_path):
@@ -448,16 +527,15 @@ def verify():
 
 
 def _record_incident(kind, payload):
-    """写一条 incident 事件。返回文件名（失败返回 ""）。"""
+    """写一条 incident 事件。返回文件名（失败返回 ""）。同秒不同事件不互相覆盖。"""
     try:
         os.makedirs(_incident_dir(), exist_ok=True)
-        fn = f"{_now_compact()}_{kind}.json"
-        path = os.path.join(_incident_dir(), fn)
+        path = _unique_path(os.path.join(_incident_dir(), f"{_now_compact()}_{kind}.json"))
         payload = dict(payload or {})
         payload.setdefault("kind", kind)
         payload.setdefault("at", _now())
         _atomic_write_json(path, payload)
-        return fn
+        return os.path.basename(path)
     except Exception:
         logger.exception("信任内核事件写入失败: %s", kind)
         return ""
@@ -488,16 +566,47 @@ def diff(name, max_lines=None):
         return ""
 
 
+def _follow_git_updates(changed):
+    """把「工作区内容 == git HEAD」的改动认定为仓库更新并自动跟随基线。
+
+    逐文件判定（只对该条件成立者放行）。git 把内核文件更新成官方新版本后，字节层面
+    无法与 AI 自我修改区分——用 git HEAD 作为权威锚点可安全消音，同时以账本事件
+    `repo_update`（含 HEAD 提交号）留痕，不静默。返回已跟随的文件名列表。
+    """
+    commit = _git_head()
+    followed = []
+    for c in changed or []:
+        name = c.get("name")
+        if not name:
+            continue
+        if _git_matches_head(name) is True:
+            _promote_baseline(name, event="repo_update", actor="git",
+                              note=f"随仓库更新自动跟随（HEAD {commit or '?'}）")
+            followed.append(name)
+    return followed
+
+
 def boot_check():
     """启动核对：生成 incident、写 last_check.json 与 STATUS.md；guard 模式隔离改动。
 
-    默认（report 模式）**不修改任何文件**——开发期用户用 IDE 改内核文件是正常
+    默认（report 模式）**不修改内核文件内容**——开发期用户用 IDE 改内核文件是正常
     行为，程序不该擅自回滚别人的编辑；代价是改动依然生效，收益是它不再沉默。
+
+    例外：**仓库更新自动跟随**。当某内核文件的工作区内容与 git HEAD 一致（即改动
+    来自 `git pull/checkout`，而非工作区自我修改），且 `auto_follow_git` 开启时，直接
+    推进基线消音——否则每次拉取都会把官方更新误报成篡改。此路径仍写账本 `repo_update`
+    事件与 STATUS 记录，不静默。
     """
     try:
         init()
         res = verify()
         cfg = _config()
+        # 仓库更新：先把「== git HEAD」的改动判为 git 更新并跟随基线，再重新核对
+        followed = []
+        if cfg.get("auto_follow_git", True) and res["changed"]:
+            followed = _follow_git_updates(res["changed"])
+            if followed:
+                res = verify()
         alerts = []
         if _last_bootstrap == "rebootstrap":
             alerts.append({
@@ -510,6 +619,11 @@ def boot_check():
         if not res["ok"] and cfg.get("mode") == "guard":
             guarded = _quarantine_and_restore(res["changed"])
         state = "ok" if (res["ok"] and not alerts) else "unconfirmed"
+        # 未确认改动的指纹（文件 → 当前 sha）：用于「同一份未确认改动」跨启动去重，
+        # 避免每次重启都新写一份 incident（证据不变时一份足矣）。
+        changes_sig = {c["name"]: c.get("current_sha") for c in res["changed"]}
+        changes_sig.update({c["name"]: "MISSING" for c in res["missing"]})
+        changes_sig.update({c["name"]: "UNTRACKED" for c in res["untracked"]})
         payload = {
             "state": state,
             "checked_at": res["checked_at"],
@@ -520,22 +634,39 @@ def boot_check():
             "guarded": guarded,
             "alerts": alerts,
             "cosmetic_only": bool(res.get("cosmetic_only")),
+            "repo_updates": followed,
+            "changes": changes_sig,
         }
-        if res.get("cosmetic_only"):
+        if followed:
+            payload["note"] = (
+                "以下内核文件与 git HEAD 一致，判定为**仓库更新**并已自动跟随基线："
+                + "、".join(followed)
+                + "。若你并不预期近期更新过仓库，请到 trust/ledger.jsonl 核对。")
+        elif res.get("cosmetic_only"):
             payload["note"] = (
                 "所有差异均**仅限行尾**（CRLF/LF），语义未变——多为 git 检出"
                 "（core.autocrlf / .gitattributes）所致。确认无碍可 "
                 "`python trust_kernel.py accept --all`。")
         if not res["ok"]:
+            # 去重：与上次**完全相同**的未确认改动（同一组文件、同一当前 sha）复用既有
+            # incident 与证据副本，避免每次重启都复制一遍同样的证据（噪音/磁盘膨胀）。
+            prev = _read_json(os.path.join(TRUST_DIR, "last_check.json"), {}) or {}
+            reuse = bool(prev.get("incident")) and (prev.get("changes") or {}) == changes_sig
+            prev_copies = {d.get("name"): d.get("current_copy")
+                           for d in (prev.get("details") or []) if isinstance(d, dict)}
             details = []
             for c in res["changed"]:
-                details.append({"name": c["name"], "path": c["path"],
-                                "diff": diff(c["name"]),
-                                "current_copy": _keep_copy(c["name"], "current", "incidents")})
+                d = {"name": c["name"], "path": c["path"], "diff": diff(c["name"])}
+                d["current_copy"] = (prev_copies.get(c["name"]) if reuse and prev_copies.get(c["name"])
+                                     else _keep_copy(c["name"], "current", "incidents"))
+                details.append(d)
             payload["details"] = details
-            payload["incident"] = _record_incident("undeclared_change", payload)
+            payload["incident"] = prev["incident"] if reuse else _record_incident("undeclared_change", payload)
         _atomic_write_json(os.path.join(TRUST_DIR, "last_check.json"), payload)
         _write_status_md(res, payload)
+        if followed:
+            logger.info("信任内核：%s 个内核文件随仓库更新自动跟随基线（%s）",
+                        len(followed), ", ".join(followed))
         if not res["ok"]:
             logger.warning(
                 "信任内核：检测到 %s 个未声明的自我修改（%s）%s——已记录事件 %s，"
@@ -565,7 +696,7 @@ def _keep_copy(name, tag, dest="history"):
             return ""
         d = _incident_dir() if dest == "incidents" else _history_dir()
         os.makedirs(d, exist_ok=True)
-        dst = os.path.join(d, f"{_now_compact()}_{_flat(name)}.{tag}")
+        dst = _unique_path(os.path.join(d, f"{_now_compact()}_{_flat(name)}.{tag}"))
         shutil.copy2(src, dst)
         return dst
     except Exception:
@@ -608,6 +739,13 @@ def _write_status_md(res, payload):
             f"- 保护文件：{', '.join(res['protected'])}",
             "",
         ]
+        if payload.get("repo_updates"):
+            lines += ["## 随仓库更新自动跟随", "",
+                      "> 以下内核文件与 git HEAD 一致（来自 `git pull/checkout`），"
+                      "已自动推进基线；明细见 trust/ledger.jsonl 的 `repo_update` 事件。", ""]
+            for name in payload["repo_updates"]:
+                lines.append(f"- `{name}`")
+            lines += [""]
         if not res["ok"]:
             lines += ["## 未声明的改动", ""]
             if res.get("cosmetic_only"):
@@ -734,12 +872,7 @@ def accept(name=None, all_: bool = False):
         if not names:
             return True, "无未确认改动，无需确认"
         for n in names:
-            _copy_to_baseline(n)
-            entry = _entry_for(n, how="accept", note="用户确认保留")
-            _update_manifest(
-                lambda files, _n=n, _e=entry: files.__setitem__(_n, _e))
-            _append_line(_ledger_path(), {"ts": _now(), "event": "accept", "file": n,
-                                          "actor": "user"})
+            _promote_baseline(n, event="accept", actor="user", note="用户确认保留")
         _atomic_write_json(os.path.join(TRUST_DIR, "last_check.json"),
                            {"state": "ok", "checked_at": _now(), "changed": [],
                             "accepted": names})
@@ -785,6 +918,7 @@ def status(deep=False):
             checked_at = res["checked_at"]
             alerts = []
             cosmetic_only = bool(res.get("cosmetic_only"))
+            repo_updates = []
         else:
             last = _read_json(os.path.join(TRUST_DIR, "last_check.json"), {}) or {}
             changed = list(last.get("changed") or []) + list(last.get("missing") or [])
@@ -792,6 +926,7 @@ def status(deep=False):
             checked_at = str(last.get("checked_at") or "")
             alerts = list(last.get("alerts") or [])
             cosmetic_only = bool(last.get("cosmetic_only"))
+            repo_updates = list(last.get("repo_updates") or [])
         return {
             "state": state,
             "mode": cfg.get("mode"),
@@ -799,6 +934,7 @@ def status(deep=False):
             "changed": changed,
             "alerts": alerts,
             "cosmetic_only": cosmetic_only,
+            "repo_updates": repo_updates,
             "unchanged": [n for n in protected_names() if n not in changed],
             "last_check": checked_at,
             "counts": {
@@ -853,6 +989,7 @@ _EVENT_LABELS = {
     "commit": "改动已提交（基线推进）",
     "abort": "改动中止（未生效）",
     "accept": "用户确认保留",
+    "repo_update": "随仓库更新跟随基线",
     "restore": "回滚到可信基线",
     "guarded_restore": "guard 模式隔离并恢复",
     "undeclared_change": "发现未声明改动",

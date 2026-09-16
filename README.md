@@ -8,9 +8,9 @@
 
 > **中文为主 · English follows**（中文完整介绍 + 英文简版）
 
-**鲸语 WhaleTalk v3.12.0** 是一个集成 DeepSeek V4.1 Flash（原生多模态统一模型）的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
+**鲸语 WhaleTalk v3.13.0** 是一个集成 DeepSeek V4.1 Flash（原生多模态统一模型）的 Windows AI 智能体——不止聊天窗口，而是一个**看得见屏幕、听得见语音、动得了鼠标键盘、还能自我进化**的 AI 工作台。Web 重构后以 React 现代界面 + 本地 API 服务形态呈现：三套主题（星空/深海/北极）、控制台侧栏、产物直达、人工智能一键切换。
 
-*WhaleTalk v3.12.0 is a Windows AI agent built on the unified DeepSeek V4.1 Flash model — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
+*WhaleTalk v3.13.0 is a Windows AI agent built on the unified DeepSeek V4.1 Flash model — rebuilt with a React frontend: modern UI, console sidebar, one-click artifact access, and self-evolution. WhaleTalk is an independent product brand with no affiliation to DeepSeek.*
 
 > 🌐 **官网 / Website：**https://whaletalk.top/
 
@@ -284,7 +284,7 @@ python web_app.py --no-tray  # 常驻但不启用系统托盘
 
 ## English Introduction
 
-WhaleTalk v3.12.0 is a Windows AI agent on the unified DeepSeek V4.1 Flash — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745), served from the browser with a system tray resident process.
+WhaleTalk v3.13.0 is a Windows AI agent on the unified DeepSeek V4.1 Flash — rebuilt as a **local-first Web architecture**: React frontend + local API (127.0.0.1:8745), served from the browser with a system tray resident process.
 
 - **v3.10**: unified DeepSeek V4.1 Flash model (native multimodal, no mode switching), auto-migration of legacy model names, new peak/off-peak pricing
 - **v3.0 highlights**: 3 themes (starfield/deepsea/arctic), console sidebar (model/thinking/scene/appearance), artifact one-click access, unified `web_app.py` entry (desktop/browser/headless)
