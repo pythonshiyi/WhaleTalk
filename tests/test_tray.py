@@ -58,6 +58,19 @@ def test_trust_unconfirmed():
     assert tray.trust_unconfirmed(None) is False
 
 
+def test_menu_signature_stable_and_sensitive():
+    """菜单指纹：同内容稳定，任一可见字段变化即变——用于「仅变化时重建菜单」的门控。"""
+    st = {"full_auto": False, "model": "m", "monthly_cost": 1.0}
+    toggles = (False, True, True, False)
+    base = tray.menu_signature(8745, "3.11.3", st, toggles)
+    assert base == tray.menu_signature(8745, "3.11.3", dict(st), tuple(toggles))  # 同内容稳定
+    assert base != tray.menu_signature(8745, "3.11.3", {"full_auto": False, "model": "m2"}, toggles)  # 模型变化
+    assert base != tray.menu_signature(8745, "3.11.3", st, (True, True, True, False))  # 勾选态变化
+    assert base != tray.menu_signature(9999, "3.11.3", st, toggles)  # 端口变化
+    assert base != tray.menu_signature(8745, "9.9.9", st, toggles)  # 版本变化
+    assert base != tray.menu_signature(8745, "3.11.3", {}, toggles)  # 空快照（状态行变化）
+
+
 def test_notify_without_icon_is_safe():
     # 无托盘（未 run）时不得抛异常
     assert tray.notify("t", "m") is False

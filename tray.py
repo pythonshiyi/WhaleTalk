@@ -22,6 +22,11 @@ _STATUS_PROVIDER = None  # () -> dict（通常注入 api_server._status）
 _ICON = None             # pystray.Icon 实例（notify 用）
 _ICON_LOCK = threading.Lock()
 
+# 菜单是否正在显示：Windows 右键弹出菜单时 pystray 在线程里阻塞于 TrackPopupMenuEx，
+# 期间**不能**重建菜单——`update_menu()` 会 DestroyMenu 正在显示的原生 HMENU，
+# 导致菜单与鼠标卡死（v3.11.3 每 5s 无条件重建菜单即触发此问题）。
+_MENU_OPEN = threading.Event()
+
 
 # ── 纯函数（可单测）─────────────────────────────────
 def fmt_tokens(n):
@@ -83,6 +88,43 @@ def _app_version():
 def trust_unconfirmed(st):
     tr = (st or {}).get("trust") or {}
     return tr.get("state") == "unconfirmed"
+
+
+def menu_signature(port, version, st, toggles):
+    """菜单内容指纹：仅当指纹变化时才重建菜单，避免无谓的 DestroyMenu/重建。
+
+    toggles 为四个开关的当前布尔值元组（autostart / completion_sound /
+    notify_on_done / silent_start）——它们也参与菜单渲染（勾选态）。
+    """
+    parts = [f"p={port}", f"v={version}"]
+    for label, val in status_lines(st):
+        parts.append(f"{label}={val}")
+    parts.append("t=" + "".join("1" if bool(x) else "0" for x in (toggles or ())))
+    return "|".join(parts)
+
+
+def _safe_icon_class():
+    """返回可标记「菜单打开中」的 Icon 子类（仅 Windows 需要）。
+
+    pystray 的 win32 后端 `_on_notify` 在右键时会阻塞于 TrackPopupMenuEx 直到
+    菜单关闭——在这段区间内 `_refresh_loop` 必须放弃重建菜单，否则会销毁正在
+    显示的原生 HMENU 并卡死菜单。此子类用 `_MENU_OPEN` 事件把该区间暴露给刷新线程。
+    其它后端没有 `_on_notify`，原样返回基类。
+    """
+    import pystray
+    base = pystray.Icon
+    if not hasattr(base, "_on_notify"):
+        return base
+
+    class _SafeIcon(base):  # type: ignore[misc, valid-type]
+        def _on_notify(self, wparam, lparam):
+            _MENU_OPEN.set()
+            try:
+                return super()._on_notify(wparam, lparam)
+            finally:
+                _MENU_OPEN.clear()
+
+    return _SafeIcon
 
 
 # ── 通知 ────────────────────────────────────────────
@@ -171,6 +213,8 @@ class TrayController:
         self._icon = None
         self._stop = threading.Event()
         self._last_trust = None
+        self._last_sig = None          # 上次菜单指纹：仅变化时重建
+        self._wake = threading.Event()  # 开关变更后请求立即刷新
         self.version = _app_version()
 
     # —— 开关回调 ——
@@ -187,6 +231,7 @@ class TrayController:
             if not ok:
                 _cfg_set(key, not bool(value))  # 回滚
                 notify(APP_NAME, "开机自启设置失败（可稍后重试）")
+        self._wake.set()  # 立即刷新勾选态（不必等下一个 5s 周期）
 
     def _checked(self, key, default=False):
         return lambda item: bool(_cfg_get(key, default))
@@ -230,13 +275,28 @@ class TrayController:
         self._st = st
         if self._icon is None:
             return
+        # tooltip 只改通知区提示，不触碰菜单，任何时候都安全
         try:
             self._icon.title = tooltip_text(st, self.port, self.version)
-            # 状态区文本是构建菜单时固化的——必须重建菜单才能刷新（update_menu 只刷勾选态）
-            self._icon.menu = self._build_menu()
-            self._icon.update_menu()
         except Exception:
             pass
+        # 菜单：① 正在显示时绝不动（DestroyMenu 卡死）；② 内容未变不重建。
+        if _MENU_OPEN.is_set():
+            return
+        toggles = (
+            bool(_cfg_get("autostart", False)),
+            bool(_cfg_get("completion_sound", True)),
+            bool(_cfg_get("notify_on_done", True)),
+            bool(_cfg_get("silent_start", False)),
+        )
+        sig = menu_signature(self.port, self.version, st, toggles)
+        if sig != self._last_sig:
+            try:
+                # 赋值 menu 内部即调用 update_menu()，无需再显式重建（旧代码重复重建两次）
+                self._icon.menu = self._build_menu()
+                self._last_sig = sig
+            except Exception:
+                pass
         # 内核待确认：状态由 ok→unconfirmed 时提示一次
         cur = trust_unconfirmed(st)
         if cur and self._last_trust is False:
@@ -246,8 +306,14 @@ class TrayController:
 
     def _refresh_loop(self):
         while not self._stop.is_set():
+            # 菜单打开期间跳过刷新（含状态采集），等关闭后再更新，避免动到正在显示的菜单
+            if _MENU_OPEN.is_set():
+                self._stop.wait(0.3)
+                continue
             self._refresh_once()
-            self._stop.wait(_REFRESH_SECONDS)
+            # 正常 5s 一刷；开关变更时 _wake 立即放行
+            self._wake.wait(_REFRESH_SECONDS)
+            self._wake.clear()
 
     # —— 菜单 ——
     def _build_menu(self):
@@ -305,7 +371,7 @@ class TrayController:
             print("[托盘] 图标生成失败（缺 Pillow？）")
             return False
         try:
-            icon = pystray.Icon("whaletalk", img, APP_NAME, self._build_menu())
+            icon = _safe_icon_class()("whaletalk", img, APP_NAME, self._build_menu())
             self._icon = icon
             global _ICON
             with _ICON_LOCK:

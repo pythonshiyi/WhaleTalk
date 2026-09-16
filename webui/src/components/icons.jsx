@@ -62,6 +62,7 @@ const PATHS = {
   pencil: <><path d="M4 20h4L20 8l-4-4L4 16z" /><path d="M14 6l4 4" /></>,
   quote: <path d="M9 7H5v6h4l-2 4M19 7h-4v6h4l-2 4" />,
   image: <><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></>,
+  paperclip: <path d="M21.4 11.05l-9.19 9.19a5 5 0 01-7.07-7.07l9.19-9.19a3.5 3.5 0 014.95 4.95l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />,
   code: <path d="M8 6l-6 6 6 6M16 6l6 6-6 6" />,
   link: <><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1" /><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1" /></>,
   download: <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />,

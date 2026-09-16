@@ -20,6 +20,18 @@ function todayStr() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+// 附件大小可读化（chip 上标注，避免用户拖了超大文件却不知情）
+function fmtSize(n) {
+  const v = Number(n) || 0;
+  if (v >= 1048576) return `${(v / 1048576).toFixed(1)}MB`;
+  if (v >= 1024) return `${Math.round(v / 1024)}KB`;
+  return `${v}B`;
+}
+
+// 单文件上限（base64 后 ≈ 1.34×）：与后端 UPLOAD_BODY_MAX(64MB) 留余量，超限前端先拦
+const MAX_UPLOAD_BYTES = 48 * 1024 * 1024;
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|ico|avif|svg)$/i;
+
 export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask = true }, ref) {
   const [text, setText] = React.useState("");
   const [slashOpen, setSlashOpen] = React.useState(false);
@@ -30,7 +42,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   const [pluginTriggers, setPluginTriggers] = React.useState([]);
   const [dirs, setDirs] = React.useState(null);
   const [attachments, setAttachments] = React.useState([]);
-  const [uploading, setUploading] = React.useState(false);
+  const [uploading, setUploading] = React.useState(0);
   const [tokens, setTokens] = React.useState(0);
   const { toast } = React.useContext(ToastContext);
   const fileRef = React.useRef(null);
@@ -38,6 +50,23 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   const histRef = React.useRef([]);
   const histIdxRef = React.useRef(-1);
   const histDraftRef = React.useRef("");
+  const attachmentsRef = React.useRef([]);
+
+  React.useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+
+  // 释放图片预览 blob URL（防长会话内存累积）：移除单条 / 发送后清空 / 组件卸载
+  const revokeUrl = (a) => {
+    try { if (a && a.url && String(a.url).startsWith("blob:")) URL.revokeObjectURL(a.url); } catch (e) { silentWarn(e, "Composer"); }
+  };
+  const clearAttachments = React.useCallback(() => {
+    (attachmentsRef.current || []).forEach(revokeUrl);
+    setAttachments([]);
+  }, []);
+  const removeAttachment = (a) => {
+    revokeUrl(a);
+    setAttachments((list) => list.filter((x) => (x.id || x.path) !== (a.id || a.path)));
+  };
+  React.useEffect(() => () => { (attachmentsRef.current || []).forEach(revokeUrl); }, []);
 
   // ── 应用指令：变量填充（{{TEXT}}/{{DATE}}/{ASK:}）+ 选中文本 + 自动发送 ──
   const applyPrompt = (p, replaceAll = false) => {
@@ -56,7 +85,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     setSlashQuery("");
     if (p.auto_send && String(t).trim()) {
       setText("");
-      setAttachments([]);  // 与 submit() 一致：自动发送后清空已选附件，防 chip 残留
+      clearAttachments();  // 与 submit() 一致：自动发送后清空已选附件，防 chip 残留
       onSend(t);
     } else {
       setText(t);
@@ -136,7 +165,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     return () => { alive = false; };
   }, []);
 
-  // ── 对外暴露：insertText（引用/编辑用）──
+  // ── 对外暴露：insertText（引用/编辑用）、addFiles（粘贴/拖拽统一入口）──
   React.useImperativeHandle(ref, () => ({
     insertText: (t, focus = true) => {
       setText(t);
@@ -145,6 +174,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       setDirOpen(false);
       if (focus) setTimeout(() => taRef.current?.focus(), 30);
     },
+    addFiles: (files) => addFiles(files),
     focus: () => taRef.current?.focus(),
   }));
 
@@ -173,34 +203,69 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     } catch (e) { silentWarn(e, "Composer"); }
   };
 
-  const onPickImage = (file) => {
-    if (!file || uploading) return;
+  // ── 附件：图片走 /v1/upload（超限自动压缩、进视觉链路）；其它文件走
+  // /v1/files/upload（原样落盘、随消息给 AI 路径由工具层读取）。支持多选/粘贴/拖拽。──
+  const uploadOne = (file) => {
+    if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      toast(`文件过大（>${Math.round(MAX_UPLOAD_BYTES / 1048576)}MB）：${file.name}`);
+      return;
+    }
+    const isImage = /^image\//.test(file.type || "") || IMAGE_RE.test(file.name || "");
+    const previewUrl = isImage ? URL.createObjectURL(file) : "";
     const reader = new FileReader();
     reader.onload = async () => {
       const b64 = String(reader.result || "");
-      setUploading(true);
+      setUploading((n) => n + 1);
       try {
-        const r = await api.uploadImage(b64, file.name);
+        const r = isImage
+          ? await api.uploadImage(b64, file.name)
+          : await api.uploadFile(b64, file.name);
         if (r && r.path) {
           const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          setAttachments((a) => [...a, { id, path: r.path, name: r.name }]);
+          setAttachments((a) => [...a, {
+            id, path: r.path,
+            name: r.name || file.name,
+            size: typeof r.size === "number" ? r.size : file.size,
+            kind: isImage ? "image" : "file",
+            url: previewUrl,
+          }]);
           if (r.note) toast("🖼 " + r.note);
+        } else {
+          if (previewUrl) URL.revokeObjectURL(previewUrl);
+          toast("上传失败：" + file.name);
         }
-      } catch (e) { silentWarn(e, "Composer"); }
-      setUploading(false);
+      } catch (e) {
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        silentWarn(e, "Composer");
+        toast(`上传失败：${file.name}（${e && e.message ? e.message : "未知错误"}）`);
+      }
+      setUploading((n) => Math.max(0, n - 1));
+    };
+    reader.onerror = () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      toast("读取失败：" + file.name);
     };
     reader.readAsDataURL(file);
   };
 
+  // 批量添加（多选/粘贴/拖拽共用入口）；去重同一次选择里的重复文件
+  const addFiles = (fileList) => {
+    const list = Array.from(fileList || []);
+    if (!list.length) return;
+    list.forEach(uploadOne);
+  };
+
   const submit = () => {
     const v = text.trim();
-    if (!v) return;
+    // 允许「只发附件不发文字」：只要有图片/文件即可发送
+    if (!v && attachments.length === 0) return;
     // 发送即打断：busy 时挂起待发（先停止当前生成，再延迟重发）
     if (busy) {
       onStop && onStop();
       setTimeout(() => onSend && onSend(v, attachments), 350);
       setText("");
-      setAttachments([]);
+      clearAttachments();
       return;
     }
     setText("");
@@ -208,7 +273,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     setPromptOpen(false);
     // 历史记录（上限 200，去尾重复）
     const hist = histRef.current;
-    if (hist[hist.length - 1] !== v) {
+    if (v && hist[hist.length - 1] !== v) {
       hist.push(v);
       if (hist.length > 200) hist.shift();
       try {
@@ -217,7 +282,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     }
     histIdxRef.current = -1;
     onSend(v, attachments);
-    setAttachments([]);
+    clearAttachments();
   };
 
   // ── B9 编辑器增强辅助 ──
@@ -375,38 +440,36 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       {attachments.length > 0 && (
         <div className="composer-att">
           {attachments.map((a) => (
-            <span className="att-chip" key={a.id || a.path}>
-              <Icon name="image" size={13} /> {a.name}
-              <button
-                title="移除附件"
-                aria-label="移除附件"
-                onClick={() => setAttachments(attachments.filter((x) => (x.id || x.path) !== (a.id || a.path)))}
-              >×</button>
+            <span className={"att-chip" + (a.kind === "image" ? " att-chip-img" : "")} key={a.id || a.path} title={a.path}>
+              {a.kind === "image" && a.url ? (
+                <img className="att-thumb" src={a.url} alt={a.name} />
+              ) : (
+                <Icon name="file" size={14} />
+              )}
+              <span className="att-name">{a.name}</span>
+              {a.size ? <span className="att-size">{fmtSize(a.size)}</span> : null}
+              <button title="移除附件" aria-label="移除附件" onClick={() => removeAttachment(a)}><Icon name="x" size={12} /></button>
             </span>
           ))}
         </div>
       )}
       <div className="composer">
         <div className="composer-tools">
-          <button className="cbtn" title="添加图片" aria-label="添加图片" disabled={uploading} onClick={() => fileRef.current?.click()}>
-            {uploading ? (
+          <button className="cbtn" title="添加图片或文件（也可直接粘贴 / 拖拽到对话区）" aria-label="添加图片或文件" disabled={uploading > 0} onClick={() => fileRef.current?.click()}>
+            {uploading > 0 ? (
               <span className="tool-spin" style={{ width: 13, height: 13 }} />
             ) : (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="3" />
-                <circle cx="9" cy="9" r="2" />
-                <path d="M21 15l-5-5L5 21" />
-              </svg>
+              <Icon name="paperclip" size={16} />
             )}
           </button>
           <input
             ref={fileRef}
             type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
+            multiple
+            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json,.zip,.7z,.rar"
             style={{ display: "none" }}
             onChange={(e) => {
-              const f = e.target.files && e.target.files[0];
-              if (f) onPickImage(f);
+              if (e.target.files && e.target.files.length) addFiles(e.target.files);
               e.target.value = "";
             }}
           />
@@ -541,7 +604,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
             </svg>
           </button>
         ) : (
-          <button className="send-btn" onClick={submit} disabled={!text.trim()} title="发送">
+          <button className="send-btn" onClick={submit} disabled={!text.trim() && attachments.length === 0} title="发送">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
             </svg>

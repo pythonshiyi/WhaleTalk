@@ -37,7 +37,16 @@ function toSaveMessages(msgs) {
   const out = [];
   for (const m of msgs || []) {
     if (m.role === "user") {
-      out.push({ role: "user", content: unwrapLongText(m.text || "") });
+      const um = { role: "user", content: unwrapLongText(m.text || "") };
+      // 附件与正文分开存储：content 保持纯文本（回显不乱），images/files 供重载回显 +
+      // 继续对话时 buildMessageChain 重新拼出附件引用。绝不把 files 送进模型字段。
+      if (m.images && m.images.length) um.images = m.images;
+      if (m.files && m.files.length) {
+        um.files = m.files
+          .filter((f) => f && f.path)
+          .map((f) => ({ path: f.path, name: f.name, size: f.size }));
+      }
+      out.push(um);
     } else if (m.role === "assistant") {
       const am = { role: "assistant", content: unwrapLongText(m.text || "") };
       if (m.think) am.reasoning_content = m.think;
@@ -117,13 +126,28 @@ function SpeakingPill() {
   );
 }
 
+// 非图片附件：以「路径清单」追加进送给模型的正文——图片走 images 视觉链路，
+// 其余文件（pdf/docx/csv…）让 AI 按路径用工具读取。展示层只用 msg.text，不显示这段。
+function fileRefsBlock(files) {
+  if (!files || !files.length) return "";
+  const lines = files
+    .filter((f) => f && f.path)
+    .map((f) => `- ${f.name || ""} → ${f.path}`);
+  return lines.length ? `\n\n[本次附件]\n${lines.join("\n")}` : "";
+}
+function withAttachRefs(text, files) {
+  return `${text || ""}${fileRefsBlock(files)}`;
+}
+
 // ── 多轮消息链构造（官方规范）────────────────────────
 // tools 模式下必须完整回传：assistant(reasoning_content + tool_calls) → tool 结果
 function buildMessageChain(msgs) {
   const out = [];
   for (const m of msgs) {
     if (m.role === "user") {
-      out.push({ role: "user", content: unwrapLongText(m.text || "") });
+      const um = { role: "user", content: withAttachRefs(unwrapLongText(m.text || ""), m.files) };
+      if (m.images && m.images.length) um.images = m.images;
+      out.push(um);
     } else if (m.role === "assistant") {
       const am = { role: "assistant", content: unwrapLongText(m.text || "") };
       if (m.think) am.reasoning_content = m.think;
@@ -177,6 +201,7 @@ function useBackendChat({
     stopRef.current = false;
     const userText = pendingRef.current.text;
     const images = pendingRef.current.images || [];
+    const files = pendingRef.current.files || [];
     const isContinue = continueRef && continueRef.current && continueRef.current.active;
     const continueIdx = isContinue ? continueRef.current.idx : -1;
 
@@ -198,7 +223,7 @@ function useBackendChat({
       // 不再保留局部 msg 变量：后续一律经 patchLast 不可变更新，
       // 落盘用 currentMsg() 从实时镜像取终态（见上）。
       updateMsgs((m) => [...m,
-        { role: "user", text: userText, time: t0 },
+        { role: "user", text: userText, time: t0, ...(images.length ? { images } : {}), ...(files.length ? { files } : {}) },
         { role: "assistant", think: "", tools: [], text: "", streaming: true, time: t0 }]);
     }
     if (!stopSignalRef.current || stopSignalRef.current.signal.aborted) stopSignalRef.current = new AbortController();
@@ -264,15 +289,17 @@ function useBackendChat({
           maybeAutoReadOnce();
         } catch (e) { silentWarn(e, "ChatPage"); }
         // msg 传实时镜像的最后一条（不可变更新后闭包 msg 已非终态）
-        onFinished && onFinished({ userText, msg: currentMsg(), ok, isContinue });
+        onFinished && onFinished({ userText, msg: currentMsg(), ok, isContinue, images, files });
       };
       try {
         const history = isContinue
           ? buildMessageChain((historyRef.current || []).slice(0, continueIdx + 1))
           : (historyRef.current || []).slice(-80);
+        // 纯图片（无文字）时给一句占位，避免部分网关拒绝空 content
+        const userContent = withAttachRefs(userText, files) || (images.length ? "[图片]" : "");
         await api.streamChat(
           {
-            messages: isContinue ? history : [...history, { role: "user", content: userText, ...(images.length ? { images } : {}) }],
+            messages: isContinue ? history : [...history, { role: "user", content: userContent, ...(images.length ? { images } : {}) }],
             // 不传 thinking：后端 _chat_kwargs 使用 config.json 的 thinking（控制台/设置选择的档位即时生效）
             mode: chatMode,
             toolsEnabled: chatMode === "task",
@@ -393,7 +420,7 @@ function useBackendChat({
               setGenState({ on: false, text: "" });
               setGenTps(0);
               try {
-                onFinished?.({ userText, msg: currentMsg(), ok: false, isContinue, error: String(e) });
+                onFinished?.({ userText, msg: currentMsg(), ok: false, isContinue, error: String(e), images, files });
               } catch (err2) { silentWarn(err2, "ChatPage"); }
             },
           },
@@ -414,6 +441,8 @@ function useBackendChat({
             ok: false,
             isContinue: false,
             error: err.message || String(err),
+            images: pendingRef.current.images || [],
+            files: pendingRef.current.files || [],
           });
         } catch (e) { silentWarn(e, "ChatPage"); }
       }
@@ -508,7 +537,12 @@ function useDataSources() {
           const mapped = d.messages
             .map((m) => {
               if (m.role === "user") {
-                return { role: "user", text: m.content };
+                return {
+                  role: "user",
+                  text: m.content,
+                  ...(m.images && m.images.length ? { images: m.images } : {}),
+                  ...(m.files && m.files.length ? { files: m.files } : {}),
+                };
               }
               // tool 结果消息：已按顺序归并进 assistant 的工具卡片，不单独渲染
               if (m.role === "tool" || m.role === "system") {
@@ -637,6 +671,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [batchTpl, setBatchTpl] = React.useState("请处理以下文件：{file}");
   // 长会话「回到最新」浮钮：向上翻阅后出现，避免手动拖到底
   const [showJump, setShowJump] = React.useState(false);
+  // 拖拽文件到对话区时的高亮遮罩状态（全局 dragenter/leave 计数维护）
+  const [dropActive, setDropActive] = React.useState(false);
   // 输入区实测高度：供「回到最新」浮钮定位（避免硬编码 bottom 遮挡多行输入/附件）
   const [composerH, setComposerH] = React.useState(0);
   const composerDockRef = React.useRef(null);
@@ -787,7 +823,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const pendingRef = React.useRef({ text: "", images: [] });
+  const pendingRef = React.useRef({ text: "", images: [], files: [] });
   const historyRef = React.useRef([]);
   const stopSignalRef = React.useRef(null);
   const scrollRef = React.useRef(null);
@@ -822,10 +858,70 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     onApplyDone?.();
   }, [applyPrompt, onApplyDone]);
   const resendIdxRef = React.useRef(null);
+  // 编辑重发时暂存被编辑消息的附件（编辑文字不应丢原图/原文件）
+  const editAttRef = React.useRef(null);
   const starsRef = React.useRef(new Set());
   const pinsRef = React.useRef(new Set());
   const genStateRef = React.useRef({ on: false, text: "" });
   const continueRef = React.useRef({ active: false, idx: -1 });
+
+  // ── 拖拽文件到应用任意位置 → 交给输入区上传（图片→视觉，其它→路径给 AI）──
+  // 全局监听：阻止浏览器「打开文件」默认行为（否则拖歪一点就跳走），并用计数
+  // 抵消 dragenter/dragleave 在子元素间来回触发的抖动。仅在确实携带文件时接管。
+  const dragDepthRef = React.useRef(0);
+  React.useEffect(() => {
+    const hasFiles = (e) => {
+      const dt = e && e.dataTransfer;
+      if (!dt) return false;
+      try { return Array.from(dt.types || []).indexOf("Files") !== -1; } catch (err) { return false; }
+    };
+    // 仅接管落在对话区（.chat-main）内的拖拽：其它区域的 file input（如大脑导入）
+    // 保持浏览器原生行为，不被全局 preventDefault 干扰。
+    const inChat = (t) => !!(t && t.closest && t.closest(".chat-main"));
+    const onEnter = (e) => { if (!hasFiles(e) || !inChat(e.target)) return; e.preventDefault(); dragDepthRef.current += 1; setDropActive(true); };
+    const onOver = (e) => { if (!hasFiles(e) || !inChat(e.target)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; setDropActive(true); };
+    const onLeave = (e) => {
+      if (!hasFiles(e)) return;
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) setDropActive(false);
+    };
+    const onDrop = (e) => {
+      if (!hasFiles(e) || !inChat(e.target)) return;
+      e.preventDefault();
+      dragDepthRef.current = 0;
+      setDropActive(false);
+      const fs = e.dataTransfer && e.dataTransfer.files;
+      if (fs && fs.length) composerRef.current?.addFiles(fs);
+    };
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragover", onOver);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragover", onOver);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, []);
+
+  // ── 粘贴图片/文件到对话区 → 输入区上传（普通文本粘贴不拦截，仍进输入框）──
+  const onPasteFiles = (e) => {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    let files = [];
+    if (dt.files && dt.files.length) files = Array.from(dt.files);
+    else if (dt.items) {
+      for (const it of dt.items) {
+        if (it.kind === "file") { const f = it.getAsFile(); if (f) files.push(f); }
+      }
+    }
+    if (files.length) {
+      e.preventDefault();
+      composerRef.current?.addFiles(files);
+    }
+  };
+
   const setGenStateThrottled = React.useCallback((s) => {
     const prev = genStateRef.current;
     if (prev.on === s.on && prev.text === s.text) return;
@@ -873,7 +969,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   });
 
   // 会话保存：每次 render 同步到 ref，保证 useBackendChat 用的是最新闭包
-  onFinishedRef.current = ({ userText, msg, ok, isContinue, error }) => {
+  onFinishedRef.current = ({ userText, msg, ok, isContinue, error, images = [], files = [] }) => {
     const saveChatFinished = async () => {
       if (ok) {
         toast("✅ 回复完成");
@@ -925,7 +1021,12 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             ? (activeSession?.title || userText.replace(/\s+/g, " ").slice(0, 24))
             : userText.replace(/\s+/g, " ").slice(0, 24),
           messages: [
-            { role: "user", content: userText },
+            {
+              role: "user",
+              content: userText,
+              ...(images.length ? { images } : {}),
+              ...(files.length ? { files } : {}),
+            },
             {
               role: "assistant",
               content: msg.text,
@@ -971,10 +1072,13 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       }
     } catch (e) { silentWarn(e, "ChatPage"); }
     let base = msgs;
+    let editedAtt = null;
     if (resendIdxRef.current != null) {
-      // 编辑重发：删除该消息及之后
+      // 编辑重发：删除该消息及之后；保留原消息附件（编辑文字不该丢掉原图/原文件）
+      editedAtt = editAttRef.current;
       base = msgs.slice(0, resendIdxRef.current);
       resendIdxRef.current = null;
+      editAttRef.current = null;
     }
     starsRef.current = new Set();
     pinsRef.current = new Set();
@@ -983,7 +1087,19 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       setBackendNote("后端未连接：请启动「鲸语 WhaleTalk」(web_app.py) 后刷新页面");
       return;
     }
-    pendingRef.current = { text, images: attachments.map((a) => a.path) };
+    // 附件分流：图片走视觉链路（images），其余文件以路径随消息交给 AI 工具层（files）
+    let images = (attachments || [])
+      .filter((a) => a && a.path && a.kind !== "file")
+      .map((a) => a.path);
+    let files = (attachments || [])
+      .filter((a) => a && a.path && a.kind === "file")
+      .map((a) => ({ path: a.path, name: a.name, size: a.size }));
+    // 编辑重发且未新选附件时，沿用被编辑消息原有的附件
+    if (editedAtt && images.length === 0 && files.length === 0) {
+      images = editedAtt.images || [];
+      files = editedAtt.files || [];
+    }
+    pendingRef.current = { text, images, files };
     historyRef.current = buildMessageChain(base.filter((m) => !m.streaming));
     // 连续对话：保留已有消息（useBackendChat 在 base 上追加本轮 user+assistant），
     // 实现常规聊天记录连续滚动；只有「新对话」(onPickSession(null)) 才清空。
@@ -1154,6 +1270,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     const m = msgs[idx];
     if (!m) return;
     resendIdxRef.current = idx;
+    editAttRef.current = (m.images && m.images.length) || (m.files && m.files.length)
+      ? { images: m.images || [], files: m.files || [] }
+      : null;
     composerRef.current?.insertText(m.text || "");
   };
 
@@ -1222,7 +1341,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     historyRef.current = buildMessageChain(base);
     setActiveId(null);
     setMsgs(base);
-    pendingRef.current = { text, images: [] };
+    pendingRef.current = { text, images: msgs[lastUser].images || [], files: msgs[lastUser].files || [] };
     setBusy(true);
     setBackendNote("");
   };
@@ -1438,7 +1557,18 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             onBatchDelete={onBatchDeleteSessions}
           />
         )}
-        <div className="chat-main">
+        <div className="chat-main" onPaste={onPasteFiles}>
+          {dropActive && (
+            <div className="drop-overlay" aria-hidden="true">
+              <div className="drop-overlay-inner">
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.4 11.05l-9.19 9.19a5 5 0 01-7.07-7.07l9.19-9.19a3.5 3.5 0 014.95 4.95l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+                </svg>
+                <div className="drop-overlay-title">松开即可添加附件</div>
+                <div className="drop-overlay-sub">图片将作为视觉输入 · 其它文件随消息提供路径给 AI 读取</div>
+              </div>
+            </div>
+          )}
           <div className="chat-header">
             <button className="icon-btn" title="会话列表" aria-label="会话列表" onClick={() => setListOpen(!listOpen)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">

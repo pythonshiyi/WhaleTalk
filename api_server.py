@@ -1803,6 +1803,56 @@ def _upload(body):
     return result, None
 
 
+def _safe_upload_name(name, fallback="file"):
+    """上传文件名消毒：只留基名、去路径分隔与控制字符、限长；空则用 fallback。
+
+    与 `_valid_name`（路径片段白名单）不同：这里允许中文/空格/`.`，只拒绝可能被
+    用于目录穿越或写盘异常的危险字符，保证「拖进来的文件名」尽量原样保留。
+    """
+    import re as _re
+    base = str(name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    base = _re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", base)
+    base = base.strip(" .")
+    if not base:
+        base = fallback
+    return base[:120]
+
+
+def _upload_file(body):
+    """通用文件上传：base64 → DATA_DIR/uploads/files/<ts>_<rand>_<原名>，返回本地路径。
+
+    与 `/v1/upload`（图片，超限自动压缩）互补：这里不做格式转换，任意类型原样落盘，
+    供「拖拽/粘贴任意文件到对话区」使用；读取/解析交给 AI 工具层按路径处理。
+    """
+    import base64
+    raw_b64 = str(body.get("data") or body.get("file") or "")
+    name = str(body.get("name") or "file")
+    if not raw_b64:
+        return None, "缺少 data（base64，data: 前缀可省略）"
+    if "," in raw_b64[:64] and raw_b64.split(",", 1)[0].startswith("data:"):
+        raw_b64 = raw_b64.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(raw_b64, validate=True)
+    except Exception:
+        return None, "base64 解码失败"
+    if not raw:
+        return None, "文件为空"
+    safe = _safe_upload_name(name, "file")
+    stem, ext = os.path.splitext(safe)
+    stem = (stem or "file")[:80]
+    ext = ext[:16]
+    files_dir = os.path.join(DATA_DIR, "uploads", "files")
+    os.makedirs(files_dir, exist_ok=True)
+    fn = f"{int(time.time() * 1000)}_{secrets_token(3)}_{stem}{ext}"
+    path = os.path.join(files_dir, fn)
+    try:
+        with open(path, "wb") as f:
+            f.write(raw)
+    except Exception as e:
+        return None, f"写入失败：{e}"
+    return {"path": path, "name": safe, "size": len(raw)}, None
+
+
 def _permissions_get():
     """权限全景：安全模式 / 任务模式零审批 / 黑名单四项（默认全空=全放行）。"""
     import permissions as perms
@@ -5900,6 +5950,18 @@ class _Handler(BaseHTTPRequestHandler):
                     item["usage"] = m["usage"]
                 if isinstance(m.get("metrics"), dict):
                     item["metrics"] = m["metrics"]
+                # 附件回显：图片路径 + 任意文件路径/名称/大小
+                if isinstance(m.get("images"), list):
+                    imgs = [str(x)[:500] for x in m["images"] if isinstance(x, str) and x.strip()][:9]
+                    if imgs:
+                        item["images"] = imgs
+                if isinstance(m.get("files"), list):
+                    fls = [
+                        {"path": str(f.get("path"))[:1000], "name": str(f.get("name") or "")[:200], "size": _safe_int(f.get("size"))}
+                        for f in m["files"] if isinstance(f, dict) and f.get("path")
+                    ][:9]
+                    if fls:
+                        item["files"] = fls
                 msgs.append(item)
             return {
                 "id": str(d.get("id") or sid),
@@ -6040,6 +6102,25 @@ class _Handler(BaseHTTPRequestHandler):
             mt = m.get("metrics")
             if isinstance(mt, dict):
                 item["metrics"] = _norm_metrics(mt)
+            # 用户消息附件：图片路径（供会话重载后回显缩略图 + 继续对话仍能送给视觉模型）
+            imgs = m.get("images")
+            if imgs and isinstance(imgs, list):
+                cleaned_imgs = [str(i)[:500] for i in imgs if isinstance(i, str) and i.strip()][:9]
+                if cleaned_imgs:
+                    item["images"] = cleaned_imgs
+            # 任意文件附件：仅存路径/名称/大小（不含正文），重载后回显 chip，AI 可按路径读取
+            fls = m.get("files")
+            if fls and isinstance(fls, list):
+                cleaned_files = []
+                for f in fls[:9]:
+                    if isinstance(f, dict) and str(f.get("path") or "").strip():
+                        cleaned_files.append({
+                            "path": str(f["path"])[:1000],
+                            "name": str(f.get("name") or "")[:200],
+                            "size": _safe_int(f.get("size")),
+                        })
+                if cleaned_files:
+                    item["files"] = cleaned_files
             clean.append(item)
         sid = self._safe_sid(str(body.get("id") or ""))
         if not sid:
@@ -7717,6 +7798,20 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid json or body too large"})
             return
         result, err = _upload(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/files/upload")
+    def _p_v1_files_upload(self):
+        """通用文件上传（拖拽/粘贴任意文件）：base64 → uploads/files，原样落盘。"""
+        body = self._read_body(UPLOAD_BODY_MAX)
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _upload_file(body)
         if err:
             self._json(400, {"error": err})
         else:

@@ -98,6 +98,97 @@ const Whale = () => (
   </svg>
 );
 
+// 附件大小可读化（用户气泡文件 chip 上标注）
+function fmtSize(n) {
+  const v = Number(n) || 0;
+  if (v >= 1048576) return `${(v / 1048576).toFixed(1)}MB`;
+  if (v >= 1024) return `${Math.round(v / 1024)}KB`;
+  return `${v}B`;
+}
+
+// 用户消息附件回显：图片缩略图（点击看大图）+ 任意文件 chip（点击用系统程序打开）。
+// 图片经带鉴权的 /v1/files/raw 取回 blob 后转对象 URL，卸载/切换时释放，避免内存泄漏。
+function UserAttachments({ images, files }) {
+  const imgList = images || [];
+  const fileList = files || [];
+  const [loaded, setLoaded] = React.useState([]);
+  const [zoom, setZoom] = React.useState(null);
+  React.useEffect(() => {
+    if (!imgList.length) { setLoaded([]); return undefined; }
+    let alive = true;
+    const urls = [];
+    setLoaded([]);
+    (async () => {
+      const got = [];
+      for (const p of imgList) {
+        try {
+          const r = await api.fetchFileBlob(p);
+          if (r && r.ok && r.blob) {
+            const u = URL.createObjectURL(r.blob);
+            urls.push(u);
+            got.push({ path: p, url: u });
+            if (alive) setLoaded([...got]);
+          } else {
+            got.push({ path: p, url: "", missing: true });
+            if (alive) setLoaded([...got]);
+          }
+        } catch (e) { silentWarn(e, "Message"); }
+      }
+    })();
+    return () => {
+      alive = false;
+      urls.forEach((u) => { try { URL.revokeObjectURL(u); } catch (e) { /* noop */ } });
+    };
+    // 仅按图片路径清单触发；数组引用随消息对象稳定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [images]);
+
+  const shown = loaded.length ? loaded : imgList.map((p) => ({ path: p, url: "" }));
+  if (!shown.length && !fileList.length) return null;
+  return (
+    <>
+      {shown.length > 0 && (
+        <div className="msg-att-imgs">
+          {shown.map((it, i) => (
+            <button
+              key={it.path || i}
+              type="button"
+              className="msg-att-img"
+              title={it.missing ? "图片已失效" : "查看大图"}
+              onClick={() => it.url && setZoom(it.url)}
+            >
+              {it.url ? <img src={it.url} alt="" loading="lazy" /> : <span className="msg-att-img-load">…</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {fileList.length > 0 && (
+        <div className="msg-att-files">
+          {fileList.map((f, i) => (
+            <span className="msg-att-file" key={f.path || i} title={f.path}>
+              <Icon name="file" size={13} />
+              <span className="msg-att-file-name">{f.name || String(f.path || "").split(/[\\/]/).pop()}</span>
+              {f.size ? <span className="msg-att-file-size">{fmtSize(f.size)}</span> : null}
+              <button
+                type="button"
+                className="msg-att-file-open"
+                title="用系统程序打开"
+                aria-label="打开文件"
+                onClick={() => f.path && api.openFile(f.path).catch(() => {})}
+              ><Icon name="external" size={12} /></button>
+            </span>
+          ))}
+        </div>
+      )}
+      {zoom && (
+        <div className="msg-img-lightbox" role="dialog" aria-label="图片预览" onClick={() => setZoom(null)}>
+          <img src={zoom} alt="" />
+        </div>
+      )}
+    </>
+  );
+}
+
 // 从助手回复/工具结果中提取产物路径（已抽到 extractProducts.js 单例）
 
 function ThinkBlock({ text, streaming }) {
@@ -184,10 +275,12 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
   // 产物已迁出聊天（在右侧「🔧 活动」标签顶部置顶），聊天只保留正文。
 
   if (msg.role === "user") {
+    const hasAtt = (msg.images && msg.images.length) || (msg.files && msg.files.length);
     return (
       <div className="msg msg-user">
         <div className="msg-user-bubble">
           {isPinned && <span className="msg-flag msg-flag-pin" aria-hidden="true"><Icon name="pin" size={12} fill="currentColor" /></span>}
+          {hasAtt ? <UserAttachments images={msg.images} files={msg.files} /> : null}
           {msg.text}
         </div>
         <div className="msg-user-avatar">我</div>

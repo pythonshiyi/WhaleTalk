@@ -617,6 +617,14 @@ export async function uploadImage(imageB64, name) {
   return api("/v1/upload", { method: "POST", body: JSON.stringify({ image: imageB64, name }) });
 }
 
+/** 上传任意类型文件（拖拽/粘贴用）：原样落盘到 uploads/files，不做转换。
+ * @param {string} fileB64 base64（可含 data: 前缀）
+ * @param {string} name 原始文件名
+ * @returns {Promise<{path?:string, name?:string, size?:number}>} */
+export async function uploadFile(fileB64, name) {
+  return api("/v1/files/upload", { method: "POST", body: JSON.stringify({ data: fileB64, name }) });
+}
+
 /** @param {string} path @returns {Promise<{content?:string, preview?:string, error?:string}>} 预览文件 */
 export async function previewFile(path) {
   return api("/v1/files/preview", { method: "POST", body: JSON.stringify({ path }) });
