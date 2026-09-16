@@ -59,6 +59,74 @@ _PENDING_LOCK = threading.Lock()
 # 无事件可写，客户端 abort 后服务端请求线程/子进程可能继续存活）。
 _STREAM_STOPS = {}
 _STREAM_STOPS_LOCK = threading.Lock()
+
+
+# ── 流式对话后台作业（detached stream）─────────────────
+# 生成线程必须独立于 HTTP 请求线程：前端切换页面 / 关闭标签 / 刷新 / 多开标签
+# 都不应打断生成。旧实现把生成绑在请求线程上——SSE 写失败即 stop_event.set()，
+# 切页卸载组件 abort 后一刀切断，前端 finish 又被 alive=false 短路 → 会话保存失败。
+# 现在：作业把事件缓存在内存缓冲，HTTP 处理器只做「订阅者」；订阅者掉线不影响
+# 作业，生成跑完（或用户手动停止）才结束；无在线订阅者时由作业自身兜底落盘。
+_CHAT_JOB_TTL = 900.0   # 完成后保留 15 分钟，供刷新/新标签页重连回放
+_CHAT_JOBS = {}          # stream_id → _ChatJob
+_CHAT_JOBS_LOCK = threading.RLock()
+
+
+class _ChatJob:
+    """一次流式生成的作业：事件缓冲 + 订阅通知 + 停止句柄。
+
+    生命周期与任何单一 HTTP 连接解耦——这是「多线程/不打断」的关键。
+    """
+
+    __slots__ = ("id", "sid", "stop_key", "stop_event", "status", "events",
+                 "cond", "subscribers", "created", "finished", "thread")
+
+    def __init__(self, jid, sid, stop_key):
+        self.id = jid
+        self.sid = sid
+        self.stop_key = stop_key
+        self.stop_event = threading.Event()
+        self.status = "running"      # running / done / error / stopped
+        self.events = []             # [(seq, event, data)]
+        self.cond = threading.Condition()
+        self.subscribers = 0
+        self.created = time.time()
+        self.finished = None
+        self.thread = None
+
+    def emit(self, event, data):
+        with self.cond:
+            self.events.append((len(self.events), event, dict(data or {})))
+            self.cond.notify_all()
+
+    def finish(self, status):
+        with self.cond:
+            if self.status == "running":
+                self.status = status
+            self.finished = time.time()
+            self.cond.notify_all()
+
+    def snapshot(self):
+        with self.cond:
+            return self.status, len(self.events)
+
+    def trim_if_unused(self):
+        """释放事件缓冲：仅当作业已结束且无订阅者时（再无人可能回放）。
+        生成期间或仍有订阅者时不动——避免晚到的订阅者漏掉尾部事件。"""
+        with self.cond:
+            if self.status != "running" and self.subscribers <= 0:
+                self.events = []
+
+
+def _chat_jobs_gc():
+    """回收已完成且超过 TTL 的作业（防内存增长）。"""
+    now = time.time()
+    with _CHAT_JOBS_LOCK:
+        for k, j in list(_CHAT_JOBS.items()):
+            if j.status != "running" and j.finished and (now - j.finished) > _CHAT_JOB_TTL:
+                _CHAT_JOBS.pop(k, None)
+
+
 _APPROVAL_LOCK = threading.Lock()
 _TOOL_CHAIN_LOCK = threading.Lock()  # 保护 _LAST_TOOL_CHAIN（多会话并发读写）
 _LAST_TOOL_CHAIN = []
@@ -5955,6 +6023,17 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
+    def _sse_comment(self):
+        """SSE 注释帧（keep-alive）：chunked 分帧写入，不进入作业缓冲、不污染回放。"""
+        try:
+            frame = b": ping\n\n"
+            chunk = f"{len(frame):X}\r\n".encode("ascii") + frame + b"\r\n"
+            self.wfile.write(chunk)
+            self.wfile.flush()
+            return True
+        except Exception:
+            return False
+
     def _strip_api_prefix(self, path):
         """兼容 Vite 代理：/api/v1/... 与 /v1/... 等价。"""
         if path.startswith("/api/") or path == "/api":
@@ -8155,45 +8234,37 @@ class _Handler(BaseHTTPRequestHandler):
             logger.exception("API chat 失败")
             self._json(500, {"error": _friendly_error(e)})
 
-    def _handle_chat_stream(self):
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        messages = self._valid_messages(body)
-        if messages is None:
-            self._json(400, {"error": "invalid messages"})
-            return
-        sid = str(body.get("session_id") or "").strip()  # 已有会话继续对话时由前端携带，用于完成后自动落盘
-        _sync_request_full_auto(body)
-        # 新一轮对话：重置自动断点计数并记录任务标题（供自动断点命名，G15）
-        global _LAST_AUTO_CHECKPOINT
-        _LAST_AUTO_CHECKPOINT = 0
-        try:
-            _um = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
-            _set_current_task(_msg_text(_um[-1])[:60] if _um else "")
-        except Exception:
-            _set_current_task("")
+    def _run_chat_job_thread(self, job, body, messages):
+        """在独立线程里跑一次生成（不与任何 HTTP 连接绑定）。
 
-        self._sse_start()
-        stop_event = threading.Event()
-        stop_key = str(body.get("gw_session") or body.get("session_id") or "").strip()
-        if stop_key:
-            with _STREAM_STOPS_LOCK:
-                _STREAM_STOPS[stop_key] = stop_event
-
+        事件全部写进 job 缓冲，由订阅者各自拉取；生成完成前即使订阅者全部掉线，
+        作业也会继续，并在无人订阅时兜底落盘——这是「切页/关标签/多开标签都不打断」
+        的根基。
+        """
         def send(event, data):
-            if not self._sse_send(event, data):
-                stop_event.set()
-                return False
+            job.emit(event, data)
             return True
 
+        persist_base = [dict(m) for m in messages if isinstance(m, dict)]
+        is_continue = bool(body.get("continue_prefix"))
+        generated = []
         try:
+            global _LAST_AUTO_CHECKPOINT
+            _LAST_AUTO_CHECKPOINT = 0
+            try:
+                _um = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
+                _set_current_task(_msg_text(_um[-1])[:60] if _um else "")
+            except Exception:
+                _set_current_task("")
+            # 事件：会话 id（前端据此统一落盘 id——新会话也能拿到后端分配的 id，
+            # 避免「前端另存一份」与兜底落盘各生成一个 id）。
+            send("session", {"id": job.sid, "stream_id": job.id})
             client, cfg = self._client_from_cfg(body)
             kb = self._budget_block(cfg)
             if kb:
                 send("error", {"message": kb})
-                self._sse_end()
+                send("done", {})
+                job.finish("error")
                 return
             kwargs = self._chat_kwargs(body, cfg)
             quiet_mode = self._quiet_mode(body, cfg)
@@ -8231,29 +8302,14 @@ class _Handler(BaseHTTPRequestHandler):
                 "on_tool_duration": lambda n, d: send("tool_duration", {"name": n, "duration": d}),
                 "on_usage": lambda u: (send("usage", u), _record_usage(u, cfg, body)),
                 "on_metrics": _on_metrics,
-                "on_approval": _make_approval_cb(send, stop_event),
-                "on_ask": _make_ask_cb(send, stop_event),
-                "on_request_permission": _make_permission_cb(send, stop_event),
-                "stop_event": stop_event,
+                "on_approval": _make_approval_cb(send, job.stop_event),
+                "on_ask": _make_ask_cb(send, job.stop_event),
+                "on_request_permission": _make_permission_cb(send, job.stop_event),
+                "stop_event": job.stop_event,
+                # 本轮新增消息（供断连兜底做「只追加本轮」的落盘，避免长会话丢历史）
+                "new_messages_out": generated,
             })
             client.chat(messages, **kwargs)
-            # 后端自动落盘（架构兜底）：chat() 返回后 messages 已含本轮完整历史
-            # （assistant 回复 + tool 结果，content 已还原纯文本）。前端正常时
-            # onFinished 也会保存（双保险）；前端卸载/断连/刷新时本处兜底，
-            # 正在生成的会话结果不丢失。过滤 system + 清洗悬空 tool（防止坏状态落盘）。
-            if sid:
-                try:
-                    import deepseek_client as _dc
-                    clean = _dc.DeepSeekClient._sanitize_messages(
-                        [m for m in messages if m.get("role") != "system"]
-                    )
-                    self._save_session({
-                        "id": sid,
-                        "name": str(body.get("session_name") or "")[:80],
-                        "messages": clean,
-                    })
-                except Exception:
-                    logger.exception("后端自动落盘失败（不影响本次会话）")
             # 任务记录：工具链写入工作目录 tasklog（对齐原程序 _record_tasklog）
             try:
                 with _TOOL_CHAIN_LOCK:
@@ -8267,32 +8323,181 @@ class _Handler(BaseHTTPRequestHandler):
                 _LAST_TOOL_CHAIN.clear()
             # 任务正常结束 → 清掉本轮自动断点（避免留下过期断点干扰）；
             # 中断/异常则保留，正是"崩溃后还能续"的价值所在。
-            if not stop_event.is_set():
+            if not job.stop_event.is_set():
                 _clear_auto_checkpoint()
-            _notify_completed(ok=not stop_event.is_set())
-            send("done", {})
+            _notify_completed(ok=not job.stop_event.is_set())
+            send("done", {"session_id": job.sid})
+            job.finish("stopped" if job.stop_event.is_set() else "done")
         except Exception as e:
             logger.exception("API chat/stream 失败")
             send("error", {"message": _friendly_error(e)})
+            send("done", {})
+            job.finish("error")
         finally:
-            if stop_key:
-                with _STREAM_STOPS_LOCK:
-                    if _STREAM_STOPS.get(stop_key) is stop_event:
-                        _STREAM_STOPS.pop(stop_key, None)
-        self._sse_end()
+            # 无人订阅（前端卸载/关标签/断连）时由作业兜底落盘：只追加本轮，
+            # 避免整段覆盖在长会话里丢失历史。有订阅者时前端会保存，避免重复。
+            try:
+                if job.subscribers <= 0 and not is_continue and generated:
+                    _save_job_turn(job, body, persist_base, generated)
+            except Exception:
+                logger.exception("后台会话兜底落盘失败")
+            with _STREAM_STOPS_LOCK:
+                for k in (job.stop_key, job.sid, job.id):
+                    if k and _STREAM_STOPS.get(k) is job.stop_event:
+                        _STREAM_STOPS.pop(k, None)
+            job.trim_if_unused()
+
+    def _stream_job_to_client(self, job):
+        """把作业事件流推送给当前 HTTP 订阅者。
+
+        客户端掉线只解除订阅（返回），**绝不**停止作业——生成由作业线程负责到底，
+        这是「切页 / 关标签 / 多开标签都不打断」的根基。空转时写 SSE 注释帧保活；
+        晚到的订阅者从缓冲起点回放，看到完整本轮输出。
+        """
+        self._sse_start()
+        with job.cond:
+            job.subscribers += 1
+        try:
+            cursor = 0
+            while True:
+                with job.cond:
+                    if cursor >= len(job.events) and job.status == "running":
+                        job.cond.wait(5.0)
+                    batch = job.events[cursor:]
+                    cursor += len(batch)
+                    status = job.status
+                for (_seq, ev, data) in batch:
+                    if not self._sse_send(ev, {**data, "seq": _seq}):
+                        return
+                if not batch and status == "running":
+                    if not self._sse_comment():
+                        return
+                if cursor >= len(job.events) and status != "running":
+                    return
+        finally:
+            with job.cond:
+                job.subscribers = max(0, job.subscribers - 1)
+            job.trim_if_unused()
+            self._sse_end()
+
+    def _handle_chat_stream(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        messages = self._valid_messages(body)
+        if messages is None:
+            self._json(400, {"error": "invalid messages"})
+            return
+        sid = str(body.get("session_id") or "").strip()
+        stop_key = str(body.get("gw_session") or "").strip()
+        # 一次生成的稳定标识：前端每次发送生成一个，同 id 的重复请求（重试/多标签页）
+        # 视为「订阅同一作业」，而不是重跑一遍生成。
+        stream_id = str(body.get("stream_id") or "").strip() or sid
+        if not stream_id:
+            stream_id = "s" + hex(int(time.time() * 1000))[2:] + secrets_token(4)
+
+        _sync_request_full_auto(body)
+        _chat_jobs_gc()
+
+        start_new = False
+        with _CHAT_JOBS_LOCK:
+            job = _CHAT_JOBS.get(stream_id)
+            if job is not None and job.status == "running":
+                pass  # 同名作业在跑：本次请求只做订阅（重复连接/多标签页）
+            else:
+                job = _ChatJob(
+                    stream_id,
+                    sid or ("s" + hex(int(time.time() * 1000))[2:] + secrets_token(4)),
+                    stop_key,
+                )
+                _CHAT_JOBS[stream_id] = job
+                start_new = True
+
+        if start_new:
+            with _STREAM_STOPS_LOCK:
+                for k in (stop_key, sid, stream_id):
+                    if k:
+                        _STREAM_STOPS[k] = job.stop_event
+            t = threading.Thread(
+                target=self._run_chat_job_thread,
+                args=(job, body, messages),
+                name="chatjob-" + stream_id[:16],
+                daemon=True,
+            )
+            job.thread = t
+            t.start()
+
+        self._stream_job_to_client(job)
+
+
+class _SessionStore:
+    """`_save_session` 唯一的 `self` 依赖是 `_safe_sid`；后台作业线程没有请求上下文，
+    用本垫片借用它落盘（断连兜底），避免把落盘逻辑复制一份造成行为漂移。"""
+
+    @staticmethod
+    def _safe_sid(sid):
+        import re
+        return re.sub(r"[^0-9a-zA-Z_-]", "", str(sid or ""))[:64]
+
+
+def _save_session_detached(body):
+    try:
+        return _Handler._save_session(_SessionStore(), body)
+    except Exception:
+        logger.exception("后台会话落盘失败")
+        return None, "error"
+
+
+def _save_job_turn(job, body, persist_base, generated):
+    """断连兜底：把「本轮 user + 新生成的 assistant/tool」以 append 语义落盘。
+
+    只追加本轮（而非整段覆盖），长会话（历史超过前端回传的 80 条）不会丢历史。
+    """
+    users = [m for m in persist_base if isinstance(m, dict) and m.get("role") == "user"]
+    turn = ([users[-1]] if users else []) + [m for m in generated if isinstance(m, dict)]
+    if not turn:
+        return
+    name = str(body.get("session_name") or "").strip()
+    if not name:
+        name = (_msg_text(users[-1]) if users else "").strip().replace("\n", " ")[:24] or "会话"
+    _save_session_detached({
+        "id": job.sid,
+        "append": True,
+        "name": name[:80],
+        "messages": turn,
+        "model": str(body.get("model") or ""),
+    })
+
+
 def _stop_chat(body):
-    """停止进行中的流式对话（按 gw_session/session_id 命中；无 key 则停全部）。"""
+    """停止进行中的流式对话（按 gw_session/session_id/stream_id 命中；无 key 则停全部）。"""
     body = body if isinstance(body, dict) else {}
-    key = str(body.get("gw_session") or body.get("session_id") or "").strip()
+    key = str(
+        body.get("gw_session") or body.get("session_id") or body.get("stream_id") or ""
+    ).strip()
+    stopped = 0
+    # 作业是真正的生成载体：命中即置位其停止句柄，令工具循环/子进程收敛
+    with _CHAT_JOBS_LOCK:
+        jobs = list(_CHAT_JOBS.values())
+    for j in jobs:
+        if j.status != "running":
+            continue
+        if key and key not in (j.stop_key, j.sid, j.id):
+            continue
+        if not j.stop_event.is_set():
+            j.stop_event.set()
+            stopped += 1
+    # 兼容既有 _STREAM_STOPS（非作业路径）
     with _STREAM_STOPS_LOCK:
         items = list(_STREAM_STOPS.items())
-    stopped = 0
     for k, ev in items:
         if key and k != key:
             continue
         try:
-            ev.set()  # 令 _consume_stream/重试退避立即退出
-            stopped += 1
+            if not ev.is_set():
+                ev.set()  # 令 _consume_stream/重试退避立即退出
+                stopped += 1
         except Exception:
             pass
     return {"ok": True, "stopped": stopped}

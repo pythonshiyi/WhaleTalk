@@ -36,7 +36,7 @@ const REQUEST_TIMEOUT = 15000;
  * tool_duration→name+duration；usage→usage 对象；compressed→removed_turns 等；
  * ask/approval→id/kind/提示语；error→message。
  * @typedef {Object} SSEEvent
- * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"ask_request"|"approval_request"|"done"|"error"} type 事件类型
+ * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"ask_request"|"approval_request"|"session"|"done"|"error"} type 事件类型
  * @property {string} [text] 增量文本
  * @property {string} [name] 工具名
  * @property {Object} [args] 工具参数
@@ -63,6 +63,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {(ev:SSEEvent)=>void} [onCompressed] 上下文已压缩
  * @property {(ev:SSEEvent)=>void} [onAskRequest] 询问（需 POST /v1/respond 回传）
  * @property {(ev:SSEEvent)=>void} [onApprovalRequest] 审批请求
+ * @property {(ev:SSEEvent)=>void} [onSession] 后端分配的会话 id（{id,stream_id}）
  * @property {()=>void} [onDone] 正常结束（后端已自动落盘会话）
  * @property {(message:string)=>void} [onError] 错误
  */
@@ -79,6 +80,9 @@ const REQUEST_TIMEOUT = 15000;
  * @property {boolean} [quiet_mode] 纯净对话总开关（关闭记忆/自我/大脑注入）
  * @property {string} [continue_prefix] 续写前缀（从该文本继续）
  * @property {string} [session_id] 已有会话 id（携带则后端生成后自动落盘）
+ * @property {string} [stream_id] 本次生成的稳定标识（后端据此把生成交给独立作业，
+ *   切换页面/多标签页不会中断；同 id 的重复请求视为订阅同一作业）
+ * @property {string} [session_name] 会话名（后端兜底落盘用）
  * @property {string} [gw_session] 网关会话 id（第三方/OpenCode Go 网关的 x-opencode-session 头）
  */
 
@@ -361,14 +365,14 @@ async function api(path, opts = {}) {
  * @param {AbortSignal} [signal] 停止生成信号（前端 AbortController）
  * @returns {Promise<void>} 流结束后 resolve；HTTP 错误时 throw
  */
-export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, gw_session }, handlers, signal) {
+export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session }, handlers, signal) {
   const r = await fetch(`${getBase()}/v1/chat/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${getToken()}`,
     },
-    body: JSON.stringify({ messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, gw_session }),
+    body: JSON.stringify({ messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session }),
     signal,
   });
   if (!r.ok || !r.body) throw new Error(`chat/stream → ${r.status}`);
@@ -396,6 +400,7 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
     else if (ev.type === "compressed") handlers.onCompressed?.(ev);
     else if (ev.type === "ask_request") handlers.onAskRequest?.(ev);
     else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);
+    else if (ev.type === "session") handlers.onSession?.(ev);
     else if (ev.type === "done") handlers.onDone?.();
     else if (ev.type === "error") handlers.onError?.(ev.message);
   };
@@ -521,13 +526,13 @@ export async function respond(payload) {
   return api("/v1/respond", { method: "POST", body: JSON.stringify(payload) });
 }
 
-/** 停止进行中的流式对话（服务端停止句柄随之置位，长工具调用/子进程能收敛）。
- * @param {{gwSession?:string, sessionId?:string}} [opts]
+/** 停止进行中的流式对话（服务端作业停止句柄随之置位，长工具调用/子进程能收敛）。
+ * @param {{gwSession?:string, sessionId?:string, streamId?:string}} [opts]
  * @returns {Promise<{ok?:boolean, stopped?:number}>} */
 export async function stopChat(opts = {}) {
   return api("/v1/chat/stop", {
     method: "POST",
-    body: JSON.stringify({ gw_session: opts.gwSession, session_id: opts.sessionId }),
+    body: JSON.stringify({ gw_session: opts.gwSession, session_id: opts.sessionId, stream_id: opts.streamId }),
   });
 }
 

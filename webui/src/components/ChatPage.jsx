@@ -80,6 +80,15 @@ function newGwSessionId() {
   return "wt-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
 }
 
+// 一次生成的稳定标识：后端据此把生成交给独立作业——切换页面/多标签页都不会
+// 中断，同 id 的重复请求视为订阅同一作业（不会重复跑一遍生成）。每「轮」生成一个。
+function newStreamId() {
+  try {
+    if (window.crypto && window.crypto.randomUUID) return "st-" + window.crypto.randomUUID();
+  } catch { /* 忽略 */ }
+  return "st-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+}
+
 // 后端断连横幅：心跳探测到服务不可用时置顶提示，恢复后自动消失；带手动重连入口
 export function BackendBanner() {
   const [down, setDown] = React.useState(false);
@@ -183,7 +192,7 @@ function useBackendChat({
   pendingRef, historyRef,
   chatMode, webSearch, quietMode,
   onFinished, stopSignalRef, onPrompt, setGenState,
-  continueRef, sessionIdRef, gwSessionRef, setGenTps, toast,
+  continueRef, sessionIdRef, gwSessionRef, streamIdRef, onSession, setGenTps, toast,
 }) {
 
   const updateMsgs = (fn) => {
@@ -205,6 +214,9 @@ function useBackendChat({
     const files = pendingRef.current.files || [];
     const isContinue = continueRef && continueRef.current && continueRef.current.active;
     const continueIdx = isContinue ? continueRef.current.idx : -1;
+    // 本轮生成的稳定标识（effect 重跑复用同一个，避免重复开新作业）
+    if (!streamIdRef.current) streamIdRef.current = newStreamId();
+    const streamId = streamIdRef.current;
 
     // 非续写分支统一走不可变更新（见 makePatchLast 的说明）
     const patchLast = makePatchLast(updateMsgs);
@@ -312,6 +324,11 @@ function useBackendChat({
             quiet_mode: quietMode,
             // 已有会话继续对话时带上会话 id：后端生成完成后自动落盘（前端卸载/断连不丢结果）
             session_id: (sessionIdRef && sessionIdRef.current) || undefined,
+            // 本次生成的稳定标识：后端把生成交给独立作业（切页/关标签/多标签页都不打断），
+            // 同 id 重复请求视为订阅同一作业，不会重复跑生成。
+            stream_id: streamId,
+            // 会话名（后端无人订阅时兜底落盘用）
+            session_name: (userText || "").replace(/\s+/g, " ").slice(0, 24) || undefined,
             // 网关会话 id（OpenCode Go/Zen 的 x-opencode-session）：每个会话稳定，
             // 供网关做路由/缓存亲和；与业务 session_id 解耦（后端不用于落盘）。
             gw_session: (gwSessionRef && gwSessionRef.current) || undefined,
@@ -410,6 +427,13 @@ function useBackendChat({
             },
             onApprovalRequest: (ev) => {
               if (alive && !stopRef.current) onPrompt && onPrompt({ ...ev, type: "approval" });
+            },
+            onSession: (ev) => {
+              // 后端分配的会话 id（新会话也能拿到）：采用它统一落盘 id，避免
+              // 「前端另存一份」与「后端无人订阅时兜底落盘」各生成一个 id → 重复会话。
+              if (alive && ev && ev.id) {
+                try { onSession && onSession(ev.id); } catch (e) { silentWarn(e, "ChatPage"); }
+              }
             },
             onDone: () => finish(true),
             onError: (e) => {
@@ -626,7 +650,7 @@ function useDataSources() {
   return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr, peakInfo };
 }
 
-export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone, openSessionId, onOpenSessionDone, quietMode, onToggleQuiet }) {
+export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone, openSessionId, onOpenSessionDone, quietMode, onToggleQuiet, active = true }) {
   const { mode, switchMode } = React.useContext(ModeContext);
   const { density, fontSize } = React.useContext(DisplayContext);
   const { flash } = React.useContext(FlashContext);
@@ -638,6 +662,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   // 最新会话 id 转发给 useBackendChat（避免 effect 闭包过期）：已有会话生成完成后由后端自动落盘
   const activeIdRef = React.useRef(null);
   activeIdRef.current = activeId;
+  // 本轮生成的稳定标识：后端用它把生成交给独立作业（切页/多标签页不打断）。
+  // 每「轮」在 onSend/onContinue 时重新生成，同一轮内 effect 重跑复用同一个。
+  const streamIdRef = React.useRef(null);
   // 网关会话 id（OpenCode Go/Zen 的 x-opencode-session）：每次「新对话」重新生成，
   // 同一会话内跨轮稳定。与业务 session_id 解耦，后端只用于请求头，不用于落盘。
   const gwSessionRef = React.useRef(null);
@@ -711,6 +738,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
 
   // Esc 关闭已打开的抽屉（会话列表/控制台/上下文）——此前只能点遮罩或开关
   React.useEffect(() => {
+    if (!active) return;  // 常驻挂载（切页只隐藏）时，隐藏页不响应全局快捷键
     const onKey = (e) => {
       if (e.key !== "Escape") return;
       if (mq("(max-width: 860px)")) setListOpen(false);
@@ -719,7 +747,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [active]);
 
   // ── 活动镜像：把"最近一次工具链"喂给侧栏「🔧 活动」标签 ──
   // 取最新的 assistant 消息（含工具或正在流式）作为实时活动；工具执行从聊天流"搬"到侧栏，
@@ -819,6 +847,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   };
 
   React.useEffect(() => {
+    if (!active) return;  // 常驻挂载（切页只隐藏）时，隐藏页不响应全局快捷键
     const onKey = (e) => {
       if (e.ctrlKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -828,7 +857,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [active]);
   const pendingRef = React.useRef({ text: "", images: [], files: [] });
   const historyRef = React.useRef([]);
   const stopSignalRef = React.useRef(null);
@@ -952,6 +981,11 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     (payload) => onFinishedRef.current && onFinishedRef.current(payload),
     []
   );
+  // 后端分配的会话 id 转发（新会话采用后端 id，落盘/停止与兜底落盘共用同一 id）
+  const onSessionRef = React.useRef(null);
+  onSessionRef.current = (sid) => {
+    if (sid && !activeIdRef.current) setActiveId(sid);
+  };
 
   useBackendChat({
     busy: dataMode === "backend" && busy,
@@ -970,6 +1004,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     continueRef,
     sessionIdRef: activeIdRef,
     gwSessionRef,
+    streamIdRef,
+    onSession: (sid) => onSessionRef.current && onSessionRef.current(sid),
     setGenTps,
     toast,
   });
@@ -1107,6 +1143,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     }
     pendingRef.current = { text, images, files };
     historyRef.current = buildMessageChain(base.filter((m) => !m.streaming));
+    // 新一轮生成：分配新的 stream_id（后端据此新建独立作业）
+    streamIdRef.current = newStreamId();
     // 连续对话：保留已有消息（useBackendChat 在 base 上追加本轮 user+assistant），
     // 实现常规聊天记录连续滚动；只有「新对话」(onPickSession(null)) 才清空。
     setMsgs(base);
@@ -1132,6 +1170,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     if (busy || !msgs[idx] || msgs[idx].role !== "assistant") return;
     // 不再预构建历史：续写效果会从 msgsRef 原始消息重建到 idx（避免二次构建把内容清空）
     continueRef.current = { active: true, idx };
+    streamIdRef.current = newStreamId();
     setBusy(true);
   };
 
@@ -1141,10 +1180,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         stopSignalRef.current.abort();
       } catch (e) { silentWarn(e, "ChatPage"); }
     }
-    // 同时通知服务端停止：长工具调用期间 SSE 无事件可写，仅靠 abort 可能让服务端
-    // 请求线程/子进程继续跑（best-effort，不阻塞 UI）。
+    // 同时通知服务端停止：生成在独立作业线程里跑，仅靠 abort 前端连接不会让
+    // 服务端停——必须显式置位作业的停止句柄（长工具调用期间 SSE 无事件可写）。
     try {
-      api.stopChat({ gwSession: gwSessionRef.current, sessionId: activeIdRef.current }).catch(() => {});
+      api.stopChat({
+        gwSession: gwSessionRef.current,
+        sessionId: activeIdRef.current,
+        streamId: streamIdRef.current,
+      }).catch(() => {});
     } catch (e) { silentWarn(e, "ChatPage"); }
     // 同步终结流式状态：把仍在 streaming 的 assistant 消息置为完成态，
     // 避免光标永久闪烁 / code-open 占位 / 操作条隐藏（停止不依赖 abort 竞态）。

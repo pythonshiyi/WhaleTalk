@@ -4109,6 +4109,7 @@ class DeepSeekClient:
         smart_tools=False,
         preset_tools=None,
         on_metrics=None,
+        new_messages_out=None,
     ):
         cfg = SCENARIOS.get(scenario, SCENARIOS["通用"])
         thinking_key = thinking if thinking in THINKING_MODES else "high"
@@ -4134,6 +4135,9 @@ class DeepSeekClient:
         else:
             eff_model = self.model
         work = embed_message_images(messages, eff_model)
+        # 记录「本轮新增消息」的起点：供上层做「只追加本轮」的断连兜底落盘
+        # （整段覆盖会在长会话里丢失 80 条之前的历史；append 又需要精确的本轮切片）。
+        _base_work_len = len(work)
         json_hint = None
         memory_msg = None
         image_hint_msg = None
@@ -4884,6 +4888,17 @@ class DeepSeekClient:
             for m in messages:
                 if isinstance(m, dict):
                     m.pop("prefix", None)
+            # 本轮新生成的 assistant/tool 消息（不含注入的提示与调用方历史）：
+            # work = [json_hint?] + 转换后的历史 + [memory_msg?] + [image_hint?] + 新增…
+            if new_messages_out is not None:
+                try:
+                    _skip = 1 if json_hint is not None else 0
+                    for _m in work[_base_work_len + _skip:]:
+                        if _m is json_hint or _m is memory_msg or _m is image_hint_msg:
+                            continue
+                        new_messages_out.append(_restore_text_content(_m))
+                except Exception:
+                    logger.exception("收集本轮新增消息失败（不影响生成）")
 
     def _create_with_retry(self, kwargs, attempts=3, stop_event=None):
         last_error = None

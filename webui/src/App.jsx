@@ -223,7 +223,11 @@ export default function App() {
                   />
                   <ErrorBoundary>
                     <Suspense fallback={<PageFallback />}>
-                    {page === "chat" && (
+                    {/* ChatPage 常驻挂载（仅隐藏，不卸载）：切换设置/其它页面不会销毁
+                        组件 → 流式输出继续、消息与滚动状态留存（否则卸载会 abort 流并
+                        让 finish 被 alive=false 短路 → 会话保存失败）。后端亦把生成放在
+                        独立作业线程，切页/关标签/多标签页都不会打断。 */}
+                    <div className="chat-keepalive" hidden={page !== "chat"}>
                       <ChatPage
                         onGoWorkbench={() => setPage("workbench")}
                         onGoSettings={() => setPage("settings")}
@@ -233,8 +237,9 @@ export default function App() {
                         onOpenSessionDone={() => setOpenSessionId(null)}
                         quietMode={quietMode}
                         onToggleQuiet={toggleQuiet}
+                        active={page === "chat"}
                       />
-                    )}
+                    </div>
                     {page === "workbench" && (() => {
                       const P = LazyPages.workbench;
                       return (

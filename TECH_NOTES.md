@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 技术文档（Web 版 · v3.14.0）
+# 鲸语 WhaleTalk 技术文档（Web 版 · v3.14.1）
 
 本文档面向后续维护/开发的 AI 智能体，描述 Web 架构（v3.0+）下的系统结构、数据流、核心约定与踩坑记录。符号名为准，行号随代码演化漂移，本文档不承诺行号。
 
@@ -101,10 +101,33 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 | `usage` | `{prompt, completion, cache_hit, cache_miss}` | 单轮增量用量（同时累计统计落盘） |
 | `metrics` | `{rounds, prompt, completion, cache_hit, cache_miss, ttft_ms, gen_ms, total_ms, tps}` | **本轮累计**速率统计（跨工具轮；TTFT/输出速率/输入输出） |
 | `compressed` | `{removed_turns, mode, archived_path}` | 上下文已压缩 |
+| `session` | `{id, stream_id}` | 后端分配的会话 id（生成开始即下发；新会话据此统一落盘 id，避免重复会话） |
 | `error` | `{message}` | 错误 |
-| `done` | `{}` | 正常结束（此前自动落盘会话） |
+| `done` | `{session_id}` | 正常结束（此前自动落盘会话） |
 
 **审批/询问/白名单双向通道**：chat worker 需要用户交互时，通过 `_PENDING`（rid → Event + box）挂起并发送 SSE 事件（`ask`/`approval`/`permission`）；前端 `POST /v1/respond` 回传答案，`box` 填充后 `ev.set()` 唤醒。`_make_approval_cb`/`_make_ask_cb`/`_make_permission_cb` 在 api_server 组装。
+
+### 5.1 后台作业（detached stream）——「切页/关标签/多标签页都不打断」
+
+生成**不再绑定 HTTP 连接**：`_handle_chat_stream` 只负责「创建/订阅作业」，
+真正的 `client.chat()` 跑在独立线程 `_run_chat_job_thread` 里，事件写入
+`_ChatJob.events` 缓冲（`_CHAT_JOBS`：`stream_id → job`）。
+
+- **请求体新增 `stream_id`**（前端每轮生成一个）：同 id 的重复请求视为**订阅同一作业**
+  （重试/多标签页），绝不重复跑一遍生成；缺省回落 `session_id` 或后端生成。
+- **订阅者掉线不停止作业**：`_stream_job_to_client` 写失败（BrokenPipe/连接重置）只
+  `return` 解除订阅，**不会** `stop_event.set()`；生成继续到跑完。空转时写 SSE 注释帧
+  保活（`: ping`，不进缓冲）。晚到的订阅者从缓冲起点回放，看到完整本轮输出。
+- **停止只来自显式动作**：`POST /v1/chat/stop` 命中作业的 `stop_event`（按
+  `stream_id` / `session_id` / `gw_session`）。
+- **会话落盘**：前端在线（有订阅者）时仍由前端 `onFinished` 保存；**无在线订阅者**
+  时由作业 `finally` 兜底 `_save_job_turn`——只追加「本轮 user + 新生成消息」，
+  不整段覆盖（长会话不丢历史）。为此 `DeepSeekClient.chat` 新增 `new_messages_out`
+  出参回传本轮新增消息。
+- **作业回收**：完成后保留 `_CHAT_JOB_TTL`（900s）供回放，`_chat_jobs_gc()` 定期清理。
+- **前端**：`App.jsx` 把 `ChatPage` **常驻挂载**（切页只 `hidden`，不卸载）——否则
+  卸载会 abort 流并让 `finish` 被 `alive=false` 短路 → 输出截断 + 会话保存失败。
+  真实卸载（关标签/刷新）时 abort 前端连接亦无碍：生成在服务端作业里继续。
 
 ## 6. 对话全链路
 
@@ -119,6 +142,10 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
   → DeepSeekClient.chat()（见 §9）
   → 结束：后端自动落盘会话（前端断连兜底）+ _record_tasklog + _notify_completed
 ```
+
+> 注：自 v3.14 起，上面「装配 → chat」跑在**后台作业线程**里（见 §5.1），HTTP
+> 请求线程只做 SSE 订阅——切页/关标签/多开标签都不会打断生成。`stream_id` 为
+> 一次生成的稳定标识；`session` 事件先行下发后端分配的会话 id。
 
 ## 7. 系统消息注入（_inject_system_messages）
 

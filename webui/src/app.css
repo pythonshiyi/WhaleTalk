@@ -133,6 +133,9 @@ button {
 }
 
 /* ═══ 会话页三栏 ═══════════════════════════════ */
+/* 常驻挂载外壳：切页只隐藏、不卸载（流式输出与状态留存）；布局等同直接子元素 */
+.chat-keepalive { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.chat-keepalive[hidden] { display: none; }
 .chat-page { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .chat-row { display: flex; flex: 1; min-height: 0; }
 
