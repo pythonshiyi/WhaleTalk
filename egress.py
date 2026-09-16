@@ -117,11 +117,28 @@ def _sanitize_target(value):
         try:
             u = urlsplit(s)
             host = u.hostname or ""
-            if u.port:
-                host = f"{host}:{u.port}"
+            try:
+                port = u.port  # 非法端口（超范围/非数字）会抛 ValueError
+            except ValueError:
+                port = None
+            if port:
+                host = f"{host}:{port}"
             return urlunsplit((u.scheme, host, u.path, "", ""))[:300]
         except Exception:
             pass
+        # 解析失败也必须去掉 query/fragment（含 ?token=…），不能回落原始串
+        try:
+            base = s.split("#", 1)[0]
+            # 去 userinfo（scheme://user:pass@host…）
+            if "://" in base:
+                scheme, rest = base.split("://", 1)
+                if "@" in rest.split("/", 1)[0]:
+                    rest = rest.split("@", 1)[1]
+                base = f"{scheme}://{rest}"
+            base = base.split("?", 1)[0]
+            return base[:300]
+        except Exception:
+            return s.split("?", 1)[0].split("#", 1)[0][:300]
     return s[:300]
 
 

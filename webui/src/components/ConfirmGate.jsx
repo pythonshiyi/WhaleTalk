@@ -11,7 +11,8 @@ import { Icon } from "./icons.jsx";
 //    用户一键拍板；无 options 时回退自由文本输入。
 // 2) 任何弹窗都可关闭：右上角 ✕ + 点击遮罩即取消（ask=跳过 / approval=拒绝），
 //    杜绝"全屏弹窗无法关闭/无法选择"的历史卡死问题。
-// 3) 倒计时归零自动按「未回答」回传，绝不让 AI 工具循环永久阻塞。
+// 3) 倒计时归零后端会按「未回答」超时回传（ASK_TIMEOUT），界面同时给出明确的
+//    「结束/再等」出口——前后端都不会让 AI 工具循环永久阻塞。
 // 4) 旧的"白名单"申请对话框已废弃：黑名单主导架构下后端一律放行、不再发
 //    对应 SSE 事件，此处已无该类型分支（回归门禁锁定，勿加回）。
 
@@ -61,12 +62,6 @@ export default function ConfirmGate({ req, onRespond }) {
 
   const finish = (payload) => {
     try { onRespond(payload); } catch (e) { /* 上层兜底 */ }
-  };
-
-  // 超时：按未回答自动回传
-  const autoTimeout = () => {
-    if (isAsk) finish({ id: req.id, answer: "（用户未在限时内回答，请简化问题或改用其他方式）" });
-    else finish({ id: req.id, allow: false, reason: "审批超时未响应（自动拒绝）" });
   };
 
   // 用户主动关闭（✕ 或点击遮罩）

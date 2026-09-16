@@ -121,16 +121,22 @@ function UserAttachments({ images, files }) {
     (async () => {
       const got = [];
       for (const p of imgList) {
+        if (!alive) break;  // 卸载/切换后立即停止，避免继续 createObjectURL 造成泄漏
         try {
           const r = await api.fetchFileBlob(p);
+          if (!alive) {
+            // 请求期间已卸载：丢弃刚拿到的结果（未创建 URL，无泄漏）
+            return;
+          }
           if (r && r.ok && r.blob) {
             const u = URL.createObjectURL(r.blob);
+            if (!alive) { URL.revokeObjectURL(u); return; }
             urls.push(u);
             got.push({ path: p, url: u });
-            if (alive) setLoaded([...got]);
+            setLoaded([...got]);
           } else {
             got.push({ path: p, url: "", missing: true });
-            if (alive) setLoaded([...got]);
+            setLoaded([...got]);
           }
         } catch (e) { silentWarn(e, "Message"); }
       }
@@ -232,7 +238,7 @@ function ThinkBlock({ text, streaming }) {
 // 浅比较会永远判定「变了」而使 memo 失效。只比 msg 是安全的——其余 props 要么由
 // msg 派生（onRegenerate/onContinue 取决于 msg.role / msg.streaming），要么与渲染
 // 无关；回调闭包捕获的索引就是列表 key，msg 引用变化即意味着位置或内容变化。
-function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRegenerate, onContinue }) {
+function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRegenerate, onContinue, onFocusActivity }) {
   const [copied, setCopied] = React.useState(false);
 
   const copy = async () => {
@@ -295,7 +301,10 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
           <button className="msg-op" title="从此分叉为新会话" aria-label="分叉" onClick={() => onFork && onFork()}><Icon name="git-branch" size={14} /></button>
           <button className="msg-op" title="编辑并重发" aria-label="编辑" onClick={() => onEdit && onEdit()}><Icon name="pencil" size={14} /></button>
           <button className="msg-op" title="引用此消息回复" aria-label="引用" onClick={() => onQuote && onQuote()}><Icon name="quote" size={14} /></button>
-          <button className="msg-op" title="重新发送" aria-label="重新发送" onClick={() => onResend && onResend(msg.text)}><Icon name="rotate" size={14} /></button>
+          <button className="msg-op" title="重新发送（保留原附件）" aria-label="重新发送" onClick={() => onResend && onResend(msg.text, [
+            ...(msg.images || []).map((p) => ({ path: p, kind: "image" })),
+            ...(msg.files || []).map((f) => ({ path: f.path, name: f.name, size: f.size, kind: "file" })),
+          ])}><Icon name="rotate" size={14} /></button>
         </div>
       </div>
     );
@@ -369,7 +378,6 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
               <Icon name="star" size={14} fill={isStarred ? "currentColor" : "none"} />
             </button>
             <button className="msg-op" title="引用此消息回复" aria-label="引用" onClick={() => onQuote && onQuote()}><Icon name="quote" size={14} /></button>
-            <button className="msg-op" title="编辑此消息并继续" aria-label="编辑" onClick={() => onEdit && onEdit()}><Icon name="pencil" size={14} /></button>
             <button className="msg-op" title="重新生成（旧版存变体）" aria-label="重新生成" onClick={() => onRegenerate && onRegenerate()}><Icon name="rotate" size={14} /></button>
             <button className="msg-op" title="继续生成（Beta 续写）" aria-label="继续" onClick={() => onContinue && onContinue()}><Icon name="play" size={14} /> 继续</button>
             <button className="msg-op" title="从此分叉为新会话" aria-label="分叉" onClick={() => onFork && onFork()}><Icon name="git-branch" size={14} /></button>

@@ -420,7 +420,7 @@ def _git(root, *args):
 
 @pytest.fixture
 def git_sandbox(tmp_path, monkeypatch):
-    """真实临时 git 仓库 + 内核文件（已提交首版）；随后引导基线。"""
+    """真实临时 git 仓库（含 origin 上游，HEAD 与上游一致）+ 内核文件；随后引导基线。"""
     if _GIT is None:
         pytest.skip("需要 git 可执行文件")
     root = tmp_path / "proj"
@@ -430,8 +430,13 @@ def git_sandbox(tmp_path, monkeypatch):
     _git(root, "init")
     _git(root, "config", "user.email", "t@example.com")
     _git(root, "config", "user.name", "tester")
+    _git(root, "branch", "-M", "main")
     _git(root, "add", "-A")
     _git(root, "commit", "-m", "init")
+    # 建一个 bare 上游并推送：让 HEAD 与 @{u} 一致（模拟「刚 clone/pull」的可信态）
+    _git(tmp_path, "init", "--bare", "origin.git")
+    _git(root, "remote", "add", "origin", str(tmp_path / "origin.git"))
+    _git(root, "push", "-u", "origin", "main")
     monkeypatch.setattr(tk, "PROJECT_DIR", str(root))
     monkeypatch.setattr(tk, "TRUST_DIR", str(root / "trust"))
     import tool_hooks
@@ -441,11 +446,12 @@ def git_sandbox(tmp_path, monkeypatch):
 
 
 def test_git_repo_update_auto_followed(git_sandbox):
-    """git 更新内核文件（已提交 → == HEAD）应自动跟随基线，不误报为自我修改。"""
+    """git 更新内核文件（已提交并推送 → == 上游 HEAD）应自动跟随基线，不误报。"""
     tk_, root = git_sandbox
     (root / "permissions.py").write_text("# v2 官方更新\n", encoding="utf-8")
     _git(root, "add", "-A")
     _git(root, "commit", "-m", "update permissions")
+    _git(root, "push", "origin", "main")  # 推上去 → HEAD 不再领先上游（可信）
     assert tk_.verify()["ok"] is False            # 跟随前：与基线不一致
     payload = tk_.boot_check()
     assert payload["state"] == "ok"               # 跟随仓库更新 → 不再报警
@@ -483,6 +489,18 @@ def test_git_auto_follow_can_be_disabled(git_sandbox):
     payload = tk_.boot_check()
     assert payload["state"] == "unconfirmed"
     assert payload["repo_updates"] == []
+    assert payload["changed"] == ["permissions.py"]
+
+
+def test_local_unpushed_commit_not_followed(git_sandbox):
+    """本地未推送的提交（可能是 AI 自造「伪仓库更新」）不得被 git 锚点跟随。"""
+    tk_, root = git_sandbox
+    (root / "permissions.py").write_text("# 本地提交，未推送\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "local only")
+    payload = tk_.boot_check()
+    assert payload["repo_updates"] == []
+    assert payload["state"] == "unconfirmed"
     assert payload["changed"] == ["permissions.py"]
 
 

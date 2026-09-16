@@ -405,13 +405,19 @@ def _update_manifest(mutate):
 
 
 def _promote_baseline(name, event="accept", actor="user", note=""):
-    """把基线推进到当前文件内容并记账（用户 accept 与 git 自动跟随共用）。"""
-    _copy_to_baseline(name)
+    """把基线推进到当前文件内容并记账（用户 accept 与 git 自动跟随共用）。
+
+    返回 bool：False = 源文件不存在/拷贝失败（不写 manifest、不记账，避免假成功）。
+    """
+    ok, _msg = _copy_to_baseline(name)
+    if not ok:
+        return False
     entry = _entry_for(name, how=event, note=note)
     entry["actor"] = actor
     _update_manifest(lambda files, _n=name, _e=entry: files.__setitem__(_n, _e))
     _append_line(_ledger_path(), {"ts": _now(), "event": event, "file": name,
                                   "actor": actor, "note": str(note or "")[:200]})
+    return True
 
 
 # ── git 锚点：把「仓库更新」从「自我修改」里分出来 ─────────────────────────
@@ -426,12 +432,34 @@ def _git_head():
         return ""
 
 
+def _git_head_is_pulled():
+    """HEAD 是否未领先于上游（`@{u}...HEAD` 的 ahead == 0）。
+
+    - True：HEAD == 上游（典型 = 刚 git pull，内容来自仓库）→ 可信；
+    - False：本地有未推送提交（可能是 AI 自己 `git commit` 出来的）→ 不可信；
+    - None：没有配置上游 / git 不可用 → 未知（保守：不自动跟随）。
+    """
+    try:
+        r = subprocess.run(
+            ["git", "-C", PROJECT_DIR, "rev-list", "--left-right", "--count", "@{u}...HEAD"],
+            capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return None
+        parts = (r.stdout or "").split()
+        if len(parts) != 2:
+            return None
+        return parts[1] == "0"
+    except Exception:
+        return None
+
+
 def _git_matches_head(name):
     """工作区内核文件是否与 git HEAD 中同一文件内容一致。
 
     git diff 会按仓库配置（core.autocrlf / .gitattributes）归一化行尾，因此
-    「仅行尾被 git 检出改写」也算一致。返回 True/False；git 不可用、非 git 仓库或
-    文件未被跟踪时返回 None（未知）——调用方据此保守处理，绝不静默放行。
+    「仅行尾被 git 检出改写」也算一致。返回 True/False；git 不可用、非 git 仓库、
+    文件未被跟踪、或该文件被标记 assume-unchanged/skip-worktree（此时 git diff
+    不再可信）时返回 None（未知）——调用方据此保守处理，绝不静默放行。
     """
     rel = str(name).replace("\\", "/")
     try:
@@ -440,6 +468,14 @@ def _git_matches_head(name):
             capture_output=True, text=True, timeout=5)
         if tracked.returncode != 0:
             return None
+        # assume-unchanged(h) / skip-worktree(S) 会让 git diff 假装文件未变——
+        # 那正是「用 git 掩盖自我修改」的手法，必须识别并拒绝。
+        flags = subprocess.run(
+            ["git", "-C", PROJECT_DIR, "ls-files", "-v", "--", rel],
+            capture_output=True, text=True, timeout=5)
+        if flags.returncode == 0 and flags.stdout.strip():
+            if flags.stdout.strip()[0] in ("h", "S", "s"):
+                return None
         d = subprocess.run(
             ["git", "-C", PROJECT_DIR, "diff", "--quiet", "HEAD", "--", rel],
             capture_output=True, text=True, timeout=5)
@@ -470,7 +506,7 @@ def _only_eol_differs(a_path, b_path):
             da = f.read()
         with open(b_path, "rb") as f:
             db = f.read()
-        return da.replace(b"\r\n", b"\n") == db.replace(b"\r\n", b"\n")
+        return da.replace(b"\r\n", b"\n").replace(b"\r", b"\n") == db.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     except Exception:
         return False
 
@@ -544,7 +580,12 @@ def _record_incident(kind, payload):
 def diff(name, max_lines=None):
     """基线 → 当前 的 unified diff 摘要（截断）。返回字符串（可能为空）。"""
     try:
-        name = _resolve_name(name) or str(name)
+        resolved = _resolve_name(name)
+        if not resolved:
+            # 未解析的名字（非内核文件/相对路径穿越）绝不拼进 _kernel_path——否则
+            # `diff ../../Windows/win.ini` 会读出任意文件。
+            return ""
+        name = resolved
         cfg = _config()
         limit = int(max_lines or cfg.get("diff_max_lines") or 60)
         cur = _kernel_path(name)
@@ -572,7 +613,13 @@ def _follow_git_updates(changed):
     逐文件判定（只对该条件成立者放行）。git 把内核文件更新成官方新版本后，字节层面
     无法与 AI 自我修改区分——用 git HEAD 作为权威锚点可安全消音，同时以账本事件
     `repo_update`（含 HEAD 提交号）留痕，不静默。返回已跟随的文件名列表。
+
+    前置门槛：`HEAD` 必须未领先于上游（`_git_head_is_pulled()` 为 True）。否则说明
+    本地存在未推送提交——那可能是智能体自己 `git commit` 出来的「伪仓库更新」，
+    一律不跟随（改为照旧报告）。
     """
+    if _git_head_is_pulled() is not True:
+        return []
     commit = _git_head()
     followed = []
     for c in changed or []:
@@ -792,17 +839,70 @@ def declare(path, reason="", actor="tool"):
     try:
         init()
         pre = _keep_copy(name, "pre", "history")
+        sha_before = _sha256(_kernel_path(name))
         handle = {"name": name, "actor": str(actor or "tool"),
-                  "reason": str(reason or "")[:200], "pre_copy": pre, "at": _now()}
+                  "reason": str(reason or "")[:200], "pre_copy": pre,
+                  "sha_before": sha_before, "at": _now()}
         _append_line(_ledger_path(), {
             "ts": handle["at"], "event": "declare", "file": name,
             "actor": handle["actor"], "reason": handle["reason"],
-            "pre_copy": pre, "sha_before": _sha256(_kernel_path(name)),
+            "pre_copy": pre, "sha_before": sha_before,
         })
         return handle
     except Exception:
         logger.exception("信任内核声明失败: %s", path)
         return None
+
+
+def resolve_after_write(handle, ok=True):
+    """声明后按「内容是否真的变了」决定提交还是丢弃。
+
+    为什么要这一步：信任钩子按「参数名像路径」触发，会把**只读**调用（read_file /
+    list_dir…）也当成内核改动。若只读也 commit，commit 会把当前磁盘内容复制为基线
+    ——一个已存在的未声明改动，只要被「读」一次就会被洗白成已声明。因此只有在
+    **字节真的改变**（且调用成功）时才推进基线；否则丢弃声明、不动基线。
+
+    返回 True 表示基线已推进（确实提交了一次内核改动）。
+    """
+    if not handle:
+        return False
+    try:
+        name = handle.get("name")
+        if not name:
+            return False
+        after = _sha256(_kernel_path(name))
+        before = handle.get("sha_before")
+        if ok and after is not None and after != before:
+            commit(handle, ok=True)
+            return True
+        if not ok:
+            # 工具失败：记 abort（保留既有账本语义），同样不推进基线
+            commit(handle, ok=False)
+            return False
+        _discard_declare(handle)
+        return False
+    except Exception:
+        logger.exception("信任内核声明结算失败")
+        return False
+
+
+def _discard_declare(handle):
+    """未改动/失败：删除预拷副本、记一条 noop，绝不触碰 manifest 与基线。"""
+    try:
+        pre = handle.get("pre_copy")
+        if pre and os.path.isfile(pre):
+            try:
+                os.remove(pre)
+            except OSError:
+                pass
+        _append_line(_ledger_path(), {
+            "ts": _now(), "event": "noop", "file": str(handle.get("name") or ""),
+            "actor": str(handle.get("actor") or ""),
+            "reason": "内容未变（只读调用或无实际写入），未推进基线",
+        })
+    except Exception:
+        pass
+
 
 
 def commit(handle, ok=True):
@@ -861,8 +961,8 @@ def accept(name=None, all_: bool = False):
         names = []
         res = verify()
         if all_ or not name:
-            names = [c["name"] for c in res["changed"]] + \
-                    [c["name"] for c in res["missing"]]
+            # 只确认「有内容的改动」；缺失文件不推进基线（此前会写空 entry 并报假成功）
+            names = [c["name"] for c in res["changed"]]
             names = list(dict.fromkeys(names))
         else:
             resolved = _resolve_name(name)
@@ -871,12 +971,16 @@ def accept(name=None, all_: bool = False):
             names = [resolved]
         if not names:
             return True, "无未确认改动，无需确认"
+        done = []
         for n in names:
-            _promote_baseline(n, event="accept", actor="user", note="用户确认保留")
+            if _promote_baseline(n, event="accept", actor="user", note="用户确认保留"):
+                done.append(n)
+        if not done:
+            return True, "无未确认改动，无需确认"
         _atomic_write_json(os.path.join(TRUST_DIR, "last_check.json"),
                            {"state": "ok", "checked_at": _now(), "changed": [],
-                            "accepted": names})
-        return True, f"已确认并推进基线：{', '.join(names)}"
+                            "accepted": done})
+        return True, f"已确认并推进基线：{', '.join(done)}"
     except Exception as e:
         logger.exception("信任内核确认失败")
         return False, f"确认失败：{e}"
@@ -901,6 +1005,43 @@ def restore(name):
     except Exception as e:
         logger.exception("信任内核回滚失败")
         return False, f"回滚失败：{e}"
+
+
+def undo(name):
+    """撤销一次「已声明」的内核改动：恢复该文件最近一次声明前的副本。
+
+    `restore` 回滚到**基线**（最近一次 accept/commit 后的内容），因此无法撤销一次
+    已声明的改动；`undo` 用 `history/<ts>_<name>.pre`（declare 时留存）把改动前内容
+    恢复回来，并推进基线使内核重新一致。返回 (ok, message)。
+    """
+    try:
+        init()
+        resolved = _resolve_name(name)
+        if not resolved:
+            return False, f"不是信任内核文件：{name}"
+        flat = _flat(resolved)
+        d = _history_dir()
+        cands = []
+        try:
+            for fn in os.listdir(d):
+                if fn.endswith(f"_{flat}.pre"):
+                    p = os.path.join(d, fn)
+                    cands.append((os.path.getmtime(p), p))
+        except OSError:
+            cands = []
+        if not cands:
+            return False, f"没有可撤销的声明记录（history 无 {resolved} 的 .pre 副本）"
+        cands.sort(reverse=True)
+        pre = cands[0][1]
+        keep = _keep_copy(resolved, "before_undo", "history")
+        shutil.copy2(pre, _kernel_path(resolved))
+        _promote_baseline(resolved, event="undo", actor="user",
+                          note=f"撤销声明改动，恢复自 {os.path.basename(pre)}")
+        return True, (f"已撤销 {resolved} 的最近一次声明改动（恢复自 {os.path.basename(pre)}；"
+                      f"撤销前内容留存：{keep or '未留存'}）")
+    except Exception as e:
+        logger.exception("信任内核撤销失败")
+        return False, f"撤销失败：{e}"
 
 
 # ── 对外状态 ─────────────────────────────────────────────────────────────
@@ -991,6 +1132,7 @@ _EVENT_LABELS = {
     "accept": "用户确认保留",
     "repo_update": "随仓库更新跟随基线",
     "restore": "回滚到可信基线",
+    "undo": "撤销已声明改动",
     "guarded_restore": "guard 模式隔离并恢复",
     "undeclared_change": "发现未声明改动",
     "manifest_lost": "清单丢失",
@@ -1116,6 +1258,8 @@ def main(argv=None):
     p_df.add_argument("file")
     p_rs = sub.add_parser("restore", help="从可信基线回滚某文件")
     p_rs.add_argument("file")
+    p_ud = sub.add_parser("undo", help="撤销某文件最近一次已声明的改动（恢复改动前内容）")
+    p_ud.add_argument("file")
     p_ac = sub.add_parser("accept", help="确认保留当前内容并推进基线")
     p_ac.add_argument("file", nargs="?", default="")
     p_ac.add_argument("--all", action="store_true", help="确认全部未声明改动")
@@ -1149,6 +1293,10 @@ def main(argv=None):
         return 0
     if cmd == "restore":
         ok, msg = restore(args.file)
+        print(("✅ " if ok else "❌ ") + msg)
+        return 0 if ok else 1
+    if cmd == "undo":
+        ok, msg = undo(args.file)
         print(("✅ " if ok else "❌ ") + msg)
         return 0 if ok else 1
     if cmd == "accept":

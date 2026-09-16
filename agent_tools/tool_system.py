@@ -157,7 +157,8 @@ def recall_session(query="", date="", limit=5):
         if fn.endswith(".bak"):
             continue
         try:
-            d = json.load(open(fn, encoding="utf-8"))
+            with open(fn, encoding="utf-8") as fh:
+                d = json.load(fh)
             msgs = d.get("messages") or []
             name = str(d.get("name") or "未命名会话")
             saved = str(d.get("saved_at") or "")
@@ -243,7 +244,12 @@ def read_project_file(path, offset=0, limit=0):
     offset/limit：按字符分页（大型文件如 main.py 320KB 需分页读取），
     limit=0 表示读取到 offset+80000 或文件尾。
     """
-    p = os.path.abspath(os.path.expanduser(str(path or "")))
+    raw = os.path.expanduser(str(path or ""))
+    # 相对路径按项目根解析（schema 说明是「项目内文件路径，如 web_app.py」；
+    # 按进程 CWD 解析会因启动目录不同而误报"只能读取项目目录内的文件"）
+    if not os.path.isabs(raw):
+        raw = os.path.join(PROJECT_DIR, raw)
+    p = os.path.abspath(raw)
     base = os.path.abspath(PROJECT_DIR)
     # Windows 路径大小写不敏感：normcase 后比较，防合法路径被误拒
     if os.path.normcase(p) != os.path.normcase(base) and not os.path.normcase(p).startswith(

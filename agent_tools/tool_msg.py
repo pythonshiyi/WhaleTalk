@@ -17,6 +17,7 @@ from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
 
+    _TELEGRAM_OFFSET,
     _agent_mail_run,
     _agent_mail_tip,
     _decrypt_secret,

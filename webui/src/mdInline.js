@@ -21,6 +21,8 @@ export function escapeHtml(s) {
 export function safeUrl(url) {
   if (!url) return null;
   const u = String(url).trim();
+  // 拒绝协议相对 URL（//host/x）：会被浏览器当作外部地址加载，造成意外出网/信息泄露
+  if (u.startsWith("//")) return null;
   if (/^(https?:|mailto:|ftp:|#|\/|\.\/|\.\.\/|[a-zA-Z0-9_.\-/]+\.(?:png|jpe?g|gif|webp|svg|md|txt|pdf|zip))/i.test(u)) return u;
   return null;
 }

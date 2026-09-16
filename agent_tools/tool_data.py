@@ -73,14 +73,12 @@ def read_csv(path, max_rows=100, delimiter=",", has_header=True):
         if delim == "\\t":
             delim = "\t"
         text, used_enc = _csv_read_text(path)
-        rows = list(itertools.islice(_csv.reader(text.splitlines(), delimiter=delim), limit))
+        # 多读一行以准确判断是否被截断（旧实现用 >= limit，恰好 limit 行会误报截断）
+        rows = list(itertools.islice(_csv.reader(text.splitlines(), delimiter=delim), limit + 1))
         if not rows:
             return "（空文件）"
-        if len(rows) >= limit:
-            truncated = True
-            rows = rows[:limit]
-        else:
-            truncated = False
+        truncated = len(rows) > limit
+        rows = rows[:limit]
         # 列宽截断交由 _table_to_md 统一处理（含单元格 | 转义）
         if not bool(has_header):
             # 无表头：补占位列名 col_1..col_n，使首行可作为 markdown 表头
@@ -164,9 +162,8 @@ def write_csv(path, rows, headers="", mode="overwrite"):
             elif cols:
                 # 追加且文件已存在：检查是否已含表头（首行非空即视为已有内容），避免重复表头
                 try:
-                    probe = _csv.reader(text_io := open(p, "r", encoding="utf-8-sig", newline=""))
-                    first = next(probe, None)
-                    text_io.close()
+                    with open(p, "r", encoding="utf-8-sig", newline="") as text_io:
+                        first = next(_csv.reader(text_io), None)
                 except Exception:
                     first = None
                 if first is None:

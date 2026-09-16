@@ -38,8 +38,12 @@ def init(undo_dir):
 
 
 def _entry_dir(ts, op):
-    import random
-    return os.path.join(UNDO_DIR, f"{ts}_{op}_{random.randrange(1000, 9999)}")
+    import re as _re
+    safe = _re.sub(r"[^A-Za-z0-9_-]", "_", str(op or "op"))[:24] or "op"
+    base = os.path.join(UNDO_DIR, f"{ts}_{safe}_{os.urandom(2).hex()}")
+    while os.path.exists(base):  # 同秒同 op 也不撞车（旧实现用 randrange，会复用目录覆盖旧快照）
+        base = os.path.join(UNDO_DIR, f"{ts}_{safe}_{os.urandom(2).hex()}")
+    return base
 
 
 def snapshot_before(op, path, note=""):
@@ -52,14 +56,23 @@ def snapshot_before(op, path, note=""):
         return False, "快照未初始化"
     try:
         p = os.path.abspath(str(path))
+        ts = time.strftime("%Y%m%d-%H%M%S")
         if not os.path.exists(p):
-            # 新建场景：无需快照内容，但记录以便恢复时感知（可选，先跳过）
-            return True, ""
+            # 新建场景：记录「当时不存在」，恢复时删除该文件（撤销新建是最常见的撤销需求）
+            d = _entry_dir(ts, op)
+            os.makedirs(d, exist_ok=True)
+            meta = {
+                "op": op, "path": p, "ts": ts, "note": str(note or "")[:200],
+                "size": 0, "kind": "absent",
+            }
+            with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=1)
+            _prune()
+            return True, os.path.basename(d)
         if os.path.isdir(p):
             return False, "目录快照暂不支持（请对文件操作）"
         if os.path.getsize(p) > MAX_SNAP_FILE:
             return False, f"文件超过 {MAX_SNAP_FILE // 1024 // 1024}MB，跳过快照"
-        ts = time.strftime("%Y%m%d-%H%M%S")
         d = _entry_dir(ts, op)
         os.makedirs(d, exist_ok=True)
         data_path = os.path.join(d, "data")
@@ -118,7 +131,7 @@ def restore_snapshot(snapshot_id):
     d = os.path.join(UNDO_DIR, str(snapshot_id))
     meta_path = os.path.join(d, "meta.json")
     data_path = os.path.join(d, "data")
-    if not os.path.isfile(meta_path) or not os.path.isfile(data_path):
+    if not os.path.isfile(meta_path):
         return False, f"快照不存在或已损坏：{snapshot_id}"
     try:
         with open(meta_path, "r", encoding="utf-8") as f:
@@ -132,6 +145,23 @@ def restore_snapshot(snapshot_id):
             ok, reason = permissions.check_filesystem(target, write=True)
             if not ok:
                 return False, reason
+        # 新建快照（kind=absent）：撤销 = 删除当时不存在的文件
+        if str(m.get("kind") or "file") == "absent":
+            if os.path.isdir(target):
+                return False, "目标已是目录，无法自动撤销"
+            if os.path.exists(target):
+                try:
+                    shutil.copy2(target, target + CURRENT_BAK_SUFFIX)
+                except Exception:
+                    pass
+                try:
+                    os.remove(target)
+                except Exception as e:
+                    return False, f"撤销新建失败: {e}"
+            permissions.audit("restore_snapshot", target, f"from {snapshot_id} (undo create)")
+            return True, f"已撤销新建：删除 {target}（原操作：{m.get('op') or '?'}）"
+        if not os.path.isfile(data_path):
+            return False, f"快照不存在或已损坏：{snapshot_id}"
         # 写回前备份当前文件（恢复本身也可撤销）
         if os.path.exists(target):
             try:

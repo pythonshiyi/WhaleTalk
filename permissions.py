@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import queue
+import re
 import shlex
 import threading
 from datetime import datetime
@@ -230,12 +231,21 @@ def save():
 
 
 def resolve(path):
-    """规范化路径：展开 ~、绝对化、去 .. 、realpath 解析链接。非法返回 None。"""
+    """规范化路径：展开 ~、绝对化、去 .. 、realpath 解析链接。非法返回 None。
+
+    安全加固：`\\\\?\\`/`\\\\.\\` 扩展长度前缀先剥掉再归一（否则绕过黑名单的
+    `_under` 比对）；UNC 路径（`\\\\host\\share`、`\\\\localhost\\C$\\…`）无法映射
+    到盘符、黑名单对其不可靠，直接拒绝。
+    """
     try:
         p = str(path or "").strip()
         if not p:
             return None
         p = os.path.expanduser(p)
+        if p.startswith("\\\\?\\") or p.startswith("\\\\.\\"):
+            p = p[4:]  # \\?\C:\x → C:\x
+        if p.startswith("\\\\"):
+            return None  # UNC：无法安全归一，拒绝（如需放行请在允许目录显式配置盘符路径）
         if not os.path.isabs(p) and WORKSPACE_DIR:
             p = os.path.join(WORKSPACE_DIR, p)
         p = os.path.realpath(os.path.abspath(os.path.normpath(p)))
@@ -311,12 +321,13 @@ def max_write_size():
 
 
 def _cmd_key(name):
-    """命令名规范化键：取 basename、小写、去 Windows 可执行扩展名。
+    """命令名规范化键：取 basename、去引号、小写、去 Windows 可执行扩展名。
 
     使黑名单/白名单条目「powershell」能命中实际命令「powershell.exe」，
-    反之亦然（Windows 用户常混写带不带 .exe）。
+    反之亦然（Windows 用户常混写带不带 .exe）。**同时剥掉包裹引号**——
+    否则 `"powershell" -c …` 这种写法会让 `_cmd_key` 得到 `"powershell"` 而绕过。
     """
-    n = os.path.basename(str(name or "")).strip().lower()
+    n = os.path.basename(str(name or "")).strip().strip("\"'").strip().lower()
     for ext in (".exe", ".com", ".bat", ".cmd"):
         if n.endswith(ext):
             return n[: -len(ext)]
@@ -324,24 +335,81 @@ def _cmd_key(name):
 
 
 _SHELL_SEPARATORS = ("|", "||", "&&", "&", ";")
+_SEP_RE = re.compile(r"\|\||&&|[|;&]")
+# shell 包装器：`cmd /c X`、`powershell -Command X` 等——内层命令同样要送检，
+# 否则「首 token 是 cmd/powershell」就能把被禁命令带过去。
+_WRAPPER_FLAGS = {
+    "cmd": ("/c", "/k", "/r"),
+    "powershell": ("-c", "-command", "-commandwithargs"),
+    "pwsh": ("-c", "-command"),
+    "bash": ("-c",),
+    "sh": ("-c",),
+}
+
+
+def _unquote_token(tok):
+    t = str(tok or "")
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'":
+        return t[1:-1]
+    return t
+
+
+def _is_quoted(tok):
+    t = str(tok or "")
+    return len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'"
 
 
 def _shell_command_tokens(argv):
-    """从 token 流提取「命令位置」token：首 token + 紧随 shell 连接符的 token。
+    """从 token 流提取「命令位置」token：首 token + 分隔符后的 token。
 
-    使 `a | b`、`a && b` 中后续命令同样接受黑名单检查（blacklist 模式用），
-    避免黑名单被管道/链式写法绕过；引号内连接符不会被 shlex 拆成独立 token，
-    不会误判。
+    覆盖两种此前可绕过黑名单的写法：
+    - **无空格分隔符**：`echo hi&powershell` 被 shlex(posix=False) 当成一个 token，
+      旧实现不拆 → 漏检；此处按 `| || && & ;` 再拆一次（引号内的不拆）。
+    - **引号包裹**：`"powershell" -c …` 旧实现 `_cmd_key` 得到带引号的名字 → 漏检；
+      此处去引号后再判定。
     """
     cmds = []
     expect_cmd = True
-    for tok in argv:
-        if expect_cmd:
-            cmds.append(tok)
-            expect_cmd = False
-        elif tok in _SHELL_SEPARATORS:
-            expect_cmd = True
+    for raw in argv:
+        tok = str(raw or "")
+        if _is_quoted(tok):
+            # 引号内是字面量（cmd 不解释内部 `|`/`&`）→ 不拆分隔符
+            if expect_cmd and tok.strip():
+                cmds.append(_unquote_token(tok))
+                expect_cmd = False
+            continue
+        for i, part in enumerate(_SEP_RE.split(tok)):
+            if i > 0:
+                expect_cmd = True
+            p = part.strip()
+            if expect_cmd and p:
+                cmds.append(p)
+                expect_cmd = False
     return cmds
+
+
+def _wrapper_inner_commands(argv):
+    """提取 `cmd /c X` / `powershell -Command X` 等包装器的内层命令名。"""
+    out = []
+    toks = [str(t or "") for t in argv]
+    for i, t in enumerate(toks):
+        flags = _WRAPPER_FLAGS.get(_cmd_key(t))
+        if not flags:
+            continue
+        j = i + 1
+        while j < len(toks):
+            low = toks[j].strip().lower()
+            if low in flags:
+                if j + 1 < len(toks):
+                    inner = _unquote_token(toks[j + 1]).split()
+                    if inner:
+                        out.append(inner[0])
+                break
+            if toks[j].startswith(("/", "-")):
+                j += 1
+                continue
+            break
+    return out
 
 
 def check_shell(command):
@@ -364,9 +432,14 @@ def check_shell(command):
         return False, "命令为空", None
     if bool(_data.get("blocklist_enabled", True)):
         blocklist = [_cmd_key(b) for b in _data["shell"].get("blocklist", []) if str(b).strip()]
-        # blacklist 模式检查每个「命令位置」（含管道/链式后命令），防 `a | 禁命令` 绕过；
+        # blacklist 模式检查每个「命令位置」（含管道/链式/无空格分隔/引号/包装器内层命令），
+        # 防 `a | 禁命令`、`echo x&禁命令`、`"禁命令" -c`、`cmd /c 禁命令` 等绕过；
         # whitelist 旧模式保持首命令语义（下方单独判定）
-        for tok in _shell_command_tokens(argv) if security_mode() == "blacklist" else argv[:1]:
+        if security_mode() == "blacklist":
+            inspected = _shell_command_tokens(argv) + _wrapper_inner_commands(argv)
+        else:
+            inspected = argv[:1]
+        for tok in inspected:
             if _cmd_key(tok) in blocklist:
                 return False, f"权限拒绝：命令在黑名单：{tok}", None
     if security_mode() == "blacklist":
@@ -606,6 +679,11 @@ def audit(action, target, detail="", result="ok"):
 
 # 敏感字段：参数摘要中打码，防止密钥/口令落盘
 _SENSITIVE_ARG_KEYS = ("password", "token", "secret", "key", "api_key", "apikey", "auth", "cookie", "value")
+# 结果含明文的工具：其「返回值」不得进审计日志（否则 secret_store(get)/clipboard_get/
+# read_email 的密钥/隐私内容会明文落 logs/tools.log；参数已按 key 打码，结果此前未处理）。
+_SENSITIVE_RESULT_TOOLS = frozenset({
+    "secret_store", "clipboard_get", "read_email",
+})
 
 
 # ── 工具留痕异步写入（P2：不在工具调用线程同步写盘）───────────────────
@@ -767,7 +845,10 @@ def tool_trace(name, args, result, duration):
     if not AUDIT_ENABLED or not AUDIT_LOG_DIR:
         return
     try:
-        res = _audit_sanitize(result, 200)
+        if str(name) in _SENSITIVE_RESULT_TOOLS:
+            res = "<已脱敏：该工具结果可能含密钥/隐私内容>"
+        else:
+            res = _audit_sanitize(result, 200)
         line = (
             f"{datetime.now():%Y-%m-%d %H:%M:%S} [tool:{_audit_sanitize(name, 40)}] "
             f"{_arg_summary(args)} | {res} | {duration:.2f}s\n"

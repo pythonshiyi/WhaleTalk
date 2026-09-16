@@ -305,43 +305,43 @@ def _load_config_uncached(config_path):
     return normalize_config(cfg)
 
 
+def _disk_cipher(config_path, key):
+    """读取磁盘上某敏感字段的 dpapi: 密文；不存在或非密文返回 None。"""
+    try:
+        if config_path and os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                v = json.load(f).get(key)
+            if isinstance(v, str) and v.startswith(crypto.PREFIX):
+                return v
+    except Exception:
+        pass
+    return None
+
+
 def save_config(cfg, config_path=None):
     if config_path is None:
         config_path = DEFAULT_CONFIG_PATH
     try:
         data = dict(cfg)
-        try:
-            data["api_key"] = crypto.encrypt(cfg.get("api_key", ""))
-        except crypto.CryptError:
-            # 加密失败：从磁盘保留原密文，绝不写明文、绝不静默删除 api_key
-            old_key = None
+        # 三个敏感字段统一处理：
+        # - 明文非空 → 加密写入；
+        # - 明文为空（含 DPAPI 解密失败返回 "" 的情况）但磁盘仍有密文 → 保留磁盘原密文。
+        #   否则一次「无关设置」的保存会把解密失败的密文抹成空串，Key 不可逆丢失。
+        # - 加密失败（CryptError）→ 保留磁盘原密文，绝不写明文、绝不静默删除。
+        for secret_key in ("api_key", "inbound_token", "image_api_key"):
+            plain = cfg.get(secret_key, "")
+            disk_cipher = _disk_cipher(config_path, secret_key)
+            if not plain and disk_cipher:
+                data[secret_key] = disk_cipher
+                continue
             try:
-                if config_path and os.path.exists(config_path):
-                    with open(config_path, "r", encoding="utf-8") as f:
-                        old_key = json.load(f).get("api_key")
-            except Exception:
-                pass
-            if old_key:
-                data["api_key"] = old_key
-            else:
-                data.pop("api_key", None)
-            logger.error("API Key 加密失败，已保留磁盘原密文，请检查系统环境")
-        for secret_key in ("inbound_token", "image_api_key"):
-            try:
-                data[secret_key] = crypto.encrypt(cfg.get(secret_key, ""))
+                data[secret_key] = crypto.encrypt(plain)
             except crypto.CryptError:
-                old_secret = None
-                try:
-                    if config_path and os.path.exists(config_path):
-                        with open(config_path, "r", encoding="utf-8") as f:
-                            old_secret = json.load(f).get(secret_key)
-                except Exception:
-                    pass
-                if old_secret:
-                    data[secret_key] = old_secret
+                if disk_cipher:
+                    data[secret_key] = disk_cipher
                 else:
                     data.pop(secret_key, None)
-                logger.error("%s 加密失败，已保留磁盘原密文", secret_key)
+                logger.error("%s 加密失败，已保留磁盘原密文，请检查系统环境", secret_key)
         tmp = config_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)

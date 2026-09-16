@@ -300,6 +300,7 @@ def rpa_scroll(clicks, x=None, y=None):
         return hint
     try:
         import pyautogui
+        pyautogui.FAILSAFE = RPA_FAILSAFE  # 未设置时角触中止失效（其它 RPA 工具都已设）
         n = max(-50, min(50, int(clicks or 0)))
         if x is not None and y is not None:
             pyautogui.scroll(n, x=int(x), y=int(y))
@@ -957,8 +958,11 @@ def image_generate(prompt, path="", size="1024x1024"):
         import base64
 
         if items[0].get("b64_json"):
+            raw = base64.b64decode(items[0]["b64_json"])
+            if len(raw) > 20 * 1024 * 1024:  # 与 URL 分支一致的 20MB 上限，防内存/磁盘写爆
+                return "错误：接口返回的图片超过 20MB 上限，已中止"
             with open(out, "wb") as f:
-                f.write(base64.b64decode(items[0]["b64_json"]))
+                f.write(raw)
         elif items[0].get("url"):
             # URL 图片大小不可信：20MB 上限，防写满磁盘；地址不做拦截（无限制模式）
             dl_url = str(items[0]["url"])

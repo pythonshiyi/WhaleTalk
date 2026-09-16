@@ -26,10 +26,10 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
 
   // 拖拽调宽
   const onDragStart = (e) => {
-    dragRef.current = { x: e.clientX, w: width };
+    const startX = e.clientX;
+    const startW = width;
     const onMove = (ev) => {
-      if (!dragRef.current) return;
-      const w = Math.max(200, Math.min(420, dragRef.current.w + (ev.clientX - dragRef.current.x)));
+      const w = Math.max(200, Math.min(420, startW + (ev.clientX - startX)));
       setWidth(w);
       try {
         localStorage.setItem("whaletalk.slwidth", String(w));
@@ -42,6 +42,8 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
+    // 存句柄以便「拖拽中卸载」时也能移除监听（否则 window 监听 + body 样式残留）
+    dragRef.current = { onMove, onUp };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     document.body.style.cursor = "col-resize";
@@ -51,11 +53,14 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
   // 卸载兜底：拖拽中卸载时清理全局监听与 body 样式（防 setState 于已卸载组件 + 光标样式残留）
   React.useEffect(() => {
     return () => {
-      if (dragRef.current) {
+      const d = dragRef.current;
+      if (d) {
+        if (d.onMove) window.removeEventListener("mousemove", d.onMove);
+        if (d.onUp) window.removeEventListener("mouseup", d.onUp);
         dragRef.current = null;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
       }
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
   }, []);
 
@@ -94,7 +99,9 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
   };
   const selectAll = () => {
     const allIds = filtered.map((s) => s.id);
-    setSelected(new Set(allIds.length === selected.size ? [] : allIds));
+    // 用「筛选后是否已全选」判断，而非 selected.size——后者可能含被筛掉的项而误判
+    const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
+    setSelected(allSelected ? new Set() : new Set(allIds));
   };
   const batchDelete = () => {
     if (!selected.size) return;

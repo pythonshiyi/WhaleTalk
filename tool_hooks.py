@@ -184,10 +184,14 @@ def _hook_trust_commit(ctx: CallContext):
     handles = ctx.data.get("trust_handles") or []
     if not handles:
         return
+    committed = []
     try:
         import trust_kernel
         for h in handles:
-            trust_kernel.commit(h, ok=bool(ctx.ok))
+            # 只有「内容真的变了」才推进基线；只读/无改动调用一律丢弃声明
+            # （否则 read_file 这类只读调用会把已有未声明改动洗白成已声明）。
+            if trust_kernel.resolve_after_write(h, ok=bool(ctx.ok)):
+                committed.append(h)
     except Exception as e:  # noqa: BLE001
         try:
             import degrade
@@ -196,10 +200,10 @@ def _hook_trust_commit(ctx: CallContext):
         except Exception:
             pass
         return
-    # 结果补充：让**模型**也知道这次改动被登记了（透明性，且对所有工具通用，
-    # 不必在每个工具里手写一句提示）。只对字符串结果追加，不动结构化返回值。
-    if ctx.ok and isinstance(ctx.result, str):
-        names = "、".join(sorted({str(h.get("name")) for h in handles if h.get("name")}))
+    # 结果补充：仅当确实提交了内核改动时，才让**模型**知道这次改动被登记了
+    # （透明性，且对所有工具通用，不必在每个工具里手写一句提示）。
+    if committed and isinstance(ctx.result, str):
+        names = "、".join(sorted({str(h.get("name")) for h in committed if h.get("name")}))
         ctx.result = ctx.result.rstrip() + (
             f"（已登记为信任内核声明改动：{names}，基线已推进、可回滚）")
 

@@ -581,6 +581,7 @@ def clipboard_set(text):
         },
     groups=['📁 文件与目录'],
     phrases='删除文件/目录',
+    hooks=('snapshot',),  # 删除前快照（permanent=True 时尤其需要；此前声明了却没挂钩子）
     preactivate=(('修改', '编辑', '改动', '改一下', '改一次', '改成', '改为', '改下', '改改', '改掉', '更新', '替换', '重写', '覆盖', '重命名', '改名', '删掉', '删除'),),
 )
 def delete_file(path, permanent=False):
@@ -987,6 +988,11 @@ def start_process(command, name="", cwd=""):
     workdir = str(cwd or "").strip()
     if workdir and not os.path.isdir(workdir):
         return f"错误：工作目录不存在：{workdir}"
+    if workdir:
+        ok_wd, reason_wd = permissions.check_filesystem(workdir, write=True)
+        if not ok_wd:
+            permissions.audit("start_process", str(workdir)[:200], f"denied(cwd): {reason_wd[:120]}")
+            return reason_wd
     with _PROCESSES_LOCK:
         for k in [k for k, v in PROCESSES.items() if v.get("exited")]:
             PROCESSES.pop(k, None)
@@ -1238,7 +1244,7 @@ def find_images(dir, keyword="", ext=None, limit=30, recurse=True,
                     ext_l = os.path.splitext(fn)[1].lower()
                     if ext_l not in exts:
                         continue
-                    if kw_parts and not any(k in (base + "\\" + fn).lower() for k in kw_parts):
+                    if kw_parts and not any(k in os.path.join(base, fn).lower() for k in kw_parts):
                         continue
                     results.append(e.path)
             except OSError:
@@ -1294,7 +1300,14 @@ def _asset_lib_dir():
 
 
 def _asset_safe_name(base, name):
-    """在 base 下生成不冲突的文件名：原名存在则追加 _2、_3…"""
+    """在 base 下生成不冲突的文件名：原名存在则追加 _2、_3…
+
+    先归一为纯文件名（去掉目录成分与 ..）：否则 name 里的 "../../x" 会把复制/重命名
+    目标写到素材库之外。
+    """
+    name = str(name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if name in ("", ".", ".."):
+        name = "素材"
     cand = name
     stem, ext = os.path.splitext(name)
     n = 2
@@ -1352,6 +1365,8 @@ def asset_import(source, name="", category="", recursive=True):
         return f"错误：素材库创建失败: {e}"
     # 目标分类目录
     cat = str(category or "").strip().strip("/\\")
+    if cat and ".." in cat.replace("\\", "/").split("/"):
+        return "错误：category 非法（不得含 ..）"
     target_dir = os.path.join(lib, cat) if cat else lib
     try:
         os.makedirs(target_dir, exist_ok=True)
@@ -1426,6 +1441,8 @@ def asset_list(category="", keyword="", limit=100):
     if not os.path.isdir(lib):
         return f"素材库为空（{lib}）\n用 asset_import 把本地素材复制进来，AI 自行分类命名后即可调用。"
     cat = str(category or "").strip().strip("/\\")
+    if cat and ".." in cat.replace("\\", "/").split("/"):
+        return "错误：category 非法（不得含 ..）"
     kw = str(keyword or "").lower().strip()
     base = os.path.join(lib, cat) if cat else lib
     if not os.path.isdir(base):
@@ -1506,6 +1523,11 @@ def asset_organize(target, new_name="", move_category=""):
     mc = str(move_category or "").strip().strip("/\\")
     if not nn and not mc:
         return "错误：需提供 new_name 或 move_category"
+    # 防越界：new_name 必须是纯文件名；分类不得含 ..（此前 "../../x" 可把文件移出素材库）
+    if nn and ("/" in nn or "\\" in nn or nn in (".", "..") or ".." in nn):
+        return "错误：new_name 只能是文件名（不得含路径分隔符或 ..）"
+    if mc and ".." in mc.replace("\\", "/").split("/"):
+        return "错误：move_category 非法"
     try:
         # 目标目录：move_category 给定则入该分类；否则留在原目录（只改名）
         dest_dir = os.path.join(lib, mc) if mc else os.path.dirname(src_full)
@@ -1513,6 +1535,10 @@ def asset_organize(target, new_name="", move_category=""):
         # 目标文件名：给了 new_name 用之；否则用原名（随目录移动）
         fname = nn if nn else os.path.basename(src_full)
         dest = os.path.join(dest_dir, fname)
+        real_dest = os.path.realpath(dest)
+        real_lib = os.path.realpath(lib) + os.sep
+        if not real_dest.startswith(real_lib):
+            return "错误：只能在素材库内操作"
         if os.path.abspath(dest) == os.path.abspath(src_full):
             return "错误：新位置与当前相同"
         if os.path.exists(dest):

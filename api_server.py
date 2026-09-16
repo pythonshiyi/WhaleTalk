@@ -54,6 +54,11 @@ def _cu_load(key, default=None):
 # 不再发 SSE 事件，前端亦不再监听 permission_request（详见 permissions.py）。
 _PENDING = {}
 _PENDING_LOCK = threading.Lock()
+# 进行中的流式请求停止句柄：key=gw_session/session_id → threading.Event。
+# 供 POST /v1/chat/stop 主动停止（此前只靠 SSE 写失败被动感知；长工具调用期间
+# 无事件可写，客户端 abort 后服务端请求线程/子进程可能继续存活）。
+_STREAM_STOPS = {}
+_STREAM_STOPS_LOCK = threading.Lock()
 _APPROVAL_LOCK = threading.Lock()
 _TOOL_CHAIN_LOCK = threading.Lock()  # 保护 _LAST_TOOL_CHAIN（多会话并发读写）
 _LAST_TOOL_CHAIN = []
@@ -129,7 +134,9 @@ def _make_approval_cb(send, stop_event):
         return box["allow"], box.get("reason", "")
 
     def cb(name, args):
-        _sync_full_auto()
+        # 不再在此重读持久化配置覆盖 FULL_AUTO：那会击穿 _sync_request_full_auto 的
+        # 「task 模式强制零审批」保证（配置为 dialog 但本次请求是 task 时仍弹审批）。
+        # FULL_AUTO 已在请求入口按本次 mode 设置好，这里只读不写。
         if permissions.is_full_auto():
             # 任务模式：零审批、零开关，黑名单仍生效
             return True, ""
@@ -164,20 +171,23 @@ def _make_ask_cb(send, stop_event):
             ev_payload["multi"] = True
         send("ask_request", ev_payload)
         deadline = time.monotonic() + ASK_TIMEOUT
-        while not ev.wait(0.5):
-            if stop_event and stop_event.is_set():
-                _record_approval({
-                    "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "type": "ask",
-                    "prompt": str(prompt)[:200],
-                    "result": "中断",
-                    "reason": "（用户停止了生成）",
-                })
-                return "（用户停止了生成）"
-            if time.monotonic() >= deadline:
-                break
-        with _PENDING_LOCK:
-            _PENDING.pop(rid, None)
+        try:
+            while not ev.wait(0.5):
+                if stop_event and stop_event.is_set():
+                    _record_approval({
+                        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "type": "ask",
+                        "prompt": str(prompt)[:200],
+                        "result": "中断",
+                        "reason": "（用户停止了生成）",
+                    })
+                    return "（用户停止了生成）"
+                if time.monotonic() >= deadline:
+                    break
+        finally:
+            # 无论正常、超时还是「停止」提前返回，都必须清理待回答项（此前停止分支会永久泄漏）
+            with _PENDING_LOCK:
+                _PENDING.pop(rid, None)
         # 组装回答：多选取 selections(列表)，其次单选 option，再自由文本 answer
         answer = box.get("selections")
         if answer is None:
@@ -1222,7 +1232,8 @@ def _valid_evo_name(name):
     """
     name = str(name or "")
     if (not name or name.startswith(".") or name.startswith("_")
-            or "\\" in name or "/" in name or name.endswith("_applied")):
+            or "\\" in name or "/" in name or ":" in name
+            or name.endswith("_applied")):
         return None
     return name
 
@@ -2029,10 +2040,45 @@ def _start_process(body):
         return None, str(e)
 
 
+def _guard_path(path, write=False):
+    """WebUI 文件端点的统一沙箱：realpath + permissions.check_filesystem。
+
+    此前这些端点完全不走权限模型（工具层有沙箱、API 层没有）——拿到 token 即可读
+    /列任意路径。此函数把两层的判定收敛到同一处。返回 (real_path, err)：
+    err 非空即拒绝。权限模块不可用（未初始化且 init 失败）时回落旧行为（放行），
+    避免把文件面板整体 brick，同时不引入新的绕过面。
+    """
+    import permissions as perms
+    raw = str(path or "").strip()
+    if not raw:
+        return None, "缺少路径"
+    try:
+        real = os.path.realpath(os.path.abspath(os.path.expanduser(raw)))
+    except Exception as e:
+        return None, f"路径无效：{e}"
+    if perms.get_data() is None:
+        try:
+            perms.init(os.path.join(DATA_DIR, "permissions.json"), WORKSPACE_DIR,
+                       audit_dir=os.path.join(DATA_DIR, "logs"))
+        except Exception:
+            pass
+    if perms.get_data() is None:
+        return real, None  # 权限模块不可用：回落旧行为（不做额外限制）
+    try:
+        ok, reason = perms.check_filesystem(real, write=write)
+    except Exception as e:
+        return None, f"权限校验失败：{e}"
+    if not ok:
+        return None, reason or "路径不在允许范围内"
+    return real, None
+
+
 def _list_dir(path):
     """列目录（文件面板树，懒加载）。"""
     import stores
-    path = os.path.abspath(os.path.expanduser(str(path or "")))
+    path, err = _guard_path(path)
+    if err:
+        return None, err
     if not os.path.isdir(path):
         return None, "目录不存在"
     entries = []
@@ -2064,7 +2110,9 @@ def _list_dir(path):
 
 def _read_file(path, max_chars=30000):
     """读文件内容（注入输入框）。仅文本类扩展名。"""
-    path = os.path.abspath(os.path.expanduser(str(path or "")))
+    path, err = _guard_path(path)
+    if err:
+        return None, err
     if not os.path.isfile(path):
         return None, "文件不存在"
     ext = os.path.splitext(path)[1].lower()
@@ -2098,10 +2146,9 @@ def _file_preview(path, max_chars=16000):
     返回 (result, err)。result 含 type/name/ext/size/truncated + data_uri 或 content。
     不改变原文件、只读；二进制/不可内嵌类型返回元信息供前端引导用系统程序打开。
     """
-    try:
-        path = os.path.abspath(os.path.expanduser(str(path or "")))
-    except Exception as e:
-        return None, str(e)
+    path, err = _guard_path(path)
+    if err:
+        return None, err
     if not path or not os.path.isfile(path):
         return None, "文件不存在"
     ext = os.path.splitext(path)[1].lower()
@@ -2243,7 +2290,9 @@ _EXEC_LIKE_EXTS = (
 def open_path(path):
     """用系统默认程序打开文件（web 侧无确认弹窗，可执行类一律拒绝）。"""
     try:
-        path = os.path.abspath(os.path.expanduser(str(path or "")))
+        path, err = _guard_path(path)
+        if err:
+            return None, err
         if not path or path == os.path.abspath(""):
             return None, "路径为空"
         if not os.path.exists(path):
@@ -2259,7 +2308,9 @@ def open_path(path):
 def open_dir(path):
     """打开所在文件夹（文件存在则定位选中）。"""
     try:
-        path = os.path.abspath(os.path.expanduser(str(path or "")))
+        path, err = _guard_path(path)
+        if err:
+            return None, err
         if not path or path == os.path.abspath(""):
             return None, "路径为空"
         if not os.path.exists(path):
@@ -3379,7 +3430,7 @@ def _evolution_ignore(name):
 def _evolution_restore(archived):
     """从 _ignored 恢复被忽略的提案（软删除的反向操作）。"""
     key = str(archived or "").strip()
-    if not key or key.startswith(".") or "\\" in key or "/" in key:
+    if not key or key.startswith(".") or "\\" in key or "/" in key or ":" in key:
         return None, "非法归档名"
     box = _evo_ignored_box()
     src = os.path.join(box, key)
@@ -4602,10 +4653,17 @@ def _audit_get():
     return {"entries": lines}
 
 
+_APPROVALS_LOCK = threading.Lock()
+
+
 def _record_approval(entry):
-    """审批/询问历史落盘（append，上限 200 条，带锁防并发写）。"""
+    """审批/询问历史落盘（append，上限 200 条，独立锁 + 原子写）。
+
+    此前复用热路径 _CACHE_LOCK，且读侧无锁、写非原子——审批写入可能拖慢状态/记忆
+    缓存读取，并发读还可能拿到半截 JSON。现改为专用锁 + tmp→os.replace 原子替换。
+    """
     try:
-        with _CACHE_LOCK:
+        with _APPROVALS_LOCK:
             items = []
             if os.path.exists(APPROVALS_PATH):
                 try:
@@ -4617,8 +4675,11 @@ def _record_approval(entry):
                     items = []
             items.append(entry)
             items = items[-200:]
-            with open(APPROVALS_PATH, "w", encoding="utf-8") as f:
+            os.makedirs(os.path.dirname(APPROVALS_PATH) or ".", exist_ok=True)
+            tmp = APPROVALS_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(items, f, ensure_ascii=False)
+            os.replace(tmp, APPROVALS_PATH)
     except Exception:
         pass
 
@@ -4626,12 +4687,13 @@ def _record_approval(entry):
 def _approvals_get():
     """审批/询问历史（最近 200 条，倒序）。"""
     items = []
-    if os.path.exists(APPROVALS_PATH):
-        try:
-            with open(APPROVALS_PATH, "r", encoding="utf-8") as f:
-                items = json.load(f)
-        except Exception:
-            items = []
+    with _APPROVALS_LOCK:
+        if os.path.exists(APPROVALS_PATH):
+            try:
+                with open(APPROVALS_PATH, "r", encoding="utf-8") as f:
+                    items = json.load(f)
+            except Exception:
+                items = []
     if not isinstance(items, list):
         items = []
     return {"approvals": list(reversed(items[-200:]))}
@@ -5427,7 +5489,8 @@ _PORT = 8745
 # index.json 持元数据 + 文件指纹（mtime/size）；命中时仅 stat 校验，毫秒级返回。
 SESSION_INDEX_PATH = os.path.join(DATA_DIR, "sessions_index.json")
 _SESSIONS_INDEX = {}      # sid -> [file_mtime, file_size, metadata_dict]
-_SESSIONS_INDEX_LOCK = threading.Lock()
+_SESSIONS_INDEX_LOCK = threading.RLock()  # RLock：_rebuild_*_locked 内部会再调 _index_session_file
+_SESSION_BAD_FILES = set()  # 无法解析的会话文件名（计入「已处理」，避免每次列表都全量重建）
 
 
 def _index_session_locked(fn):
@@ -5489,23 +5552,33 @@ def _save_session_index():
     global _SESSIONS_INDEX
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
+        with _SESSIONS_INDEX_LOCK:
+            snapshot = dict(_SESSIONS_INDEX)  # 锁内取快照：避免迭代中并发改字典
         tmp = SESSION_INDEX_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"entries": _SESSIONS_INDEX}, f, ensure_ascii=False, separators=(",", ":"))
+            json.dump({"entries": snapshot}, f, ensure_ascii=False, separators=(",", ":"))
         os.replace(tmp, SESSION_INDEX_PATH)
     except Exception:
         pass
 
 
 def _index_session_file(fn, meta_override=None):
-    """把单个会话文件编入内存索引（重复调用安全：先 read 一遍拿指纹与元数据）。"""
+    """把单个会话文件编入内存索引（重复调用安全：先 read 一遍拿指纹与元数据）。
+
+    全程持锁（RLock，允许 _rebuild_*_locked 重入）——此前该函数被后台线程
+    `_save_session_data` 直接调用而**未加锁**，与请求线程并发改字典会触发
+    `RuntimeError: dictionary changed size during iteration`。
+    """
     global _SESSIONS_INDEX
-    full = os.path.join(SESSIONS_DIR, fn)
-    fp = _session_fingerprint(full)
-    if fp is None:
-        _SESSIONS_INDEX.pop(fn[:-5], None) if fn.endswith(".json") else None
-        return None
-    if fn.endswith(".json"):
+    with _SESSIONS_INDEX_LOCK:
+        full = os.path.join(SESSIONS_DIR, fn)
+        fp = _session_fingerprint(full)
+        if fp is None:
+            if fn.endswith(".json"):
+                _SESSIONS_INDEX.pop(fn[:-5], None)
+            return None
+        if not fn.endswith(".json"):
+            return None
         sid = fn[:-5]
         # 若指纹一致且已有内存条目 → 直接复用元数据，不读文件内容
         cur = _SESSIONS_INDEX.get(sid)
@@ -5516,26 +5589,31 @@ def _index_session_file(fn, meta_override=None):
                 d = json.load(f)
             meta = _session_meta(d, fn)
         except Exception:
+            _SESSION_BAD_FILES.add(fn)  # 记录坏文件，计入「已处理」避免无限重建
             return None
+        _SESSION_BAD_FILES.discard(fn)
         _SESSIONS_INDEX[sid] = [fp[0], fp[1], meta]
         return meta
-    return None
 
 
 def _drop_session_index(sid):
     """从索引移除会话（删除时）。"""
     global _SESSIONS_INDEX
-    _SESSIONS_INDEX.pop(str(sid), None)
+    with _SESSIONS_INDEX_LOCK:
+        _SESSIONS_INDEX.pop(str(sid), None)
 
 
 def _rebuild_session_index_locked():
     """全量重建索引核心（调用方须已持有 _SESSIONS_INDEX_LOCK）。"""
+    global _SESSION_BAD_FILES
     if not os.path.isdir(SESSIONS_DIR):
         _SESSIONS_INDEX.clear()
+        _SESSION_BAD_FILES = set()
         return 0
     fnames = {fn for fn in os.listdir(SESSIONS_DIR) if fn.endswith(".json")}
     for sid in [k for k in _SESSIONS_INDEX if f"{k}.json" not in fnames]:
         _SESSIONS_INDEX.pop(sid, None)
+    _SESSION_BAD_FILES = {fn for fn in _SESSION_BAD_FILES if fn in fnames}
     for fn in fnames:
         sid = fn[:-5]
         fp = _session_fingerprint(os.path.join(SESSIONS_DIR, fn))
@@ -5563,11 +5641,15 @@ def _ensure_session_index():
                 _rebuild_session_index_locked()
                 _session_dir_mtime = os.stat(SESSIONS_DIR).st_mtime_ns if os.path.isdir(SESSIONS_DIR) else 0
                 return
-    # 轻量校验：目录 mtime 或文件数变了才增量重建（兼容外部直接改动文件）
+    # 轻量校验：目录 mtime 或「已处理文件数」变了才增量重建（兼容外部直接改动文件）。
+    # 用 index + bad 覆盖 fcount：否则存在一个无法解析的会话文件时，len(index) 永远
+    # 小于 fcount → 每次列表都全量重建 + 重写索引（旧实现的问题）。
     try:
+        with _SESSIONS_INDEX_LOCK:
+            indexed = len(_SESSIONS_INDEX) + len(_SESSION_BAD_FILES)
         dir_m = os.stat(SESSIONS_DIR).st_mtime_ns if os.path.isdir(SESSIONS_DIR) else 0
         fcount = len([fn for fn in os.listdir(SESSIONS_DIR) if fn.endswith(".json")]) if os.path.isdir(SESSIONS_DIR) else 0
-        if dir_m != _session_dir_mtime or fcount != len(_SESSIONS_INDEX):
+        if dir_m != _session_dir_mtime or fcount != indexed:
             _rebuild_session_index()
             _session_dir_mtime = dir_m
     except Exception:
@@ -5854,7 +5936,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _sse_send(self, event, data):
         try:
-            payload = json.dumps({"type": event, **data}, ensure_ascii=False).encode("utf-8")
+            # event 放最后：避免调用方 data 里恰好带 "type" 覆盖事件名（前端按 type 派发）
+            payload = json.dumps({**(data or {}), "type": event}, ensure_ascii=False).encode("utf-8")
             frame = b"data: " + payload + b"\n\n"
             chunk = f"{len(frame):X}\r\n".encode("ascii") + frame + b"\r\n"
             self.wfile.write(chunk)
@@ -5885,7 +5968,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "not found"})
             return
         full = os.path.normpath(os.path.join(DIST_DIR, rel))
-        if not full.startswith(os.path.normpath(DIST_DIR)):
+        # 用 realpath + commonpath 做包含判定：startswith 会被同级前缀目录
+        # （如 dist_secret）或 dist 内指向外部的符号链接绕过。
+        try:
+            real_dist = os.path.realpath(DIST_DIR)
+            real_full = os.path.realpath(full)
+            if os.path.commonpath([real_full, real_dist]) != real_dist:
+                self._json(404, {"error": "not found"})
+                return
+            full = real_full
+        except (ValueError, OSError):
             self._json(404, {"error": "not found"})
             return
         if os.path.isdir(full):
@@ -5920,7 +6012,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _list_sessions(self):
         _ensure_session_index()
-        metas = [v[2] for v in _SESSIONS_INDEX.values() if isinstance(v, list) and len(v) == 3]
+        with _SESSIONS_INDEX_LOCK:
+            metas = [v[2] for v in list(_SESSIONS_INDEX.values())
+                     if isinstance(v, list) and len(v) == 3]
         metas.sort(key=lambda s: s.get("saved_at") or "", reverse=True)
         return metas[:200]
 
@@ -6137,15 +6231,12 @@ class _Handler(BaseHTTPRequestHandler):
         # 前端 onSend 会清空界面 msgs，闭包保存不到历史 → 由后端读旧文件合并，保证完整。
         saved_msgs = clean
         if body.get("append") and old.get("messages"):
-            # 防重复：若本轮首条 user 消息已在尾部的最后 50 条中，视为重复提交，跳过追加
+            # 防重复：**仅当本轮消息恰好是既有会话的尾部**（完全相同的最后 N 条）才跳过。
+            # 旧实现按「首条 user 内容在最近 50 条里出现过」判定，会把用户合法的重复回合
+            # （「继续」「好的」）整轮丢弃（含助手回复与工具结果）——是数据丢失，已改。
             old_msgs = list(old["messages"])
-            dup_found = False
-            if len(clean) >= 2 and clean[0].get("role") == "user":
-                first_user = clean[0]
-                for om in old_msgs[-50:]:
-                    if om.get("role") == "user" and om.get("content") == first_user.get("content"):
-                        dup_found = True
-                        break
+            n = len(clean)
+            dup_found = bool(n) and len(old_msgs) >= n and old_msgs[-n:] == clean
             if not dup_found:
                 saved_msgs = old_msgs + clean
             else:
@@ -6427,7 +6518,10 @@ class _Handler(BaseHTTPRequestHandler):
         import urllib.parse
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         p = (qs.get("path") or [""])[0]
-        path = os.path.abspath(os.path.expanduser(str(p or "")))
+        path, err = _guard_path(p)
+        if err:
+            self._json(403, {"error": err})
+            return
         if not path or not os.path.isfile(path):
             self._json(404, {"error": "文件不存在"})
             return
@@ -6787,6 +6881,15 @@ class _Handler(BaseHTTPRequestHandler):
     @_post_route("/v1/chat/stream")
     def _p_v1_chat_stream(self):
         self._handle_chat_stream()
+
+
+    @_post_route("/v1/chat/stop")
+    def _p_v1_chat_stop(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        self._json(200, _stop_chat(body))
 
 
     @_post_route("/v1/brain")
@@ -7558,10 +7661,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid json or body too large"})
             return
         items = body.get("prompts")
-        if not isinstance(items, list):
-            self._json(400, {"error": "prompts 必须是列表"})
+        if not isinstance(items, list) or not all(isinstance(p, dict) for p in items):
+            self._json(400, {"error": "prompts 必须是对象列表"})
             return
-        _prompts_save_user([p for p in items if not p.get("builtin")] if all(isinstance(p, dict) for p in items) else items)
+        _prompts_save_user([p for p in items if not p.get("builtin")])
         self._json(200, {"ok": True})
 
 
@@ -8028,7 +8131,8 @@ class _Handler(BaseHTTPRequestHandler):
             kwargs.update({
                 "on_content": (lambda t: out.append(("c", t))),
                 "on_reasoning": (lambda t: out.append(("r", t))),
-                "on_tool": (lambda n, a, r: out.append(("t", n, a, r))),
+                # 非流式路径同样做工具记账（失败记忆/成功模式/自动断点），此前只有流式做了
+                "on_tool": (lambda n, a, r: (out.append(("t", n, a, r)), _tool_bookkeeping(n, a, r))),
                 "on_usage": (lambda u: out.append(("u", u))),
             })
             client.chat(messages, **kwargs)
@@ -8069,6 +8173,10 @@ class _Handler(BaseHTTPRequestHandler):
 
         self._sse_start()
         stop_event = threading.Event()
+        stop_key = str(body.get("gw_session") or body.get("session_id") or "").strip()
+        if stop_key:
+            with _STREAM_STOPS_LOCK:
+                _STREAM_STOPS[stop_key] = stop_event
 
         def send(event, data):
             if not self._sse_send(event, data):
@@ -8162,7 +8270,30 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.exception("API chat/stream 失败")
             send("error", {"message": _friendly_error(e)})
+        finally:
+            if stop_key:
+                with _STREAM_STOPS_LOCK:
+                    if _STREAM_STOPS.get(stop_key) is stop_event:
+                        _STREAM_STOPS.pop(stop_key, None)
         self._sse_end()
+def _stop_chat(body):
+    """停止进行中的流式对话（按 gw_session/session_id 命中；无 key 则停全部）。"""
+    body = body if isinstance(body, dict) else {}
+    key = str(body.get("gw_session") or body.get("session_id") or "").strip()
+    with _STREAM_STOPS_LOCK:
+        items = list(_STREAM_STOPS.items())
+    stopped = 0
+    for k, ev in items:
+        if key and k != key:
+            continue
+        try:
+            ev.set()  # 令 _consume_stream/重试退避立即退出
+            stopped += 1
+        except Exception:
+            pass
+    return {"ok": True, "stopped": stopped}
+
+
 def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
     """启动本地 API 服务。token 为空时自动生成。返回 (port, token, error)。
 

@@ -34,7 +34,7 @@ const REQUEST_TIMEOUT = 15000;
  * SSE 流式事件（POST /v1/chat/stream 的 data 帧）。
  * 字段按事件类型取用：reasoning/content→text；tool_start/tool→name+args(+result)；
  * tool_duration→name+duration；usage→usage 对象；compressed→removed_turns 等；
- * ask/approval→rid/kind/提示语；error→message。
+ * ask/approval→id/kind/提示语；error→message。
  * @typedef {Object} SSEEvent
  * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"ask_request"|"approval_request"|"done"|"error"} type 事件类型
  * @property {string} [text] 增量文本
@@ -45,7 +45,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {{prompt:number, completion:number, cache_hit:number, cache_miss:number}} [usage] token 用量与缓存命中
  * @property {Object} [metrics] 实时速率统计（首次字延迟/输出 tok/s 等）
  * @property {{removed_turns:number, mode:string, archived_path?:string}} [compressed] 上下文压缩信息
- * @property {string} [rid] 审批/询问请求 id（回传 /v1/respond）
+ * @property {string} [id] 审批/询问请求 id（回传 /v1/respond）
  * @property {string} [kind] 审批类别（ask/approval）
  * @property {string} [message] 错误信息
  */
@@ -375,37 +375,51 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  /** 处理单条 `data:` 行
+   * @param {string} line */
+  const dispatch = (line) => {
+    if (!line.startsWith("data: ")) return;
+    /** @type {SSEEvent|null} */
+    let ev;
+    try {
+      ev = JSON.parse(line.slice(6));
+    } catch {
+      return;
+    }
+    if (ev.type === "reasoning") handlers.onReasoning?.(ev.text);
+    else if (ev.type === "content") handlers.onContent?.(ev.text);
+    else if (ev.type === "tool_start") handlers.onToolStart?.(ev);
+    else if (ev.type === "tool") handlers.onTool?.(ev);
+    else if (ev.type === "tool_duration") handlers.onToolDuration?.(ev);
+    else if (ev.type === "usage") handlers.onUsage?.(ev);
+    else if (ev.type === "metrics") handlers.onMetrics?.(ev);
+    else if (ev.type === "compressed") handlers.onCompressed?.(ev);
+    else if (ev.type === "ask_request") handlers.onAskRequest?.(ev);
+    else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);
+    else if (ev.type === "done") handlers.onDone?.();
+    else if (ev.type === "error") handlers.onError?.(ev.message);
+  };
+  // 兼顾 \n\n 与 \r\n\r\n 两种帧分隔；空行结束的一帧立即派发
+  const drain = () => {
+    const re = /\r?\n\r?\n/;
+    let m;
+    while ((m = re.exec(buf)) !== null) {
+      const frame = buf.slice(0, m.index);
+      buf = buf.slice(m.index + m[0].length);
+      for (const line of frame.split(/\r?\n/)) dispatch(line);
+    }
+  };
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
-    let nl;
-    while ((nl = buf.indexOf("\n\n")) !== -1) {
-      const frame = buf.slice(0, nl);
-      buf = buf.slice(nl + 2);
-      for (const line of frame.split("\n")) {
-        if (!line.startsWith("data: ")) continue;
-        /** @type {SSEEvent|null} */
-        let ev;
-        try {
-          ev = JSON.parse(line.slice(6));
-        } catch {
-          continue;
-        }
-        if (ev.type === "reasoning") handlers.onReasoning?.(ev.text);
-        else if (ev.type === "content") handlers.onContent?.(ev.text);
-        else if (ev.type === "tool_start") handlers.onToolStart?.(ev);
-        else if (ev.type === "tool") handlers.onTool?.(ev);
-        else if (ev.type === "tool_duration") handlers.onToolDuration?.(ev);
-        else if (ev.type === "usage") handlers.onUsage?.(ev);
-        else if (ev.type === "metrics") handlers.onMetrics?.(ev);
-        else if (ev.type === "compressed") handlers.onCompressed?.(ev);
-        else if (ev.type === "ask_request") handlers.onAskRequest?.(ev);
-        else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);
-        else if (ev.type === "done") handlers.onDone?.();
-        else if (ev.type === "error") handlers.onError?.(ev.message);
-      }
-    }
+    drain();
+  }
+  // 收尾：冲刷解码器残余，并派发「没有以空行结尾」的最后一帧（此前会被静默丢弃）
+  buf += decoder.decode();
+  drain();
+  if (buf.trim()) {
+    for (const line of buf.split(/\r?\n/)) dispatch(line);
   }
 }
 
@@ -500,11 +514,21 @@ export async function listAbilities() {
 
 /**
  * 回传审批/询问的答案（配合 SSE 的 ask/approval_request）。
- * @param {{rid:string, kind?:string, answer?:any, action?:string, reason?:string}} payload
+ * @param {{id:string, kind?:string, answer?:any, action?:string, reason?:string}} payload
  * @returns {Promise<any>}
  */
 export async function respond(payload) {
   return api("/v1/respond", { method: "POST", body: JSON.stringify(payload) });
+}
+
+/** 停止进行中的流式对话（服务端停止句柄随之置位，长工具调用/子进程能收敛）。
+ * @param {{gwSession?:string, sessionId?:string}} [opts]
+ * @returns {Promise<{ok?:boolean, stopped?:number}>} */
+export async function stopChat(opts = {}) {
+  return api("/v1/chat/stop", {
+    method: "POST",
+    body: JSON.stringify({ gw_session: opts.gwSession, session_id: opts.sessionId }),
+  });
 }
 
 // ── 指令库 ───────────────────────────────────────────

@@ -260,6 +260,7 @@ async function playUrl(urlPath, volumePct) {
       clearWatch();
       if (currentAudio === audio) currentAudio = null;
       if (currentResolve === done) currentResolve = null;
+      try { URL.revokeObjectURL(blobUrl); } catch (e) { silentWarn(e, "ttsUtil"); }
       reject(new Error("音频解码/播放失败"));
     };
     currentAudio = audio;
@@ -271,6 +272,7 @@ async function playUrl(urlPath, volumePct) {
       clearWatch();
       if (currentAudio === audio) currentAudio = null;
       if (currentResolve === done) currentResolve = null;
+      try { URL.revokeObjectURL(blobUrl); } catch (err) { silentWarn(err, "ttsUtil"); }
       reject(e && e.name === "NotAllowedError" ? e : new Error("播放失败: " + (e && e.name || "")));
     });
   });

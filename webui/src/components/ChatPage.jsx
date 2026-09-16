@@ -292,8 +292,10 @@ function useBackendChat({
         onFinished && onFinished({ userText, msg: currentMsg(), ok, isContinue, images, files });
       };
       try {
+        // 续写：从原始消息（msgsRef 镜像）重建到 continueIdx 为止——historyRef 里可能
+        // 是已构建的链，再 buildMessageChain 一次会把 assistant 变空、tool 消息丢光。
         const history = isContinue
-          ? buildMessageChain((historyRef.current || []).slice(0, continueIdx + 1))
+          ? buildMessageChain((msgsRef.current || []).slice(0, continueIdx + 1))
           : (historyRef.current || []).slice(-80);
         // 纯图片（无文字）时给一句占位，避免部分网关拒绝空 content
         const userContent = withAttachRefs(userText, files) || (images.length ? "[图片]" : "");
@@ -641,6 +643,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   // 实时镜像 msgs：hook 内函数式更新 + 组件体 onFinished 共用，保证续写/保存拿到最新消息
   const msgsRef = React.useRef([]);
   const [msgs, setMsgs] = React.useState([]);
+  // 兜底同步：任何直接 setMsgs（onSend/onPickSession/onFork/…）都要让镜像跟上，
+  // 否则流式/保存会对着旧会话的镜像操作（历史串会话、落盘错乱）。
+  React.useEffect(() => { msgsRef.current = msgs; }, [msgs]);
   const [busy, setBusy] = React.useState(false);
   const [ctxOpen, setCtxOpen] = React.useState(false);
   const [listOpen, setListOpen] = React.useState(() => !mq("(max-width: 860px)"));
@@ -1124,8 +1129,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
 
     const onContinue = (idx) => {
     if (busy || !msgs[idx] || msgs[idx].role !== "assistant") return;
-    // 同步 historyRef 到该消息为止
-    historyRef.current = buildMessageChain(msgs.slice(0, idx + 1));
+    // 不再预构建历史：续写效果会从 msgsRef 原始消息重建到 idx（避免二次构建把内容清空）
     continueRef.current = { active: true, idx };
     setBusy(true);
   };
@@ -1136,13 +1140,15 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         stopSignalRef.current.abort();
       } catch (e) { silentWarn(e, "ChatPage"); }
     }
+    // 同时通知服务端停止：长工具调用期间 SSE 无事件可写，仅靠 abort 可能让服务端
+    // 请求线程/子进程继续跑（best-effort，不阻塞 UI）。
+    try {
+      api.stopChat({ gwSession: gwSessionRef.current, sessionId: activeIdRef.current }).catch(() => {});
+    } catch (e) { silentWarn(e, "ChatPage"); }
     // 同步终结流式状态：把仍在 streaming 的 assistant 消息置为完成态，
-    // 避免光标永久闪烁 / code-open 占位 / 操作条隐藏（停止不依赖 abort 竞态）
-    setMsgs((m) => {
-      const next = m.map((x) => (x.streaming ? { ...x, streaming: false } : x));
-      msgsRef.current = next;  // 同步实时镜像，保证停止后保存会话拿到完成态
-      return next;
-    });
+    // 避免光标永久闪烁 / code-open 占位 / 操作条隐藏（停止不依赖 abort 竞态）。
+    // updater 保持纯函数：msgsRef 由 useMsgs 同步 effect 统一维护。
+    setMsgs((m) => m.map((x) => (x.streaming ? { ...x, streaming: false } : x)));
     setBusy(false);
     setGenStateThrottled({ on: false, text: "" });
     setGenTps(0);
@@ -1269,6 +1275,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const onEditMsg = (idx) => {
     const m = msgs[idx];
     if (!m) return;
+    // 只允许编辑「用户」消息并重发；编辑助手消息会被当成新的 user 回合，语义错乱
+    if (m.role !== "user") return;
     resendIdxRef.current = idx;
     editAttRef.current = (m.images && m.images.length) || (m.files && m.files.length)
       ? { images: m.images || [], files: m.files || [] }
@@ -1738,7 +1746,11 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                   role={multiSel ? "checkbox" : undefined}
                   aria-checked={multiSel ? multiSel.has(gi) : undefined}
                   tabIndex={multiSel ? 0 : undefined}
-                  onClick={multiSel ? () => toggleSelect(gi) : undefined}
+                  onClick={multiSel ? (e) => {
+                    // 不吞掉消息内操作按钮（复制/收藏/引用…）的点击——否则点复制会顺带切换选中
+                    if (e.target && e.target.closest && e.target.closest("button, a, input, textarea, select, .msg-ops")) return;
+                    toggleSelect(gi);
+                  } : undefined}
                   onKeyDown={multiSel ? (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleSelect(gi); } } : undefined}
                 >
                   <Message

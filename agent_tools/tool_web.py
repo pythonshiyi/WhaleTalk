@@ -180,6 +180,7 @@ def download_file(url, local_path="", expected_sha256=""):
     ok, reason = permissions.check_filesystem(p, write=True)
     if not ok:
         return reason
+    tmp = p + ".part"
     try:
         os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
         total = 0
@@ -188,7 +189,8 @@ def download_file(url, local_path="", expected_sha256=""):
         h = hashlib.sha256()
         with _safe_stream("GET", url, timeout=60) as resp:
             resp.raise_for_status()
-            with open(p, "wb") as f:
+            # 先写临时文件：任何失败都不动目标文件（此前会截断并删除已存在的同名文件）
+            with open(tmp, "wb") as f:
                 for chunk in resp.iter_bytes(64 * 1024):
                     total += len(chunk)
                     if total > DOWNLOAD_MAX_BYTES:
@@ -197,30 +199,25 @@ def download_file(url, local_path="", expected_sha256=""):
                     f.write(chunk)
                     h.update(chunk)
         if too_large:
-            try:
-                os.remove(p)
-            except OSError:
-                pass
-            return f"错误：文件超过 {DOWNLOAD_MAX_BYTES // 1024 // 1024}MB 上限，已中止"
+            return f"错误：文件超过 {DOWNLOAD_MAX_BYTES // 1024 // 1024}MB 上限，已中止（原文件未改动）"
+        digest = h.hexdigest()
+        if exp and digest != exp:
+            return (f"错误：SHA-256 校验失败（期望 {exp[:16]}…，实际 {digest[:16]}…），"
+                    "已放弃（原文件未改动）")
+        os.replace(tmp, p)  # 原子替换：写完整 + 校验通过后才落地
         if exp:
-            digest = h.hexdigest()
-            if digest != exp:
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
-                return f"错误：SHA-256 校验失败（期望 {exp[:16]}…，实际 {digest[:16]}…），已删除文件"
             permissions.audit("download_file", url, f"{p} {total} 字节 sha256={digest[:16]}…")
             return f"已下载 {url} → {p}（{total} 字节，SHA-256 校验通过 {digest[:16]}…）"
         permissions.audit("download_file", url, f"{p} {total} 字节")
         return f"已下载 {url} → {p}（{total} 字节）"
     except Exception as e:
+        return f"错误：下载失败: {e}（原文件未改动）"
+    finally:
         try:
-            if os.path.exists(p):
-                os.remove(p)
+            if os.path.exists(tmp):
+                os.remove(tmp)
         except OSError:
             pass
-        return f"错误：下载失败: {e}"
 
 
 @tool(
@@ -1306,6 +1303,7 @@ def webdav(action="list", remote_path="/", local_path=""):
             if not out:
                 return "错误：本地路径无效"
             total = 0
+            tmp = out + ".part"
             try:
                 os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
                 client = _http_client()
@@ -1316,32 +1314,32 @@ def webdav(action="list", remote_path="/", local_path=""):
                     ) as resp:
                         if resp.status_code != 200:
                             return f"错误：下载失败（HTTP {resp.status_code}）"
-                        with open(out, "wb") as f:
+                        with open(tmp, "wb") as f:
                             for chunk in resp.iter_bytes(64 * 1024):
                                 total += len(chunk)
                                 if total > WEBDAV_MAX_SIZE:
-                                    try:
-                                        os.remove(out)
-                                    except OSError:
-                                        pass
-                                    return f"错误：远端文件超过 {WEBDAV_MAX_SIZE // 1024 // 1024}MB 上限，请分段下载"
+                                    return (f"错误：远端文件超过 {WEBDAV_MAX_SIZE // 1024 // 1024}MB 上限，"
+                                            "请分段下载（原文件未改动）")
                                 f.write(chunk)
                 else:
                     resp = _webdav_request(cfg, "GET", remote)
                     if resp.status_code != 200:
                         return f"错误：下载失败（HTTP {resp.status_code}）"
                     if len(resp.content) > WEBDAV_MAX_SIZE:
-                        return f"错误：远端文件超过 {WEBDAV_MAX_SIZE // 1024 // 1024}MB 上限，请分段下载"
+                        return (f"错误：远端文件超过 {WEBDAV_MAX_SIZE // 1024 // 1024}MB 上限，"
+                                "请分段下载（原文件未改动）")
                     total = len(resp.content)
-                    with open(out, "wb") as f:
+                    with open(tmp, "wb") as f:
                         f.write(resp.content)
+                os.replace(tmp, out)  # 原子替换：成功前不动目标文件
             except Exception as e:
+                return f"错误：WebDAV 下载失败: {e}（原文件未改动）"
+            finally:
                 try:
-                    if os.path.exists(out):
-                        os.remove(out)
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
                 except OSError:
                     pass
-                return f"错误：WebDAV 下载失败: {e}"
             return f"已下载 {remote} → {out}（{total} 字节）"
         # upload
         ok, reason = permissions.check_filesystem(local_path, write=False)
@@ -1471,16 +1469,15 @@ def call_api(url, method="GET", params=None, json_body=None, data=None,
             kw["json"] = json_body
         if data is not None:
             kw["data"] = data
-        def _validate(u):
-            return ""  # 无限制模式：不校验主机，任何地址均可访问
-
         raw = b""
         truncated = False
         status_code = 0
         content_type = ""
-        # 流式读取：大响应不再全量进内存，超过上限立即断开连接
+        # 流式读取：大响应不再全量进内存，超过上限立即断开连接。
+        # 走默认 SSRF 校验（此前传 None-validator 直接放开首跳，可打 169.254.169.254，
+        # 击穿 security 的「不可绕过硬底线」；如需访问内网请在安全设置里放行回环）。
         with _safe_stream(
-            method, url, validate=_validate,
+            method, url,
             headers=hdrs or None, timeout=timeout, **kw
         ) as resp:
             resp.raise_for_status()

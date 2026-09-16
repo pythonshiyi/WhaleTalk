@@ -836,6 +836,7 @@ export default function AuxPanel({ onClose, onInjectFile, activity, products, ta
   });
   const widthRef = React.useRef(width);
   widthRef.current = width;
+  const resizeRef = React.useRef(null);
   const startResize = (e) => {
     e.preventDefault();
     const startX = e.clientX;
@@ -847,11 +848,23 @@ export default function AuxPanel({ onClose, onInjectFile, activity, products, ta
       document.body.style.userSelect = prevUserSelect;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      resizeRef.current = null;
       try { localStorage.setItem(AUX_W_KEY, String(widthRef.current)); } catch { /* 存储不可用不致命 */ }
     };
+    resizeRef.current = { onMove, onUp, prevUserSelect };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
+  // 卸载兜底：拖拽中卸载时移除全局监听并还原 body 样式（此前无清理）
+  React.useEffect(() => () => {
+    const r = resizeRef.current;
+    if (r) {
+      window.removeEventListener("mousemove", r.onMove);
+      window.removeEventListener("mouseup", r.onUp);
+      document.body.style.userSelect = r.prevUserSelect;
+      resizeRef.current = null;
+    }
+  }, []);
 
   const wasStreaming = React.useRef(false);
   const hasRun = !!(activity && activity.steps && activity.steps.length > 0 && activity.streaming);

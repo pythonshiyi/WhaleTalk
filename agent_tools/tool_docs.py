@@ -4184,7 +4184,9 @@ def chart_render(output, data, labels=None, series=None, kind="line", title="", 
         opt = _chart_option(data if isinstance(data, list) else [], labels, series, kind, title, x_label, y_label, theme)
         w = int(width) or 1200
         h = int(height) or 675
-        opt_json = json.dumps(opt, ensure_ascii=False)
+        # 嵌入 <script> 前必须转义 '<'：json.dumps 不转义 '</script>'，否则标题/标签里的
+        # `</script><script>…` 会注入可执行 JS（无沙箱 chromium 渲染）。
+        opt_json = json.dumps(opt, ensure_ascii=False).replace("<", "\\u003c")
         if low.endswith(".pdf"):
             w_mm = round(w / 96 * 25.4, 2)
             h_mm = round(h / 96 * 25.4, 2)
@@ -4541,6 +4543,9 @@ def design_kit(action, html="", path="", name="", data=None):
                 op = permissions.resolve(path or html)
                 if not op:
                     return "错误：输出路径无效"
+                ok, reason = permissions.check_filesystem(op, write=True)
+                if not ok:
+                    return reason
                 os.makedirs(os.path.dirname(op) or ".", exist_ok=True)
                 with open(op, "w", encoding="utf-8") as f:
                     f.write(tpl)

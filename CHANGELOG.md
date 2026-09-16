@@ -2,6 +2,89 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.14.0（2026-09-16）—— 🩹 全量审查修复总汇：安全加固 · 并发 · 客户端健壮性
+
+**版本号 3.13.0 → 3.14.0。** 一次覆盖后端/安全/前端/工具层的全量审查与修复，分两批（见下）。
+
+### 第二批：安全加固 · 并发 · 客户端健壮性
+
+### 安全
+
+- **shell 黑名单绕过**：`run_command` 走 `shell=True`，但 tokenizer 只认「独立分隔符」且不脱引号 → `echo hi&powershell`（无空格）、`"powershell" -c …`（引号）可绕过 `shell.blocklist`。现按 `| || && & ;` 二次拆分（引号内不拆）+ 去引号归一 + 识别 `cmd /c`、`powershell -Command` 包装器内层命令。
+- **敏感结果进审计日志**：`tool_trace` 的结果未打码 → `secret_store(get)`/`clipboard_get`/`read_email` 的明文/密钥落 `logs/tools.log`。现对敏感工具结果整体脱敏。
+- **信任内核可撤销已声明改动**：新增 `undo`（CLI `python trust_kernel.py undo <文件>`）——用 declare 时留存的 `history/*.pre` 恢复改动前内容并推进基线（此前 `restore` 只能回到基线，无法撤销一次已声明的改动）。
+
+### 可靠性 / 并发
+
+- **会话索引竞态**：`_index_session_file`/`_drop_session_index` 未加锁（后台线程与请求线程并发改字典 → `dict changed size` 500）→ 加 `RLock`；`_list_sessions`/`_save_session_index` 锁内取快照。
+- **坏会话文件导致每次列表全量重建**：`len(index)!=fcount` 恒成立 → 每次 `GET /v1/sessions` 全盘扫描 + 重写索引。现用「index + 坏文件数」判定，坏文件只处理一次。
+- **非流式工具不记账**：`/v1/chat` 的 `on_tool` 现同样调用 `_tool_bookkeeping`（失败记忆/成功模式/自动断点不再缺失）。
+- **`_create_with_retry` 保留异常类型**：此前包成 `RuntimeError`，上层 `except (APIConnectionError/APITimeoutError)` 匹配不到 → 改 `raise last_error`。
+- **`_sanitize_messages` 重置 pending**：非 assistant 消息处清空待配对 tool_calls，避免错位历史里的孤儿 tool 被误留 → 400。
+- **新增停止端点 `POST /v1/chat/stop`**：前端 `onStop` 除 abort 外再通知服务端置位停止句柄，长工具调用期间也能收敛请求线程/子进程（此前仅靠 SSE 写失败被动感知）。
+
+### 客户端健壮性
+
+- `thinking="auto"` 判简单任务时同步把 `extra_body.thinking` 改为 `disabled`（此前只换采样参数，思考仍在跑）。
+- `empty_retries` 在有内容后重置（此前全轮共享，早期间歇空响应会耗尽重试额度）。
+- 并行 `tool_calls` 缺 `index` 时按「新 id」新开槽，避免合并成坏 JSON。
+- 配置变更重建回退客户端时 `close()` 旧连接池。
+- `_sse_send` 事件名放最后，防调用方 `data.type` 覆盖。
+- `_record_approval` 专用锁 + 原子写；`_approvals_get` 锁内读。
+- `_serve_static` 用 `realpath + commonpath` 判包含（防同级前缀目录/符号链接）；`_valid_evo_name`/`_evolution_restore` 拒绝 `:`（盘符相对）；`_p_v1_prompts` 非对象元素返回 400。
+- 前端：`SessionList`/`AuxPanel` 拖拽监听在卸载时清理；`api.js` SSE 事件 `rid`→`id` 更正。
+
+### 验证
+
+`pytest` **625 passed**（新增 `tests/test_audit_fixes2.py` 14 项）· `npm test` / `npm run typecheck` / `vite build` · 四道门禁全绿（154 工具 0 error；`/v1` 端点 97→98）。
+
+### 第一批：Critical / High / Medium（全量审查）
+
+一次覆盖后端/安全/前端/工具层的全量审查与修复。
+
+### 安全（Critical / High）
+
+- **信任内核只读洗白（Critical）**：信任钩子按「参数名像路径」触发，`read_file`/`list_dir` 等**只读**调用也会 `commit` → 把当前磁盘内容复制为基线，使已存在的未声明改动被「读一次」洗白。现改为**按内容是否真的改变**结算（`trust_kernel.resolve_after_write`）：无改动 → 丢弃声明、记 `noop`，绝不推进基线。
+- **WebUI 文件端点无沙箱（High）**：`/v1/files/read|preview|raw|open|opendir`、`/v1/files?dir` 此前完全不走 `permissions.check_filesystem`（工具层有、API 层没有）。新增 `_guard_path()` 统一 realpath + 权限校验（权限模块不可用时回落旧行为，不 brick）。
+- **git 锚点加固**：`auto_follow_git` 现要求 `HEAD` 未领先上游（`@{u}`）——本地未推送提交（可能是 AI 自造「伪仓库更新」）不再被跟随；并识别 `assume-unchanged`/`skip-worktree`（`git diff` 不可信）→ 保守处理。
+- **SSRF**：`call_api` 之前传空 validator（首跳不校验，可打 `169.254.169.254`）→ 改走默认硬底线。
+- **路径归一**：`permissions.resolve` 剥离 `\\?\`/`\\.\` 前缀、拒绝 UNC（`\\host\share`、`\\localhost\C$`），堵住黑名单绕过。
+- **shell 黑名单**：无空格分隔符（`a&b`）与引号包裹命令的绕过（拆分/归一化 token）。
+- **webhook 嵌套密钥**：`{"url","secret"}` 形态的 secret 未解密 → HMAC 永久验签失败；`_decrypt_secret` 改为递归解密。
+- **DPAPI 密钥不可逆丢失**：解密失败返回 `""` 后，一次无关保存会把磁盘密文抹成空串；`save_config` 现保留磁盘原密文。
+- **egress 脱敏**：URL 端口非法时回落原始串，导致 `?token=` 落盘；解析失败也必须去 query/fragment。
+- **资产库越界**：`asset_organize`/`asset_import` 的 `new_name`/`category` 未校验 `..`/分隔符，可把文件移出素材库。
+- **图表脚本注入**：`chart_render` 把 `json.dumps` 直接嵌入 `<script>`，未转义 `</script>`。
+- **出网/写入数据丢失**：`download_file`/`webdav` 下载失败会**删除已存在的同名文件** → 改为临时文件 + `os.replace` 原子替换。
+
+### 后端正确性
+
+- **流式中断重发重复内容（High）**：重试判据用的局部变量在异常时不会赋值 → 断线后整体重发、UI 重复内容。改用增量镜像 `holder` 判定。
+- **会话 append 数据丢失（High）**：按「首条 user 内容出现过」去重，会把用户合法的重复回合整轮丢弃 → 改为**仅当本轮消息恰好是既有会话尾部**才跳过。
+- **`ask_user` 待回答项泄漏**：用户停止生成时提前返回、`_PENDING` 永不清理 → `try/finally` 兜底。
+- **task 模式零审批被击穿**：审批回调重读持久化配置覆盖 `FULL_AUTO` → 移除。
+- **信任内核 `diff` 任意文件读**：未解析的名字被拼进 `_kernel_path`，可读项目外文件 → 拒绝未解析名。
+- **视觉回退**：图片请求在第三方网关也被切到 `deepseek-flash` → 仅官方端点回退。
+- **`continue_prefix` 失效**：注入 memory/image 提示后 `work[-1]` 不再是 assistant → 修正判定。
+- 若干资源/健壮性：会话索引锁、`--assume-unchanged`、文件句柄、CSV 截断 off-by-one、快照同秒覆盖、`diff` 越界、`rpa_scroll` failsafe、`start_process(cwd)` 权限、`design_kit` 写权限、`image_generate` base64 体积上限、`read_project_file` 相对路径按项目根解析。
+
+### 前端
+
+- **`onFocusActivity` 未定义（High）**：点击「查看工具详情」抛 `ReferenceError` → 补参数。
+- **「发送即打断」丢消息（High）**：busy 时延迟调用的是陈旧 `onSend` 闭包（首行 `if(busy)return`）→ 改为待发队列，busy 回落后用最新回调发出。
+- **「继续生成」历史被清空（High）**：对已构建的链二次 `buildMessageChain` + 用错下标 → 从 `msgsRef` 原始消息重建。
+- **`msgsRef` 镜像漂移（High）**：多处直接 `setMsgs` 不同步镜像 → 增加统一同步 effect；`onStop` updater 改纯函数。
+- **对象 URL 泄漏（High/Medium）**：附件缩略图卸载后继续创建 URL；TTS 失败路径不 revoke。
+- **多选误触**：点击消息内按钮冒泡触发选中 → 事件目标判定。
+- **编辑/重发**：编辑助手消息被当新 user 回合（移除该入口 + 守卫）；「重新发送」丢失原附件（现保留）。
+- **SSE 解析**：兼容 `\r\n\r\n`、补齐末尾未以空行结尾的帧。
+- **`safeUrl`**：拒绝协议相对 `//host/x`（意外外网加载）。
+- 其它：`SessionList.selectAll` 判定修正、`ConfirmGate` 死代码清理。
+
+### 验证
+
+`pytest` **611 passed**（新增 `tests/test_audit_fixes.py` 等回归门禁）· `npm test` / `npm run typecheck` / `vite build` · check_docs / audit / validate / island 四道门禁全绿（154 工具 0 error）。
+
 ## v3.13.0（2026-09-16）—— 🧭 信任内核：仓库更新不再被误报为「自我修改」
 
 **版本号 3.12.0 → 3.13.0。**

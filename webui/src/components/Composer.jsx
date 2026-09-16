@@ -51,6 +51,19 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   const histIdxRef = React.useRef(-1);
   const histDraftRef = React.useRef("");
   const attachmentsRef = React.useRef([]);
+  // 发送回调 / 待发队列：busy 时先停止生成，待 busy 回落后用**最新**的 onSend 发出
+  // （旧实现 setTimeout 调用的是 busy=true 那次的闭包，onSend 首行 `if(busy)return`
+  //   会把消息静默丢掉）。
+  const onSendRef = React.useRef(onSend);
+  const pendingSendRef = React.useRef(null);
+  React.useEffect(() => { onSendRef.current = onSend; });
+  React.useEffect(() => {
+    if (!busy && pendingSendRef.current) {
+      const p = pendingSendRef.current;
+      pendingSendRef.current = null;
+      try { onSendRef.current && onSendRef.current(p.text, p.atts); } catch (e) { silentWarn(e, "Composer"); }
+    }
+  }, [busy]);
 
   React.useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
 
@@ -260,10 +273,10 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     const v = text.trim();
     // 允许「只发附件不发文字」：只要有图片/文件即可发送
     if (!v && attachments.length === 0) return;
-    // 发送即打断：busy 时挂起待发（先停止当前生成，再延迟重发）
+    // 发送即打断：busy 时先停止当前生成，挂入待发队列——待 busy 回落后再发出
     if (busy) {
       onStop && onStop();
-      setTimeout(() => onSend && onSend(v, attachments), 350);
+      pendingSendRef.current = { text: v, atts: attachments };
       setText("");
       clearAttachments();
       return;

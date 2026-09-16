@@ -863,6 +863,16 @@ def set_active_client(client):
     _CLIENT_HOLDER["client"] = client
 
 
+def _close_client(c):
+    """尽力关闭客户端底层连接池（配置变更重建时回收，避免 TCP/TLS 连接泄漏）。"""
+    try:
+        inner = getattr(c, "client", None)
+        if inner is not None and hasattr(inner, "close"):
+            inner.close()
+    except Exception:
+        pass
+
+
 # 工具直调路径的懒构建客户端（带配置指纹：api_key/base_url/model/timeout 变更自动重建）
 _ACTIVE_FALLBACK = {"sig": None, "client": None}
 
@@ -902,7 +912,10 @@ def get_active_client():
         c = DeepSeekClient(key, base_url=sig[1], model=sig[2], timeout=sig[3])
     except Exception:
         return None
+    old = fb.get("client")
     fb["sig"], fb["client"] = sig, c
+    if old is not None and old is not c:
+        _close_client(old)  # 配置变了才走到这里，回收旧连接池
     return c
 
 
@@ -1541,7 +1554,8 @@ def _load_watch_state():
     if not WATCH_STATE_PATH or not os.path.exists(WATCH_STATE_PATH):
         return {}
     try:
-        return json.load(open(WATCH_STATE_PATH, encoding="utf-8"))
+        with open(WATCH_STATE_PATH, encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
         return {}
 
@@ -4049,6 +4063,10 @@ class DeepSeekClient:
                 else:
                     continue  # 悬空 tool：丢弃，避免 400
             else:
+                # 非 assistant 且非 tool（user/system）：清空待配对的 tool_calls——
+                # 否则「assistant(tool_calls) → user → tool」这种错位历史里，孤儿 tool
+                # 会被误判为合法配对而保留，API 仍以 400 拒绝。
+                pending = set()
                 final.append(m)
         return final
 
@@ -4108,7 +4126,9 @@ class DeepSeekClient:
         if any(
             isinstance(m, dict) and m.get("images") and m.get("role") == "user"
             for m in messages
-        ) and not is_vision_model(self.model):
+        ) and not is_vision_model(self.model) and getattr(self, "is_official", False):
+            # 仅官方端点才回退到 VISION_MODEL：第三方网关未必托管 deepseek-flash，
+            # 强行替换会把用户自配的多模态模型（gpt-4o/qwen-vl…）改成不存在的模型 → 400/404。
             eff_model = VISION_MODEL
             logger.info("会话包含图片输入：本次请求自动改用多模态模型 %s（全局配置不变）", VISION_MODEL)
         else:
@@ -4189,7 +4209,11 @@ class DeepSeekClient:
                 effort = _auto_effort(work)
             if effort == "none":
                 # auto 判定为简单任务：关闭思考（reasoning_effort 不支持 none，
-                # 此前直接传 "none" 会被 API 拒绝或静默忽略）
+                # 此前直接传 "none" 会被 API 拒绝或静默忽略）。
+                # 注意：extra_body.thinking 此前已被设成 enabled，必须同步改 disabled，
+                # 否则只是换了采样参数、思考仍在跑（白花 token/延迟）。
+                if self.is_official and "extra_body" in kwargs:
+                    kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
                 kwargs["temperature"] = cfg["temperature"] if temperature is None else temperature
                 kwargs["top_p"] = cfg["top_p"] if top_p is None else top_p
             else:
@@ -4341,6 +4365,7 @@ class DeepSeekClient:
                 # 仅在「尚无任何增量送达 UI」时整体重试，避免已显示内容重复
                 reasoning, content, tool_calls, finish_reason = "", "", {}, None
                 stream_usage = None
+                held = {"reasoning": "", "content": "", "tool_calls": []}
                 try:
                     for stream_attempt in range(2):
                         round_t0 = time.perf_counter()
@@ -4348,11 +4373,13 @@ class DeepSeekClient:
                         try:
                             (reasoning, content, tool_calls, finish_reason, stream_usage,
                              stream_timing) = self._consume_stream(
-                                response, on_reasoning, on_content, stop_event
+                                response, on_reasoning, on_content, stop_event, holder=held
                             )
                             break
                         except (APIConnectionError, APITimeoutError) as e:
-                            if reasoning or content or tool_calls or stream_attempt == 1:
+                            # 用增量镜像判断是否已有内容送达 UI（局部变量在异常时不会赋值）
+                            if (held["reasoning"] or held["content"] or held["tool_calls"]
+                                    or stream_attempt == 1):
                                 raise
                             logger.warning("流式连接中途断开（尚未收到内容），重试: %s", e)
                 except _StopRequested:
@@ -4406,6 +4433,9 @@ class DeepSeekClient:
                     if on_truncated:
                         on_truncated("模型连续返回空响应，本轮生成失败")
                     return False
+                # 本轮有内容 → 重置空响应预算（此前全轮共享，早期间歇性空响应会耗尽额度，
+                # 导致后续真正的瞬时空响应不再重试）
+                empty_retries = 0
 
                 if continue_prefix and work and work[-1].get("role") == "assistant":
                     prev = dict(work[-1])
@@ -4858,9 +4888,13 @@ class DeepSeekClient:
                     if stop_event and stop_event.is_set():
                         raise _StopRequested()  # 干净信号：chat() 内部转 return False
                     time.sleep(min(0.1, end - time.monotonic()))
-        raise RuntimeError(f"请求失败，已重试 {attempts} 次: {last_error}")
+        # 保留原异常类型（此前包成 RuntimeError → 上层 `except (APIConnectionError,
+        # APITimeoutError)` 匹配不到，预流连接失败会走错分支/文案）。
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"请求失败，已重试 {attempts} 次（无错误详情）")
 
-    def _consume_stream(self, response, on_reasoning, on_content, stop_event):
+    def _consume_stream(self, response, on_reasoning, on_content, stop_event, holder=None):
         reasoning = ""
         content = ""
         tool_calls = {}
@@ -4882,6 +4916,8 @@ class DeepSeekClient:
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
+                if delta is None:
+                    continue
                 try:
                     fr = chunk.choices[0].finish_reason
                     if fr:
@@ -4904,7 +4940,19 @@ class DeepSeekClient:
                     last_ts = now
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
-                        idx = tc.index if tc.index is not None else 0
+                        if tc.index is not None:
+                            idx = tc.index
+                        else:
+                            # 非规范网关不带 index：若最后一个槽已完整（有 id）且本次携带
+                            # 不同的新 id，则新开槽，避免把并行工具调用合并成一条坏 JSON。
+                            idx = 0
+                            if tool_calls:
+                                last_idx = max(tool_calls)
+                                last = tool_calls[last_idx]
+                                if tc.id and last.get("id") and last["id"] != tc.id:
+                                    idx = last_idx + 1
+                                else:
+                                    idx = last_idx
                         entry = tool_calls.setdefault(idx, {"id": "", "name": "", "args": ""})
                         if tc.id:
                             entry["id"] = tc.id
@@ -4912,6 +4960,11 @@ class DeepSeekClient:
                             entry["name"] = tc.function.name
                         if tc.function and tc.function.arguments:
                             entry["args"] += tc.function.arguments
+                # 增量镜像：中途断线时上层据此判断「是否已把内容送到 UI」，避免重发导致重复。
+                if holder is not None:
+                    holder["reasoning"] = reasoning
+                    holder["content"] = content
+                    holder["tool_calls"] = list(tool_calls.values())
         finally:
             # 显式关闭 SSE 流，连接回收不依赖 GC
             try:
