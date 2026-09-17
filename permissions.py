@@ -100,6 +100,7 @@ ACTION_TOOLS = (
     "pdf_create",
     "qrcode",
     "media_ffmpeg",
+    "mv_compose",
     "webdav",
     "create_plugin",
     "rpa_click",

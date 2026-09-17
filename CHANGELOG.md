@@ -2,6 +2,28 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.14.2（2026-09-17）—— 🎬 微电影/MV 能力：放开媒体限制 + 一键成片
+
+**版本号 3.14.1 → 3.14.2。** 贯彻「法无禁止皆可为、黑名单为唯一限制来源」：把此前工具里的**参数白名单式硬编码**换成**能力直通 + 用户黑名单拦截**，并补齐从「素材」到「成片」的合成层。
+
+### 放开限制（方便 AI）
+
+- **`media_ffmpeg` 任意参数直通**：新增 `action=run`，`args` 数组原样交给 ffmpeg（`argv` 直传、无 shell 拼接），仅经 `permissions.check_shell` 的用户命令黑名单——此前被 action 枚举堵死的任意 `filter_complex`/滤镜/封装现在可直接用。
+- **`image_generate` 尺寸解禁**：`size` 从「256/512/…/2048 枚举」改为任意「宽x高」（每边 64-4096）或 `auto`，**1920x1080 / 1080x1920 等视频比例不再被拒**；新增 `n`（1-10 张）。
+- **`image_generate` 图生图/编辑**：新增 `reference` / `mask`，传参考图即走 OpenAI 兼容 `/images/edits`（multipart），解决微电影最关键的**跨镜头角色/画风一致性**；URL 参考图经 SSRF 校验、32MB 上限。
+- **`tts_save` 音色选择**：新增 `voice`（音色名子串，在系统已装 SAPI 音色中匹配），配音不再只有默认音色。
+
+### 新增成片工具（完成目的）
+
+- **`mv_compose` 一键成片**：输入分镜数组（每镜 `prompt`/`image`/`narration`/`subtitle`/`duration`/`effect`），自动逐镜出图（`image_generate`）、逐镜配音（TTS），再合成带 **Ken Burns 运镜 + 交叉转场 + 字幕烧录 + 旁白/BGM 混音** 的微电影 / MV / 图片故事短片；也可只传现成图片做纯剪辑合成。出图/配音失败降级不中断（记入日志），素材缺失才报错。
+- **`media_ffmpeg` 合成动作**：`compose`（图片/视频序列→成片）、`subtitles`/`mux`（给已有视频加字幕/音轨），复用同一套 `_mv_compose`/`_mv_finish` 实现；转码按容器自动选码（webm→vp9/opus，避免 h264 remux 到 webm 失败）。
+- **音画严格对齐**：每镜旁白归一化为 44.1k/立体声/pcm_s16le 并按镜头时长 `apad` 补齐、无旁白镜头生成等长静音，`concat -c copy` 后音频总长 = 视频总长，避免多镜累积漂移。
+
+### 验证
+
+- `tools/validate_tools.py`：155 工具全链路通过；`tools/audit_tools.py --strict`：error 0 / warn 0；`tools/check_docs.py`：文档数字（154→155）与源码一致；`python -m pytest tests`：**637 passed**。
+- 实跑冒烟：`media_ffmpeg compose`（运镜+转场）→ 输出 2.08s mp4；`compose+字幕` 烧录成功（imageio-ffmpeg 自带 ffmpeg 含 libass）；`action=run` 直通生成色块视频；`mv_compose` 三镜（图+TTS 旁白+字幕）输出 6.08s 含 aac 音轨的 mp4。
+
 ## v3.14.1（2026-09-16）—— 🧵 后台作业式流式对话：切页 / 关标签 / 多标签页都不打断
 
 **版本号 3.14.0 → 3.14.1。** 修复「回答生成中切到设置或其它页面后被截断、会话保存失败」。

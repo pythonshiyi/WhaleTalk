@@ -381,6 +381,7 @@ _TOOL_DOMAIN = {
     "debug_screenshot": "媒体与图像", "scan_read": "媒体与图像", "screen_capture": "媒体与图像",
     "speech_to_text": "媒体与图像", "media_ffmpeg": "媒体与图像", "web_screenshot": "媒体与图像",
     "qrcode": "媒体与图像", "tts_speak": "媒体与图像", "tts_stop": "媒体与图像",
+    "mv_compose": "媒体与图像",
     "send_email": "消息与协作", "read_email": "消息与协作", "email_summary": "消息与协作",
     "agent_mail": "消息与协作", "send_webhook": "消息与协作", "im_send": "消息与协作",
     "telegram_poll_updates": "消息与协作", "notify_desktop": "消息与协作",

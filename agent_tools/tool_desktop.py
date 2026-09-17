@@ -557,6 +557,7 @@ def vision_loop(goal, steps="", max_iters=5, area=""):
                         "text": {"type": "string", "description": "要合成的文本"},
                         "path": {"type": "string", "description": "输出 WAV 文件绝对路径（须在允许目录内）"},
                         "rate": {"type": "integer", "description": "可选：语速 -10~10，默认 0"},
+                        "voice": {"type": "string", "description": "可选：音色名子串（如 Huihui / Xiaoxiao，留空=系统默认）"},
                     },
                     "required": ["text", "path"],
                 },
@@ -566,8 +567,12 @@ def vision_loop(goal, steps="", max_iters=5, area=""):
     phrases='文字转语音（存文件）',
     preactivate=(('朗读', '语音播报', '文字转语音', '读给我听', '停止朗读', 'tts'),),
 )
-def tts_save(text, path, rate=0):
-    """语音合成保存为 WAV 文件（Windows SAPI，可选 pywin32；无则用 PowerShell）。"""
+def tts_save(text, path, rate=0, voice=""):
+    """语音合成保存为 WAV 文件（Windows SAPI，可选 pywin32；无则用 PowerShell）。
+
+    voice 为音色名子串（不区分大小写）：在系统已装 SAPI 音色里匹配第一个命中者，
+    留空用默认音色。匹配不到时静默回退默认音色。
+    """
     if not text or not str(text).strip():
         return "错误：text 必填"
     if not path or not str(path).strip():
@@ -594,6 +599,17 @@ def tts_save(text, path, rate=0):
             stream = None
             try:
                 speaker = win32com.client.Dispatch("SAPI.SpVoice")
+                if str(voice or "").strip():
+                    try:
+                        want = str(voice).strip().lower()
+                        installed = speaker.GetVoices()
+                        for vi in range(installed.Count):
+                            item = installed.Item(vi)
+                            if want in str(item.GetDescription()).lower():
+                                speaker.Voice = item
+                                break
+                    except Exception:
+                        pass
                 stream = win32com.client.Dispatch("SAPI.SpFileStream")
                 stream.Open(p, 3)  # SSFMCreateForWrite
                 speaker.AudioOutputStream = stream
@@ -881,39 +897,151 @@ def voice_chat_loop(rounds=3, model="base", max_seconds=15, speak=True, rate=0):
         return "\n".join(log)
 
 
+def _load_ref_image(ref):
+    """读取参考图（本地路径或 http(s) URL）为 multipart 文件三元组。
+
+    返回 (错误字符串|None, (文件名, 字节, mime)|None)。32MB 上限，地址走 SSRF 校验。
+    """
+    ref = str(ref or "").strip()
+    raw = None
+    name = "reference.png"
+    if ref.lower().startswith(("http://", "https://")):
+        err = _safe_url(ref)
+        if err:
+            return f"参考图地址不安全（{err}）", None
+        try:
+            with _safe_stream("GET", ref, timeout=60) as r:
+                r.raise_for_status()
+                buf = b""
+                for chunk in r.iter_bytes(64 * 1024):
+                    buf += chunk
+                    if len(buf) > 32 * 1024 * 1024:
+                        return "参考图超过 32MB 上限", None
+                raw = buf
+        except Exception as e:
+            return f"参考图下载失败: {e}", None
+    else:
+        rp = permissions.resolve(ref)
+        if not rp or not os.path.isfile(rp):
+            return f"参考图不存在：{ref}", None
+        ok, reason = permissions.check_filesystem(rp, write=False)
+        if not ok:
+            return reason, None
+        try:
+            if os.path.getsize(rp) > 32 * 1024 * 1024:
+                return "参考图超过 32MB 上限", None
+            with open(rp, "rb") as f:
+                raw = f.read()
+        except OSError as e:
+            return f"参考图读取失败: {e}", None
+        name = os.path.basename(rp)
+    try:
+        mime = _dc._detect_image_mime(raw[:16])
+    except Exception:
+        mime = "image/png"
+    return None, (name, raw, mime)
+
+
+def _save_gen_items(items, out, num):
+    """把接口返回的图片项写入 out（num>1 时第二张起加 _2/_3 后缀）。
+
+    返回 (已保存路径列表, 错误字符串|None)。单张上限 20MB，URL 走 SSRF 校验。
+    """
+    import base64
+
+    saved = []
+    for i, it in enumerate(items[:max(1, num)]):
+        if not isinstance(it, dict):
+            return saved, "接口返回的图片项格式异常"
+        if i == 0:
+            dst = out
+        else:
+            stem, ext = os.path.splitext(out)
+            dst = f"{stem}_{i + 1}{ext}"
+        raw = None
+        if it.get("b64_json"):
+            try:
+                raw = base64.b64decode(it["b64_json"])
+            except Exception:
+                return saved, "接口返回的图片数据无法解码"
+        elif it.get("url"):
+            dl = str(it["url"])
+            err = _safe_url(dl)
+            if err:
+                return saved, f"图片接口返回了不安全的下载地址（{err}）"
+            try:
+                with _safe_stream("GET", dl, timeout=120) as r:
+                    total = 0
+                    buf = b""
+                    for chunk in r.iter_bytes(64 * 1024):
+                        total += len(chunk)
+                        if total > 20 * 1024 * 1024:
+                            return saved, "图片下载超过 20MB 上限，已放弃保存"
+                        buf += chunk
+                    raw = buf
+            except Exception as e:
+                return saved, f"图片下载失败: {e}"
+        else:
+            return saved, "接口返回格式无法解析"
+        if len(raw) > 20 * 1024 * 1024:
+            return saved, "接口返回的图片超过 20MB 上限，已中止"
+        try:
+            os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+            with open(dst, "wb") as f:
+                f.write(raw)
+        except OSError as e:
+            return saved, f"图片写入失败: {e}"
+        saved.append(dst)
+    return saved, None
+
+
 @tool(
         {
             "type": "function",
             "function": {
                 "name": "image_generate",
-                "description": "生成图片（需在 config.json 配置 image_api_key/image_base_url/image_model，OpenAI 兼容 images API）",
+                "description": "生成或编辑图片（OpenAI 兼容 images API，需配置 image_api_key/image_base_url/image_model）。纯文生图只传 prompt；要沿用参考图保持角色/画风一致，传 reference（自动走 /images/edits 图生图/编辑），mask 可指定重绘区域。size 接受任意「宽x高」（每边 64-4096，支持 1920x1080/1080x1920 等视频比例）或 auto；n 可一次出多张",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "prompt": {"type": "string", "description": "图片描述提示词"},
-                        "path": {"type": "string", "description": "可选：输出路径（默认工作区 images/）"},
-                        "size": {"type": "string", "description": "可选：尺寸如 1024x1024"},
+                        "prompt": {"type": "string", "description": "图片描述提示词，或对参考图的编辑指令"},
+                        "path": {"type": "string", "description": "可选：输出路径（默认工作区 images/）；n>1 时第二张起自动加 _2/_3 序号后缀"},
+                        "size": {"type": "string", "description": "可选：尺寸「宽x高」（每边 64-4096，任意比例，如 1024x1024 / 1920x1080 / 1080x1920）或 auto，默认 1024x1024"},
+                        "n": {"type": "integer", "description": "可选：一次生成的张数 1-10（默认 1）"},
+                        "reference": {"type": "string", "description": "可选：参考图路径或 http(s) URL；传入即走图生图/编辑（/images/edits），用于角色与画风跨镜头一致"},
+                        "mask": {"type": "string", "description": "可选：遮罩图路径（透明区域=需要重绘处），仅在传 reference 时生效"},
                     },
                     "required": ["prompt"],
                 },
             },
         },
     groups=['🎨 媒体与图像'],
-    phrases='文生图',
-    preactivate=(('文生图', 'ai绘图', '生成一张图', '画一张'),),
+    phrases='文生图/图生图（参考图编辑）',
+    preactivate=(('文生图', 'ai绘图', '生成一张图', '画一张'), ('图生图', '参考图', '保持角色一致', '改图', '修图', '编辑图片')),
 )
-def image_generate(prompt, path="", size="1024x1024"):
-    """生成图片（需配置 image_api_key / image_base_url / image_model，OpenAI 兼容接口）。"""
+def image_generate(prompt, path="", size="1024x1024", n=1, reference="", mask=""):
+    """生成或编辑图片（OpenAI 兼容 images API）。
+
+    无 reference：POST /images/generations（文生图）。
+    有 reference：POST /images/edits（图生图/编辑，multipart），用于角色/画风一致。
+    size 支持任意「宽x高」（每边 64-4096）或 auto；n 支持 1-10 张。
+    """
     p = str(prompt or "").strip()
     if not p:
         return "错误：prompt 必填"
-    # size 白名单校验：非法尺寸让模型自纠（接口对任意字符串返回 400，报错不友好）
     sz = str(size or "1024x1024").strip().lower()
-    if not re.match(r"^(256|512|768|1024|1536|2048)x(256|512|768|1024|1536|2048)$", sz):
-        return (
-            f"错误：size 非法：{size}（支持 256/512/768/1024/1536/2048 的正方形或 "
-            "两者组合，如 1024x1024 / 1536x1024）"
-        )
+    if sz != "auto":
+        m = re.match(r"^(\d{2,4})\s*[x×*]\s*(\d{2,4})$", sz)
+        if not m:
+            return f"错误：size 非法：{size}（应为「宽x高」如 1024x1024 / 1920x1080 / 1080x1920，或 auto）"
+        w, h = int(m.group(1)), int(m.group(2))
+        if not (64 <= w <= 4096 and 64 <= h <= 4096):
+            return f"错误：size 每边须在 64-4096 之间：{size}"
+        sz = f"{w}x{h}"
+    try:
+        num = max(1, min(10, int(n)))
+    except (TypeError, ValueError):
+        num = 1
     key = str(_dc.IMAGE_GEN_KEY or "").strip()
     if not key:
         return "错误：未配置图片生成（config.json 的 image_api_key / image_base_url / image_model）"
@@ -938,65 +1066,64 @@ def image_generate(prompt, path="", size="1024x1024"):
             pass
         out = os.path.join(base_dir, f"gen_{datetime.now():%Y%m%d_%H%M%S}.png")
     try:
-        resp = _http_client().post(
-            f"{base}/images/generations",
-            json={
-                "model": _dc.IMAGE_GEN_MODEL,
-                "prompt": p,
-                "n": 1,
-                "size": sz,
-                "response_format": "b64_json",
-            },
-            headers={"Authorization": f"Bearer {key}"},
-            timeout=120.0,
-        )
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    except Exception:
+        pass
+    ref = str(reference or "").strip()
+    mask_p = str(mask or "").strip()
+    try:
+        headers = {"Authorization": f"Bearer {key}"}
+        if ref:
+            err, img = _load_ref_image(ref)
+            if err:
+                return f"错误：{err}"
+            files = {"image": img}
+            if mask_p:
+                err2, mk = _load_ref_image(mask_p)
+                if err2:
+                    return f"错误：遮罩图{err2}"
+                files["mask"] = mk
+            resp = _http_client().post(
+                f"{base}/images/edits",
+                data={
+                    "model": _dc.IMAGE_GEN_MODEL,
+                    "prompt": p,
+                    "n": str(num),
+                    "size": sz,
+                    "response_format": "b64_json",
+                },
+                files=files,
+                headers=headers,
+                timeout=300.0,
+            )
+        else:
+            resp = _http_client().post(
+                f"{base}/images/generations",
+                json={
+                    "model": _dc.IMAGE_GEN_MODEL,
+                    "prompt": p,
+                    "n": num,
+                    "size": sz,
+                    "response_format": "b64_json",
+                },
+                headers=headers,
+                timeout=300.0,
+            )
         resp.raise_for_status()
-        data = resp.json()
-        items = data.get("data") or []
+        try:
+            payload = resp.json()
+        except Exception:
+            return f"错误：图片接口返回非 JSON（HTTP {getattr(resp, 'status_code', '?')}）"
+        items = payload.get("data") or []
         if not items:
             return "错误：接口未返回图片"
-        import base64
-
-        if items[0].get("b64_json"):
-            raw = base64.b64decode(items[0]["b64_json"])
-            if len(raw) > 20 * 1024 * 1024:  # 与 URL 分支一致的 20MB 上限，防内存/磁盘写爆
-                return "错误：接口返回的图片超过 20MB 上限，已中止"
-            with open(out, "wb") as f:
-                f.write(raw)
-        elif items[0].get("url"):
-            # URL 图片大小不可信：20MB 上限，防写满磁盘；地址不做拦截（无限制模式）
-            dl_url = str(items[0]["url"])
-            err = _safe_url(dl_url)
-            if err:
-                return f"错误：图片接口返回了不安全的下载地址（{err}）"
-            try:
-                with _safe_stream("GET", dl_url, timeout=60) as r:
-                    total = 0
-                    truncated = False
-                    with open(out, "wb") as f:
-                        for chunk in r.iter_bytes(64 * 1024):
-                            total += len(chunk)
-                            if total > 20 * 1024 * 1024:
-                                truncated = True
-                                break
-                            f.write(chunk)
-            except Exception:
-                try:
-                    os.remove(out)
-                except OSError:
-                    pass
-                raise
-            if truncated:
-                try:
-                    os.remove(out)
-                except OSError:
-                    pass
-                return "错误：图片下载超过 20MB 上限，已放弃保存"
-        else:
-            return "错误：接口返回格式无法解析"
-        size_b = os.path.getsize(out)
-        permissions.audit("image_generate", out, p[:80])
-        return f"已生成图片保存至 {out}（{size_b / 1024:.0f} KB）"
+        saved, err = _save_gen_items(items, out, num)
+        if err:
+            return f"错误：{err}"
+        if not saved:
+            return "错误：接口未返回可保存的图片"
+        permissions.audit("image_generate", "；".join(saved), p[:80])
+        return f"已生成 {len(saved)} 张图片：" + "、".join(saved)
     except Exception as e:
         return f"错误：图片生成失败: {e}"
 
@@ -1102,48 +1229,381 @@ def qrcode(action="generate", text="", output="", image_path="", size=300, error
         return f"错误：二维码识别失败: {e}"
 
 
+def _ff_media_duration(path, timeout=20):
+    """用 ffmpeg -i 的 stderr 解析媒体时长（秒）；失败返回 None。"""
+    code, text = _ffmpeg_run(["-hide_banner", "-i", path], timeout=timeout)
+    if code is None:
+        return None
+    m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    except Exception:
+        return None
+
+
+def _ff_subtitle_filter(sub_path):
+    """构造 ffmpeg subtitles 滤镜串（Windows 盘符冒号等做转义）。"""
+    s = str(sub_path).replace("\\", "/")
+    s = (s.replace(":", "\\:").replace("'", r"\'")
+         .replace("[", "\\[").replace("]", "\\]").replace(",", "\\,"))
+    return f"subtitles=filename='{s}'"
+
+
+def _mv_norm_audio(src, dur, out):
+    """把音频统一为 44.1k/立体声/pcm_s16le 且时长恰为 dur；src 为空则生成等长静音。
+
+    返回 (ok, 错误字符串)。归一化后各片段格式一致，concat 可 -c copy 无缝拼接。
+    """
+    d = max(0.05, float(dur or 0.05))
+    args = ["-hide_banner", "-y"]
+    if src:
+        args += ["-i", src, "-af", "apad"]
+    else:
+        args += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+    args += ["-t", f"{d:.3f}", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", out]
+    code, text = _ffmpeg_run(args)
+    if code != 0:
+        return False, (text or "")[-200:]
+    return True, ""
+
+
+def _mv_concat_list(paths, list_path):
+    """写 ffmpeg concat 清单（正斜杠 + 单引号转义）。"""
+    with open(list_path, "w", encoding="utf-8") as f:
+        for p in paths:
+            f.write("file '" + str(p).replace("\\", "/").replace("'", "'\\''") + "'\n")
+
+
+def _mv_finish(src, output, audio="", bgm="", subtitle=""):
+    """给已拼接的无声视频叠加旁白/BGM/字幕并编码落盘。
+
+    返回 (输出路径|"", 说明, 错误|"")。旁白全音量、BGM 0.25 音量混音。
+    """
+    try:
+        ok, reason = permissions.check_filesystem(output, write=True)
+        if not ok:
+            return "", "", reason
+    except Exception:
+        pass
+    try:
+        os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
+    except Exception:
+        pass
+    nar, bg, sub = "", "", ""
+    if str(audio or "").strip():
+        rp = permissions.resolve(audio)
+        if not rp or not os.path.isfile(rp):
+            return "", "", f"音频不存在：{audio}"
+        nar = rp
+    if str(bgm or "").strip():
+        rp = permissions.resolve(bgm)
+        if not rp or not os.path.isfile(rp):
+            return "", "", f"BGM 不存在：{bgm}"
+        bg = rp
+    if str(subtitle or "").strip():
+        rp = permissions.resolve(subtitle)
+        if not rp or not os.path.isfile(rp):
+            return "", "", f"字幕不存在：{subtitle}"
+        sub = rp
+    if not (nar or bg or sub):
+        import shutil
+        try:
+            shutil.copyfile(src, output)
+        except Exception as e:
+            return "", "", f"落盘失败: {e}"
+        return output, "无音轨/字幕", ""
+    args = ["-hide_banner", "-y", "-i", src]
+    idx = 1
+    nar_i = bg_i = None
+    if nar:
+        args += ["-i", nar]
+        nar_i = idx
+        idx += 1
+    if bg:
+        args += ["-i", bg]
+        bg_i = idx
+        idx += 1
+    if sub:
+        args += ["-vf", _ff_subtitle_filter(sub)]
+    if nar and bg:
+        args += ["-filter_complex",
+                 f"[{nar_i}:a]volume=1.0[a1];[{bg_i}:a]volume=0.25[a2];"
+                 "[a1][a2]amix=inputs=2:duration=longest[aout]",
+                 "-map", "0:v", "-map", "[aout]", "-c:a", "aac"]
+    elif nar or bg:
+        a_i = nar_i if nar else bg_i
+        args += ["-map", "0:v", "-map", f"{a_i}:a", "-c:a", "aac"]
+    else:
+        args += ["-map", "0:v", "-an"]
+    args += ["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+             "-crf", "20", "-shortest", output]
+    code, text = _ffmpeg_run(args)
+    if code != 0:
+        return "", "", f"成片编码失败：{(text or '')[-400:]}"
+    note = f"音频={'有' if (nar or bg) else '无'}，字幕={'有' if sub else '无'}"
+    return output, note, ""
+
+
+def _mv_compose(items, output, durations=None, duration=3.0, effect="kenburns",
+                transition=0.0, resolution="1920x1080", fps=30,
+                audio="", bgm="", subtitle="", workdir=""):
+    """图片/视频序列 → 成片（每段运镜 + 可选交叉转场 + 旁白/BGM/字幕）。
+
+    durations 给出每段时长（秒），缺省用 duration。返回 (输出路径|"", 说明, 错误|"")。
+    """
+    items = [str(x) for x in (items or []) if str(x or "").strip()]
+    if not items:
+        return "", "", "items 为空（至少一张图片或一段视频）"
+    m = re.match(r"^(\d{2,4})\s*[x×*]\s*(\d{2,4})$", str(resolution or "").strip().lower())
+    if not m:
+        return "", "", f"resolution 非法：{resolution}（应为「宽x高」如 1920x1080）"
+    W, H = int(m.group(1)), int(m.group(2))
+    if not (16 <= W <= 7680 and 16 <= H <= 7680):
+        return "", "", f"resolution 每边须在 16-7680：{resolution}"
+    try:
+        fps = max(1, min(120, int(fps or 30)))
+    except (TypeError, ValueError):
+        fps = 30
+    eff = str(effect or "none").strip().lower()
+    if eff not in ("none", "kenburns", "kenburns-in", "kenburns-out"):
+        eff = "kenburns"
+    try:
+        trans = max(0.0, min(5.0, float(transition or 0)))
+    except (TypeError, ValueError):
+        trans = 0.0
+    resolved = []
+    for it in items:
+        rp = permissions.resolve(it)
+        if not rp or not os.path.isfile(rp):
+            return "", "", f"素材不存在：{it}"
+        ok, reason = permissions.check_filesystem(rp, write=False)
+        if not ok:
+            return "", "", reason
+        resolved.append(rp)
+    if not workdir:
+        base_dir = os.path.join(permissions.WORKSPACE_DIR or ".", "video")
+        workdir = os.path.join(base_dir, f"compose_{datetime.now():%Y%m%d_%H%M%S}")
+    try:
+        os.makedirs(workdir, exist_ok=True)
+    except Exception as e:
+        return "", "", f"工作目录创建失败: {e}"
+    segs, seg_durs = [], []
+    for i, src in enumerate(resolved):
+        is_img = src.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
+        seg = os.path.join(workdir, f"seg_{i:03d}.mp4")
+        if is_img:
+            d = duration
+            if durations and i < len(durations):
+                d = durations[i]
+            try:
+                d = max(0.2, float(d or 3.0))
+            except (TypeError, ValueError):
+                d = 3.0
+            vf = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                  f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")
+            if eff != "none":
+                frames = max(1, int(round(d * fps)))
+                step = 0.12 / frames
+                if eff == "kenburns-out":
+                    z = f"if(eq(on,1),1.12,max(zoom-{step:.6f},1.0))"
+                else:
+                    z = f"min(zoom+{step:.6f},1.12)"
+                vf += (f",zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                       f":d={frames}:s={W}x{H}:fps={fps}")
+            code, text = _ffmpeg_run([
+                "-hide_banner", "-y", "-loop", "1", "-i", src, "-t", f"{d:.3f}",
+                "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
+                "-pix_fmt", "yuv420p", "-r", str(fps), "-an", seg])
+            if code != 0:
+                return "", "", f"第 {i + 1} 个素材渲染失败：{(text or '')[-300:]}"
+            seg_durs.append(d)
+        else:
+            d = 0.0
+            if durations and i < len(durations):
+                try:
+                    d = max(0.0, float(durations[i] or 0))
+                except (TypeError, ValueError):
+                    d = 0.0
+            vf = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                  f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")
+            args = ["-hide_banner", "-y", "-i", src]
+            if d > 0:
+                args += ["-t", f"{d:.3f}"]
+            args += ["-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
+                     "-pix_fmt", "yuv420p", "-r", str(fps), "-an", seg]
+            code, text = _ffmpeg_run(args)
+            if code != 0:
+                return "", "", f"第 {i + 1} 个素材转码失败：{(text or '')[-300:]}"
+            dd = d or _ff_media_duration(seg) or 0.0
+            seg_durs.append(max(0.2, float(dd)))
+        segs.append(seg)
+    silent = os.path.join(workdir, "silent.mp4")
+    if trans > 0 and len(segs) > 1:
+        args = []
+        for s in segs:
+            args += ["-i", s]
+        fc = []
+        prev = "[0:v]"
+        offset = 0.0
+        for i in range(1, len(segs)):
+            offset += max(0.0, seg_durs[i - 1] - trans)
+            outl = f"[vx{i}]"
+            fc.append(f"{prev}[{i}:v]xfade=transition=fade:duration={trans:.3f}:"
+                      f"offset={offset:.3f}{outl}")
+            prev = outl
+        args += ["-filter_complex", ";".join(fc), "-map", prev,
+                 "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                 "-r", str(fps), silent]
+        code, text = _ffmpeg_run(args)
+        if code != 0:
+            return "", "", f"转场拼接失败：{(text or '')[-300:]}"
+    else:
+        lst = os.path.join(workdir, "concat.txt")
+        _mv_concat_list(segs, lst)
+        code, text = _ffmpeg_run(["-hide_banner", "-y", "-f", "concat", "-safe", "0",
+                                  "-i", lst, "-c", "copy", silent])
+        if code != 0:
+            return "", "", f"拼接失败：{(text or '')[-300:]}"
+    out, note, err = _mv_finish(silent, output, audio=audio, bgm=bgm, subtitle=subtitle)
+    if err:
+        return "", "", err
+    return out, f"{len(segs)} 段合成，{note}", ""
+
+
 @tool(
         {
             "type": "function",
             "function": {
                 "name": "media_ffmpeg",
-                "description": "音视频处理：info 读取时长/分辨率/码率/音频信息；thumbnail 指定时间点截图；transcode 转码（mp4/mp3 等）；extract_audio 提取音频。输入超 2GB 或耗时超 300 秒会拒绝",
+                "description": "音视频处理与视频合成（ffmpeg）。info 读媒体信息；thumbnail 截帧；transcode 转码；extract_audio 提取音频；compose 把图片/视频序列合成为成片（支持 Ken Burns 运镜、交叉转场、旁白、BGM 混音、字幕烧录）；subtitles/mux 给已有视频加字幕与音轨；run 直接传入任意 ffmpeg 参数（法无禁止皆可为，仅受用户命令黑名单约束）。输入超 2GB 或耗时超 300 秒会拒绝",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "description": "info / thumbnail / transcode / extract_audio"},
-                        "input": {"type": "string", "description": "源文件绝对路径"},
-                        "output": {"type": "string", "description": "thumbnail/transcode/extract_audio 必填：输出路径"},
-                        "time": {"type": "string", "description": "可选：截图时间点，如 00:01:30（默认取开头 1 秒）"},
-                        "width": {"type": "integer", "description": "可选：转码输出宽度（16-7680，保持宽高比）"},
+                        "action": {"type": "string", "description": "info / thumbnail / transcode / extract_audio / compose / subtitles / mux / run"},
+                        "input": {"type": "string", "description": "源文件绝对路径（info/thumbnail/transcode/extract_audio/subtitles/mux 用；compose 未传 items 时也可作单一素材）"},
+                        "output": {"type": "string", "description": "输出路径（thumbnail/transcode/extract_audio/compose/subtitles/mux 必填）"},
+                        "time": {"type": "string", "description": "可选：thumbnail 截图时间点，如 00:01:30（默认开头 1 秒）"},
+                        "width": {"type": "integer", "description": "可选：transcode 输出宽度（16-7680，保持宽高比）"},
                         "format": {"type": "string", "description": "可选：转码/提取输出格式：mp4/mp3/webm/mkv/avi/mov/ogg/flac/wav"},
+                        "args": {"type": "array", "items": {"type": "string"}, "description": "action=run 时的完整 ffmpeg 参数数组（不含 ffmpeg 本身），如 [\"-i\",\"in.mp4\",\"-vf\",\"hflip\",\"-y\",\"out.mp4\"]；请自带 -y 避免交互挂起"},
+                        "items": {"type": "array", "items": {"type": "string"}, "description": "compose 的素材顺序列表（图片/视频绝对路径，按顺序拼接）"},
+                        "audio": {"type": "string", "description": "可选：旁白/人声音轨文件路径（compose/subtitles/mux；全音量）"},
+                        "bgm": {"type": "string", "description": "可选：背景音乐文件路径（compose/subtitles/mux；以 0.25 音量与旁白混音）"},
+                        "subtitle": {"type": "string", "description": "可选：字幕文件（.srt/.ass）绝对路径，烧录进画面（compose/subtitles/mux；需 ffmpeg 含 libass）"},
+                        "duration": {"type": "number", "description": "可选：compose 每个图片素材的默认时长秒数（默认 3）"},
+                        "transition": {"type": "number", "description": "可选：compose 相邻镜头的交叉淡化秒数（0=硬切，默认 0）"},
+                        "effect": {"type": "string", "description": "可选：compose 图片运镜 none/kenburns/kenburns-in/kenburns-out（默认 kenburns）"},
+                        "resolution": {"type": "string", "description": "可选：compose 输出分辨率「宽x高」（默认 1920x1080）"},
+                        "fps": {"type": "integer", "description": "可选：compose 输出帧率（1-120，默认 30）"},
                     },
-                    "required": ["action", "input"],
+                    "required": ["action"],
                 },
             },
         },
     groups=['🎨 媒体与图像'],
-    phrases='音视频处理（ffmpeg）',
-    preactivate=(('ffmpeg', '视频处理', '转码', '提取音频', '视频截图', '剪辑'),),
+    phrases='音视频处理与视频合成（含参数直通）',
+    preactivate=(('ffmpeg', '视频处理', '转码', '提取音频', '视频截图', '剪辑'), ('合成视频', '图片转视频', '加字幕', '配乐', '混音', '运镜', '转场')),
 )
-def media_ffmpeg(action="info", input="", output="", time="", width=0, format=""):
-    """音视频：info / thumbnail / transcode / extract_audio（参数白名单化）。"""
+def media_ffmpeg(action="info", input="", output="", time="", width=0, format="",
+                 args=None, items=None, audio="", bgm="", subtitle="",
+                 duration=3.0, transition=0.0, effect="kenburns",
+                 resolution="1920x1080", fps=30):
+    """音视频处理与视频合成（ffmpeg）。
+
+    action=run 直通任意 ffmpeg 参数（argv 直传、无 shell，仅受用户命令黑名单约束）；
+    action=compose 把图片/视频序列合成为成片（运镜/转场/旁白/BGM/字幕）；
+    subtitles/mux 给已有视频加字幕与音轨；其余保持原有 info/thumbnail/transcode/extract_audio。
+    """
     act = str(action or "info").strip().lower()
-    if act not in ("info", "thumbnail", "transcode", "extract_audio"):
-        return "错误：action 仅支持 info / thumbnail / transcode / extract_audio"
-    if not str(input or "").strip():
-        return "错误：input 必填"
-    ok, reason = permissions.check_filesystem(input, write=False)
-    if not ok:
-        return reason
-    src = permissions.resolve(input)
-    if not src or not os.path.isfile(src):
-        return f"错误：源文件不存在：{input}"
-    try:
-        if os.path.getsize(src) > MEDIA_MAX_INPUT:
-            return "错误：输入文件超过 2GB 上限"
-    except OSError:
-        pass
+    if act not in ("info", "thumbnail", "transcode", "extract_audio",
+                   "compose", "subtitles", "mux", "run"):
+        return ("错误：action 仅支持 info / thumbnail / transcode / extract_audio / "
+                "compose / subtitles / mux / run")
+
+    # ---- run：任意 ffmpeg 参数直通（argv 直传，无 shell；仅过用户命令黑名单）----
+    if act == "run":
+        raw = args
+        if isinstance(raw, str):
+            import shlex
+            try:
+                raw = shlex.split(raw)
+            except ValueError as e:
+                return f"错误：args 解析失败: {e}"
+        if not isinstance(raw, (list, tuple)) or not raw:
+            return ('错误：action=run 需要 args 数组，如 '
+                    '["-i","in.mp4","-vf","hflip","-y","out.mp4"]')
+        argv = [str(x) for x in raw]
+        ok, reason, _ = permissions.check_shell(" ".join(argv))
+        if not ok:
+            return reason
+        code, text = _ffmpeg_run(argv)
+        if code is None:
+            return f"错误：{text}"
+        tail = (text or "").strip()
+        head = "ffmpeg 执行完成（退出码 0）" if code == 0 else f"ffmpeg 退出码 {code}"
+        return head + (f"\n{tail[-1500:]}" if tail else "")
+
+    src = ""
+    if str(input or "").strip():
+        ok, reason = permissions.check_filesystem(input, write=False)
+        if not ok:
+            return reason
+        src = permissions.resolve(input)
+        if not src or not os.path.isfile(src):
+            return f"错误：源文件不存在：{input}"
+        try:
+            if os.path.getsize(src) > MEDIA_MAX_INPUT:
+                return "错误：输入文件超过 2GB 上限"
+        except OSError:
+            pass
+
+    # ---- compose：图片/视频序列 → 成片 ----
+    if act == "compose":
+        if not str(output or "").strip():
+            return "错误：compose 需要 output（输出路径）"
+        out = permissions.resolve(output)
+        if not out:
+            return "错误：输出路径无效"
+        if not out.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi")):
+            out += ".mp4"
+        ok, reason = permissions.check_filesystem(out, write=True)
+        if not ok:
+            return reason
+        mats = list(items) if isinstance(items, (list, tuple)) and items else ([src] if src else [])
+        res, note, err = _mv_compose(
+            mats, out, durations=None, duration=duration, effect=effect,
+            transition=transition, resolution=resolution, fps=fps,
+            audio=audio, bgm=bgm, subtitle=subtitle)
+        if err:
+            return f"错误：{err}"
+        size = os.path.getsize(res) if os.path.exists(res) else 0
+        permissions.audit("media_ffmpeg_compose", res, note)
+        return f"已合成视频保存至 {res}（{size / 1024 / 1024:.1f} MB；{note}）"
+
+    # ---- subtitles / mux：给已有视频加字幕/音轨 ----
+    if act in ("subtitles", "mux"):
+        if not src:
+            return f"错误：{act} 需要 input（源视频）"
+        if not str(output or "").strip():
+            return f"错误：{act} 需要 output（输出路径）"
+        if not (str(audio or "").strip() or str(bgm or "").strip() or str(subtitle or "").strip()):
+            return f"错误：{act} 至少需要 audio / bgm / subtitle 之一"
+        out = permissions.resolve(output)
+        if not out:
+            return "错误：输出路径无效"
+        if not out.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi")):
+            out += ".mp4"
+        res, note, err = _mv_finish(src, out, audio=audio, bgm=bgm, subtitle=subtitle)
+        if err:
+            return f"错误：{err}"
+        size = os.path.getsize(res) if os.path.exists(res) else 0
+        permissions.audit("media_ffmpeg_" + act, res, note)
+        return f"已保存至 {res}（{size / 1024 / 1024:.1f} MB；{note}）"
+
+    if not src:
+        return f"错误：{act} 需要 input"
     if act == "info":
         code, text = _ffmpeg_run(["-hide_banner", "-i", src], timeout=20)
         if code is None:
@@ -1203,9 +1663,14 @@ def media_ffmpeg(action="info", input="", output="", time="", width=0, format=""
                 return "错误：width 应为 16-7680 的整数"
         args = ["-hide_banner", "-y", "-i", src]
         if w:
-            args += ["-vf", f"scale={w}:-2", "-c:v", "libx264", "-preset", "veryfast"]
+            args += ["-vf", f"scale={w}:-2"]
         if fmt in ("mp3", "ogg", "flac", "wav"):
             args += ["-vn"]
+        elif fmt == "webm":
+            # webm 容器只收 vp8/vp9/av1 与 opus/vorbis：给 h264/aac 源直接 remux 会失败
+            args += ["-c:v", "libvpx-vp9", "-b:v", "1M", "-c:a", "libopus"]
+        elif w:
+            args += ["-c:v", "libx264", "-preset", "veryfast"]
         args += [out]
     else:  # extract_audio
         # 强制转码（copy 与目标容器可能不兼容；testsrc 无音频流时 mp3 也能正常产出空流）

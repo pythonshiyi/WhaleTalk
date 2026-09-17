@@ -23,6 +23,7 @@ from .tool_data import *   # noqa: F401,F403  # read_csv / write_csv
 from .tool_media import *  # noqa: F401,F403  # 媒体与图像 10 工具
 from .tool_docs import *  # noqa: F401,F403  # 📊 数据与文档
 from .tool_desktop import *  # noqa: F401,F403  # 🖱 桌面与视觉语音
+from .tool_mv import *  # noqa: F401,F403  # 🎬 微电影/MV 一键成片（依赖 tool_desktop）
 from .tool_system import *  # noqa: F401,F403  # 🔧 系统与项目
 from .tool_msg import *  # noqa: F401,F403  # 📧 邮件与消息
 from .tool_brain import *  # noqa: F401,F403  # 🧠 记忆与定时任务
@@ -149,6 +150,7 @@ __all__ = [
     'image_generate',
     'qrcode',
     'media_ffmpeg',
+    'mv_compose',
     'team_run',
     'database_query_mysql',
     'database_query_postgres',
