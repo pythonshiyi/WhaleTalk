@@ -1,5 +1,6 @@
 import React from "react";
 import * as api from "../api.js";
+import { Icon } from "./icons.jsx";
 
 // ── U7 大脑健康盘：体检分 + 问题清单 + 一键修复（F6 doctor / B4 snapshot_index）────────
 // 点按加载，调 brainAction doctor 拉结构化健康数据；避免把 O(n²) 体检塞进每次 status 轮询。
@@ -7,6 +8,7 @@ function BrainHealth() {
   const [health, setHealth] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [fixing, setFixing] = React.useState(false);
+  const [merging, setMerging] = React.useState(false);
   const [err, setErr] = React.useState("");
 
   const runDoctor = async (fix = false) => {
@@ -27,7 +29,15 @@ function BrainHealth() {
   };
   React.useEffect(() => { runDoctor(false); }, []);
 
-  if (err) return <div className="sched-text" style={{ color: "var(--danger-text)" }}>⚠ {err}</div>;
+  const mergeDups = async () => {
+    setMerging(true);
+    await api.brainAction({ action: "doctor-merge-dups" }).catch(() => null);
+    const d = await api.brainAction({ action: "doctor" }).catch(() => null);
+    if (d && d.ok) setHealth(d);
+    setMerging(false);
+  };
+
+  if (err) return <div className="sched-text" style={{ color: "var(--danger-text)" }}><Icon name="warning" size={13} /> {err}</div>;
   if (!health)
     return (
       <div style={{ display: "flex", gap: 18, alignItems: "center", padding: "6px 2px" }}>
@@ -66,11 +76,16 @@ function BrainHealth() {
             未回执决策 {health.open_decisions ?? 0} · 快照 {health.snapshots ?? 0}
             {health.open_conflicts ? ` · 冲突 ${health.open_conflicts}` : ""}
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button className="msg-op" disabled={busy} onClick={() => runDoctor(false)}>🔄 复查</button>
-            {(health.problems || []).length > 0 && (
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <button className="msg-op" disabled={busy} onClick={() => runDoctor(false)}><Icon name="refresh" size={13} /> 复查</button>
+            {health.stale > 0 && (
               <button className="confirm-btn" style={{ padding: "3px 12px" }} disabled={fixing} onClick={() => runDoctor(true)}>
-                {fixing ? "修复中…" : "🧹 一键修复陈旧记忆"}
+                {fixing ? "修复中…" : <><Icon name="eraser" size={13} /> 归档陈旧记忆（{health.stale}）</>}
+              </button>
+            )}
+            {health.dups > 0 && (
+              <button className="msg-op" disabled={merging} onClick={mergeDups}>
+                <Icon name="git-branch" size={13} /> {merging ? "合并中…" : `合并疑似重复（${health.dups}）`}
               </button>
             )}
           </div>
@@ -83,7 +98,7 @@ function BrainHealth() {
           ))}
         </ul>
       ) : (
-        <div className="sched-text" style={{ opacity: 0.7, marginTop: 10 }}>✓ 状态良好，无需处理。</div>
+        <div className="sched-text" style={{ opacity: 0.7, marginTop: 10 }}><Icon name="check" size={12} /> 状态良好，无需处理。</div>
       )}
     </div>
   );

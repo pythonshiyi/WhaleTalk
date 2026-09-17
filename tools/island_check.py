@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """工具系统全链路「孤岛」对账（WhaleTalk 开发工具链）。
 
-对 9 层信息做差集对账，确保每个工具在每一层都可被发现/可被调用，
+对 10 层信息做差集对账，确保每个工具在每一层都可被发现/可被调用，
 不存在「有实现但模型看不到 / 有 schema 但调不动 / UI 归不了类」的孤岛：
 
   1. TOOLS schema ↔ TOOL_CALL_MAP 实现映射
@@ -13,6 +13,7 @@
   7. config.json enabled_tools 幽灵启用
   8. SELF_EVOLUTION_TOOLS 存在性
   9. config_defaults.BUILTIN_TOOL_NAMES 存在性
+  10. agent_tools.__all__ re-export 完整性（保住 dc.<tool_name> 旧访问路径）
 
 用法：
     python tools/island_check.py            # 对账并输出报告（默认返回 0）
@@ -113,6 +114,24 @@ def main(argv=None):
     for pf in tool_files:
         defined |= {n.name for n in ast.walk(_parse(pf))
                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    # agent_tools 域模块内定义的函数名 + 聚合 __all__（第 10 层：re-export 完整性）。
+    at_files = _tool_files()
+    at_defined = set()
+    for pf in at_files:
+        at_defined |= {n.name for n in ast.walk(_parse(pf))
+                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    at_all = set()
+    init_path = TOOL_DIR / "__init__.py"
+    if init_path.exists():
+        for node in _parse(init_path).body:
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Name) and t.id == "__all__":
+                        try:
+                            at_all = set(ast.literal_eval(node.value))
+                        except Exception:
+                            at_all = set()
+    expected_reexport = {impl for impl in call_map.values() if impl and impl in at_defined}
     group_members = {m for _, ms in layers["TOOL_GROUPS"] for m in ms}
     phrases = set(layers["_TOOL_ACTION_PHRASES"])
     pre_covered = {t for _, ts in layers["_PREACTIVATE_HINTS"] for t in ts}
@@ -152,9 +171,10 @@ def main(argv=None):
     add("enabled_tools 幽灵启用", sorted(enabled - tool_names))
     add("SELF_EVOLUTION 幽灵", sorted(self_evo - tool_names))
     add("BUILTIN 幽灵", sorted(builtin - tool_names))
+    add("agent_tools.__all__ 漏 re-export", sorted(expected_reexport - at_all))
 
     print("=" * 64)
-    print(f"孤岛对账: {len(tool_names)} 工具 × 9 层")
+    print(f"孤岛对账: {len(tool_names)} 工具 × 10 层")
     print("=" * 64)
     if not gaps:
         print("✅ 全部联通：无孤岛")

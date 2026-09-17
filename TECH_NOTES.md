@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 技术文档（Web 版 · v3.14.1）
+# 鲸语 WhaleTalk 技术文档（Web 版 · v3.16.0）
 
 本文档面向后续维护/开发的 AI 智能体，描述 Web 架构（v3.0+）下的系统结构、数据流、核心约定与踩坑记录。符号名为准，行号随代码演化漂移，本文档不承诺行号。
 
@@ -26,12 +26,12 @@ DeepSeek 已把全部模型升级为**单一原生多模态模型**，本产品�
 - 回归：`tests/test_gateway_compat.py`。
 
 - 品牌：鲸语 WhaleTalk（独立产品，与 DeepSeek 官方无关联）。对外展示一律使用品牌名，技术描述可写"基于 DeepSeek API"。
-- **版本单一源**：`config_defaults.VERSION`（当前 3.14.0）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
+- **版本单一源**：`config_defaults.VERSION`（当前 3.16.0）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
 - 入口形态：**纯 Web + 托盘常驻**。浏览器是唯一界面；无 pywebview 原生窗口（desktop.py 已废弃）。
 
 ## 1. 项目概览
 
-Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、155 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、鲸语大脑（跨会话灵魂）、插件体系（.wtplugin v2）、公众号自动写作。
+Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、161 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、鲸语大脑（跨会话灵魂）、插件体系（.wtplugin v2）、公众号自动写作。
 
 - 运行时：Python 3.9+（开发 3.12），核心依赖仅 `openai` / `httpx`，其余全部可选（缺失自动降级提示）
 - API 层：标准库 `http.server.ThreadingHTTPServer`（**无 Flask/无框架**）
@@ -43,8 +43,8 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
 ├── api_server.py           # 本地 HTTP API（REST + SSE，98+ /v1 端点）
-├── deepseek_client.py      # 能力引擎：DeepSeekClient + 155 工具 + smart_tools（4,735 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
-├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop 共 11 模块 117 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
+├── deepseek_client.py      # 能力引擎：DeepSeekClient + 161 工具 + smart_tools（4,735 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
+├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop/mv/codegen 共 13 模块 159 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
 ├── security.py             # SSRF 防护（云元数据永远拦截）
 ├── crypto.py               # API Key DPAPI 加密（fail-closed）
@@ -134,7 +134,7 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 ```
 前端 Composer → POST /v1/chat/stream
   → _valid_messages（角色/长度/条数校验）
-  → _sync_full_auto（同步权限 FULL_AUTO）
+  → _sync_request_full_auto（按本次请求 mode 同步权限 FULL_AUTO）
   → _client_from_cfg（Profile/模型/Key 解析）
   → _chat_kwargs（mode=task/dialog 决定 tools/pure_chat；thinking/温度/seed 透传）
   → _inject_system_messages（见 §7）
@@ -232,6 +232,7 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 - 分支合并：快照带血缘，`merge` 找 LCA 三路合并（记忆 jsonl 行级智能合并——按 id 三方比对，并集+字段融合、text 冲突取 ts 新者，永不整文件冲突；日志行级并集、JSON 字段级、冲突逐条裁决）；合并结果 `.lineage` 保留双亲/祖先续链；`merge-resolve --keep ours|theirs|both|custom`（拒绝旧版 jsonl 整文件冲突，防截断样本毁库）
 - 守护并入调度循环（单一调度源）：每 ≥6h 心跳 + 每日 22:00 自动快照 + 28h 兜底快照；`stop_server` 收尾自动心跳留断点；滚动 prune 自动豁免血缘引用快照（LCA 祖先不丢）
 - AI 对话自动注入大脑上下文（身份 + 断点 + 进行中目标 + 自我认知[知道/不确定/局限] + 待回执决策 + 记忆）；记忆按当前话题语义检索（用户消息尾部作 query），无 query 时按重要度×时间衰减 Top-N（`_ts_epoch` 混时区统一口径）；记忆写入原子 append
+- 前端 API（brain_action）：管理动作（mount/unmount/heartbeat/archive/restore/merge/migrate/share/doctor…）之外，另有一组**只读观察**动作供大脑页消费——`thinking-list`（思考日志）/ `self-model` / `evolution-list` / `review-due`（F4）/ `brain-search`（记忆·决策·快照·思考全局检索）/ `lineage`（快照血缘图，只读元数据不解包）/ `diff-current`（暂存当前大脑与快照对比）/ `context-preview`（对话上下文预览，懒加载）。`brain_status(with_context=False)` 默认不算预览
 
 ## 14. 插件体系（.wtplugin v2）
 
@@ -278,7 +279,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 ## 17. 工程实践
 
 - **CI**（.github/workflows/ci.yml）：`check`（ruff 关键规则 E9/F63/F7/F82 + 入口 py_compile）· `test-backend`（`pytest tests/`，28 用例，依赖 `requirements-dev.txt` 锁 pytest 版本）· `webui`（npm ci + build + `npm test` 三个 node 套件）· 门禁 job（`tools/audit_tools.py --strict` / `tools/validate_tools.py` / `tools/island_check.py` / `tools/check_docs.py`）。pytest 的 `addopts=-p no:asyncio` 在 `pyproject.toml` 固化，本地与 CI 行为一致
-- **本地门禁**：`tools/audit_tools.py`（六层一致性，error 级 `--strict` 返回非 0；warn 级仅提示）· `tools/validate_tools.py`（smart_tools 全链路：能力地图 / compact **无损**校验（描述不得被删减）/ schema 可序列化 / 描述保真与参数覆盖 / 数组参数带 items）· `tools/island_check.py`（九层孤岛对账）· `tools/check_docs.py`（README/TECH_NOTES/MODULES 数字与源码一致，`--fix` 自动修正）
+- **本地门禁**：`tools/audit_tools.py`（六层一致性，error 级 `--strict` 返回非 0；warn 级仅提示）· `tools/validate_tools.py`（smart_tools 全链路：能力地图 / compact **无损**校验（描述不得被删减）/ schema 可序列化 / 描述保真与参数覆盖 / 数组参数带 items）· `tools/island_check.py`（十层孤岛对账）· `tools/check_docs.py`（README/TECH_NOTES/MODULES 数字与源码一致，`--fix` 自动修正）
 - **依赖**：`deps.py` 分层（硬依赖同步安装 / 自动安装后台 / 重型可选）；清华源镜像（`WHALETALK_PIP_MIRROR` 可覆盖）
 - **打包**：`build_exe.bat` → PyInstaller（WhaleTalk.spec：webui/dist + sample_plugins 内置；playwright/faster-whisper/PyMuPDF 等大型依赖排除）
 - **备份**：`backup.py` 源码快照（compresslevel=1；排除 .venv/dist/backups/.git 等）

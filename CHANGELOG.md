@@ -2,6 +2,175 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.0（2026-09-17）—— 🎞 图像流水线补全：局部重绘 · 控制图 · 精灵表 · 确定性 GIF · 混合渲染
+
+**版本号 3.15.0 → 3.16.0。** 工具 156 → 161，把「生图 → 可控编辑 → 多帧动画 → 结构 + 质感」这条链路补齐。
+
+### 新增工具（5）
+
+- **`image_inpaint` 局部重绘**：用 `region`（x,y,w,h）或掩膜圈定区域，按 prompt 只重画该区域——
+  优先走图生图 `/images/edits`；后端不支持时自动「生成补丁 + 羽化合成」兜底。同时产出 `.mask.png`。
+- **`control_map` 控制图**：纯本地、确定性提取 `edge`（Sobel）/ `lineart`（线稿）/ `gray` / `silhouette`（剪影）/ `threshold`，可作 ControlNet 式结构条件或线稿素材。
+- **`sprite_sheet` 多帧精灵表**：帧可为图片路径或**内联 HTML 片段**（自动渲染成帧），拼成网格或横向长条，可选同时导出 GIF。
+- **`make_gif` 确定性 GIF**：固定帧率 / 循环、固定中位切分量化、无抖动、不优化——**相同输入逐字节可复现**。
+- **`image_hybrid` 混合渲染**：代码先渲染结构底图（或给定底图）→ 图生图补高频质感 → 按 `strength` 混合；后端不支持图生图时**优雅降级**交付结构底图。
+
+### 设计
+
+- 沿用「程序负责可压缩的低频结构，先验负责不可压缩的高频残差」：结构走代码（确定性、可复现），质感走扩散；
+  `image_inpaint` / `image_hybrid` 复用统一图像后端（`IMAGE_GEN_KEY/BASE/MODEL`），**无新依赖**。
+- 多帧与 GIF 是**动画 / MV / 短剧**链路的第一块砖：帧可用代码（HTML）生成，天然可控、可复现。
+
+### 工程
+
+- 全部并入 `agent_tools/tool_codegen.py`；六层注册齐备（`_TOOL_ORDER` / `_HINT_ORDER` / `_TOOL_DOMAIN` / `agent_tools.__all__`），
+  `audit --strict` / `validate` / `island --strict`（160×10 层）全绿；文档计数同步 155 → 160。
+
+### 验证
+
+`pytest` **671 passed**（新增 `tests/test_image_pipeline.py` 11 项：控制图五种 / 精灵表尺寸 / GIF 逐字节确定性 / 重绘双路径 / 混合渲染双路径与降级）· 四门禁全绿。
+
+---
+
+## v3.15.0（2026-09-17）—— 🎨 代码生图：结构化图像走确定性通道 + 视觉自评闭环
+
+**版本号 3.14.5 → 3.15.0。** 新增工具 `image_codegen`（工具 155 → 156），把「模型缺的是手不是脑」落成能力——用代码作画，再让模型自看、自改。
+
+### 新增工具 `image_codegen`
+
+- **代码即画布**：给定 brief 与类型（插画 / 图标 / 信息图 / 像素风 / UI / 示意图 / 海报 / 标志）与尺寸，
+  模型先写一份**自包含 HTML/CSS/SVG** 源码。
+- **渲染 + 自评闭环**：`html_render`（系统 Edge）渲染成 PNG → `image_understand` 多模态自评
+  （`{"score","issues","verdict"}`）→ 不达标按审查意见改源码重渲，**≤4 轮**收敛即止。
+- **源码与成品同时交付**：PNG 旁落同名 `.html`（可再编辑）；支持 `refine_source` 在既有源码上迭代。
+- **定位清晰**：面向低熵、强结构图；写实照片 / 复杂质感仍用 `image_generate`（扩散后端）——两者互补而非替代。
+- **零外部资源**：仅系统字体 + 内联 CSS/SVG，不联网；渲染失败也会保存源码供手动渲染。
+- **成本可控**：`max_rounds=1` 只生成不自评；默认 2 轮。
+
+### 设计依据
+
+- 借鉴本地项目 **PixelScribe（像素画笔，MIT）** 的「符号 DSL + 渲染回灌 + 自我修正」思路：
+  光栅对 Transformer 不友好、符号友好；闭环把一次性生成变成渐进式雕塑；差分优于重绘。
+- WhaleTalk 侧复用既有 `html_render` / `image_understand`，**不引入任何新依赖**。
+
+### 工程
+
+- 新模块 `agent_tools/tool_codegen.py`；六层注册齐备（`_TOOL_ORDER` / `_HINT_ORDER` / `_TOOL_DOMAIN` / `agent_tools.__all__`），`audit --strict` / `validate` / `island --strict` 全绿。
+- 文档计数同步 154 → 155（README / MODULES / TECH_NOTES）。
+
+### 验证
+
+`pytest` **660 passed**（新增 `tests/test_image_codegen.py` 7 项：源码提取 / 提示约束 / 闭环收敛 / 单轮省成本 / 渲染失败保源码）· 四门禁全绿。
+
+---
+
+## v3.14.5（2026-09-17）—— 🧠 大脑功能补全：可见性 · 联动 · 检索 · 血缘
+
+**版本号 3.14.4 → 3.14.5。** 承接 v3.14.3 的分区重构，补齐「数据都在、界面没给」的功能缺口与若干确凿缺陷。
+
+### 修复
+
+- **心跳输入框不清空**：唤醒 / 记录想法 / 安睡后 `thought` 未复位，陈旧断点会被重复写入 → 成功后清空。
+- **「标记重要」丢失原重要度**：4 → 5 → 3 不可逆，原值 4 永久丢失 → 记住原值，取消时恢复。
+- **健康盘名不副实**：按钮「一键修复」实际只归档陈旧记忆 → 改为「归档陈旧记忆（N）」，并按项新增「合并疑似重复（N）」。
+- **创世化重复应用无确认**：再次应用会覆盖名字/前史/声音 → 应用前二次确认。
+- **知识库状态把错误当索引**（v3.14.3 已修，此处归档说明）。
+
+### 新增（后端 brain_api / brainkit + 前端）
+
+- **思考日志上屏**：`brainkit.load_thinking` + action `thinking-list`；认知时间轴新增「思考」类别，思考历程不再只是计数。
+- **自我认知 / 演化账本 / 待复习**：action `self-model` / `evolution-list` / `review-due`；总览新增面板，把每轮注入的自我认知与 F4 复习提醒显性化。
+- **全局检索**：action `brain-search`，一次搜索横跨 记忆 / 决策 / 快照 / 思考日志，结果可深链到对应分区。
+- **快照血缘图**：action `lineage`（只读元数据，不解包快照、不依赖密钥）；时光备份升级为 git-log 式 DAG（延续 / 恢复来源 / 融合）。
+- **恢复前对比**：action `diff-current`（暂存当前大脑 → 与快照 diff），恢复前先看差异再决定。
+- **记忆实体 / 关系编辑**：`update_memory` 支持 `entities`/`relations`；记忆编辑器可标注，实体图谱因此可真正生长。
+- **记忆 ↔ 图谱联动**：图谱节点点击按实体筛记忆；记忆上的实体标签点击反向筛选。
+- **目标 / 首诞引导 / 自我述职**：总览显示进行中目标与「三步」引导；成长轨迹一键生成本周述职。
+- **分页**：认知时间轴与决策看板支持「显示更多」。
+
+### 优化
+
+- **状态懒加载**：`brain_status(with_context=False)` 默认不再计算对话上下文预览（避免每次取状态都做衰减排序），改按需 action `context-preview`。
+- **时间轴数据缓存**：概览与成长共用 12s TTL 缓存，记忆 / 决策变更时主动失效。
+- **图谱交互**：圆形布局半径随节点数自适应、支持缩放 / 拖拽、点击筛选、标签 12 字。
+- **无障碍**：顶层与二级分区页签支持左右方向键切换，补齐 `aria-controls`/`tabpanel` 语义。
+
+### 验证
+
+`pytest` **653 passed**（新增 `tests/test_brain_ui_actions.py` 10 项）· 四门禁全绿（audit `--strict` · validate · island `--strict` · check_docs）· 前端 `npm test`（brainLayout 守卫扩至 4 条）· `npm run build` · `npm run typecheck`。
+
+---
+
+## v3.14.4（2026-09-17）—— 🧠 大脑页重排：从「十几张卡平铺」到三分区
+
+**版本号 3.14.3 → 3.14.4。** 大脑指挥舱信息层级重整：日常状态与低频/危险操作分离。
+
+### 问题
+
+- 原「指挥舱」把身份、健康、时间轴、洞察、心跳、备份、融合、迁徙、分享、清理、上下文
+  十几张同权重卡片垂直堆叠——没有视觉落点、信息重复（备份入口 ×2、快照数 ×3）、危险操作
+  与日常状态混排，用户反映「太乱、看不出这页在表达什么」。
+
+### 改动（前端）
+
+- **指挥舱二级分区**：`BrainBlock` 重排为「状态总览 / 成长轨迹 / 备份与延续」三个分区
+  （`brain-subtabs` 分段控件）：
+  - **状态总览**：身份 Hero + 生命体征 + 意识状态 + 健康盘 + 「最近动态」（时间轴前 5 条）
+    + 折叠的「对话中的我」「创世化初始」——一屏可读。
+  - **成长轨迹**：完整认知时间轴 + 决策看板 + 实体图谱。
+  - **备份与延续**：时光备份（恢复/对比）+ 生命延续（融合/迁徙/分享/清理），全部折叠。
+- **危险/低频操作隔离**：融合、迁徙、分享、清理从总览移入新组件 `BrainContinuity.jsx`；
+  创世化初始移入新组件 `BrainGenesis.jsx`（默认折叠、展开自动生成候选）。
+- **去重**：备份入口只保留一处；快照数只保留在生命体征；移除重复/常驻说明块。
+- **记忆库整理**：检索与「记录记忆 / 睡眠巩固」收进同一工具栏；进行中目标、知识库折叠
+  收纳到列表下方，按钮不再散落上下。
+- **视觉统一**：界面 chrome 的 emoji 全部替换为 SVG 图标（设计系统 §8），新增
+  `moon/power/target/share` 图标；新增 `.brain-subtabs` 等样式。
+
+### 验证
+
+`npm test`（新增 `tests/brainLayout.test.mjs`：分区结构 / 危险操作隔离 / chrome 无 emoji
+三道回归门禁）· `npm run build` · `npm run typecheck` 全绿。
+
+---
+
+## v3.14.3（2026-09-17）—— 🧹 审查修复批次：门禁补层 · 资源收口 · 死代码清理
+
+**版本号 3.14.2 → 3.14.3。** 针对全量架构审查发现的潜在缺陷与缺口做收口，不增删对外能力。
+
+### 修复
+
+- **`failure_memory` 旧访问路径失效**：工具已在 `agent_tools/tool_brain.py` 注册、可经
+  `TOOL_CALL_MAP` 触发，但漏在 `agent_tools.__all__` → `dc.failure_memory` 静默不可达。
+  已补入并加回归锁。
+- **入站 webhook 接收端无法优雅关闭**：`_inbound_loop` 的 `ThreadingHTTPServer` 只存
+  局部变量，`stop_server` 拿不到句柄 → 端口在进程重启前一直被占用（表现为「改了
+  `inbound_port` 却仍连旧端口」）。现回填 `_INBOUND_SERVER`，`stop_server` 中
+  `shutdown()/server_close()` 并复位线程句柄。
+- **兜底落盘的订阅数竞态**：作业线程在 `finally` 裸读 `job.subscribers`（订阅者增减都在
+  `job.cond` 内）→ 可能误判而重复落盘或漏存。现于锁内读取。
+- **`app_utils.apply_privacy_logging` 缺 `logging.handlers` 导入**：`isinstance(...,
+  logging.handlers.RotatingFileHandler)` 在子模块未预导入时抛 `AttributeError`。已在模块
+  顶部显式 `import logging.handlers`。
+- **`app_utils.is_empty_shell` 缓存不区分路径**：以「首次结果」全局缓存，第二次换目录会
+  串用结果。改为按规范化路径缓存。
+
+### 优化 / 完善
+
+- **孤岛对账第 10 层**：新增 `agent_tools.__all__` re-export 完整性校验，`island_check.py`
+  由九层升为十层；CI 的 `gate-tools` 改用 `--strict`（此前不带 `--strict`，门禁形同虚设）。
+- **死代码清理**：移除从未调用的 `_sync_full_auto()`、`MAX_ROUNDS`，以及仅被写入从不读取的
+  `_TOOLS_PROVIDER`/`_CHAT_PROVIDER`（连同 `start_server` 的两个未使用入参）。
+- **文档同步**：README / MODULES / TECH_NOTES / AI_PROJECT_GUIDE 的版本号与「九层」表述更新。
+
+### 验证
+
+`pytest` **643 passed**（新增 `tests/test_app_utils.py` 2 项 + `test_tool_split.py` 3 项 +
+`test_api_routes.py` 1 项）· 四门禁全绿（audit `--strict` · validate · island `--strict` 十层 ·
+check_docs）· `ruff E9,F63,F7,F82` + 入口 `py_compile` 通过。
+
+---
+
 ## v3.14.2（2026-09-17）—— 🎬 微电影/MV 能力：放开媒体限制 + 一键成片
 
 **版本号 3.14.1 → 3.14.2。** 贯彻「法无禁止皆可为、黑名单为唯一限制来源」：把此前工具里的**参数白名单式硬编码**换成**能力直通 + 用户黑名单拦截**，并补齐从「素材」到「成片」的合成层。
@@ -23,7 +192,6 @@
 
 - `tools/validate_tools.py`：155 工具全链路通过；`tools/audit_tools.py --strict`：error 0 / warn 0；`tools/check_docs.py`：文档数字（154→155）与源码一致；`python -m pytest tests`：**637 passed**。
 - 实跑冒烟：`media_ffmpeg compose`（运镜+转场）→ 输出 2.08s mp4；`compose+字幕` 烧录成功（imageio-ffmpeg 自带 ffmpeg 含 libass）；`action=run` 直通生成色块视频；`mv_compose` 三镜（图+TTS 旁白+字幕）输出 6.08s 含 aac 音轨的 mp4。
-
 ## v3.14.1（2026-09-16）—— 🧵 后台作业式流式对话：切页 / 关标签 / 多标签页都不打断
 
 **版本号 3.14.0 → 3.14.1。** 修复「回答生成中切到设置或其它页面后被截断、会话保存失败」。

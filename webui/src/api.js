@@ -782,9 +782,10 @@ export async function getTrustTimeline() {
 
 // ── 鲸语大脑 ─────────────────────────────────────────
 
-/** @returns {Promise<Object>} 大脑状态（brain_status 30+ 字段） */
-export async function getBrain() {
-  return api("/v1/brain");
+/** @param {boolean} [withContext] 是否一并计算对话上下文预览（默认否，预览按需经 brainAction context-preview 取）
+ * @returns {Promise<Object>} 大脑状态（brain_status 30+ 字段） */
+export async function getBrain(withContext = false) {
+  return api(`/v1/brain${withContext ? "?context=1" : ""}`);
 }
 /**
  * 大脑操作（mount/unmount/archive/restore/merge/export-key/import-key 等 24 个 action）。

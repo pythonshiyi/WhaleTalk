@@ -10,6 +10,7 @@ import base64
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -47,8 +48,39 @@ def _run(func, **kwargs):
         return 1, (buf.getvalue() + f"\n[异常] {e}").strip()
 
 
-def brain_status():
-    """大脑状态 dict；未初始化返回 None。"""
+def _snapshot_list() -> list:
+    """快照清单（版本/大小/时间），供状态与检索复用。"""
+    versions = sorted(bk.ARCHIVE_DIR.glob("brain_v*.whale")) if bk.ARCHIVE_DIR.exists() else []
+    out = []
+    for v in versions:
+        try:
+            ver = int(v.stem.rsplit("_v", 1)[-1])
+        except (ValueError, IndexError):
+            continue
+        st = v.stat()
+        out.append({
+            "name": v.name,
+            "version": ver,
+            "size_kb": round(st.st_size / 1024, 1),
+            "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime)),
+        })
+    return out
+
+
+def context_preview(max_memories: int = 3):
+    """对话注入的上下文预览（按需调用：brain_status 默认不再计算，避免每次取状态都做衰减排序）。"""
+    try:
+        return brain_context(max_memories=max_memories)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def brain_status(with_context: bool = True):
+    """大脑状态 dict；未初始化返回 None。
+
+    with_context=False 时跳过 context_preview 计算（前端首次加载只需状态，
+    预览等用户展开时再经 brain_action('context-preview') 按需取）。
+    """
     try:
         m = bk.load_manifest()
     except SystemExit:
@@ -57,14 +89,9 @@ def brain_status():
     ident = bk.load_json(bk.BRAIN_DIR / "identity.json", {})
     mem_count = len(bk.load_memories())
     think_files = sum(1 for _ in bk.THINKING_DIR.glob("*.md")) if bk.THINKING_DIR.exists() else 0
-    versions = sorted(bk.ARCHIVE_DIR.glob("brain_v*.whale")) if bk.ARCHIVE_DIR.exists() else []
+    snapshots = _snapshot_list()
     conflicts = bk.load_json(bk.MERGE_CONFLICT_FILE, {})
     lineage = bk.load_json(bk.LINEAGE_FILE, {})
-    context_preview = None
-    try:
-        context_preview = brain_context(max_memories=3)
-    except Exception:  # noqa: BLE001
-        pass
     return {
         "brain_id": m.get("brain_id"),
         "fingerprint_ok": bk.verify_fingerprint(m),
@@ -86,17 +113,9 @@ def brain_status():
         "open_conflicts": len(conflicts.get("conflicts", [])) if conflicts else 0,
         "open_decisions": sum(1 for d in bk.list_decisions(limit=500) if d.get("status") == "open"),
         "self_model_source": (bk.load_json(bk.BRAIN_DIR / "self_model.json", {}) or {}).get("source"),
-        "current_version": int(versions[-1].stem.rsplit("_v", 1)[-1]) if versions else 0,
-        "context_preview": context_preview,
-        "snapshots": [
-            {
-                "name": v.name,
-                "version": int(v.stem.rsplit("_v", 1)[-1]),
-                "size_kb": round(v.stat().st_size / 1024, 1),
-                "mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(v.stat().st_mtime)),
-            }
-            for v in versions
-        ],
+        "current_version": snapshots[-1]["version"] if snapshots else 0,
+        "context_preview": context_preview() if with_context else None,
+        "snapshots": snapshots,
         "dir": str(bk.BRAIN_DIR),
         "goals": bk.load_goals(),
     }
@@ -578,6 +597,53 @@ def brain_action(action, payload=None):
                                   note=str(payload.get("note") or ""))
         return {"ok": bool(rec), "message": f"演化账本已记录 {rec['id']}" if rec else "标题为空",
                 "data": {"record": rec}}
+    if action == "context-preview":
+        # 对话上下文预览（懒加载：状态页展开「对话中的我」时才计算）
+        return {"ok": True, "data": {"preview": context_preview(int(payload.get("max_memories") or 3))}}
+    if action == "thinking-list":
+        items = _thinking_entries(days=int(payload.get("days") or 30),
+                                  limit=int(payload.get("limit") or 200))
+        return {"ok": True, "data": {"items": items}}
+    if action == "self-model":
+        return {"ok": True, "data": {"self_model": bk.load_json(bk.BRAIN_DIR / "self_model.json", {})}}
+    if action == "evolution-list":
+        evo = bk.load_json(bk.BRAIN_DIR / "evolution.json", {}) or {}
+        return {"ok": True, "data": {"proposals": evo.get("proposals", []),
+                                     "adopted": evo.get("adopted", [])}}
+    if action == "review-due":
+        due = _spaced_review_due(time.time(), limit=max(1, min(50, int(payload.get("limit") or 20))))
+        return {"ok": True, "data": {"items": [
+            {"id": e.get("id"), "text": e.get("text"), "type": e.get("type"),
+             "importance": e.get("importance"), "ts": e.get("ts"),
+             "hit_count": e.get("hit_count")} for e in due]}}
+    if action == "brain-search":
+        return {"ok": True, "data": _brain_search(
+            str(payload.get("q") or payload.get("query") or ""),
+            int(payload.get("limit") or 30))}
+    if action == "lineage":
+        return {"ok": True, "data": _lineage_graph()}
+    if action == "doctor-merge-dups":
+        n = _merge_duplicate_memories()
+        return {"ok": True, "message": f"已合并 {n} 组重复记忆（旧条归档，可恢复）", "data": {"merged": n}}
+    if action == "diff-current":
+        version = payload.get("version")
+        snap = bk.ARCHIVE_DIR / f"brain_v{version}.whale"
+        if not snap.exists():
+            return {"ok": False, "message": f"找不到快照 brain_v{version}.whale"}
+        stage = Path(tempfile.mkdtemp(prefix="whale-cur-"))
+        try:
+            tmp_brain = stage / "brain"
+            tmp_brain.mkdir(parents=True, exist_ok=True)
+            bk._stage_brain(tmp_brain)
+            zip_path = stage / "current.whale"
+            bk._zip_stage(tmp_brain, zip_path)
+            code, out = _run(bk.cmd_diff, snap_a=str(snap), snap_b=str(zip_path),
+                             passphrase=str(payload.get("passphrase") or ""))
+            return {"ok": code == 0, "message": out, "data": {"output": out}}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "message": f"对比失败: {e}"}
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
     return {"ok": False, "message": f"未知动作: {action}"}
 
 
@@ -625,6 +691,109 @@ def _graph_entities():
                  "types": sorted(ent_types.get(k, set()))[:6]}
                 for k, v in ent_map.items()]
     return {"entities": entities, "relations": list(edge_map.values())}
+
+
+def _thinking_entries(days: int = 30, limit: int = 200) -> list:
+    """思考日志（前额叶）条目，最新在前。"""
+    try:
+        return bk.load_thinking(days=days, limit=limit)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _lineage_graph() -> dict:
+    """快照血缘图（节点/边）：线性快照链 + 恢复来源 + 融合事件。
+
+    只读廉价元数据（快照清单 / .lineage.json / merge_log.json），不逐个解包快照，
+    因此不依赖密钥、可在状态页即时渲染。
+    """
+    snapshots = _snapshot_list()  # 升序
+    nodes, edges = [], []
+    for s in snapshots:
+        nodes.append({"id": f"v{s['version']}", "version": s["version"],
+                      "mtime": s["mtime"], "kind": "snapshot",
+                      "current": False, "name": s["name"]})
+    if nodes:
+        nodes[-1]["current"] = True
+    for i in range(1, len(nodes)):
+        edges.append({"from": nodes[i - 1]["id"], "to": nodes[i]["id"], "kind": "chain"})
+    lin = bk.load_json(bk.LINEAGE_FILE, {}) or {}
+    rf, la = lin.get("restored_from_version"), lin.get("last_archived")
+    if rf is not None and la is not None and int(rf) != int(la):
+        edges.append({"from": f"v{int(rf)}", "to": f"v{int(la)}", "kind": "restore"})
+    ml = bk.load_json(bk.MERGE_LOG_FILE, {}) or {}
+    for i, mg in enumerate(ml.get("merges", []) or []):
+        nid = f"m{i}"
+        nodes.append({
+            "id": nid, "version": None, "kind": "merge",
+            "mtime": str(mg.get("merged_at") or "")[:16],
+            "strategy": mg.get("strategy"),
+            "a": mg.get("a_version"), "b": mg.get("b_version"), "lca": mg.get("lca"),
+        })
+        for src in (mg.get("a_version"), mg.get("b_version")):
+            if src is not None:
+                edges.append({"from": f"v{int(src)}", "to": nid, "kind": "merge"})
+    return {"nodes": nodes, "edges": edges,
+            "current": (snapshots[-1]["version"] if snapshots else 0),
+            "restored_from": rf, "ancestors": lin.get("ancestors") or []}
+
+
+def _brain_search(q: str, limit: int = 30) -> dict:
+    """大脑全局检索：记忆 / 决策 / 快照 / 思考日志 四类分组返回。"""
+    q = str(q or "").strip()
+    limit = max(1, min(100, int(limit or 30)))
+    if not q:
+        return {"query": "", "memories": [], "decisions": [], "snapshots": [], "thoughts": []}
+    low = q.lower()
+    mems = [e for e in bk.search_memories(q, limit) if not e.get("archived")][:limit]
+    decs = [d for d in bk.list_decisions(limit=500)
+            if low in json.dumps(d, ensure_ascii=False).lower()][:limit]
+    snaps = [s for s in _snapshot_list()
+             if low in str(s.get("name", "")).lower() or q == str(s.get("version"))][:limit]
+    thoughts = [t for t in _thinking_entries(days=90, limit=600)
+                if low in (str(t.get("text", "")) + str(t.get("tag", ""))).lower()][:limit]
+    return {"query": q, "memories": mems, "decisions": decs, "snapshots": snaps, "thoughts": thoughts}
+
+
+def _merge_duplicate_memories() -> int:
+    """合并「疑似重复」记忆：同类型 + 词面 Jaccard>0.7 归并为一组，
+    保留（重要度, 时间）最优者，其余归档（非删除，可恢复）。返回归档条数。"""
+    active = [e for e in bk.load_memories() if not e.get("archived")]
+    n = len(active)
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    toks = [set(bk._mem_tokens(e.get("text") or "")) for e in active]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if str(active[i].get("type")) != str(active[j].get("type")):
+                continue
+            ti, tj = toks[i], toks[j]
+            if ti and tj and len(ti & tj) / len(ti | tj) > 0.7:
+                union(i, j)
+    groups = {}
+    for idx in range(n):
+        groups.setdefault(find(idx), []).append(idx)
+    archived = 0
+    for g in groups.values():
+        if len(g) < 2:
+            continue
+        best = max(g, key=lambda k: (int(active[k].get("importance") or 3),
+                                     str(active[k].get("ts") or "")))
+        for k in g:
+            if k != best and bk.update_memory(active[k]["id"], archived=True):
+                archived += 1
+    return archived
 
 
 def _load_conflicts(d):

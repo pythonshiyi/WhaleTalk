@@ -60,6 +60,7 @@ import datetime as _dt
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 import sys
@@ -948,12 +949,15 @@ def remember_structured(text, type="", importance=3, tags=None, entities=None, r
     return entry
 
 
-def update_memory(mid: str, text=None, type=None, importance=None, tags=None, archived=None, sensitivity=None) -> bool:
+def update_memory(mid: str, text=None, type=None, importance=None, tags=None, archived=None,
+                  sensitivity=None, entities=None, relations=None) -> bool:
     """就地更新一条记忆（id 已定位，用于精确同步）。
 
     F2 事实版本链：工具层的 update_memory（改文本）走版本追加（见 brain_api/`version_replace_memory`，
     本函数保持「同 id 就地改」以兼容旧调用）；此处 text 改动直接覆盖并保留原 id/version_id。
     新增可选 sensitivity 就地更新。
+    entities/relations：供前端记忆编辑器标注实体/关系（图谱数据源），格式与
+    remember_structured 一致（entities=字符串列表；relations=dict 列表 {rel,to}）。
     """
     items = load_memories(include_archived=True)
     hit = next((e for e in items if e["id"] == mid), None)
@@ -967,6 +971,10 @@ def update_memory(mid: str, text=None, type=None, importance=None, tags=None, ar
         hit["importance"] = max(1, min(5, int(importance)))
     if tags is not None:
         hit["tags"] = [str(t).strip() for t in tags if str(t).strip()][:10]
+    if entities is not None:
+        hit["entities"] = [str(e).strip()[:30] for e in entities if str(e).strip()][:20]
+    if relations is not None:
+        hit["relations"] = [r for r in relations if isinstance(r, dict)][:20]
     if archived is not None:
         hit["archived"] = bool(archived)
     if sensitivity is not None and str(sensitivity) in ("public", "private", "secret"):
@@ -976,6 +984,40 @@ def update_memory(mid: str, text=None, type=None, importance=None, tags=None, ar
     hit["ts"] = now_iso()
     save_memories(items)
     return True
+
+
+def load_thinking(days: int = 30, limit: int = 200) -> list:
+    """读取 thinking_log/*.md → 结构化条目（最新在前）：[{ts, tag, text, date}]。
+
+    每篇日志以 `## <ISO ts>` 分块；首标签形如 `[收工]`/`[心跳]`/`【神经元 #N】`
+    会被抽到 tag（保留原文）。供前端「思考日志」面板与全局检索消费。
+    """
+    out: list = []
+    if not THINKING_DIR.exists():
+        return out
+    files = sorted(THINKING_DIR.glob("*.md"), reverse=True)[:max(1, int(days or 30))]
+    for p in files:
+        try:
+            raw = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for block in re.split(r"(?m)^##\s+", raw):
+            block = block.strip()
+            if not block:
+                continue
+            lines = block.splitlines()
+            ts = lines[0].strip() if lines else ""
+            body = "\n".join(lines[1:]).strip()
+            if not body:
+                continue
+            tag = ""
+            m = re.match(r"^[\[【]([^\]】]+)[\]】]\s*", body)
+            if m:
+                tag = m.group(1).strip()
+            out.append({"ts": ts, "tag": tag, "text": body, "date": p.stem})
+    # 最新在前（文件内块按时间升序，需整体排序后截断，避免 limit 丢掉最新条目）
+    out.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
+    return out[:int(limit or 200)]
 
 
 def version_replace_memory(mid: str, text: str, source="对话") -> str:

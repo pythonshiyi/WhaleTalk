@@ -277,3 +277,33 @@ def test_get_handlers_all_exist():
 
 def inspect_source(fname):
     return (REPO / fname).read_text(encoding="utf-8")
+
+
+# ===== stop_server 优雅关闭入站 webhook 接收端（独立端口） =====
+def test_stop_server_shuts_down_inbound(monkeypatch):
+    """stop_server 必须关闭并复位入站 webhook 接收端。
+
+    _inbound_loop 此前把 ThreadingHTTPServer 只存在局部变量里，stop_server 拿不到
+    句柄做优雅关闭——端口在进程重启前一直被占用（表现为「改了 inbound_port 却仍连
+    旧端口」）。此测试锁定句柄回填 + 关闭 + 复位。
+    """
+    calls = {}
+
+    class _FakeSrv:
+        def shutdown(self):
+            calls["shutdown"] = True
+
+        def server_close(self):
+            calls["close"] = True
+
+    monkeypatch.setattr(api_server, "_INBOUND_SERVER", _FakeSrv())
+    monkeypatch.setattr(api_server, "_INBOUND_THREAD", object())
+    monkeypatch.setattr(api_server, "_SERVER", None)
+
+    api_server.stop_server()
+
+    assert calls.get("shutdown") is True, "入站接收端应被 shutdown"
+    assert calls.get("close") is True, "入站接收端 socket 应被 server_close"
+    assert api_server._INBOUND_SERVER is None
+    assert api_server._INBOUND_THREAD is None
+

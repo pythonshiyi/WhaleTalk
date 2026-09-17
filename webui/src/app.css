@@ -3131,6 +3131,100 @@ button {
 .brain-page-body { max-width: none; }
 .page-embedded { animation: msgIn .25s var(--ease); }
 
+/* 指挥舱二级分区（分段控件）：状态总览 / 成长轨迹 / 备份与延续 */
+.brain-subtabs {
+  display: inline-flex; gap: 2px; padding: 3px; margin-bottom: var(--sp-4);
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-full);
+}
+.brain-subtab {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: none; background: none; cursor: pointer;
+  padding: 6px 14px; border-radius: var(--r-full);
+  font-size: var(--fs-xs); font-weight: 600; color: var(--text-3);
+  transition: var(--t-colors);
+}
+.brain-subtab:hover { color: var(--text-1); }
+.brain-subtab.on { background: var(--bg-active); color: var(--brand-strong); }
+.brain-subtab svg { flex-shrink: 0; }
+.brain-more { margin-top: var(--sp-2); display: flex; justify-content: flex-end; }
+
+/* 记忆库工具栏：检索与动作同一行，动作不再散落上下 */
+.brain-toolbar { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; margin-bottom: var(--sp-3); }
+.brain-toolbar .mem-search { flex: 1; min-width: 220px; margin: 0; }
+.brain-toolbar-actions { display: flex; gap: var(--sp-2); align-items: center; flex-shrink: 0; }
+.mem-add { display: flex; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); }
+.mem-add input { flex: 1; padding: 8px 12px; border-radius: var(--r-md); border: 1px solid var(--border); background: var(--bg-2); color: var(--text-1); font-size: var(--fs-sm); }
+.mem-secondary { max-width: 720px; margin-top: var(--sp-4); }
+
+/* ── 大脑 · 全局检索 ── */
+.brain-search-wrap { position: relative; margin-bottom: var(--sp-3); }
+.brain-search { max-width: 640px; }
+.brain-search-panel {
+  position: absolute; z-index: var(--z-panel, 60); left: 0; right: 0; top: calc(100% + 4px);
+  max-height: 60vh; overflow: auto;
+  background: var(--bg-1); border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-2); padding: var(--sp-3);
+}
+.brain-search-head { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-xs); color: var(--text-3); margin-bottom: var(--sp-2); }
+.brain-search-group { margin-top: var(--sp-2); }
+.brain-search-group-title { display: flex; align-items: center; gap: 5px; font-size: var(--fs-2xs); font-weight: 700; color: var(--text-2); margin-bottom: 4px; }
+.brain-search-item {
+  display: flex; gap: var(--sp-2); align-items: baseline; width: 100%; text-align: left;
+  background: none; border: none; cursor: pointer; padding: 5px 8px; border-radius: var(--r-sm);
+  color: var(--text-1); font-size: var(--fs-xs);
+}
+.brain-search-item:hover { background: var(--bg-hover); }
+.bs-kind { flex-shrink: 0; font-size: var(--fs-3xs); color: var(--ai); background: var(--ai-soft); padding: 1px 6px; border-radius: var(--r-full); }
+.bs-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 快照血缘图 ── */
+.brain-lineage-scroll { overflow-x: auto; padding-bottom: 4px; }
+.brain-lineage-legend { display: flex; gap: var(--sp-3); align-items: center; font-size: var(--fs-2xs); color: var(--text-3); margin-top: 4px; }
+.brain-lineage-legend .ll-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }
+.ll-dot.chain { background: var(--border-strong); }
+.ll-dot.restore { background: var(--warn); }
+.ll-dot.merge { background: var(--ai); border-radius: 2px; }
+
+/* ── 实体图谱工具条 ── */
+.brain-graph-wrap { position: relative; }
+.brain-graph-tools { position: absolute; right: 8px; top: 8px; display: flex; gap: 4px; z-index: 2; }
+
+/* ── 恢复前对比 ── */
+.brain-diff { margin-top: var(--sp-2); border: 1px solid var(--border-strong); border-radius: var(--r-md); overflow: hidden; }
+.brain-diff-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; font-size: var(--fs-xs); color: var(--text-2); background: var(--bg-2); }
+.brain-diff .brain-context { margin: 0; border: none; border-radius: 0; max-height: 320px; }
+
+/* ── 自我述职 ── */
+.brain-report { margin-top: var(--sp-3); max-height: 460px; overflow: auto; }
+
+/* ── 自我认知 / 演化账本 ── */
+.sm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--sp-3); }
+.sm-list { margin-top: var(--sp-2); }
+.sm-list-title { font-size: var(--fs-2xs); font-weight: 700; margin-bottom: 4px; }
+.sm-list ul { margin: 0; padding-left: 16px; font-size: var(--fs-xs); color: var(--text-2); line-height: 1.7; }
+
+/* ── 进行中目标 ── */
+.goal-list { display: flex; flex-direction: column; gap: 4px; margin-top: var(--sp-2); }
+.goal-row { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-1); }
+.goal-title { flex: 1; }
+.goal-progress { font-size: var(--fs-2xs); color: var(--brand); }
+
+/* ── 待复习 ── */
+.review-list { display: flex; flex-direction: column; gap: 4px; margin-top: var(--sp-2); }
+.review-item { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 10px; cursor: pointer; color: var(--text-1); }
+.review-item:hover { border-color: var(--border-strong); }
+.review-text { flex: 1; font-size: var(--fs-xs); }
+.review-meta { font-size: var(--fs-3xs); color: var(--text-3); }
+
+/* ── 首诞引导 ── */
+.onboard-steps { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-2); }
+.onboard-step { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-full); padding: 7px 14px; cursor: pointer; color: var(--text-1); font-size: var(--fs-xs); font-weight: 600; }
+.onboard-step:hover { border-color: var(--brand); color: var(--brand-strong); }
+
+/* ── 实体筛选 chip + 定位高亮 ── */
+.entity-filter-chip { display: inline-flex; align-items: center; gap: 6px; margin-bottom: var(--sp-2); padding: 4px 10px; border-radius: var(--r-full); background: var(--ai-soft); color: var(--ai); font-size: var(--fs-xs); font-weight: 600; }
+.mem-card-hl { border-color: var(--brand) !important; box-shadow: 0 0 0 3px rgba(var(--brand-rgb), .18); }
+
 /* ═══ 按钮体系规范（三层统一：主 / 次 / 图标+最小操作） ════════ */
 button { -webkit-tap-highlight-color: transparent; }
 /* 聚焦可见性（键盘可达）：统一品牌色光环——覆盖所有可交互控件，

@@ -51,7 +51,7 @@ cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typed
 # ── 工具系统四道门禁（改工具必跑）──
 python tools/audit_tools.py --strict     # 六层一致性审计（error 级门禁，可入 CI）
 python tools/validate_tools.py           # smart_tools 全链路回归（描述无损等）
-python tools/island_check.py             # 九层孤岛对账（工具可达性）
+python tools/island_check.py --strict   # 十层孤岛对账（工具可达性，含 __all__ re-export）
 python tools/check_docs.py               # 文档数字 vs 源码实测（151 工具 / 96 端点 / 版本）
 ```
 
@@ -164,7 +164,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（151 �
 | 路径 | 职责 |
 |---|---|
 | `wechat_writer/` | 公众号自动写作：`main.run_once`（采集 sources → 选题 topic → 三阶段写作 writer → 质检 quality → 草稿 output），任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
-| `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（九层孤岛）、`check_docs.py`（文档数字校验）、`_gen_routes.py`/`_verify_routes.py`/`_verify_route_bodies.py`（路由表生成/校验）、`_restore_proposals.py`（从会话救回被误删提案） |
+| `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、`_gen_routes.py`/`_verify_routes.py`/`_verify_route_bodies.py`（路由表生成/校验）、`_restore_proposals.py`（从会话救回被误删提案） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
 | `tests/` | 后端回归 50 个 pytest 文件 |
 | `webui/tests/` | 前端 node 测试 11 个 + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建） |

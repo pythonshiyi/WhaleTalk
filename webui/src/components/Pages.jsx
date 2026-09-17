@@ -8,6 +8,8 @@ import { Icon } from "./icons.jsx";
 import { confirmDialog } from "../dialog.js";
 
 import { silentWarn } from "../quiet.js";
+import * as brainNav from "../brainNav.js";
+import { bustBrainFeed } from "./BrainTimeline.jsx";
 
 const DOMAINS = []; // 能力域以后端 /v1/abilities 为准（未加载时无数据，明确提示错误）
 
@@ -111,6 +113,7 @@ function KnowledgeBaseBlock() {
   const [kerr, setKerr] = React.useState("");
   const [kberr, setKberr] = React.useState("");
   const [kbusy, setKbusy] = React.useState(false);
+  const [kopen, setKopen] = React.useState(false);
   React.useEffect(() => { api.getKnowledge().then((d) => d && setKb(d)).catch(() => setKberr("知识库状态读取失败（后端未连接）")); }, []);
   const doSearch = async () => {
     if (!kquery.trim() || kbusy) return;
@@ -134,32 +137,42 @@ function KnowledgeBaseBlock() {
     }
   };
   return (
-    <div className="wb-card" style={{ marginTop: 16 }}>
-      <div className="wb-card-title"><Icon name="book" size={14} /> 知识库 RAG（带引用源）</div>
-      <div className="empty-tip" style={{ marginBottom: 6 }}>
-        {kberr
-          ? `已建立索引：${kberr}`
-          : `已建立索引：${kb ? (kb.indexed ? ` ${(kb.files || []).length} 个文件` : "未建立") : "查询中…"}`}
-        {kb && kb.files && kb.files.length > 0 && <span style={{ opacity: .6 }}>（{kb.files.slice(0, 3).join(" · ")}…）</span>}
-      </div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-        <input className="set-select set-combo" placeholder="输入问题，如「我们服务器的部署步骤」" value={kquery}
-          onChange={(e) => setKquery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} />
-        <button className="confirm-btn confirm-primary" onClick={doSearch} disabled={kbusy}>{kbusy ? "检索中…" : "🔍 检索"}</button>
-      </div>
-      {kerr && <div className="empty-tip is-err">{kerr}</div>}
-      {khits && khits.length > 0 && (
-        <div className="mem-list">
-          {khits.map((h, i) => (
-            <div className="mem-card mem-card-lg" key={i}>
-              <div className="mem-card-head">
-                <span className="mem-id">{h.path ? String(h.path).split(/[\\/]/).pop() : "命中"}</span>
-                <span className="mem-tag">相似度 {h.score}</span>
-                {h.path && <span className="mem-time" style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "var(--fs-2xs)" }} title={h.path}>{h.path}</span>}
-              </div>
-              <div className="mem-text">{h.snippet || h.text}</div>
+    <div className={`acc-item ${kopen ? "open" : ""}`}>
+      <button className="acc-head" aria-expanded={kopen} onClick={() => setKopen(!kopen)}>
+        <span className="acc-arrow">▸</span>
+        <Icon name="book-open" size={14} /> 知识库 RAG（带引用源）
+        <span className="acc-desc">{kb && kb.indexed ? `已索引 ${(kb.files || []).length} 个文件` : "文档语义检索"}</span>
+      </button>
+      {kopen && (
+        <div className="acc-body">
+          <div className="empty-tip" style={{ marginBottom: 6 }}>
+            {kberr
+              ? `状态读取失败：${kberr}`
+              : `已建立索引：${kb ? (kb.indexed ? ` ${(kb.files || []).length} 个文件` : "未建立") : "查询中…"}`}
+            {kb && kb.files && kb.files.length > 0 && <span style={{ opacity: .6 }}>（{kb.files.slice(0, 3).join(" · ")}…）</span>}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <input className="set-select set-combo" placeholder="输入问题，如「我们服务器的部署步骤」" value={kquery}
+              onChange={(e) => setKquery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} />
+            <button className="confirm-btn confirm-primary" onClick={doSearch} disabled={kbusy}>
+              {kbusy ? "检索中…" : <><Icon name="search" size={13} /> 检索</>}
+            </button>
+          </div>
+          {kerr && <div className="empty-tip is-err">{kerr}</div>}
+          {khits && khits.length > 0 && (
+            <div className="mem-list">
+              {khits.map((h, i) => (
+                <div className="mem-card mem-card-lg" key={i}>
+                  <div className="mem-card-head">
+                    <span className="mem-id">{h.path ? String(h.path).split(/[\\/]/).pop() : "命中"}</span>
+                    <span className="mem-tag">相似度 {h.score}</span>
+                    {h.path && <span className="mem-time" style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "var(--fs-2xs)" }} title={h.path}>{h.path}</span>}
+                  </div>
+                  <div className="mem-text">{h.snippet || h.text}</div>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -179,7 +192,24 @@ export function MemoryPage({ embedded }) {
   const [addText, setAddText] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [tip, setTip] = React.useState("");
+  const [editEntities, setEditEntities] = React.useState("");
+  const [editRelations, setEditRelations] = React.useState("");
+  const [entityFilter, setEntityFilter] = React.useState(() => brainNav.getState().entity || "");
+  const [highlightId, setHighlightId] = React.useState(() => brainNav.getState().memoryId || "");
+  const starPrev = React.useRef(new Map());
   const flash = (t) => { setTip(t); setTimeout(() => setTip(""), 3000); };
+
+  // 图谱节点 → 按实体筛记忆；全局检索 → 定位并高亮某条
+  React.useEffect(() => brainNav.subscribe((ev) => {
+    setEntityFilter(ev.entity || "");
+    if (ev.memoryId !== undefined) setHighlightId(ev.memoryId || "");
+  }), []);
+
+  React.useEffect(() => {
+    if (!highlightId) return;
+    const el = document.getElementById(`memcard-${highlightId}`);
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlightId, memories]);
 
   const load = React.useCallback(async (query) => {
     try {
@@ -216,14 +246,29 @@ export function MemoryPage({ embedded }) {
     load("");
   }, [load]);
 
-  const items = (memories || []).filter(
-    (m) => !q || (m.text || "").includes(q) || (m.type || "").includes(q)
-  );
+  const items = (memories || []).filter((m) => {
+    if (q && !((m.text || "").includes(q) || (m.type || "").includes(q))) return false;
+    if (entityFilter) {
+      const ents = (m.entities || []).map((x) => String(x).toLowerCase());
+      if (!ents.some((x) => x.includes(entityFilter.toLowerCase()))) return false;
+    }
+    return true;
+  });
+
+  const parseEntities = (s) => String(s || "").split(/[,，\n]/).map((x) => x.trim()).filter(Boolean);
+  const parseRelations = (s) => String(s || "").split(/\n/).map((x) => x.trim()).filter(Boolean).map((line) => {
+    const m = line.split(/→|->|=>|[:：]/);
+    if (m.length < 2) return null;
+    const rel = m[0].trim();
+    const to = m.slice(1).join("-").trim();
+    return rel && to ? { rel, to } : null;
+  }).filter(Boolean);
+  const fmtRelations = (rels) => (rels || []).map((r) => `${r.rel || ""}→${r.to || ""}`).join("\n");
 
   const doUpdate = async (id, patch) => {
     setBusy(true);
     const r = await api.brainMemoryAction({ action: "update", id, ...patch }).catch(() => null);
-    if (r && r.ok !== false) { setEditingId(null); load(q); }
+    if (r && r.ok !== false) { setEditingId(null); bustBrainFeed(); load(q); }
     else flash("❌ 保存失败（后端未响应）");
     setBusy(false);
   };
@@ -232,7 +277,7 @@ export function MemoryPage({ embedded }) {
     if (!(await confirmDialog("删除这条记忆？", { danger: true, okText: "删除" }))) return;
     setBusy(true);
     const r = await api.brainMemoryAction({ action: "delete", id }).catch(() => null);
-    if (r && r.ok !== false) load(q);
+    if (r && r.ok !== false) { bustBrainFeed(); load(q); }
     else flash("❌ 删除失败（后端未响应）");
     setBusy(false);
   };
@@ -244,14 +289,31 @@ export function MemoryPage({ embedded }) {
     if (r && r.ok !== false) {
       setAddText("");
       setAdding(false);
+      bustBrainFeed();
       load(q);
     } else flash("❌ 添加失败（后端未响应）");
     setBusy(false);
   };
 
   const star = (m) => {
-    const imp = m.importance >= 5 ? 3 : 5;
-    doUpdate(m.id, { importance: imp });
+    // 记住原始重要度，取消重要时恢复（避免 4 → 5 → 3 丢失原值）
+    if (Number(m.importance) >= 4) {
+      const restore = starPrev.current.has(m.id) ? starPrev.current.get(m.id) : 3;
+      starPrev.current.delete(m.id);
+      doUpdate(m.id, { importance: restore });
+    } else {
+      starPrev.current.set(m.id, Number(m.importance) || 3);
+      doUpdate(m.id, { importance: 5 });
+    }
+  };
+
+  const consolidate = async () => {
+    setBusy(true);
+    const r = await api.brainAction({ action: "consolidate" }).catch(() => null);
+    flash(r?.message || "睡眠巩固已触发");
+    bustBrainFeed();
+    load(q);
+    setBusy(false);
   };
 
   return (
@@ -262,68 +324,83 @@ export function MemoryPage({ embedded }) {
           <p>大脑记忆库 · 类型/重要度/实体标注 · 相关检索 · 可编辑管理{memories ? ` · 共 ${memories.length} 条` : ""}</p>
         </div>
       )}
-      <div className={`mem-search ${focused ? "mem-search-focus" : ""}`}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <circle cx="11" cy="11" r="7" />
-          <path d="M21 21l-4-4" />
-        </svg>
-        <input
-          placeholder="检索大脑记忆（本地 IDF 相关度）"
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value);
-            load(e.target.value);
-          }}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-        />
-        <span className="mem-search-count">{items.length} 条</span>
+
+      {/* 工具栏：检索 + 动作在同一行，按钮不再散落上下 */}
+      <div className="brain-toolbar">
+        <div className={`mem-search ${focused ? "mem-search-focus" : ""}`}>
+          <Icon name="search" size={15} />
+          <input
+            placeholder="检索大脑记忆（本地 IDF 相关度）"
+            value={q}
+            onChange={(e) => {
+              setQ(e.target.value);
+              load(e.target.value);
+            }}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+          />
+          <span className="mem-search-count">{items.length} 条</span>
+        </div>
+        <div className="brain-toolbar-actions">
+          <button className="confirm-btn confirm-primary" onClick={() => setAdding(true)} disabled={adding}>
+            <Icon name="plus" size={14} /> 记录记忆
+          </button>
+          <button className="confirm-btn" disabled={busy} onClick={consolidate} title="归档旧记忆 + 合并相似 + LLM 提炼">
+            <Icon name="eraser" size={14} /> 睡眠巩固
+          </button>
+        </div>
       </div>
-      <div style={{ display: "flex", justifyContent: "flex-end", margin: "6px 0 2px" }}>
-        {!adding ? (
-          <button className="confirm-btn" onClick={() => setAdding(true)}>＋ 记录一条记忆</button>
-        ) : (
-          <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input
-              style={{ width: 320, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: "var(--fs-sm)" }}
-              placeholder="要记住的内容…"
-              value={addText}
-              onChange={(e) => setAddText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && doAdd()}
-              autoFocus
-            />
-            <button className="confirm-btn confirm-primary" onClick={doAdd} disabled={busy || !addText.trim()}>保存</button>
-            <button className="confirm-btn" onClick={() => { setAdding(false); setAddText(""); }}>取消</button>
-          </span>
-        )}
-      </div>
-      <BrainGoals />
-      <div style={{ display: "flex", justifyContent: "flex-end", margin: "4px 0 8px" }}>
-        <button
-          className="confirm-btn"
-          style={{ fontSize: "var(--fs-xs)" }}
-          onClick={async () => {
-            setBusy(true);
-            const r = await api.brainAction({ action: "consolidate" }).catch(() => null);
-            flash(r?.message || "🧹 睡眠巩固已触发");
-            load(q);
-            setBusy(false);
-          }}
-        >
-          🧹 睡眠巩固（归档旧记忆 + 合并相似 + LLM 提炼）
-        </button>
-      </div>
+
+      {entityFilter && (
+        <div className="entity-filter-chip">
+          <Icon name="filter" size={13} /> 按实体筛选：{entityFilter}
+          <button className="msg-op" onClick={() => { setEntityFilter(""); brainNav.clearEntityFilter(); }} aria-label="清除实体筛选">
+            <Icon name="x" size={12} />
+          </button>
+        </div>
+      )}
+
+      {adding && (
+        <div className="mem-add">
+          <input
+            placeholder="要记住的内容…"
+            value={addText}
+            onChange={(e) => setAddText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && doAdd()}
+            autoFocus
+          />
+          <button className="confirm-btn confirm-primary" onClick={doAdd} disabled={busy || !addText.trim()}>保存</button>
+          <button className="confirm-btn" onClick={() => { setAdding(false); setAddText(""); }}>取消</button>
+        </div>
+      )}
+
+      {tip && <div className="px-tip" style={{ textAlign: "left", marginBottom: 6 }}>{tip}</div>}
+
+      {/* 主区：记忆列表 */}
       <div className="mem-list">
-        {tip && <div className="px-tip" style={{ textAlign: "left", marginBottom: 6 }}>{tip}</div>}
         {memories === null && !err && (
           <div className="empty-tip is-loading">正在加载记忆…</div>
         )}
         {items.map((m) => (
-          <div className={`mem-card mem-card-lg ${m.importance >= 4 ? "mem-card-star" : ""}`} key={m.id}>
+          <div
+            id={`memcard-${m.id}`}
+            className={`mem-card mem-card-lg ${m.importance >= 4 ? "mem-card-star" : ""} ${highlightId === m.id ? "mem-card-hl" : ""}`}
+            key={m.id}
+          >
             <div className="mem-card-head">
               <span className="mem-id">{m.type || "记忆"}</span>
               {m.importance >= 4 && <span className="mem-tag" style={{ background: "var(--warn-soft)", color: "var(--warn-text)" }}>★ 重要</span>}
               <span className="mem-tag">{m.source || "手动"}</span>
+              {(m.entities || []).length > 0 && (
+                <button
+                  className="mem-tag mem-tag-btn"
+                  style={{ background: "var(--ai-soft)", color: "var(--ai)", cursor: "pointer", border: "none" }}
+                  onClick={() => brainNav.setEntityFilter(String((m.entities || [])[0]))}
+                  title="按此实体筛选（与实体图谱联动）"
+                >
+                  <Icon name="git-branch" size={10} /> {(m.entities || []).slice(0, 3).join(" · ")}
+                </button>
+              )}
               {m.ts && <span className="mem-time">{String(m.ts).slice(0, 16).replace("T", " ")}</span>}
             </div>
             {editingId === m.id ? (
@@ -333,7 +410,7 @@ export function MemoryPage({ embedded }) {
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
                 />
-                <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   类型：
                   <input style={{ width: 120, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: "var(--fs-xs)" }} value={editType} onChange={(e) => setEditType(e.target.value)} />
                   重要度：
@@ -344,7 +421,25 @@ export function MemoryPage({ embedded }) {
                     <option value={4}>4</option>
                     <option value={5}>5 高</option>
                   </select>
-                  <button className="confirm-btn confirm-primary" disabled={busy} onClick={() => doUpdate(m.id, { text: editText, type: editType, importance: editImportance })}>保存</button>
+                </span>
+                <input
+                  className="set-select set-combo"
+                  placeholder="实体（逗号分隔，如：鲸语, WhaleTalk）"
+                  value={editEntities}
+                  onChange={(e) => setEditEntities(e.target.value)}
+                  style={{ fontSize: "var(--fs-xs)" }}
+                />
+                <textarea
+                  placeholder={"关系（每行「关系→实体」，如：\n维护→鲸语\n依赖→DeepSeek）"}
+                  value={editRelations}
+                  onChange={(e) => setEditRelations(e.target.value)}
+                  style={{ width: "100%", minHeight: 52, padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-1)", color: "var(--text-1)", fontSize: "var(--fs-xs)" }}
+                />
+                <span style={{ display: "flex", gap: 8 }}>
+                  <button className="confirm-btn confirm-primary" disabled={busy} onClick={() => doUpdate(m.id, {
+                    text: editText, type: editType, importance: editImportance,
+                    entities: parseEntities(editEntities), relations: parseRelations(editRelations),
+                  })}>保存</button>
                   <button className="confirm-btn" onClick={() => setEditingId(null)}>取消</button>
                 </span>
               </div>
@@ -353,8 +448,16 @@ export function MemoryPage({ embedded }) {
             )}
             <div className="mem-card-foot" style={{ display: "flex", gap: 8, marginTop: 6 }}>
               <button className="msg-op" disabled={busy} onClick={() => star(m)}>{m.importance >= 4 ? "☆ 取消重要" : "★ 标记重要"}</button>
-              <button className="msg-op" disabled={busy} onClick={() => { setEditingId(m.id); setEditText(m.text || ""); setEditType(m.type || ""); setEditImportance(Number(m.importance) || 3); }}>✏️ 编辑</button>
-              <button className="msg-op" style={{ color: "var(--danger-text)" }} disabled={busy} onClick={() => doDelete(m.id)}>🗑 删除</button>
+              <button className="msg-op" disabled={busy} onClick={() => {
+                setEditingId(m.id); setEditText(m.text || ""); setEditType(m.type || ""); setEditImportance(Number(m.importance) || 3);
+                setEditEntities((m.entities || []).join(", "));
+                setEditRelations(fmtRelations(m.relations));
+              }}>
+                <Icon name="pencil" size={12} /> 编辑
+              </button>
+              <button className="msg-op" style={{ color: "var(--danger-text)" }} disabled={busy} onClick={() => doDelete(m.id)}>
+                <Icon name="trash" size={12} /> 删除
+              </button>
             </div>
           </div>
         ))}
@@ -362,17 +465,23 @@ export function MemoryPage({ embedded }) {
           err ? (
             <EmptyState icon="warning" title="记忆加载失败" hint={err} compact />
           ) : (
-            <EmptyState icon="brain" title="大脑记忆库还是空的" hint="对话中记录的重要事实会自动同步到这里；点右上角「记录一条记忆」或与 AI 多聊几次，记忆就开始生长。" compact />
+            <EmptyState icon="brain" title="大脑记忆库还是空的" hint="对话中记录的重要事实会自动同步到这里；点右上角「记录记忆」或与 AI 多聊几次，记忆就开始生长。" compact />
           )
         )}
       </div>
-      <KnowledgeBaseBlock />
+
+      {/* 次区：进行中目标 / 知识库（折叠收纳） */}
+      <div className="mem-secondary">
+        <BrainGoals />
+        <KnowledgeBaseBlock />
+      </div>
     </div>
   );
 }
 
-// ── 大脑进行中目标（goals.json，对话自动注入）──
+// ── 大脑进行中目标（goals.json，对话自动注入）──折叠收纳在记忆库下方
 function BrainGoals() {
+  const [open, setOpen] = React.useState(false);
   const [goals, setGoals] = React.useState([]);
   const [newTitle, setNewTitle] = React.useState("");
   const [showAdd, setShowAdd] = React.useState(false);
@@ -393,38 +502,46 @@ function BrainGoals() {
   };
 
   const active = goals.filter((g) => g.status === "active");
-  if (active.length === 0 && !showAdd) return null;
   return (
-    <div style={{ margin: "4px 0 10px", padding: "10px 14px", borderRadius: 12, background: "var(--bg-1)", border: "1px solid var(--border)" }}>
-      <div style={{ fontSize: "var(--fs-xs)", fontWeight: 600, color: "var(--text-1)", marginBottom: 6 }}>🎯 进行中目标（对话中自动注入）</div>
-      {active.map((g) => (
-        <div key={g.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12.5, color: "var(--text-1)" }}>
-          <span style={{ flex: 1 }}>{g.title}</span>
-          {g.progress && <span style={{ color: "var(--brand)", fontSize: "var(--fs-2xs)" }}>{g.progress}</span>}
-          <button className="msg-op" style={{ color: "var(--ok-text)" }} onClick={() => act("goals-update", { id: g.id, status: "done" })}>✓ 完成</button>
-          <button className="msg-op" style={{ color: "var(--danger-text)" }} onClick={() => act("goals-delete", { id: g.id })}>✕</button>
+    <div className={`acc-item ${open ? "open" : ""}`}>
+      <button className="acc-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="acc-arrow">▸</span>
+        <Icon name="target" size={14} /> 进行中目标
+        <span className="acc-desc">{active.length ? `${active.length} 个 · 对话中自动注入` : "对话中自动注入"}</span>
+      </button>
+      {open && (
+        <div className="acc-body">
+          {active.length === 0 && <div className="sched-text" style={{ opacity: 0.7, padding: "4px 0" }}>暂无进行中目标。</div>}
+          {active.map((g) => (
+            <div key={g.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12.5, color: "var(--text-1)" }}>
+              <span style={{ flex: 1 }}>{g.title}</span>
+              {g.progress && <span style={{ color: "var(--brand)", fontSize: "var(--fs-2xs)" }}>{g.progress}</span>}
+              <button className="msg-op" style={{ color: "var(--ok-text)" }} onClick={() => act("goals-update", { id: g.id, status: "done" })}><Icon name="check" size={12} /> 完成</button>
+              <button className="msg-op" style={{ color: "var(--danger-text)" }} onClick={() => act("goals-delete", { id: g.id })}><Icon name="x" size={12} /></button>
+            </div>
+          ))}
+          {showAdd ? (
+            <span style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <input
+                style={{ flex: 1, padding: "5px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-2)", color: "var(--text-1)", fontSize: 12.5 }}
+                placeholder="新目标…"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newTitle.trim()) {
+                    act("goals-add", { title: newTitle.trim() });
+                    setNewTitle("");
+                    setShowAdd(false);
+                  }
+                }}
+                autoFocus
+              />
+              <button className="confirm-btn confirm-primary" style={{ fontSize: "var(--fs-xs)" }} onClick={() => { act("goals-add", { title: newTitle.trim() }); setNewTitle(""); setShowAdd(false); }}>保存</button>
+            </span>
+          ) : (
+            <button className="msg-op" onClick={() => setShowAdd(true)}><Icon name="plus" size={13} /> 添加目标</button>
+          )}
         </div>
-      ))}
-      {showAdd ? (
-        <span style={{ display: "flex", gap: 6, marginTop: 6 }}>
-          <input
-            style={{ flex: 1, padding: "5px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-2)", color: "var(--text-1)", fontSize: 12.5 }}
-            placeholder="新目标…"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && newTitle.trim()) {
-                act("goals-add", { title: newTitle.trim() });
-                setNewTitle("");
-                setShowAdd(false);
-              }
-            }}
-            autoFocus
-          />
-          <button className="confirm-btn confirm-primary" style={{ fontSize: "var(--fs-xs)" }} onClick={() => { act("goals-add", { title: newTitle.trim() }); setNewTitle(""); setShowAdd(false); }}>保存</button>
-        </span>
-      ) : (
-        <button className="msg-op" onClick={() => setShowAdd(true)}>＋ 添加目标</button>
       )}
     </div>
   );

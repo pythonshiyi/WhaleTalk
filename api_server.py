@@ -288,17 +288,6 @@ def _make_ask_cb(send, stop_event):
     return cb
 
 
-def _sync_full_auto():
-    """每次会话请求前同步权限模块的 FULL_AUTO（防进程内状态漂移）。"""
-    try:
-        import permissions as perms
-        import config_utils
-        cfg = config_utils.load_config()
-        perms.set_full_auto(bool(cfg.get("full_auto")))
-    except Exception:
-        pass
-
-
 def _sync_request_full_auto(body):
     """按"本次请求"的实际模式同步 FULL_AUTO —— 根因兜底。
 
@@ -376,7 +365,8 @@ _TOOL_DOMAIN = {
     "verify_project": "开发与测试", "dev_plan": "开发与测试", "project_scaffold": "开发与测试",
     "project_map": "开发与测试", "find_symbol": "开发与测试", "get_status": "开发与测试",
     "tts_save": "媒体与图像", "image_process": "媒体与图像", "ocr_image": "媒体与图像",
-    "image_understand": "媒体与图像", "image_generate": "媒体与图像", "image_batch": "媒体与图像",
+    "image_understand": "媒体与图像", "image_generate": "媒体与图像", "image_batch": "媒体与图像", "image_codegen": "媒体与图像",
+    "image_inpaint": "媒体与图像", "control_map": "媒体与图像", "sprite_sheet": "媒体与图像", "make_gif": "媒体与图像", "image_hybrid": "媒体与图像",
     "screen_see": "媒体与图像", "chart_read": "媒体与图像", "screenshot_to_html": "媒体与图像",
     "debug_screenshot": "媒体与图像", "scan_read": "媒体与图像", "screen_capture": "媒体与图像",
     "speech_to_text": "媒体与图像", "media_ffmpeg": "媒体与图像", "web_screenshot": "媒体与图像",
@@ -3654,7 +3644,7 @@ def _brain_daily_snapshot(now):
         return
     try:
         import brain_api
-        if brain_api.brain_status() is None:
+        if brain_api.brain_status(with_context=False) is None:
             return
         brain_api.brain_action("heartbeat", {"thought": "每日自动快照"})
         brain_api.brain_action("archive", {})
@@ -4984,6 +4974,7 @@ _INBOUND_THREAD = None
 
 def _inbound_loop(port, expected_token):
     """Webhook 接收端：POST {token, text} → 远程下达任务（对齐原程序 inbound）。"""
+    global _INBOUND_SERVER
     from http.server import BaseHTTPRequestHandler as _BIH
 
     class _InboundHandler(_BIH):
@@ -5021,9 +5012,13 @@ def _inbound_loop(port, expected_token):
 
     try:
         srv = ThreadingHTTPServer(("127.0.0.1", int(port)), _InboundHandler)
+        _INBOUND_SERVER = srv
         srv.serve_forever()
     except Exception:
         logger.exception("inbound 接收端退出")
+    finally:
+        # 句柄复位：否则 stop_server 拿不到它做优雅关闭，端口会一直占着。
+        _INBOUND_SERVER = None
 
 
 def _start_inbound():
@@ -5428,7 +5423,6 @@ def _token_request_allowed(origin, host):
     if origin:
         return origin in _CORS_ALLOWED_ORIGINS
     return _host_is_loopback(host)
-MAX_ROUNDS = 10
 MAX_MESSAGES = 200
 MAX_MSG_CHARS = 100_000
 
@@ -5551,8 +5545,6 @@ _MIME = {
 _SERVER = None
 _THREAD = None
 _TOKEN = ""
-_TOOLS_PROVIDER = None
-_CHAT_PROVIDER = None
 _PORT = 8745
 
 # ── 会话索引缓存 ────────────────────────────────────
@@ -6718,7 +6710,13 @@ class _Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 days = 7
             days = max(1, min(3650, days))
-            self._json(200, {"ok": True, "report": _insight_report(days)})
+            rep = _insight_report(days)
+            try:
+                import insight as _ins
+                md = _ins.render_report(rep, "自我述职")
+            except Exception:  # noqa: BLE001
+                md = ""
+            self._json(200, {"ok": True, "report": rep, "markdown": md})
         except Exception as e:  # noqa: BLE001
             self._fail_soft(e, report=None)
 
@@ -6727,7 +6725,11 @@ class _Handler(BaseHTTPRequestHandler):
     def _g_v1_brain(self):
         try:
             import brain_api
-            self._json(200, {"ok": True, "brain": brain_api.brain_status()})
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            # ?context=1 才计算对话上下文预览（默认懒加载，避免每次取状态都做衰减排序）
+            with_context = (qs.get("context") or ["0"])[0] not in ("0", "false", "no", "")
+            self._json(200, {"ok": True, "brain": brain_api.brain_status(with_context=with_context)})
         except Exception as e:  # noqa: BLE001
             self._fail_soft(e, brain=None)
 
@@ -7018,6 +7020,9 @@ class _Handler(BaseHTTPRequestHandler):
                     type=body.get("type"),
                     importance=body.get("importance"),
                     tags=body.get("tags"),
+                    entities=body.get("entities"),
+                    relations=body.get("relations"),
+                    sensitivity=body.get("sensitivity"),
                 )
                 self._json(200, {"ok": ok, "message": "已更新" if ok else "未找到该记忆"})
             elif act == "delete":
@@ -8337,8 +8342,12 @@ class _Handler(BaseHTTPRequestHandler):
         finally:
             # 无人订阅（前端卸载/关标签/断连）时由作业兜底落盘：只追加本轮，
             # 避免整段覆盖在长会话里丢失历史。有订阅者时前端会保存，避免重复。
+            # 订阅数须在 job.cond 下读取：订阅者增减都在该锁内，裸读可能在
+            # 「订阅者刚退出但计数尚未减」时误判，造成重复落盘或漏存。
             try:
-                if job.subscribers <= 0 and not is_continue and generated:
+                with job.cond:
+                    no_subscriber = job.subscribers <= 0
+                if no_subscriber and not is_continue and generated:
                     _save_job_turn(job, body, persist_base, generated)
             except Exception:
                 logger.exception("后台会话兜底落盘失败")
@@ -8504,7 +8513,7 @@ def _stop_chat(body):
     return {"ok": True, "stopped": stopped}
 
 
-def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
+def start_server(port=8745, token=""):
     """启动本地 API 服务。token 为空时自动生成。返回 (port, token, error)。
 
     初始化错误分级（P2）：
@@ -8513,7 +8522,7 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
     - 可降级：旧会话迁移 / 进程看门狗 / 入站 webhook / IM 轮询 / 权限与快照 /
       workflow 发送通道——失败仅损失对应外围能力，记录明确影响后继续启动。
     """
-    global _SERVER, _THREAD, _TOKEN, _TOOLS_PROVIDER, _CHAT_PROVIDER, _PORT, _SCHEDULER_THREAD
+    global _SERVER, _THREAD, _TOKEN, _PORT, _SCHEDULER_THREAD
     if _SERVER is not None:
         return _PORT, _TOKEN, None
     import secrets
@@ -8601,8 +8610,6 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
         logger.warning("workflow 发送通道接线失败（可降级）：run_workflow 投递不可用")
     token = (token or "").strip() or ("wt_" + secrets.token_hex(16))
     _TOKEN = token
-    _TOOLS_PROVIDER = tools_provider
-    _CHAT_PROVIDER = chat_provider
     _PORT = int(port or 8745)
     try:
         server = ThreadingHTTPServer(("127.0.0.1", _PORT), _Handler)
@@ -8616,7 +8623,7 @@ def start_server(port=8745, token="", tools_provider=None, chat_provider=None):
 
 
 def stop_server():
-    global _SERVER, _THREAD
+    global _SERVER, _THREAD, _INBOUND_SERVER, _INBOUND_THREAD
     # 工具留痕队列排空（异步写缓冲落盘，优雅退出不丢尾部日志）
     try:
         import permissions as _perms_flush
@@ -8627,10 +8634,20 @@ def stop_server():
     # 下次启动 brain_context 可带回「上次思考断点」）
     try:
         import brain_api
-        if brain_api.brain_status() is not None:
+        if brain_api.brain_status(with_context=False) is not None:
             brain_api.brain_action("heartbeat", {"thought": "服务停止，记忆已落盘"})
     except Exception:
         pass
+    # 入站 webhook 接收端（独立端口）：随服务优雅关闭并复位句柄。否则端口在进程
+    # 重启前一直被占用，表现为「改了 inbound_port 却仍连不上/连到旧端口」。
+    try:
+        if _INBOUND_SERVER is not None:
+            _INBOUND_SERVER.shutdown()
+            _INBOUND_SERVER.server_close()
+    except Exception:
+        pass
+    _INBOUND_SERVER = None
+    _INBOUND_THREAD = None
     if _SERVER is not None:
         try:
             # 终止全部后台子进程（AI 起的服务/浏览器等），防孤儿进程残留

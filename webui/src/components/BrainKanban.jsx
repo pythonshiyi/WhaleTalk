@@ -1,12 +1,14 @@
 import React from "react";
 import * as api from "../api.js";
+import { Icon } from "./icons.jsx";
+import { bustBrainFeed } from "./BrainTimeline.jsx";
 
 // ── U5 决策看板（Kanban）：open → kept / reversed 三列；卡片含「预期 vs 实际」，可回执 ──
 // 让决策日志从"只写不读"变成可执行的验证闭环。
 const COLS = [
-  { key: "open", title: "⏳ 待回执" },
-  { key: "kept", title: "✓ 已采纳" },
-  { key: "reversed", title: "↺ 已反转" },
+  { key: "open", title: "待回执", icon: "clock" },
+  { key: "kept", title: "已采纳", icon: "check" },
+  { key: "reversed", title: "已反转", icon: "rotate" },
 ];
 
 function fmt(iso) {
@@ -17,6 +19,8 @@ function fmt(iso) {
 function BrainKanban() {
   const [decs, setDecs] = React.useState(null);
   const [err, setErr] = React.useState("");
+  const [expand, setExpand] = React.useState(false);
+  const CAP = 8;
 
   const load = React.useCallback(async () => {
     const d = await api.brainAction({ action: "decisions-list", limit: 200 }).catch(() => null);
@@ -28,7 +32,7 @@ function BrainKanban() {
   const resolve = async (id, outcome, status) => {
     const d = await api.brainAction({ action: "decision-resolve", id, outcome, status }).catch(() => null);
     if (d && !d.ok) setErr(d.message || "回执失败");
-    else { setErr(""); load(); }
+    else { setErr(""); bustBrainFeed(); load(); }
   };
 
   const grouped = { open: [], kept: [], reversed: [] };
@@ -39,17 +43,17 @@ function BrainKanban() {
 
   return (
     <div>
-      {err && <div className="sched-text" style={{ color: "var(--danger-text)", marginBottom: 8 }}>⚠ {err}</div>}
+      {err && <div className="sched-text" style={{ color: "var(--danger-text)", marginBottom: 8 }}><Icon name="warning" size={12} /> {err}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, alignItems: "start" }}>
         {COLS.map((c) => (
           <div key={c.key} style={{ background: "var(--panel)", borderRadius: "var(--r-sm)", padding: 8 }}>
-            <div style={{ fontWeight: 600, fontSize: "var(--fs-sm)", marginBottom: 6 }}>
-              {c.title} <span style={{ opacity: 0.6 }}>({grouped[c.key].length})</span>
+            <div style={{ fontWeight: 600, fontSize: "var(--fs-sm)", marginBottom: 6, display: "flex", alignItems: "center", gap: 5 }}>
+              <Icon name={c.icon} size={13} /> {c.title} <span style={{ opacity: 0.6 }}>({grouped[c.key].length})</span>
             </div>
             {grouped[c.key].length === 0 && (
               <div className="sched-text" style={{ opacity: 0.5, fontSize: "var(--fs-xs)", padding: "4px 2px" }}>空</div>
             )}
-            {grouped[c.key].map((dc) => (
+            {(expand ? grouped[c.key] : grouped[c.key].slice(0, CAP)).map((dc) => (
               <div key={dc.id} className="mem-card" style={{ marginBottom: 6, padding: 8 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 500 }}>{dc.decision}</div>
                 {dc.reason && <div style={{ fontSize: "var(--fs-2xs)", opacity: 0.7, marginTop: 2 }}>理由：{dc.reason}</div>}
@@ -62,6 +66,11 @@ function BrainKanban() {
           </div>
         ))}
       </div>
+      {(grouped.open.length > CAP || grouped.kept.length > CAP || grouped.reversed.length > CAP) && (
+        <div className="brain-more">
+          <button className="msg-op" onClick={() => setExpand(!expand)}>{expand ? "收起" : "显示更多"}</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -82,8 +91,8 @@ function OpenCardResolver({ onResolve }) {
       />
       <div style={{ display: "flex", gap: 4 }}>
         <select className="set-select" style={{ flex: 1, fontSize: "var(--fs-xs)" }} value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="kept">✓ 采纳</option>
-          <option value="reversed">↺ 反转</option>
+          <option value="kept">采纳</option>
+          <option value="reversed">反转</option>
         </select>
         <button className="msg-op" disabled={busy || !outcome.trim()} onClick={async () => {
           setBusy(true);

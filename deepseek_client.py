@@ -3423,7 +3423,8 @@ _TOOL_ORDER = [
     'image_generate', 'usage_report', 'pdf_extract', 'pdf_create', 'pdf_visual_check', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'rss_fetch', 'qrcode',
     'secret_store', 'kv_store', 'media_ffmpeg', 'mv_compose', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_plugin', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check',
     'list_my_capabilities', 'capability_heatmap', 'self_report',
-    'chart_render', 'pdf_toolkit', 'design_kit',
+    'chart_render', 'pdf_toolkit', 'design_kit', 'image_codegen',
+    'image_inpaint', 'control_map', 'sprite_sheet', 'make_gif', 'image_hybrid',
 ]
 
 _GROUP_ORDER = [
@@ -3468,6 +3469,12 @@ _HINT_ORDER = [
     ('画图', '数据图', '柱状图', '折线图', '饼图', '散点图', '可视化'),
     ('合并pdf', '拆分pdf', 'pdf水印', 'pdf页码', 'pdf加密', 'pdf压缩', 'pdf目录'),
     ('设计规范', '版式检查', '配色检查', '设计模板', '品牌套件'),
+    ('代码生图', '画个插画', '生成插画', '画个图标', '做个信息图', '画个示意图', '像素画', '画个海报'),
+    ('局部重绘', '改这块', '重画这块', '涂抹重绘', 'inpaint'),
+    ('控制图', '提取线稿', '边缘图', '线稿图', 'controlnet'),
+    ('精灵表', '精灵图', '帧序列图', '拼帧', 'sprite sheet'),
+    ('做个gif', '生成gif', '动图', '逐帧动画'),
+    ('混合渲染', '代码加质感', '图生图', 'img2img', '结构加细节'),
 ]
 
 TOOLS = build_tool_list(_TOOL_ORDER)

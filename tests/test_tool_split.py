@@ -198,8 +198,8 @@ def test_all_split_tools_module_ownership():
 
 def test_all_split_tools_in_all_six_layers():
     names = [t["function"]["name"] for t in dc.TOOLS]
-    assert len(names) == 155, "工具总数应为 155（151 + chart_render + pdf_toolkit + design_kit + mv_compose），实际 %d" % len(names)
-    assert len(dc._TOOL_ORDER) == 155, "顺序表必须与工具数一致"
+    assert len(names) == 161, "工具总数应为 161（151 + chart_render + pdf_toolkit + design_kit + mv_compose + 代码生图/重绘/控制图/精灵表/GIF/混合 6 项），实际 %d" % len(names)
+    assert len(dc._TOOL_ORDER) == 161, "顺序表必须与工具数一致"
     assert set(dc.TOOL_CALL_MAP) == set(dc._TOOL_ORDER), "CALL_MAP 键与 ORDER 必须一一对应"
     for n in _uniq(ALL_SPLIT_TOOLS):
         assert n in names, "%s 必须仍在 TOOLS 列表" % n
@@ -257,3 +257,40 @@ def test_all_split_tools_validation_branch_no_crash():
         fn = getattr(dc, call[0])
         out = fn(*call[1:])
         assert isinstance(out, str) and out, "%s 校验分支应返回非空字符串" % call[0]
+
+
+# ===== 孤岛对账第 10 层：agent_tools.__all__ re-export 完整性 =====
+def test_agent_tools_all_reexports_every_domain_impl():
+    """域模块内定义的每个工具实现都必须经 __all__ re-export。
+
+    否则 `from agent_tools import *` 不会绑定该名，`dc.<tool_name>` 旧访问路径
+    静默失效（failure_memory 曾漏：工具可经 TOOL_CALL_MAP 触发，但 dc 命名空间
+    拿不到）。此断言即 island_check 第 10 层的运行时等价物。
+    """
+    import agent_tools
+
+    missing = []
+    for name, impl in dc.TOOL_CALL_MAP.items():
+        mod = getattr(impl, "__module__", "") or ""
+        if mod.startswith("agent_tools.") and getattr(impl, "__name__", "") not in agent_tools.__all__:
+            missing.append("%s->%s" % (name, getattr(impl, "__name__", "?")))
+    assert not missing, "agent_tools.__all__ 漏 re-export: %s" % missing
+
+
+def test_failure_memory_reexported():
+    """failure_memory 属 agent_tools.tool_brain，必须在 dc 命名空间可达。"""
+    assert hasattr(dc, "failure_memory"), "deepseek_client.failure_memory 应经 agent_tools re-export"
+    assert dc.failure_memory.__module__ == "agent_tools.tool_brain"
+    assert dc.TOOL_CALL_MAP["failure_memory"] is dc.failure_memory
+
+
+def test_island_check_strict_passes():
+    """门禁自检：10 层孤岛对账在 --strict 下不得有缺口。"""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "island_check", REPO / "tools" / "island_check.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.main(["--strict"]) == 0

@@ -4,10 +4,11 @@
 从 main.py 中拆出的纯函数/低依赖工具。
 """
 import logging
+import logging.handlers
 import os
 import shutil
 
-_EMPTY_SHELL_CACHE = {"checked": False, "value": False}
+_EMPTY_SHELL_CACHE = {}
 
 
 def as_bool(v, default=False):
@@ -28,10 +29,12 @@ def is_empty_shell(path):
     """判断目录是否为空壳（仅含空子目录、无任何文件）。
 
     scandir + 栈遍历：第一层发现任何文件立即返回 False（对含大量文件的
-    DATA_DIR 从 O(全部条目) 降为 O(第一层)）；结果缓存避免迁移/崩溃检测双遍历。
+    DATA_DIR 从 O(全部条目) 降为 O(第一层)）；结果按路径缓存，避免同一目录的
+    迁移/崩溃检测双遍历，且不同路径不会互相串用结果。
     """
-    if _EMPTY_SHELL_CACHE["checked"]:
-        return _EMPTY_SHELL_CACHE["value"]
+    key = os.path.normcase(os.path.abspath(path))
+    if key in _EMPTY_SHELL_CACHE:
+        return _EMPTY_SHELL_CACHE[key]
     empty = True
     try:
         stack = [path]
@@ -51,7 +54,7 @@ def is_empty_shell(path):
                 break
     except Exception:
         empty = False
-    _EMPTY_SHELL_CACHE.update(checked=True, value=empty)
+    _EMPTY_SHELL_CACHE[key] = empty
     return empty
 
 

@@ -30,6 +30,7 @@ from .tool_brain import *  # noqa: F401,F403  # 🧠 记忆与定时任务
 from .tool_files import *  # noqa: F401,F403  # 📁 文件与进程
 from .tool_code import *  # noqa: F401,F403  # 💻 编程与执行
 from .tool_web import *  # noqa: F401,F403  # 🌐 浏览器与网页
+from .tool_codegen import *  # noqa: F401,F403  # 🎨 代码生图（image_codegen）
 
 __all__ = [
     "get_date",
@@ -112,6 +113,7 @@ __all__ = [
     'task_checkpoint_save',
     'task_checkpoint_load',
     'run_workflow',
+    'failure_memory',
     'send_email',
     'publish_draft',
     'send_webhook',
@@ -185,4 +187,10 @@ __all__ = [
     'chart_render',
     'pdf_toolkit',
     'design_kit',
+    'image_codegen',
+    'image_inpaint',
+    'control_map',
+    'sprite_sheet',
+    'make_gif',
+    'image_hybrid',
 ]
