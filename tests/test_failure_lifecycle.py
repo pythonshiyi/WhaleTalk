@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """失败模式生命周期回归（G18）。
 
 覆盖：指纹归并 / 状态码不误并 / 自动消解（修复验证）/ 复现重开 /
@@ -21,7 +20,7 @@ def paths(tmp_path):
 
 
 def _load(path):
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

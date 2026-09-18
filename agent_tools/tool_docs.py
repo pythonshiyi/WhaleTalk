@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """tool_docs —— P0-1 批量拆分（工具域模块）：📊 数据与文档.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
@@ -6,20 +5,18 @@
 仅剩余辅助函数仍依赖主文件加载顺序契约（在 `from agent_tools import *` 前已定义）。
 """
 
+import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
-import json
 
-import permissions
-
-from shared import clamp_int, PDF_EXTRACT_MAX_OUTPUT, DOCX_MAX_DEFAULT, PPTX_MAX_DEFAULT, KV_VALUE_MAX_BYTES  # D4: 参数校验辅助
-from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
+import permissions
+from db_utils import force_limit  # L3: SQL 层强制 LIMIT（防无界查询）
+from db_utils import table_to_md as _md_table  # 统一 markdown 表格渲染（含 | 转义）
 from deepseek_client import (
-
     _TABLE_CELL_MAX,
     _atomic_write,
     _db_conn,
@@ -37,8 +34,14 @@ from deepseek_client import (
     _strip_html_tags,
     _table_to_md,
 )
-from db_utils import force_limit  # L3: SQL 层强制 LIMIT（防无界查询）
-from db_utils import table_to_md as _md_table  # 统一 markdown 表格渲染（含 | 转义）
+from shared import (  # D4: 参数校验辅助
+    DOCX_MAX_DEFAULT,
+    KV_VALUE_MAX_BYTES,
+    PDF_EXTRACT_MAX_OUTPUT,
+    PPTX_MAX_DEFAULT,
+    clamp_int,
+)
+from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 # L3: SQLite 只读查询语句级超时（progress handler 中断慢查询，防占住共享工具线程池）
 _SQLITE_QUERY_TIMEOUT_S = 15.0
@@ -588,7 +591,7 @@ def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None,
     """写入 Excel（.xlsx）：overwrite / append / update；支持表头/样式/起始格/原生图表。"""
     try:
         from openpyxl import Workbook, load_workbook
-        from openpyxl.utils.cell import coordinate_from_string, column_index_from_string
+        from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
     except ImportError:
         return "错误：需要 openpyxl（pip install openpyxl）"
     if not path or not str(path).strip():
@@ -700,8 +703,6 @@ def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None,
                         ws.cell(row=cur_r, column=start_c + j, value=v)
                     cur_r += 1
             total += len(rows)
-            # 记录本表实表头行（供样式阶段用），并记录列数
-            last_written = (ws, cur_r)
         # 统一应用样式（表头加粗/冻结/筛选/列宽），取各表实际写入的头行
         if style:
             for _sname, _rows in plan.items():
@@ -821,10 +822,7 @@ def _excel_apply_style(ws, header_row, ncols, style_spec):
         from openpyxl.utils import get_column_letter
     except Exception:
         return
-    if isinstance(style_spec, dict):
-        st = dict(style_spec)
-    else:
-        st = {}
+    st = dict(style_spec) if isinstance(style_spec, dict) else {}
     fill_color = str(st.get("fill_color") or "2B4C7E").lstrip("#")
     ncols = max(int(ncols or 0), 1)
     if header_row is not None and st.get("bold_header", True):
@@ -871,8 +869,8 @@ def _excel_embed_chart(wb, cspec):
     """
     try:
         from openpyxl.chart import BarChart, LineChart, PieChart, Reference
-        from openpyxl.chart.series import SeriesLabel as _SL
         from openpyxl.chart import Series as _CSeries
+        from openpyxl.chart.series import SeriesLabel as _SL
     except Exception:
         return
     try:
@@ -906,7 +904,7 @@ def _excel_embed_chart(wb, cspec):
         for i, c in enumerate(cats):
             chart_sheet.cell(row=2 + i, column=1, value=c)
         col_idx = 2
-        for sname, sdata in series.items():
+        for _sname, sdata in series.items():
             for i, v in enumerate(sdata):
                 chart_sheet.cell(row=2 + i, column=col_idx, value=v)
             col_idx += 1
@@ -933,7 +931,7 @@ def _excel_embed_chart(wb, cspec):
                 s = _CSeries(yref, xvalues=xref, title=_SL(v=str(sname)))
                 chart.series.append(s)
         else:
-            for si, (sname, sdata) in enumerate(series.items()):
+            for si, (sname, _sdata) in enumerate(series.items()):
                 data_ref = Reference(chart_sheet, min_col=2 + si, min_row=1, max_row=1 + max(n, 0))
                 # 系列名放第一行以便 add_data from_rows
                 chart_sheet.cell(row=1, column=2 + si, value=sname)
@@ -984,7 +982,7 @@ def _chart_parse_series(data):
         try:
             return float(v or 0)
         except (TypeError, ValueError):
-            raise ValueError(f"非数值数据：{v!r}（请只传数字）")
+            raise ValueError(f"非数值数据：{v!r}（请只传数字）") from None
 
     first = data[0]
     if isinstance(first, dict) and "data" in first:
@@ -1494,11 +1492,16 @@ def _md_to_html(md):
 def pdf_create(content="", source_path="", output="", title=""):
     """把文本/Markdown 内容生成 PDF（中文字体嵌入；支持标题/列表/代码块/表格；可选封面/页码/目录）。"""
     try:
+        from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle
-        from reportlab.lib import colors
         from reportlab.platypus import (
-            SimpleDocTemplate, Paragraph, Spacer, Preformatted, Table, TableStyle,
+            Paragraph,
+            Preformatted,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
         )
     except ImportError:
         return "未安装 reportlab，请先执行 pip_install reportlab 后重试"
@@ -1516,7 +1519,7 @@ def pdf_create(content="", source_path="", output="", title=""):
         if not ok:
             return reason
         try:
-            with open(src, "r", encoding="utf-8", errors="replace") as f:
+            with open(src, encoding="utf-8", errors="replace") as f:
                 content = f.read(2_000_000)
         except Exception as e:
             return f"错误：读取源文件失败: {e}"
@@ -1969,8 +1972,8 @@ def docx_edit(path, action="", find="", replace="", anchor="", text=""):
             if target is None:
                 return f"未找到锚点段落（含「{anchor}」）"
             # python-docx 无 insert_after；用 XML 在 target 之后插入克隆样式的段落
-            from docx.text.paragraph import Paragraph as _Para2
             from docx.oxml.ns import qn as _qn2
+            from docx.text.paragraph import Paragraph as _Para2
             new_el = target._p.makeelement(_qn2("w:p"), {})
             target._p.addnext(new_el)
             new_para = _Para2(new_el, doc)
@@ -1985,7 +1988,7 @@ def docx_edit(path, action="", find="", replace="", anchor="", text=""):
             _md_inline_to_runs(para, str(text))
             doc.save(p)
             permissions.audit("docx_edit", p, "append")
-            return f"已在文档末尾追加段落（原文件已备份 .bak）"
+            return "已在文档末尾追加段落（原文件已备份 .bak）"
     except Exception as e:
         return f"错误：Word 编辑失败: {e}"
 
@@ -2114,7 +2117,7 @@ def _load_ppt_themes():
         path = os.path.join(base, "assets", "templates", "ppt_themes.json")
         if os.path.isfile(path):
             import json as _json
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 ext = _json.load(f)
             for k, v in (ext or {}).items():
                 if isinstance(v, dict) and not k.startswith("_"):
@@ -2199,12 +2202,12 @@ def _pptx_image_placeholder_label(line):
 def _add_image_placeholder_boxes(slide, labels, body_top_in):
     """在幻灯片底部画一组虚线圆角占位框 + 居中说明（图片位置预留的可见呈现）。
     body_top_in：正文区域顶端英寸（从正文下方开始排框）。"""
-    from pptx.util import Inches as _In, Pt as _Pt
-    from pptx.enum.shapes import MSO_SHAPE
-    from pptx.enum.text import PP_ALIGN
     from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches as _In
+    from pptx.util import Pt as _Pt
     try:
-        labels = [l for l in labels if l]
+        labels = [x for x in labels if x]
         if not labels:
             return
         left, width = 0.55, 9.0
@@ -2212,8 +2215,6 @@ def _add_image_placeholder_boxes(slide, labels, body_top_in):
         box_h = 1.15
         if len(labels) > 1:
             # 多图占位：并排两列
-            per_row = 2
-            rows = (len(labels) + per_row - 1) // per_row
             box_h = 0.95
         accent = "9BB7D4"
         for i, lab in enumerate(labels):
@@ -2321,7 +2322,6 @@ def _pptx_img_cover(src, dst_w_in, dst_h_in, out_cache):
         im = Image.open(src)
         im.load()
         # 目标像素比例（按 ~150 DPI 估算，足够预览）
-        import math
         target_ratio = (float(dst_w_in) or 5.0) / (float(dst_h_in) or 3.0)
         w, h = im.size
         cur_ratio = w / h
@@ -2352,7 +2352,8 @@ def _pptx_img_cover(src, dst_w_in, dst_h_in, out_cache):
 def _pptx_add_picture(slide, path, left_in, top_in, width_in=None, height_in=None,
                       cover=None, caption="", accent_hex=None):
     """往 slide 加一张图（可选 cover 居中裁剪铺满 + 底部图注）。返回 True/False。"""
-    from pptx.util import Inches as _In, Pt as _Pt
+    from pptx.util import Inches as _In
+    from pptx.util import Pt as _Pt
     try:
         use_path = path
         if cover:
@@ -2362,9 +2363,9 @@ def _pptx_add_picture(slide, path, left_in, top_in, width_in=None, height_in=Non
             cropped = _pptx_img_cover(path, cw, ch, out_cache)
             if cropped:
                 use_path = cropped
-        pic = slide.shapes.add_picture(use_path, _In(left_in), _In(top_in),
-                                       width=_In(width_in) if width_in else None,
-                                       height=_In(height_in) if (height_in and not width_in) else None)
+        slide.shapes.add_picture(use_path, _In(left_in), _In(top_in),
+                                 width=_In(width_in) if width_in else None,
+                                 height=_In(height_in) if (height_in and not width_in) else None)
         if caption:
             from pptx.enum.text import PP_ALIGN as _A
             tb = slide.shapes.add_textbox(_In(left_in), _In((top_in or 0) + (height_in or 2) - 0.32),
@@ -2507,9 +2508,10 @@ def _parse_outline_to_slides(outline):
 
 
 def _add_title_slide(prs, title, th, cover_image="", cover_subtitle=""):
-    from pptx.util import Inches as _In, Pt as _Pt
-    from pptx.enum.text import PP_ALIGN as _A
     from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN as _A
+    from pptx.util import Inches as _In
+    from pptx.util import Pt as _Pt
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # 全空白，自己排版
     # 背景底色（防透明白）
     bg = slide.shapes.add_shape(1, _In(0), _In(0), _In(13.33), _In(7.5))  # 1=rect
@@ -2535,7 +2537,6 @@ def _add_title_slide(prs, title, th, cover_image="", cover_subtitle=""):
             pass
     # 标题（居中，白字，偏下）
     _c = str(th.get("accent2") or "00A8A8") if not cover_image else "FFFFFF"
-    title_color = "FFFFFF"  # 有图/深底都用白字保证可读
     tb = slide.shapes.add_textbox(_In(0.8), _In(2.6), _In(11.7), _In(1.6))
     tf = tb.text_frame
     tf.word_wrap = True
@@ -2565,7 +2566,6 @@ def _add_title_slide(prs, title, th, cover_image="", cover_subtitle=""):
 
 
 def _add_content_slide(prs, page, th):
-    from pptx.util import Pt
     body = None
     # body 来源：bullets 数组或 body 字符串（每行一要点）
     raw_lines = []
@@ -2630,7 +2630,8 @@ def _add_content_slide(prs, page, th):
             body = ph
     if not title_set and page.get("title"):
         # 无标题占位符的版式：用文本框补
-        from pptx.util import Inches, Pt as _Pt
+        from pptx.util import Inches
+        from pptx.util import Pt as _Pt
         tb = slide.shapes.add_textbox(Inches(0.4), Inches(0.2), Inches(9), Inches(0.7))
         tb.text = str(page["title"])
         for para in tb.text_frame.paragraphs:
@@ -2658,7 +2659,6 @@ def _add_content_slide(prs, page, th):
             if lines and body is not None:
                 _pptx_text_frame_slides_body(body.text_frame, lines[:4], th.get("body", "333333"))
             per_row = 2 if n > 2 else n
-            rows = (n + per_row - 1) // per_row
             cw, ch = 4.1, 2.6
             for idx, ph in enumerate(photos):
                 row, col = divmod(idx, per_row)
@@ -2703,8 +2703,8 @@ def _add_content_slide(prs, page, th):
 
 
 def _write_slide_table(slide, table_spec, th, body_ph):
-    from pptx.util import Inches as _In, Pt as _Pt
-    from pptx.oxml.ns import qn as _qn
+    from pptx.util import Inches as _In
+    from pptx.util import Pt as _Pt
     headers = list(table_spec.get("headers") or [])
     rows = table_spec.get("rows") or []
     if headers and rows:
@@ -2731,7 +2731,6 @@ def _write_slide_table(slide, table_spec, th, body_ph):
                             pass
         # 表头底色
         try:
-            from pptx.dml.color import RGBColor as _RC
             from pptx.oxml.ns import qn as _q2
             accent = str(th.get("accent", "2B4C7E")).lstrip("#")
             for j in range(ncol):
@@ -3045,7 +3044,6 @@ def _add_docx_hyperlink(paragraph, text, url, bold=False, italic=False):
         from docx.opc.constants import RELATIONSHIP_TYPE
         from docx.oxml import OxmlElement
         from docx.oxml.ns import qn
-        from docx.shared import RGBColor
         part = paragraph.part
         r_id = part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
         hyperlink = OxmlElement("w:hyperlink")
@@ -3127,7 +3125,7 @@ def _load_docx_styles():
         path = os.path.join(base, "assets", "templates", "docx_styles.json")
         if os.path.isfile(path):
             import json as _json
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = _json.load(f)
             return dict(data)
     except Exception:
@@ -3174,7 +3172,7 @@ def _build_docx_markdown(out_path, content, style_name="default"):
                 p.paragraph_format.left_indent = Pt(18)
                 p.paragraph_format.space_after = Pt(6)
                 for line in str(body).split("\n"):
-                    r = p.add_run((line if not p.runs else "\n" + line))
+                    r = p.add_run(line if not p.runs else "\n" + line)
                     r.font.name = "Consolas"
                     r.font.size = Pt(9.5)
                     _set_run_cjk(r)
@@ -3219,9 +3217,7 @@ def _build_docx_markdown(out_path, content, style_name="default"):
                     style_name = "List Number" if (ordered or is_ordered) else "List Bullet"
                     if is_ordered:
                         s = s.split(".", 1)[1] if "." in s[:4] else s
-                    elif s.startswith("- "):
-                        s = s[2:]
-                    elif s.startswith("* "):
+                    elif s.startswith("- ") or s.startswith("* "):
                         s = s[2:]
                     p = doc.add_paragraph(style=style_name)
                     _md_inline_to_runs(p, s)
@@ -3587,35 +3583,34 @@ def _html_to_pngs(items, w, h, sc, full_page, base_dir=None):
         if not todo:
             return "无有效 HTML 内容"
         w, h, sc = int(w), int(h), max(1, min(int(sc or 1), 3))
-        with _html_render_lock():
-            with sync_playwright() as p:
-                browser = None
-                tmp_files = []
+        with _html_render_lock(), sync_playwright() as p:
+            browser = None
+            tmp_files = []
+            try:
                 try:
+                    browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
+                except Exception:
+                    browser = p.chromium.launch(args=["--no-sandbox"])
+                for hdoc, out_path, needs_ready in todo:
+                    pg = browser.new_page(viewport={"width": w * sc, "height": h * sc},
+                                          device_scale_factor=sc)
                     try:
-                        browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
-                    except Exception:
-                        browser = p.chromium.launch(args=["--no-sandbox"])
-                    for hdoc, out_path, needs_ready in todo:
-                        pg = browser.new_page(viewport={"width": w * sc, "height": h * sc},
-                                              device_scale_factor=sc)
+                        tmp_files.append(_goto_html_doc(pg, hdoc, base_dir, expect_ready=needs_ready))
+                        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+                        pg.screenshot(path=out_path, full_page=bool(full_page))
+                    finally:
                         try:
-                            tmp_files.append(_goto_html_doc(pg, hdoc, base_dir, expect_ready=needs_ready))
-                            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-                            pg.screenshot(path=out_path, full_page=bool(full_page))
-                        finally:
-                            try:
-                                pg.close()
-                            except Exception:
-                                pass
-                finally:
-                    if browser is not None:
-                        try:
-                            browser.close()
+                            pg.close()
                         except Exception:
                             pass
-                    for t in tmp_files:
-                        _safe_rm_temp(t)
+            finally:
+                if browser is not None:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                for t in tmp_files:
+                    _safe_rm_temp(t)
         return None
     except Exception as e:
         return f"批量 HTML 渲染失败: {e}（需已装 playwright，系统有 Edge 最佳）"
@@ -3630,28 +3625,27 @@ def _html_to_png(content, out_path, w, h, sc, full_page, base_dir=None, media=No
         if not html_doc:
             return "HTML 内容为空"
         from playwright.sync_api import sync_playwright
-        with _html_render_lock():
-            with sync_playwright() as p:
-                browser = None
-                tmp = None
+        with _html_render_lock(), sync_playwright() as p:
+            browser = None
+            tmp = None
+            try:
                 try:
+                    browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
+                except Exception:
+                    browser = p.chromium.launch(args=["--no-sandbox"])
+                pg = browser.new_page(viewport={"width": int(w) * int(sc), "height": int(h) * int(sc)},
+                                      device_scale_factor=int(sc))
+                tmp = _goto_html_doc(pg, html_doc, base_dir, media=media,
+                                     wait_selector=wait_selector, expect_ready=needs_ready)
+                os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+                pg.screenshot(path=out_path, full_page=bool(full_page))
+            finally:
+                if browser is not None:
                     try:
-                        browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
+                        browser.close()
                     except Exception:
-                        browser = p.chromium.launch(args=["--no-sandbox"])
-                    pg = browser.new_page(viewport={"width": int(w) * int(sc), "height": int(h) * int(sc)},
-                                          device_scale_factor=int(sc))
-                    tmp = _goto_html_doc(pg, html_doc, base_dir, media=media,
-                                         wait_selector=wait_selector, expect_ready=needs_ready)
-                    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-                    pg.screenshot(path=out_path, full_page=bool(full_page))
-                finally:
-                    if browser is not None:
-                        try:
-                            browser.close()
-                        except Exception:
-                            pass
-                    _safe_rm_temp(tmp)
+                        pass
+                _safe_rm_temp(tmp)
         return None
     except Exception as e:
         return f"HTML 渲染失败: {e}（需已装 playwright，可用 pip_install playwright；系统有 Edge 最佳）"
@@ -3702,7 +3696,7 @@ def html_render(html="", source_path="", output="", width=1280, height=720,
         if not ok:
             return reason
         try:
-            with open(sp, "r", encoding="utf-8", errors="replace") as f:
+            with open(sp, encoding="utf-8", errors="replace") as f:
                 content = f.read(2_000_000)
         except Exception as e:
             return f"错误：读取源文件失败: {e}"
@@ -3877,7 +3871,7 @@ def html_to_pdf(html="", source_path="", output="", size="A4", margin="1cm", lan
         if not okr:
             return reasonr
         try:
-            with open(sp, "r", encoding="utf-8", errors="replace") as f:
+            with open(sp, encoding="utf-8", errors="replace") as f:
                 content = f.read(2_000_000)
         except Exception as e:
             return f"错误：读取源文件失败: {e}"
@@ -3928,38 +3922,37 @@ def html_to_pdf(html="", source_path="", output="", size="A4", margin="1cm", lan
                       if foot_parts else "<div></div>")
 
         from playwright.sync_api import sync_playwright
-        with _html_render_lock():
-            with sync_playwright() as p:
-                browser = None
-                tmp = None
+        with _html_render_lock(), sync_playwright() as p:
+            browser = None
+            tmp = None
+            try:
                 try:
+                    browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
+                except Exception:
+                    browser = p.chromium.launch(args=["--no-sandbox"])
+                pg = browser.new_page()
+                tmp = _goto_html_doc(pg, html_doc, base_dir, extra_wait=400, expect_ready=needs_ready)
+                os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+                pdf_kwargs = dict(
+                    path=out,
+                    margin={"top": top_m, "bottom": bottom_m,
+                            "left": str(margin), "right": str(margin)},
+                    print_background=True, landscape=bool(landscape),
+                    display_header_footer=want_hf,
+                    header_template=header_tpl, footer_template=footer_tpl,
+                )
+                if css_page_size:
+                    pdf_kwargs["prefer_css_page_size"] = True
+                else:
+                    pdf_kwargs["format"] = str(size or "A4").upper()
+                pg.pdf(**pdf_kwargs)
+            finally:
+                if browser is not None:
                     try:
-                        browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
+                        browser.close()
                     except Exception:
-                        browser = p.chromium.launch(args=["--no-sandbox"])
-                    pg = browser.new_page()
-                    tmp = _goto_html_doc(pg, html_doc, base_dir, extra_wait=400, expect_ready=needs_ready)
-                    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-                    pdf_kwargs = dict(
-                        path=out,
-                        margin={"top": top_m, "bottom": bottom_m,
-                                "left": str(margin), "right": str(margin)},
-                        print_background=True, landscape=bool(landscape),
-                        display_header_footer=want_hf,
-                        header_template=header_tpl, footer_template=footer_tpl,
-                    )
-                    if css_page_size:
-                        pdf_kwargs["prefer_css_page_size"] = True
-                    else:
-                        pdf_kwargs["format"] = str(size or "A4").upper()
-                    pg.pdf(**pdf_kwargs)
-                finally:
-                    if browser is not None:
-                        try:
-                            browser.close()
-                        except Exception:
-                            pass
-                    _safe_rm_temp(tmp)
+                        pass
+                _safe_rm_temp(tmp)
         sz = os.path.getsize(out)
         permissions.audit("html_to_pdf", out, f"{sz} 字节")
         extra = "，含页眉页脚" if want_hf else ""
@@ -4031,13 +4024,13 @@ def ppt_layout_check(path, margin=0.05):
                         txt = shp.text_frame.text.strip()[:24].replace("\n", " ")
                     except Exception:
                         pass
-                tag = name or (txt or f"shape")
+                tag = name or (txt or "shape")
                 R, B = L + W, T + H
                 # 越界
-                if L < -m or T < -m or R > SW + m or B > SH + m:
+                if -m > L or -m > T or SW + m < R or SH + m < B:
                     issues.append(f"⚠ 越界 {tag}: L{L:.2f} T{T:.2f} R{R:.2f} B{B:.2f} (>画布{SW:.2f}x{SH:.2f})")
                 # 贴边(设计性贴边不算，仅当侵入过多)
-                if R > SW - 0.05 and R <= SW + m:
+                if R > SW - 0.05 and SW + m >= R:
                     pass
                 boxes.append((L, T, R, B, tag))
             # 两两重叠（正文文本框与其它大元素，略去文字含空）
@@ -4517,7 +4510,7 @@ def design_kit(action, html="", path="", name="", data=None):
                 sp = permissions.resolve(path)
                 if not sp or not os.path.isfile(sp):
                     return f"错误：文件不存在：{path}"
-                with open(sp, "r", encoding="utf-8", errors="replace") as f:
+                with open(sp, encoding="utf-8", errors="replace") as f:
                     content = f.read(2_000_000)
             if not content.strip():
                 return "错误：lint 需要 html 或 path"
@@ -4537,7 +4530,7 @@ def design_kit(action, html="", path="", name="", data=None):
             fp = os.path.join(tdir, fn)
             if not os.path.isfile(fp):
                 return f"错误：模板不存在：{name}（可用 design_kit action=templates 查看）"
-            with open(fp, "r", encoding="utf-8") as f:
+            with open(fp, encoding="utf-8") as f:
                 tpl = f.read()
             if str(path or "").strip() or str(html or "").strip():
                 op = permissions.resolve(path or html)
@@ -4561,13 +4554,13 @@ def design_kit(action, html="", path="", name="", data=None):
             bp = _brand_path()
             if not os.path.isfile(bp):
                 return "尚未设置品牌套件（用 design_kit action=brand-set data={...}）"
-            with open(bp, "r", encoding="utf-8") as f:
+            with open(bp, encoding="utf-8") as f:
                 return "品牌套件：\n" + json.dumps(json.load(f), ensure_ascii=False, indent=2)
         if act == "brand-css":
             bp = _brand_path()
             if not os.path.isfile(bp):
                 return "尚未设置品牌套件"
-            with open(bp, "r", encoding="utf-8") as f:
+            with open(bp, encoding="utf-8") as f:
                 b = json.load(f)
             colors = b.get("colors") or []
             css = [":root {"]

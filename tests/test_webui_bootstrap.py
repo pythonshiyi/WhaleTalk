@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 """WebUI 开箱即用自举逻辑回归：_ensure_webui_build 的依赖判定与构建触发。
 
 保证用户「双击启动即自动装依赖 + 自动构建」，无需手工 npm install/build。
 不实际执行 npm（慢且需网络）；只验证决策逻辑正确。
 """
 import json
-import os
 
 import web_app
 

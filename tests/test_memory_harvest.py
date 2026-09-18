@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """记忆写入风暴回归测试（v3.8.5 修复）：harvest 低价值过滤 + consolidate 近重复不再递归拼接。
 
 背景 bug：`_chat_harvest` 每分钟把无信息量的标签（如「新版本结论」）写入记忆；
@@ -43,7 +42,6 @@ def _jline(e):
 
 
 def _mk(mid, text, ts, archived=False):
-    import json
     return {"id": mid, "ts": ts, "type": "对话", "importance": 3, "text": text,
             "tags": [], "entities": [], "relations": [], "source": "对话", "archived": archived,
             "sensitivity": "public", "hit_count": 0, "last_hit": "", "supersedes": "", "version_id": mid}
@@ -69,7 +67,7 @@ def test_consolidate_no_recursive_glue(btmp):
     lines = [_jline(_mk(f"m{i}", "新版本结论", f"2026-09-0{1 + i % 3}T10:00:00+08:00")) for i in range(20)]
     with open(bk.MEMORY_JSONL, "a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    r = bk.consolidate_memories(min_importance=0, days=0)
+    bk.consolidate_memories(min_importance=0, days=0)
     items = bk.load_memories(include_archived=True)
     # 不应出现因拼接产生的超长文本（每条都 < 40 字）——即没有 (并入:) 链式累加
     for e in items:
@@ -81,7 +79,6 @@ def test_consolidate_no_recursive_glue(btmp):
 
 def test_consolidate_complementary_still_merges(btmp):
     """真正互补的两条记忆仍应保留信息（keep + 对方独有片段），而非丢弃。"""
-    import json
     a = _mk("m-a", "用户偏好中文表格化输出", "2026-09-01T10:00:00+08:00")
     b = _mk("m-b", "用户偏好中文回复，表格优先", "2026-09-02T10:00:00+08:00")
     with open(bk.MEMORY_JSONL, "a", encoding="utf-8") as f:

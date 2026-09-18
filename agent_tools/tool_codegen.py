@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """代码生图（image_codegen）：结构化图像优先走确定性代码通道 + 视觉自评迭代。
 
 设计取自「模型缺的是手不是脑」的工程补法：
@@ -12,13 +11,19 @@ import os
 import re
 import time
 
-import permissions
-from toolkit import tool
-from shared import clamp_int
 import deepseek_client as _dc
+import permissions
+from deepseek_client import (
+    DEFAULT_BASE_URL,
+    _atomic_write,
+    _extract_json_obj,
+    _http_client,
+    _safe_stream,
+    get_active_client,
+)
 from security import _safe_url
-from deepseek_client import get_active_client, _atomic_write, _extract_json_obj, _http_client, _safe_stream, DEFAULT_BASE_URL
-
+from shared import clamp_int
+from toolkit import tool
 
 _KINDS = ("illustration", "icon", "infographic", "pixel", "ui", "diagram", "poster", "logo")
 
@@ -167,7 +172,7 @@ def image_codegen(brief="", kind="illustration", width=1024, height=1024,
         if not okr:
             return reason_r
         try:
-            with open(sp, "r", encoding="utf-8", errors="replace") as f:
+            with open(sp, encoding="utf-8", errors="replace") as f:
                 html = f.read(2_000_000)
         except OSError as e:
             return f"错误：读取 refine_source 失败：{e}"
@@ -462,6 +467,7 @@ def _save_gif(imgs, path, fps, loop, background=(0, 0, 0, 255)):
 def image_inpaint(image="", prompt="", region="", mask="", output="", feather=12):
     """局部重绘：region/mask 圈定 → 图生图优先、补丁合成兜底。"""
     import io
+
     from PIL import Image, ImageDraw, ImageFilter
     prompt = str(prompt or "").strip()
     if not prompt:
@@ -561,8 +567,8 @@ def image_inpaint(image="", prompt="", region="", mask="", output="", feather=12
 )
 def control_map(src="", kind="edge", output="", blur=1, threshold=128, invert=False):
     """确定性控制图：Sobel 边缘 / 线稿 / 灰阶 / 剪影 / 阈值。"""
-    from PIL import Image, ImageFilter
     import numpy as np
+    from PIL import Image, ImageFilter
     kind = str(kind or "edge").strip().lower()
     if kind not in ("edge", "lineart", "gray", "silhouette", "threshold"):
         kind = "edge"
@@ -603,10 +609,7 @@ def control_map(src="", kind="edge", output="", blur=1, threshold=128, invert=Fa
             if mx > 0:
                 mag = mag / mx * 255.0
             edge = Image.fromarray(mag.astype("uint8"), "L")
-            if kind == "lineart":
-                out = edge.point(lambda v: 0 if v > th else 255)
-            else:
-                out = edge
+            out = edge.point(lambda v: 0 if v > th else 255) if kind == "lineart" else edge
     if invert:
         out = Image.eval(out, lambda v: 255 - v)
 
@@ -663,8 +666,9 @@ def _cell_size(frame_size, imgs):
 )
 def sprite_sheet(frames=None, output="", layout="grid", columns=0, frame_size="", background="", gif="", fps=8, loop=0):
     """多帧 → 网格/长条精灵表（+ 可选确定性 GIF）。"""
-    from PIL import Image
     import math
+
+    from PIL import Image
     out, oe = _resolve_out(output, ".png")
     if oe:
         return oe
@@ -789,6 +793,7 @@ def image_hybrid(brief="", base="", kind="illustration", width=1024, height=1024
                  output="", strength=0.5, background=""):
     """代码结构底图 → 图生图补质感 → 按 strength 混合；不可用则降级交付底图。"""
     import io
+
     from PIL import Image
     brief = str(brief or "").strip()
     if not brief:

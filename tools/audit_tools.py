@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """工具系统六层一致性审计（WhaleTalk 开发工具链）。
 
 用 AST 解析 deepseek_client.py / permissions.py（不导入模块、无副作用），
@@ -51,7 +50,6 @@ OUT_JSON = REPORTS_DIR / "tool_audit.json"
 # P1-3 迁移后六层由 @tool() 声明生成，AST 重建（不 import 模块，CI 无依赖）
 sys.path.insert(0, str(REPO_ROOT))
 import toolkit
-
 
 # ── 输出编码加固 ───────────────────────────────────────────────────
 # Windows 控制台与 CI 的默认码页（cp1252 / cp936 等）无法编码中文提示，print 时
@@ -243,7 +241,7 @@ def main(argv=None):
 
     # 覆盖检查
     group_members = set()
-    for g, ms in groups:
+    for _g, ms in groups:
         group_members |= set(ms)
     for name in all_names:
         if name not in group_members and name != "activate_tools":
@@ -252,10 +250,9 @@ def main(argv=None):
             flag(name, "短语表缺失", "能力地图将回退 description 截断 60 字")
         # 第 6 层 preactivate 覆盖（audit_preactivate_hints 提案）：交互回调工具豁免；
         # 建议进入预激活的其余工具必须有声明，防"工具加进系统但忘了挂预激活关键词"的静默漂移
-        if name not in ("ask_user", "request_permission", "activate_tools"):
-            if not _hint_membership(name, hints):
-                flag(name, "预激活未覆盖",
-                     "_PREACTIVATE_HINTS 未收录，将无法通过口语关键词被预激活")
+        if name not in ("ask_user", "request_permission", "activate_tools") and not _hint_membership(name, hints):
+            flag(name, "预激活未覆盖",
+                 "_PREACTIVATE_HINTS 未收录，将无法通过口语关键词被预激活")
 
     # 高危审批核对（写/删/命令/发信/RPA/DB 写等必须入 ACTION_TOOLS）
     # L8: rpa_screenshot 属只读"看屏幕"（可保存到工作区但语义只读），已从审批清单降级，此处不同步要求

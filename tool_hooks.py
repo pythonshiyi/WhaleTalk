@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """工具钩子管线（Tool Hooks）：把横切关注点从 148 个工具函数里收回到一处。
 
 ## 为什么需要它
@@ -217,7 +216,7 @@ def _hook_snapshot(ctx: CallContext):
     if "snapshot" not in (ctx.declared or ()):
         return
     import snapshot as snapshot_mod
-    for key, path in ctx.path_args():
+    for _key, path in ctx.path_args():
         try:
             if os.path.isfile(path):
                 snapshot_mod.snapshot_before(ctx.tool, path)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P0 审查修复的回归测试。
 
 覆盖（每项对应代码里修复的一个真实缺陷）：
@@ -20,7 +19,6 @@ if PROJECT_ROOT not in sys.path:
 import api_server  # noqa: E402
 import fetch_blocked  # noqa: E402
 import permissions  # noqa: E402
-
 
 # ── 1. fetch_blocked SSRF 硬底线 ─────────────────────────────────────
 

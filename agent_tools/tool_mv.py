@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """tool_mv —— 微电影/MV 一键成片编排（工具域模块）。
 
 把「分镜脚本 → 逐镜出图 → 逐镜配音 → 合成带运镜/转场/字幕/BGM 的成片」
@@ -16,17 +15,17 @@ import shutil
 from datetime import datetime
 
 import permissions
-from toolkit import tool
-from shared import clamp_float, clamp_int
 from agent_tools.tool_desktop import (
-    image_generate,
-    tts_save,
-    _ffmpeg_run,
     _ff_media_duration,
+    _ffmpeg_run,
     _mv_compose,
     _mv_concat_list,
     _mv_norm_audio,
+    image_generate,
+    tts_save,
 )
+from shared import clamp_float, clamp_int
+from toolkit import tool
 
 
 def _mv_ts(t):

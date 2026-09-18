@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """API Key 加密存储：Windows DPAPI（CryptProtectData）。
 
 - 磁盘上 config.json 的 api_key 存为 "dpapi:" 前缀 + base64 密文。
@@ -61,7 +60,7 @@ def encrypt(text):
         return PREFIX + base64.b64encode(raw).decode("ascii")
     except Exception:
         logging.exception("API Key DPAPI 加密失败，本次保存将跳过 api_key（明文不落盘）")
-        raise CryptError("DPAPI 加密失败")
+        raise CryptError("DPAPI 加密失败") from None
 
 
 def decrypt(token):

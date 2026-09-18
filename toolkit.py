@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """@tool() 装饰器 —— 工具声明单一来源（P1-3）。
 
 背景：WhaleTalk 的工具信息此前散布在六处手工维护（TOOLS schema / 函数签名 /

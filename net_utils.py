@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """网络工具：共享 httpx 客户端、安全请求/流式请求（含逐跳 SSRF 校验）。
 
 从 deepseek_client.py 中拆出，供搜索/抓取/API 调用等联网工具复用。

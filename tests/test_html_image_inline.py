@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """HTML 本地图片内联回归：修复 data: URI 载入导致相对图片加载失败的问题。
 
 覆盖 agent_tools.tool_docs._inline_local_images / _prep_html_doc：

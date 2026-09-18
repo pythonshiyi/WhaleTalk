@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """运行时工具域模块聚合（P0-1 巨石拆分）。
 
 deepseek_client.py 在共享基建定义后执行 `from agent_tools import *`：

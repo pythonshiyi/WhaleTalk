@@ -10,7 +10,6 @@ import base64
 import io
 import json
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -196,10 +195,7 @@ def refresh_self_model():
             return False
         out = c.chat([{"role": "user", "content": prompt}], max_tokens=400, thinking="low", json_output=True)
         import json as _json
-        if isinstance(out, str):
-            data = _json.loads(out)
-        else:
-            data = out
+        data = _json.loads(out) if isinstance(out, str) else out
         sm = {
             "knows": [str(x)[:120] for x in (data.get("knows") or [])][:5],
             "unknowns": [str(x)[:120] for x in (data.get("unknowns") or [])][:5],
@@ -250,7 +246,7 @@ def _genesis_model_call(prompt, max_tokens=900):
         if "401" in low or "invalid api key" in low or "authentication" in low:
             return "", "API Key 无效或已失效——请检查设置中的 Key"
         if "404" in low or "model" in low:
-            return "", f"模型不可用或不存在——请检查设置的模型名（可切换其它供应商）"
+            return "", "模型不可用或不存在——请检查设置的模型名（可切换其它供应商）"
         if "timed out" in low or "timeout" in low or "connection" in low or "网络" in low:
             return "", "网络/网关超时——请检查网络或 base_url"
         # 其它：透传首段

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """项目备份脚本：每次大版本更新前运行，生成完整源码快照压缩包。
 
 用法：
@@ -8,7 +7,6 @@
 import argparse
 import datetime
 import os
-import re
 import zipfile
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

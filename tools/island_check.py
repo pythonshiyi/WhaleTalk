@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """工具系统全链路「孤岛」对账（WhaleTalk 开发工具链）。
 
 对 10 层信息做差集对账，确保每个工具在每一层都可被发现/可被调用，
@@ -37,7 +36,6 @@ CD = REPO_ROOT / "config_defaults.py"
 # P1-3 迁移后 deepseek_client 六层由 @tool() 声明生成，AST 重建（不 import 模块）
 sys.path.insert(0, str(REPO_ROOT))
 import toolkit
-
 
 # ── 输出编码加固 ───────────────────────────────────────────────────
 # Windows 控制台与 CI 的默认码页（cp1252 / cp936 等）无法编码中文提示，print 时

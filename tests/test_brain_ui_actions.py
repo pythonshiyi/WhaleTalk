@@ -3,7 +3,6 @@
 
 对应 brain_api 新增 action 与 brainkit.load_thinking / update_memory 扩展。
 """
-import json
 import os
 import shutil
 import sys

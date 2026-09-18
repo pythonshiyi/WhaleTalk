@@ -4,8 +4,8 @@ import os
 import threading
 from datetime import date
 
-from shared import is_peak_hour
 import persistence
+from shared import is_peak_hour
 
 # 元 / 百万 tokens。此处均为**高峰时段价格**，空闲时段为高峰的一半，
 # estimate_cost 按「用量发生日 + 当前时段」自动处理。
@@ -51,7 +51,7 @@ def load_stats(path):
     if not path or not os.path.exists(path):
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return {}

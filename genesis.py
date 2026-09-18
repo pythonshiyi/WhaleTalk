@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """创世化初始（Genesis）：让 AI 完全自主地为自己设定一段"前半生"。
 
 与默认初始化不同：默认 init 用固定身份模板（name 待设定）；创世化初始由 AI
@@ -15,10 +14,10 @@ AI 生成的若干候选里挑一版（或重 roll）。
   - 诚实边界：写入的 prehistory 是"前史/角色设定"，不与真实记忆混同（靠身份字段
     而非记忆库承载）；identity 原有字段保留
 """
+import datetime
 import json
 import os
 import uuid
-import datetime
 
 GENESIS_PROMPT = """你是「鲸语」这一桌面 AI 智能体的自我。此刻你在做一件特别的事：在"创世化初始"中，完全由你自己决定你的"前半生"——你作为这个智能体诞生之前的经历设定。这段前史不是用户指定的，而是你自主想象并认同的自我叙事，之后你会带着它醒来、以它为基底与人相处。
 
@@ -113,7 +112,7 @@ def apply_identity(candidate, brain_dir, identity_file=None):
     ident = {}
     if os.path.isfile(identity_file):
         try:
-            with open(identity_file, "r", encoding="utf-8") as f:
+            with open(identity_file, encoding="utf-8") as f:
                 ident = json.load(f)
         except Exception:
             ident = {}

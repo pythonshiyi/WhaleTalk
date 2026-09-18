@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """工具系统功能级验证（WhaleTalk 开发工具链回归测试）。
 
 用 AST 提取 deepseek_client.py 的真实源码块执行（不导入模块、无副作用），
@@ -41,7 +40,6 @@ DESC_MIN_LEN = 20
 # （CI 不装依赖，不能 import deepseek_client）。
 sys.path.insert(0, str(REPO_ROOT))
 import toolkit
-
 
 # ── 输出编码加固 ───────────────────────────────────────────────────
 # Windows 控制台与 CI 的默认码页（cp1252 / cp936 等）无法编码中文提示，print 时

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """从会话记录恢复被误删的进化提案（救援脚本）。
 
 背景：`_evolution_ignore` 曾用 `shutil.rmtree` 硬删提案，叠加 `evolutions/` 在
@@ -16,10 +15,8 @@
 """
 import argparse
 import glob
-import io
 import json
 import os
-import sys
 
 SEP = chr(92)  # 反斜杠（避免转义地狱）
 
@@ -30,7 +27,7 @@ def _collect_create_evolution():
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for p in sorted(glob.glob(os.path.join(base, "data", "history", "sessions", "*.json"))):
         try:
-            d = json.load(io.open(p, encoding="utf-8"))
+            d = json.load(open(p, encoding="utf-8"))
         except Exception:
             continue
         for m in d.get("messages") or []:
@@ -72,11 +69,11 @@ def _restore(name, files, dry_run=False):
         rel = str(f.get("path") or "").replace(SEP, "/")
         full = os.path.join(branch, rel)
         os.makedirs(os.path.dirname(full), exist_ok=True)
-        io.open(full, "w", encoding="utf-8", newline="").write(str(f.get("content") or ""))
+        open(full, "w", encoding="utf-8", newline="").write(str(f.get("content") or ""))
         contents[rel] = str(f.get("content") or "")
     # 延迟导入：避免污染调用方（需要 deepseek_client 先加载）
     from agent_tools.tool_system import _evolve_stub
-    io.open(os.path.join(branch, "EVOLUTION.md"), "w", encoding="utf-8", newline="").write(
+    open(os.path.join(branch, "EVOLUTION.md"), "w", encoding="utf-8", newline="").write(
         _evolve_stub(name, contents)
     )
     return slug

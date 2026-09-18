@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """LLM 写作引擎：大纲 → 正文 → 润色 三阶段（全部走 DeepSeek API）。"""
 import json
 import logging

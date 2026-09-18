@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """数据库工具：只读校验、SQL 预览、表格格式化。
 
 从 deepseek_client.py 中拆出的纯函数/常量，供数据库查询/执行工具复用。
@@ -68,9 +67,7 @@ def readonly_stmt(sql):
         if kw in upper:
             return False
     # 函数调用类：名字与左括号间允许任意空白（防 `SLEEP (1)` 绕过子串匹配）
-    if _DB_FORBIDDEN_CALL_RE.search(upper):
-        return False
-    return True
+    return not _DB_FORBIDDEN_CALL_RE.search(upper)
 
 
 def force_limit(stmt, limit):

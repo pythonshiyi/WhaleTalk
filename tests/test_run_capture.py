@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """A6 回归：_run_capture 公共执行辅助 + 五执行工具统一路径的持久化测试。
 
 覆盖：成功/失败/超时 kill/截断/cwd/错误合并 六条 _run_capture 路径；
@@ -14,14 +13,13 @@ import time
 # 直接 import agent_tools.tool_code 会触发 __init__ 循环导入导致 TOOLS 未注册报错
 import deepseek_client as dsc  # noqa: F401
 import permissions
-
 from agent_tools.tool_code import (
     _run_capture,
+    pip_install,
     run_command,
     run_lint,
     run_python,
     run_tests,
-    pip_install,
 )
 
 PY = sys.executable

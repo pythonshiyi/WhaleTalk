@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """托盘（任务栏图标）纯函数回归：状态摘要 / tooltip / token 格式化。
 
 不依赖 pystray/Pillow —— TrayController 才用到它们，纯函数可独立测试。

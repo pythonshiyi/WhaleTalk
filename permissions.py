@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """权限模型 v2：默认放行 + 黑名单（自由优先，用户掌权）。
 
 设计理念（覆盖 v2.13+ 全部版本）：
@@ -191,7 +190,7 @@ def _load():
     data = json.loads(json.dumps(DEFAULT_PERMISSIONS))
     if PERMISSIONS_PATH and os.path.exists(PERMISSIONS_PATH):
         try:
-            with open(PERMISSIONS_PATH, "r", encoding="utf-8") as f:
+            with open(PERMISSIONS_PATH, encoding="utf-8") as f:
                 disk = json.load(f)
             if int(disk.get("version", 1) or 1) < 2:
                 _migrate_v1_to_v2(data, disk)

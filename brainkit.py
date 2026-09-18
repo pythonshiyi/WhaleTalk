@@ -552,13 +552,13 @@ def decrypt_whale(data: bytes, passphrase: str = "") -> bytes:
                 salt = base64.b64decode(env["salt"])
                 mk = Fernet(_derive_key(passphrase, salt)).decrypt(base64.b64decode(env["pw_mk"]))
             except Exception:
-                raise ValueError("口令错误")
+                raise ValueError("口令错误") from None
         if mk is None:
             raise ValueError("无法解锁快照：本机无密钥且未提供口令。请先 import-key 或提供 --passphrase")
         try:
             return _fernet(mk).decrypt(token)
         except Exception:
-            raise ValueError("快照内容解密失败（密钥不匹配或已损坏）")
+            raise ValueError("快照内容解密失败（密钥不匹配或已损坏）") from None
     if data.startswith(WHALE_MAGIC_V1):
         if _crypto_ok() and passphrase:
             salt = data[len(WHALE_MAGIC_V1): len(WHALE_MAGIC_V1) + 16]
@@ -566,7 +566,7 @@ def decrypt_whale(data: bytes, passphrase: str = "") -> bytes:
             try:
                 return Fernet(_derive_key(passphrase, salt)).decrypt(token)
             except Exception:
-                raise ValueError("口令错误或快照已损坏")
+                raise ValueError("口令错误或快照已损坏") from None
         raise ValueError("该快照已加密，需要 --passphrase 口令才能恢复")
     return data  # 明文 zip（旧版/未加密）
 
@@ -605,7 +605,7 @@ def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
         try:
             target.relative_to(base)
         except ValueError:
-            raise ValueError(f"快照包含非法路径: {name}")
+            raise ValueError(f"快照包含非法路径: {name}") from None
     zf.extractall(dest)
 
 
@@ -1928,14 +1928,12 @@ def _merge_mapping(base, ours, theirs, strategy, path=""):
                 continue
             except Exception:
                 pass
-        if isinstance(o[k], dict) or isinstance(t[k], dict):
-            if isinstance(o[k], dict) and isinstance(t[k], dict):
-                out[k] = _merge_mapping(b.get(k) if isinstance(b, dict) else None, o[k], t[k], strategy, f"{path}.{k}")
-                continue
-        if isinstance(o[k], list) or isinstance(t[k], list):
-            if isinstance(o[k], list) and isinstance(t[k], list):
-                out[k] = _merge_list(b.get(k) if isinstance(b, dict) else None, o[k], t[k], strategy, f"{path}.{k}")
-                continue
+        if isinstance(o[k], dict) and isinstance(t[k], dict):
+            out[k] = _merge_mapping(b.get(k) if isinstance(b, dict) else None, o[k], t[k], strategy, f"{path}.{k}")
+            continue
+        if isinstance(o[k], list) and isinstance(t[k], list):
+            out[k] = _merge_list(b.get(k) if isinstance(b, dict) else None, o[k], t[k], strategy, f"{path}.{k}")
+            continue
         try:
             out[k] = _merge_scalar(b.get(k) if isinstance(b, dict) else None, o[k], t[k], strategy)
         except _Conflict as c:
@@ -2182,7 +2180,6 @@ def cmd_diff(args) -> int:
 
 def cmd_merge(args) -> int:
     """merge <A> <B>：血缘三路合并。A 为主干。"""
-    m = load_manifest()
     a_path, b_path = Path(args.snap_a), Path(args.snap_b)
     if not a_path.exists() or not b_path.exists():
         print("[错误] 快照文件不存在。", file=sys.stderr)

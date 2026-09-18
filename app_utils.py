@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """应用级小工具：布尔转换、空壳目录判断、清理、干净退出标记、隐私日志。
 
 从 main.py 中拆出的纯函数/低依赖工具。
@@ -6,7 +5,6 @@
 import logging
 import logging.handlers
 import os
-import shutil
 
 _EMPTY_SHELL_CACHE = {}
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """创世化初始回归：候选生成(多版解析) + 写入大脑 identity(合并不覆盖)。"""
 import json
 import os
@@ -53,7 +52,7 @@ def test_apply_identity_merges_preserving_defaults():
             "voice": "先说后做", "archetype": "语言学家"}
     ok, msg = genesis.apply_identity(cand, tmp, identity_file=ident_file)
     assert ok
-    with open(ident_file, "r", encoding="utf-8") as f:
+    with open(ident_file, encoding="utf-8") as f:
         ident = json.load(f)
     # 原有字段保留
     assert ident["vessel"] == "鲸语" and "诚实" in ident["principles"]

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """文件/数据库写操作快照（删除可恢复的安全网）。
 
 设计目标：写文件 / 编辑 / 批量重命名 / 数据库写等**不可逆操作**执行前，
@@ -105,7 +104,7 @@ def list_snapshots(limit=50):
             if not os.path.isfile(meta_path):
                 continue
             try:
-                with open(meta_path, "r", encoding="utf-8") as f:
+                with open(meta_path, encoding="utf-8") as f:
                     m = json.load(f)
                 out.append({
                     "id": name,
@@ -134,7 +133,7 @@ def restore_snapshot(snapshot_id):
     if not os.path.isfile(meta_path):
         return False, f"快照不存在或已损坏：{snapshot_id}"
     try:
-        with open(meta_path, "r", encoding="utf-8") as f:
+        with open(meta_path, encoding="utf-8") as f:
             m = json.load(f)
         target = str(m.get("path") or "")
         if not target:

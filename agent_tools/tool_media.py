@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """🎨 媒体与图像 —— P0-1 拆分第二批（工具域模块）。
 
 共享符号策略：permissions / security / shared 为独立模块，顶层直接 import；
@@ -14,20 +13,20 @@ import re
 import subprocess
 from datetime import datetime
 
-from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import permissions
-from security import _safe_url
-from shared import OCR_IMAGE_PS
 from deepseek_client import (
-    VISION_MODEL,
+    EFFORT_BY_THINKING,
     IMAGE_EXTENSIONS,
-    get_active_client,
-    is_vision_model,
+    VISION_MODEL,
+    _capture_screen_png,
     _detect_image_mime,
     _safe_stream,
-    _capture_screen_png,
-    EFFORT_BY_THINKING,
+    get_active_client,
+    is_vision_model,
 )
+from security import _safe_url
+from shared import OCR_IMAGE_PS
+from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
 @tool(

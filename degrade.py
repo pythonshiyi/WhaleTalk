@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """退化日志（Degradation Journal）：让「静默降级」变成可见事实。
 
 ## 为什么需要它
@@ -45,7 +44,7 @@ LOG_THROTTLE = 60.0       # 同一 key 的日志节流（秒）；首次必记
 FLUSH_MIN_INTERVAL = 20.0  # 落盘最小间隔（秒），防高频写盘
 
 _lock = threading.RLock()
-_entries: "OrderedDict[str, dict]" = OrderedDict()
+_entries: OrderedDict[str, dict] = OrderedDict()
 _log_at: dict = {}
 _last_flush = 0.0
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """主流程编排：采集 → 选题 → 写作 → 质检（重试）→ 输出。
 
 CLI：python -m wechat_writer --dry-run / --run / --topic "指定主题"

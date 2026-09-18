@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """一次性迁移脚本：deepseek_client.py 六层手工注册表 → @tool() 单一来源（P1-3）。
 
 做什么：
@@ -233,7 +232,7 @@ def main():
     )
     # 找到第一个顶层 FunctionDef / 最后 import 后插入（第 73 行 Import 后）
     anchor = None
-    for i, node in enumerate(tree.body):
+    for _i, node in enumerate(tree.body):
         if not isinstance(node, (ast.Import, ast.ImportFrom)):
             anchor = node.lineno
             break
@@ -247,7 +246,7 @@ def main():
         ast.parse(new_text)
     except SyntaxError as e:
         Path(SRC.parent / "gen_check.py").write_text(new_text, encoding="utf-8")
-        raise SystemExit(f"生成文件语法错误 @{e.lineno}: {e.msg}（已保存 gen_check.py 供排查）")
+        raise SystemExit(f"生成文件语法错误 @{e.lineno}: {e.msg}（已保存 gen_check.py 供排查）") from e
 
     # ── 11. 静态等价性校验：模拟注册 → 构建 → 与原六层 deep-equal ──
     sys.path.insert(0, str(SRC.parent))
@@ -333,7 +332,7 @@ def main():
         assert [frozenset(ts) for _, ts in new_hints] == [frozenset(ts) for _, ts in old_hints], "_PREACTIVATE_HINTS 成员不一致！"
     except AssertionError as e:
         Path(SRC.parent / "gen_check.py").write_text(new_text, encoding="utf-8")
-        raise SystemExit(f"{e}（已保存 gen_check.py 供排查）")
+        raise SystemExit(f"{e}（已保存 gen_check.py 供排查）") from e
     print("[11] ✅ 六层等价性校验全部通过")
 
     # ── 12. 备份并写回（write_bytes 强制 LF 行尾，避免 git 全文件 diff）──

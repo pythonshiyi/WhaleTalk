@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """工具描述保真回归（禁止以「省 token」为由删减描述）。
 
 背景：compact_tool_schema（现 normalize_tool_schema）曾对描述做两类破坏性处理——

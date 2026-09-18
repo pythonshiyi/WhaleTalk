@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """上下文装配测试：顺序/门控/预算/失败隔离/回执。
 
 核心不变量：
@@ -10,7 +9,6 @@ import pytest
 
 import context_providers as cp
 import degrade
-
 
 FIXED_DEPS = {
     "task_quality_guide": "[任务质量指南]",

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """用户自定义工具加载（mtime+size 缓存）。
 
 从 main.py 中拆出，供工具中心/请求构造复用。
@@ -30,7 +29,7 @@ def load_user_tools(path=None):
     if cached is not None:
         return cached
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         tools = []
         for t in data:

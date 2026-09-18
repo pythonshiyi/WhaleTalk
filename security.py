@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """SSRF / URL 安全校验工具。
 
 从 deepseek_client.py 中拆出的纯安全函数，供客户端、测试与后续模块复用。
@@ -116,9 +115,7 @@ def _is_private_host(host, allow_loopback=True):
         # 链路本地（含 169.254.169.254 云元数据）与保留地址永远阻止
         if ip.is_link_local or ip.is_reserved:
             return True
-        if ip.is_private:
-            return True
-        return False
+        return bool(ip.is_private)
     except ValueError:
         pass
     # 非 IP 主机名：解析 DNS，任一解析结果落内网即拦截（防 DNS 重绑定）

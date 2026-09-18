@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 fetch_blocked：通过机场 HTTP 代理 + 浏览器 TLS 指纹访问被墙站点（按需加载的能力扩展）
 
@@ -22,8 +21,8 @@ import concurrent.futures
 import logging
 import os
 import re
-import ssl
 import socket
+import ssl
 import time
 from urllib.parse import urlparse
 
@@ -69,9 +68,7 @@ def _is_blocked_host(host):
             # （blocklist_enabled / network.block_private / allow_loopback）。
             try:
                 import security
-                if security._hard_floor_reason(host):
-                    return True
-                return False
+                return bool(security._hard_floor_reason(host))
             except Exception:
                 pass  # security 不可用 → 继续走下方旧 SSRF 判断（更严）
     except Exception:
@@ -181,7 +178,7 @@ def _discover_nodes():
                     continue
                 fp = os.path.join(d, fn)
                 try:
-                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                    with open(fp, encoding="utf-8", errors="replace") as f:
                         nodes.extend(_parse_yaml_nodes(f.read()))
                 except Exception:
                     logger.debug("解析订阅失败: %s", fp)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """主题 token 定义（深海驾驶舱 Deep Sea Cockpit 色板）。
 
 - dark：深海声呐（深蓝底 + 声呐青 #00D4FF 主色 + 深空紫 #8B6BFF 次色）

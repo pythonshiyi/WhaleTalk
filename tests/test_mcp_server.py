@@ -1,10 +1,7 @@
-# -*- coding: utf-8 -*-
 """MCP 出口回归：WhaleTalk 作为 MCP stdio server 可被外部 host 拉起调用工具。"""
 import json
 import subprocess
 import sys
-
-import pytest
 
 
 def _run_mcp(msgs, timeout=40):

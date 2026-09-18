@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """图像流水线回归：局部重绘 / 控制图 / 精灵表 / 确定性 GIF / 混合渲染。
 
 不触网：图生图与文生图后端以桩替换；控制图与 GIF 为纯本地确定性实现。
@@ -12,11 +11,11 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import permissions  # noqa: E402
-import deepseek_client as dc  # noqa: E402,F401  （先完整初始化工具注册表）
-import agent_tools.tool_codegen as tg  # noqa: E402
-
 from PIL import Image  # noqa: E402
+
+import agent_tools.tool_codegen as tg  # noqa: E402
+import deepseek_client as dc  # noqa: E402,F401  （先完整初始化工具注册表）
+import permissions  # noqa: E402
 
 
 @pytest.fixture

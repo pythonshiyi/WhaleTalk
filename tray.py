@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """系统托盘（任务栏图标）控制器 —— 常驻入口的原生体验层。
 
 职责：
@@ -362,7 +361,7 @@ class TrayController:
     def run(self):
         """构建并运行托盘（阻塞，应在后台线程调用）。失败返回 False。"""
         try:
-            import pystray
+            pass
         except Exception as e:
             print(f"[托盘] 不可用：{e}（--no-tray 可跳过）")
             return False

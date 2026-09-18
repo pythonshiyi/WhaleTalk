@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """📊 数据与文档 —— 首批拆分工具域（P0-1 巨石拆分）。
 
 共享符号策略：permissions / db_utils 为独立模块（无循环依赖），顶层直接
@@ -8,10 +7,10 @@ import；函数体内按需导入标准库（csv 等）保持原样。
 import itertools
 import os
 
-from shared import clamp_int  # D4: 参数校验辅助
-from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import permissions
 from db_utils import table_to_md as _table_to_md  # 统一 markdown 表格渲染（含 | 转义）
+from shared import clamp_int  # D4: 参数校验辅助
+from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
 # GBK/GB18030 回退链：国内 Excel「另存为 CSV」默认 GBK/ANSI，纯 utf-8 读取会整片乱码。
@@ -20,11 +19,11 @@ def _csv_read_text(path):
     """以编码回退链读取 CSV 文本，返回 (text, used_encoding)。"""
     for enc in ("utf-8-sig", "utf-8", "gb18030"):
         try:
-            with open(path, "r", encoding=enc, newline="") as f:
+            with open(path, encoding=enc, newline="") as f:
                 return f.read(), enc
         except UnicodeDecodeError:
             continue
-    with open(path, "r", encoding="latin-1", errors="replace", newline="") as f:
+    with open(path, encoding="latin-1", errors="replace", newline="") as f:
         return f.read(), "latin-1"
 
 
@@ -162,7 +161,7 @@ def write_csv(path, rows, headers="", mode="overwrite"):
             elif cols:
                 # 追加且文件已存在：检查是否已含表头（首行非空即视为已有内容），避免重复表头
                 try:
-                    with open(p, "r", encoding="utf-8-sig", newline="") as text_io:
+                    with open(p, encoding="utf-8-sig", newline="") as text_io:
                         first = next(_csv.reader(text_io), None)
                 except Exception:
                     first = None

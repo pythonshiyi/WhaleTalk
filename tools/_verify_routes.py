@@ -1,8 +1,10 @@
-# -*- coding: utf-8 -*-
 """P2-8 行为等价验证：旧 do_POST if/elif 链 vs 新 _POST_ROUTES 表。
 对比：对所有候选路径，两者匹配结果（是否命中 + 命中目标方法名）必须一致。
 只读源码，不 import 任何模块，无副作用。"""
-import re, ast, sys, pathlib
+import ast
+import pathlib
+import re
+import sys
 
 SRC = pathlib.Path("api_server.py")
 RN = pathlib.Path("api_server.py.routes_new")
@@ -75,21 +77,20 @@ routes = []  # (matcher, method_name)
 for node in ast.walk(tree):
     if isinstance(node, ast.Assign):
         for t in node.targets:
-            if isinstance(t, ast.Name) and t.id == "_POST_ROUTES":
-                if isinstance(node.value, ast.List):
-                    for elt in node.value.elts:
-                        if isinstance(elt, ast.Tuple) and len(elt.elts) == 2:
-                            m = elt.elts[0]
-                            nm = elt.elts[1]
-                            if isinstance(nm, ast.Constant) and isinstance(nm.value, str):
-                                if isinstance(m, ast.Constant) and isinstance(m.value, str):
-                                    routes.append((m.value, nm.value))
-                                elif isinstance(m, ast.Tuple):
-                                    parts = []
-                                    for x in ast.walk(m):
-                                        if isinstance(x, ast.Constant) and isinstance(x.value, str):
-                                            parts.append(x.value)
-                                    routes.append((tuple(parts), nm.value))
+            if isinstance(t, ast.Name) and t.id == "_POST_ROUTES" and isinstance(node.value, ast.List):
+                for elt in node.value.elts:
+                    if isinstance(elt, ast.Tuple) and len(elt.elts) == 2:
+                        m = elt.elts[0]
+                        nm = elt.elts[1]
+                        if isinstance(nm, ast.Constant) and isinstance(nm.value, str):
+                            if isinstance(m, ast.Constant) and isinstance(m.value, str):
+                                routes.append((m.value, nm.value))
+                            elif isinstance(m, ast.Tuple):
+                                parts = []
+                                for x in ast.walk(m):
+                                    if isinstance(x, ast.Constant) and isinstance(x.value, str):
+                                        parts.append(x.value)
+                                routes.append((tuple(parts), nm.value))
 
 print(f"旧分支: {len(old)} 个（含 else） · 新路由表: {len(routes)} 条")
 
@@ -122,9 +123,8 @@ def new_match(p):
         elif matcher[0] == "set":
             if p in matcher[1:]:
                 return name
-        elif matcher[0] == "pre":
-            if p.startswith(matcher[1]) and p.endswith(matcher[2]):
-                return name
+        elif matcher[0] == "pre" and p.startswith(matcher[1]) and p.endswith(matcher[2]):
+            return name
     return None
 
 # ── 3. 构造测试路径：所有精确路由 + set 内路径 + 前缀变形 + 边界 ──

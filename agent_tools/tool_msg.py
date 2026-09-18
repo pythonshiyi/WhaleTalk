@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """tool_msg —— P0-1 批量拆分（工具域模块）：📧 邮件与消息.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
@@ -11,12 +10,9 @@ import os
 import re
 from datetime import datetime
 
-import permissions
-
-from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
+import permissions
 from deepseek_client import (
-
     _TELEGRAM_OFFSET,
     _agent_mail_run,
     _agent_mail_tip,
@@ -26,7 +22,7 @@ from deepseek_client import (
     get_active_client,
     send_webhook_notify,
 )
-
+from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
 @tool(
@@ -60,7 +56,7 @@ def send_email(to, subject, body):
             '"user": "you@example.com", "password": "***", "from": "you@example.com"}'
         )
     try:
-        with open(_dc.EMAIL_CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(_dc.EMAIL_CONFIG_FILE, encoding="utf-8") as f:
             cfg = json.load(f)
         if isinstance(cfg, dict) and cfg.get("password"):
             cfg["password"] = _decrypt_secret(cfg["password"])
@@ -225,12 +221,10 @@ def im_send(text, title="", channel=""):
     body = f"{title}\n{text}" if title else str(text)
     ch = str(channel or "").strip().lower()
     targets = {}
-    if not ch or ch == "telegram":
-        if cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id"):
-            targets["telegram"] = (cfg["telegram_bot_token"], str(cfg["telegram_chat_id"]))
-    if not ch or ch in ("wecom", "wechat", "weixin"):
-        if cfg.get("wecom_webhook"):
-            targets["wecom"] = (cfg["wecom_webhook"],)
+    if (not ch or ch == "telegram") and cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id"):
+        targets["telegram"] = (cfg["telegram_bot_token"], str(cfg["telegram_chat_id"]))
+    if (not ch or ch in ("wecom", "wechat", "weixin")) and cfg.get("wecom_webhook"):
+        targets["wecom"] = (cfg["wecom_webhook"],)
     if not targets:
         return "错误：未配置可用的 IM 通道（telegram_bot_token/telegram_chat_id 或 wecom_webhook）"
     sent = []
@@ -337,7 +331,7 @@ def read_email(limit=10, since_days=3):
     if not _dc.EMAIL_CONFIG_FILE or not os.path.exists(_dc.EMAIL_CONFIG_FILE):
         return "错误：未找到 email_config.json（需配置 imap 段）"
     try:
-        with open(_dc.EMAIL_CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(_dc.EMAIL_CONFIG_FILE, encoding="utf-8") as f:
             cfg = json.load(f)
         imap = cfg.get("imap") if isinstance(cfg, dict) else None
         if not isinstance(imap, dict):
@@ -356,8 +350,8 @@ def read_email(limit=10, since_days=3):
         except (TypeError, ValueError):
             days = 3
         import imaplib
-        from email.header import decode_header
         from email import message_from_bytes
+        from email.header import decode_header
 
         ssl_flag = imap.get("ssl", cfg.get("imap_ssl", "true"))
         if str(ssl_flag).lower() in ("true", "1", "yes"):

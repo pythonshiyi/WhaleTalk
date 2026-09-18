@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """本地 HTTP API（v2）：新一代 WebUI 的后端。
 
 提供 token 保护的本地接口，供 WebUI（浏览器）调用：
@@ -21,13 +20,13 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
-import sys
 import threading
 import time
 import urllib.request
-import shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 import shared
 
 logger = logging.getLogger("whaletalk.api")
@@ -276,10 +275,7 @@ def _make_ask_cb(send, stop_event):
             })
             return "（用户未在限时内回答，请简化问题或改用其他方式）"
         # 多选答案格式化为人类可读串，便于模型理解
-        if isinstance(answer, (list, tuple)):
-            answer_str = "、".join(str(x) for x in answer)
-        else:
-            answer_str = str(answer)
+        answer_str = "、".join(str(x) for x in answer) if isinstance(answer, (list, tuple)) else str(answer)
         _record_approval({
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
             "type": "ask",
@@ -311,8 +307,12 @@ def _sync_request_full_auto(body):
         import config_utils
         cfg = config_utils.load_config()
         perms.set_full_auto(bool(cfg.get("full_auto")))
-    except Exception:
-        pass
+    except Exception as e:
+        # 权限同步失败会让免审批语义回退到进程残留状态（任务模式可能被误审批拦截），
+        # 静默吞掉等于"偶发弹审批"无从定位——必须可见。
+        import degrade
+        degrade.degrade("api.permissions.sync", e,
+                        "任务模式权限同步失败，可能回退到配置默认（影响免审批执行）")
 
 
 def _make_permission_cb(send, stop_event):
@@ -444,7 +444,7 @@ def _plugin_summary(p):
         "author": str(meta.get("author") or ""),
         "version": str(meta.get("version") or ""),
         "enabled": bool(p.get("enabled", True)),
-        "trigger": str((meta.get("triggers") or [meta.get("trigger")] or [""])[0] if isinstance(meta.get("triggers"), list) else (meta.get("trigger") or "")),
+        "trigger": str((meta.get("triggers") or [meta.get("trigger")])[0] if isinstance(meta.get("triggers"), list) else (meta.get("trigger") or "")),
         "slug": str(p.get("slug") or ""),
         "kind": kind,
         "permissions": perms,
@@ -626,6 +626,7 @@ def _verify_plugin_download(raw, entry):
             return False, "市场配置了签名公钥，但该插件缺少 signature 字段，已拒绝安装（fail-closed）"
         try:
             import base64
+
             from cryptography.hazmat.primitives import serialization
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
             key_material = pub.encode("utf-8")
@@ -829,8 +830,9 @@ def _role_name(prompt):
 
 def _monthly_cost():
     """本月成本（stats.json 估算）。"""
-    import stats as stats_mod
     from datetime import date
+
+    import stats as stats_mod
     try:
         data = stats_mod.load_stats(STATS_PATH)
         month_key = date.today().strftime("%Y-%m")
@@ -848,8 +850,9 @@ def _monthly_cost():
 
 def _usage_month_summary():
     """本月真实 token 累计（stats.json 按天累计）：返回 (输入, 输出, 缓存命中率字符串)。"""
-    import stats as stats_mod
     from datetime import date
+
+    import stats as stats_mod
     acc = {"prompt": 0, "completion": 0, "cache_hit": 0}
     try:
         data = stats_mod.load_stats(STATS_PATH)
@@ -1053,7 +1056,6 @@ def build_situation(section=None):
       "health"     完整健康（含 CPU/内存/网络实时探测）
       "full"       摘要 + 全部详情（前端工作台一次取全）
     """
-    import deepseek_client as dc
 
     st = _status()
     u = st.get("usage_total") or {}
@@ -1078,7 +1080,7 @@ def build_situation(section=None):
                 git_branch = rb.stdout.strip()
             stp = _git(["status", "--porcelain"])
             if stp.returncode == 0:
-                git_changes = len([l for l in stp.stdout.splitlines() if l.strip()])
+                git_changes = len([ln for ln in stp.stdout.splitlines() if ln.strip()])
                 git_dirty = git_changes > 0
             lg = _git(["log", "-1", "--pretty=%h %s"])
             if lg.returncode == 0 and lg.stdout.strip():
@@ -1334,7 +1336,7 @@ def _evo_ignored_list(limit=40):
 
 def _evo_read_head(path, limit=6000):
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return f.read(limit)
     except Exception:
         return ""
@@ -1710,8 +1712,8 @@ def _dirs():
 def _set_dir(body):
     """切换工作目录：校验存在 → 写入 cfg + active_dir + 自动加入权限允许目录。"""
     import config_utils
-    import permissions as perms
     import deepseek_client as dc
+    import permissions as perms
     path = str(body.get("path") or "").strip()
     if not path:
         return None, "缺少 path"
@@ -2199,7 +2201,7 @@ def _read_file(path, max_chars=30000):
         size = os.path.getsize(path)
         if size > 10 * 1024 * 1024:
             return None, "文件超过 10MB，请直接交给 AI 用 read_file 处理"
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             content = f.read(max_chars + 1)
         truncated = len(content) > max_chars
         return {"path": path, "content": content[:max_chars], "truncated": truncated, "size": size}, None
@@ -2259,7 +2261,7 @@ def _file_preview(path, max_chars=16000):
             base.update({"previewable": False, "reason": "文本超过 2MB，不内嵌预览"})
             return base, None
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            with open(path, encoding="utf-8", errors="replace") as f:
                 content = f.read(max_chars + 1)
             truncated = len(content) > max_chars
             inline = ext in _PREVIEW_INLINE_TEXT
@@ -2278,8 +2280,8 @@ def _file_preview(path, max_chars=16000):
             base.update({"previewable": False, "reason": "CSV 超过 2MB，不内嵌预览"})
             return base, None
         try:
-            import csv as _csv, io as _io
-            with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
+            import csv as _csv
+            with open(path, encoding="utf-8", errors="replace", newline="") as f:
                 rows = list(_csv.reader(f))
             max_rows, max_cols = 200, 30
             header = rows[0] if rows else []
@@ -2584,8 +2586,8 @@ def _init_dc_paths():
     - config 同步的运行态开关（图像/视觉自审/静默启动/邮件等）= 可降级：同步失败时
       该能力退默认值并记录明确日志，不阻塞启动。
     """
-    import deepseek_client as dc
     import config_utils
+    import deepseek_client as dc
     import profiles as profiles_mod
     profiles_mod.DEFAULT_PROFILES_PATH = os.path.join(DATA_DIR, "profiles.json")
 
@@ -2718,7 +2720,7 @@ def _clear_auto_checkpoint():
     try:
         if not os.path.exists(CHECKPOINT_PATH):
             return False
-        with open(CHECKPOINT_PATH, "r", encoding="utf-8") as f:
+        with open(CHECKPOINT_PATH, encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict) or not data.get("auto"):
             return False
@@ -2970,7 +2972,7 @@ def _encrypt_val(v):
 def _read_json(path, default):
     try:
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 d = json.load(f)
             return d if isinstance(d, dict) else default
     except Exception:
@@ -2988,8 +2990,8 @@ def _atomic_write_json(path, data):
 
 def _services_get():
     """外部服务配置全景（解密后返回）。"""
-    import deepseek_client as dc
     import config_utils
+    import deepseek_client as dc
     cfg = config_utils.load_config()
     out = {}
     try:
@@ -3002,7 +3004,7 @@ def _services_get():
     except Exception:
         out["im"] = {}
     db = _read_json(os.path.join(DATA_DIR, "db_config.json"), {})
-    for kind, conns in db.items():
+    for _kind, conns in db.items():
         if isinstance(conns, dict):
             for c in conns.values():
                 if isinstance(c, dict) and c.get("password"):
@@ -3144,6 +3146,7 @@ def _mark_first_run_done():
 def _deps():
     """依赖全量清单：核心组件（AUTO）+ 可选能力（HEAVY）+ 常规（OPTIONAL）。"""
     import importlib.util
+
     import deps as deps_mod
     core = []
     for imp, pkg, label in deps_mod.AUTO_INSTALL_DEPS:
@@ -3183,8 +3186,8 @@ def _deps_install(key):
 
 def _config_reset():
     """恢复默认配置（保留 api_key / inbound_token / image_api_key / active_dir）。"""
-    import config_utils
     import config_defaults
+    import config_utils
     cfg = config_utils.load_config()
     keep = {
         "api_key": cfg.get("api_key", ""),
@@ -3284,7 +3287,10 @@ def _compress_messages(messages, cfg, client, max_rounds=6):
                 lines.append("")
             with open(archived_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
-        except Exception:
+        except Exception as e:
+            import degrade
+            degrade.degrade("api.compress.archive", e,
+                            "被压缩的历史未能归档（原文已不在本会话，且无归档可回溯）")
             archived_path = ""
 
     # LLM 摘要
@@ -3303,8 +3309,12 @@ def _compress_messages(messages, cfg, client, max_rounds=6):
             on_content=lambda t: summary_parts.append(t),
         )
         summary_text = "".join(summary_parts).strip()
-    except Exception:
+    except Exception as e:
         logger.exception("上下文摘要失败，回退硬裁剪")
+        import degrade
+        degrade.degrade("api.compress.summary", e,
+                        "上下文摘要失败，已回退硬裁剪（历史细节可能丢失，影响长程一致性）",
+                        critical=True)
         summary_text = ""
 
     if summary_text:
@@ -3355,8 +3365,11 @@ def _compress_messages(messages, cfg, client, max_rounds=6):
                     m["content"] = m["content"][:6000] + "\n…[超长已截断]"
             info["mode"] = "trim"
             info["hard_trim"] = True
-    except Exception:
+    except Exception as e:
         logger.exception("压缩后二次校验失败（不影响主流程）")
+        import degrade
+        degrade.degrade("api.compress.recheck", e,
+                        "压缩后二次校验失败，存在请求超限被服务端拒绝的风险", critical=True)
 
     return kept, info
 
@@ -3382,7 +3395,7 @@ def _global_search(query, filters=None):
         if not fn.endswith(".json"):
             continue
         try:
-            with open(os.path.join(SESSIONS_DIR, fn), "r", encoding="utf-8") as f:
+            with open(os.path.join(SESSIONS_DIR, fn), encoding="utf-8") as f:
                 d = json.load(f)
         except Exception:
             continue
@@ -3458,7 +3471,7 @@ def _evolution_apply(name):
                         os.remove(bak)
                     os.replace(dst, bak)
                 except Exception:
-                    raise RuntimeError(f"备份失败: {fn}")
+                    raise RuntimeError(f"备份失败: {fn}") from None
             _shutil.copy2(src, dst)
             applied.append(fn)
         # 成功：目录改名 _applied
@@ -3553,7 +3566,7 @@ def _evolution_detail(name):
             p = os.path.join(dp, fn)
             rel = os.path.relpath(p, branch).replace("\\", "/")
             try:
-                with open(p, "r", encoding="utf-8") as f:
+                with open(p, encoding="utf-8") as f:
                     content = f.read(20000)
             except Exception:
                 continue
@@ -3577,7 +3590,8 @@ def _evolution_detail(name):
 
 def _schedule_next_run(item, now=None):
     """计算定时任务的下次运行时间字符串（time/cron/every），失败返回空串。"""
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
     now = now or _dt.now()
     try:
         if item.get("time"):
@@ -3662,7 +3676,7 @@ def _brain_daily_snapshot(now):
         return
     t = str(cfg.get("brain_snapshot_time", "22:00")).strip()
     today_str = now.strftime("%Y-%m-%d")
-    if _BRAIN_SNAPSHOT_LAST_DATE == today_str:
+    if today_str == _BRAIN_SNAPSHOT_LAST_DATE:
         return
     if now.strftime("%H:%M") != t:
         return
@@ -3718,8 +3732,9 @@ def _brain_guard_tick(now):
 
 def _scheduler_loop():
     """定时任务调度线程（30s 轮询）。"""
-    import stores
     from datetime import datetime as _dt
+
+    import stores
     last_checked_minute = {}
     while True:
         try:
@@ -3895,9 +3910,8 @@ def _start_process_watchdog(interval=180, max_idle=3600):
 
 def _dispatch_schedule(s, action):
     """执行定时任务动作。"""
-    import config_utils
-    import deepseek_client as dc
     import backup as backup_mod
+    import deepseek_client as dc
     try:
         if action == "backup":
             backup_mod.make_backup()
@@ -3961,8 +3975,8 @@ def _migrate_legacy_sessions():
             continue
         full = os.path.join(HISTORY_DIR, fn)
         try:
-            with open(full, "r", encoding="utf-8", errors="replace") as f:
-                lines = [l.strip() for l in f.read().splitlines() if l.strip()]
+            with open(full, encoding="utf-8", errors="replace") as f:
+                lines = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
             if not lines or len(lines) > 2000:
                 continue
             msgs = []
@@ -4038,7 +4052,7 @@ def _workflows_get():
 def _load_workflows():
     try:
         if os.path.exists(WORKFLOWS_PATH):
-            with open(WORKFLOWS_PATH, "r", encoding="utf-8") as f:
+            with open(WORKFLOWS_PATH, encoding="utf-8") as f:
                 d = json.load(f)
             return d if isinstance(d, dict) else {}
     except Exception:
@@ -4067,7 +4081,7 @@ def _checkpoint_get():
     """任务检查点。"""
     try:
         if os.path.exists(CHECKPOINT_PATH):
-            with open(CHECKPOINT_PATH, "r", encoding="utf-8") as f:
+            with open(CHECKPOINT_PATH, encoding="utf-8") as f:
                 return json.load(f)
     except Exception:
         pass
@@ -4098,7 +4112,7 @@ def _knowledge_get():
     if not idx_path or not os.path.exists(idx_path):
         return {"indexed": False, "files": []}
     try:
-        with open(idx_path, "r", encoding="utf-8") as f:
+        with open(idx_path, encoding="utf-8") as f:
             d = json.load(f)
         if isinstance(d, dict):
             docs = d.get("docs") or d.get("files") or []
@@ -4119,7 +4133,7 @@ def _knowledge_search_api(query, top_k=5):
     if not idx_file or not os.path.exists(idx_file):
         return None, "知识库尚未建立索引（先在对话用 knowledge_index 或到知识目录建索引）"
     try:
-        with open(idx_file, "r", encoding="utf-8") as f:
+        with open(idx_file, encoding="utf-8") as f:
             index = json.load(f)
     except Exception:
         return None, "索引读取失败，请重新建立索引"
@@ -4734,8 +4748,8 @@ def _audit_get():
     lines = []
     if os.path.exists(log_path):
         try:
-            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = [l.strip() for l in f.read().splitlines() if l.strip()][-200:]
+            with open(log_path, encoding="utf-8", errors="replace") as f:
+                lines = [ln.strip() for ln in f.read().splitlines() if ln.strip()][-200:]
         except Exception:
             pass
     return {"entries": lines}
@@ -4755,7 +4769,7 @@ def _record_approval(entry):
             items = []
             if os.path.exists(APPROVALS_PATH):
                 try:
-                    with open(APPROVALS_PATH, "r", encoding="utf-8") as f:
+                    with open(APPROVALS_PATH, encoding="utf-8") as f:
                         items = json.load(f)
                 except Exception:
                     items = []
@@ -4778,7 +4792,7 @@ def _approvals_get():
     with _APPROVALS_LOCK:
         if os.path.exists(APPROVALS_PATH):
             try:
-                with open(APPROVALS_PATH, "r", encoding="utf-8") as f:
+                with open(APPROVALS_PATH, encoding="utf-8") as f:
                     items = json.load(f)
             except Exception:
                 items = []
@@ -4934,8 +4948,8 @@ def _backup_delete(name):
 
 def _update_check():
     """检查更新（GitHub Releases / 自定义 UPDATE_URL）。"""
-    import config_utils
     import backup as backup_mod
+    import config_utils
     cfg = config_utils.load_config()
     url = str(cfg.get("update_url") or "").strip() or "https://api.github.com/repos/pythonshiyi/WhaleTalk/releases/latest"
     try:
@@ -5155,8 +5169,8 @@ def _apply_autostart(enabled):
     """注册/卸载 HKCU Run 开机自启。
     打包版：注册 exe 自身；源码版：pythonw 无窗口起 webui/start.py。"""
     try:
-        import winreg
         import sys
+        import winreg
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
         if getattr(sys, "frozen", False):
             cmd = f'"{sys.executable}"'
@@ -5255,7 +5269,7 @@ def _plugin_detail(name):
         "skills": [str(s.get("name") or "") for s in skills[:30]] if isinstance(skills, list) else [],
         "workflows": [str(w) for w in (workflows.keys() if isinstance(workflows, dict) else [])][:30],
         "app_entry": str((app or {}).get("entry") or "")[:120],
-        "files": [str(f) for f in files.keys()][:40],
+        "files": [str(f) for f in files][:40],
         "rating": rating,
     }
 
@@ -5627,7 +5641,7 @@ def _session_meta(d, fn):
 def _load_session_index():
     """从磁盘加载索引（启动时调用一次）。失败返回空（将惰性重建）。"""
     try:
-        with open(SESSION_INDEX_PATH, "r", encoding="utf-8") as f:
+        with open(SESSION_INDEX_PATH, encoding="utf-8") as f:
             raw = json.load(f)
         if isinstance(raw, dict) and isinstance(raw.get("entries"), dict):
             entries = raw["entries"]
@@ -5683,7 +5697,7 @@ def _index_session_file(fn, meta_override=None):
         if cur and list(cur[:2]) == list(fp) and not meta_override:
             return cur[2]
         try:
-            with open(full, "r", encoding="utf-8") as f:
+            with open(full, encoding="utf-8") as f:
                 d = json.load(f)
             meta = _session_meta(d, fn)
         except Exception:
@@ -5874,9 +5888,8 @@ def _match_routes(path, table):
         elif matcher[0] == "pre":
             if path.startswith(matcher[1]) and path.endswith(matcher[2]):
                 return name
-        elif matcher[0] == "qpath":
-            if path.split("?", 1)[0] == matcher[1]:
-                return name
+        elif matcher[0] == "qpath" and path.split("?", 1)[0] == matcher[1]:
+            return name
     return None
 
 
@@ -6134,7 +6147,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not os.path.exists(path):
             return None
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 d = json.load(f)
             msgs = []
             for m in (d.get("messages") or [])[:2000]:
@@ -6231,7 +6244,7 @@ class _Handler(BaseHTTPRequestHandler):
             return False, "会话不存在"
         try:
             with _SESSION_SAVE_LOCK:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     d = json.load(f)
                 # 置顶语义写入 top（bool）；pinned 专用于「消息固定」(list)
                 d["top"] = bool(body.get("pinned"))
@@ -6257,7 +6270,7 @@ class _Handler(BaseHTTPRequestHandler):
             return False, "会话不存在"
         try:
             with _SESSION_SAVE_LOCK:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     d = json.load(f)
                 if "name" in fields and "name" in body:
                     d["name"] = str(body["name"] or "未命名会话")[:80]
@@ -6278,7 +6291,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _memory_summary(self):
         try:
             if os.path.exists(MEMORY_PATH):
-                with open(MEMORY_PATH, "r", encoding="utf-8") as f:
+                with open(MEMORY_PATH, encoding="utf-8") as f:
                     d = json.load(f)
                 facts = d.get("facts") or []
                 return {
@@ -6294,7 +6307,6 @@ class _Handler(BaseHTTPRequestHandler):
         """创建/更新会话：{id?, name?, messages: [...], model?, scenario?}。
         消息自动附加 reasoning_content；原子写盘；返回会话 id。"""
         import time
-        from datetime import datetime
         messages = body.get("messages") or []
         if not isinstance(messages, list) or not messages or len(messages) > 2000:
             return None, "messages 必须是非空列表（最多 2000 条）"
@@ -6356,7 +6368,7 @@ class _Handler(BaseHTTPRequestHandler):
         old = {}
         if os.path.exists(path):
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     old = json.load(f)
             except Exception:
                 old = {}
@@ -6370,10 +6382,7 @@ class _Handler(BaseHTTPRequestHandler):
             old_msgs = list(old["messages"])
             n = len(clean)
             dup_found = bool(n) and len(old_msgs) >= n and old_msgs[-n:] == clean
-            if not dup_found:
-                saved_msgs = old_msgs + clean
-            else:
-                saved_msgs = old_msgs
+            saved_msgs = old_msgs + clean if not dup_found else old_msgs
         # 会话级累计（输入/输出/缓存 + 平均输出速率）：由消息的 usage/metrics 汇总，
         # append 场景下对「旧消息 + 新消息」整体求和，保证连续对话累计正确。
         usage_total = {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0}
@@ -6556,9 +6565,10 @@ class _Handler(BaseHTTPRequestHandler):
 
         查询参数：unresolved=1 只返回未消解项；tool=<名> 过滤工具。
         """
+        import urllib.parse
+
         import app_utils
         import stores
-        import urllib.parse
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         items = [x for x in (stores.normalize_failure(i) for i in stores.load_failures(FAILURES_PATH)) if x]
         if app_utils.as_bool((qs.get("unresolved") or ["0"])[0]):
@@ -6727,8 +6737,9 @@ class _Handler(BaseHTTPRequestHandler):
         回滚/确认走 CLI（python trust_kernel.py restore|accept）或前端按钮。
         """
         try:
-            import trust_kernel
             from urllib.parse import parse_qs, urlparse
+
+            import trust_kernel
             qs = parse_qs(urlparse(self.path).query)
             deep = (qs.get("deep") or ["0"])[0] in ("1", "true", "yes")
             st = trust_kernel.status(deep=True) if deep else _trust_state()
@@ -6784,8 +6795,9 @@ class _Handler(BaseHTTPRequestHandler):
     @_get_route("/v1/brain")
     def _g_v1_brain(self):
         try:
-            import brain_api
             from urllib.parse import parse_qs, urlparse
+
+            import brain_api
             qs = parse_qs(urlparse(self.path).query)
             # ?context=1 才计算对话上下文预览（默认懒加载，避免每次取状态都做衰减排序）
             with_context = (qs.get("context") or ["0"])[0] not in ("0", "false", "no", "")
@@ -6798,9 +6810,9 @@ class _Handler(BaseHTTPRequestHandler):
     def _g_v1_brain_memories(self):
         # 大脑记忆列表/搜索：?query=关键词&limit=N
         try:
-            import brain_api
-            import brainkit as bk
             from urllib.parse import parse_qs, urlparse
+
+            import brainkit as bk
             qs = parse_qs(urlparse(self.path).query)
             q = (qs.get("query") or [""])[0]
             try:
@@ -6820,8 +6832,9 @@ class _Handler(BaseHTTPRequestHandler):
         ?query=关键词&limit=N&sources=all|memory.json|brain
         """
         try:
-            import memory_store as ms
             from urllib.parse import parse_qs, urlparse
+
+            import memory_store as ms
             qs = parse_qs(urlparse(self.path).query)
             q = (qs.get("query") or [""])[0]
             try:
@@ -7633,7 +7646,7 @@ class _Handler(BaseHTTPRequestHandler):
     @_post_route("/v1/tts/setup_piper")
     def _p_v1_tts_setup_piper(self):
         # Piper 一键部署：NDJSON 流式推送进度（依赖安装 → 模型下载 → 合成验证）
-        body = self._read_body()
+        self._read_body()  # 读取并丢弃请求体（保持连接语义一致）
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -8464,9 +8477,8 @@ class _Handler(BaseHTTPRequestHandler):
                 for (_seq, ev, data) in batch:
                     if not self._sse_send(ev, {**data, "seq": _seq}):
                         return
-                if not batch and status == "running":
-                    if not self._sse_comment():
-                        return
+                if not batch and status == "running" and not self._sse_comment():
+                    return
                 if cursor >= len(job.events) and status != "running":
                     return
         finally:
@@ -8539,8 +8551,11 @@ class _SessionStore:
 def _save_session_detached(body):
     try:
         return _Handler._save_session(_SessionStore(), body)
-    except Exception:
+    except Exception as e:
         logger.exception("后台会话落盘失败")
+        import degrade
+        degrade.degrade("api.session.save", e,
+                        "本轮对话未能落盘（刷新/关闭标签后可能丢失）", critical=True)
         return None, "error"
 
 

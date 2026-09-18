@@ -1,7 +1,9 @@
-# -*- coding: utf-8 -*-
 """P2-8 第二层验证：新 _p_* 方法体 vs 旧 do_POST 分支体，逐行比对（忽略纯缩进差异）。
 同时校验：分支顺序 == 路由表顺序（匹配优先级一致）。"""
-import re, ast, pathlib, sys
+import ast
+import pathlib
+import re
+import sys
 
 SRC = pathlib.Path("api_server.py")
 RN = pathlib.Path("api_server.py.routes_new")

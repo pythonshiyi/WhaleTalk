@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """跨模块共享的纯函数与常量（无 GUI / 无 API 依赖）。
 
 从 main.py / deepseek_client.py / taskpanel.py 中抽取，消除重复实现漂移：
@@ -98,8 +97,8 @@ def cron_field_ok(field, pos=0):
             ):
                 return False
         elif "-" in part:
-            l, _, r = part.partition("-")
-            lv, rv = cron_int(l), cron_int(r)
+            lo_s, _, hi_s = part.partition("-")
+            lv, rv = cron_int(lo_s), cron_int(hi_s)
             if lv is None or rv is None or not (lo <= lv <= hi and lo <= rv <= hi and lv <= rv):
                 return False
         else:
@@ -188,7 +187,7 @@ def file_lock(target_path, timeout=10.0):
                         break
                     except OSError:
                         if _monotonic() >= deadline:
-                            raise TimeoutError(f"文件锁等待超时：{lock_path}")
+                            raise TimeoutError(f"文件锁等待超时：{lock_path}") from None
                         _sleep(0.05)
             else:
                 import fcntl
@@ -198,7 +197,7 @@ def file_lock(target_path, timeout=10.0):
                         break
                     except OSError:
                         if _monotonic() >= deadline:
-                            raise TimeoutError(f"文件锁等待超时：{lock_path}")
+                            raise TimeoutError(f"文件锁等待超时：{lock_path}") from None
                         _sleep(0.05)
             yield
         finally:

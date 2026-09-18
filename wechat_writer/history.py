@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """历史主题索引：已写主题/日期/标题/关键词，供选题与质检去重。"""
 import json
 import logging
@@ -13,7 +12,7 @@ def _load(path):
     if not path or not os.path.exists(path):
         return json.loads(json.dumps(DEFAULT_HISTORY))
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict) or not isinstance(data.get("items"), list):
             return json.loads(json.dumps(DEFAULT_HISTORY))

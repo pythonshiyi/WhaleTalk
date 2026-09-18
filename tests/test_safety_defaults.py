@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """默认自由 + 黑名单主导回归测试。
 
 设计理念（用户约定）：
@@ -27,7 +26,6 @@ if PROJECT_ROOT not in sys.path:
 
 import config_defaults
 import permissions
-
 
 # ── 默认值断言（默认自由 / 黑名单主导）──────────────────
 
@@ -187,7 +185,7 @@ def test_config_reset_backs_to_default_full_auto(monkeypatch, tmp_path):
 def test_frontend_initial_mode_is_task():
     """App.jsx 初始 mode 应为 task（默认任务模式 / 无限权限）。"""
     app_path = os.path.join(PROJECT_ROOT, "webui", "src", "App.jsx")
-    with open(app_path, "r", encoding="utf-8") as f:
+    with open(app_path, encoding="utf-8") as f:
         src = f.read()
     assert 'useState("task")' in src, "App.jsx 初始 mode 应为 task"
 
@@ -195,7 +193,7 @@ def test_frontend_initial_mode_is_task():
 def test_first_run_shows_freedom_notice():
     """首次启动向导应包含「法无禁止皆可为」默认自由说明。"""
     frp = os.path.join(PROJECT_ROOT, "webui", "src", "components", "FirstRunPage.jsx")
-    with open(frp, "r", encoding="utf-8") as f:
+    with open(frp, encoding="utf-8") as f:
         src = f.read()
     assert "法无禁止皆可为" in src, "首次启动向导应有默认自由说明"
     assert "黑名单" in src, "说明应提及黑名单为限制来源"

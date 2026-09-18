@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """进化提案「最后一公里」回归（G17）。
 
 现象：提案正文写在 docs/evolutions/*.md，而入口页 EVOLUTION.md 只有

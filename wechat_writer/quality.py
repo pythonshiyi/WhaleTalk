@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """质量门禁：字数 / 来源标注 / 敏感词 / 完整性 / 双通道查重（Jaccard 粗筛 + LLM 精判）。"""
 import logging
 import re
@@ -77,10 +76,9 @@ def check(article, config, history_topics=None, history_titles=None, llm_chat=No
         reasons.append(f"字数超限：{chars} > {style['max_chars'] * 1.3}")
         score -= 20
     # 2 来源标注
-    if q.get("require_sources", True):
-        if not re.search(r"参考资料|信息来源|来源：", text):
-            reasons.append("缺少来源标注（文末需「参考资料」小节）")
-            score -= 25
+    if q.get("require_sources", True) and not re.search(r"参考资料|信息来源|来源：", text):
+        reasons.append("缺少来源标注（文末需「参考资料」小节）")
+        score -= 25
     # 3 敏感词
     hit = [w for w in (q.get("sensitive_words") or []) if w and w in text]
     if hit:
@@ -102,10 +100,9 @@ def check(article, config, history_topics=None, history_titles=None, llm_chat=No
                     reasons.append(f"与历史主题重复（相似度超阈值）：{h[:30]}")
                     score -= 40
                     break
-        if history_titles and not reasons:
-            if _llm_judge_duplicate(title, history_titles[-14:], llm_chat):
-                reasons.append("与近期文章主题重复（LLM 精判）")
-                score -= 40
+        if history_titles and not reasons and _llm_judge_duplicate(title, history_titles[-14:], llm_chat):
+            reasons.append("与近期文章主题重复（LLM 精判）")
+            score -= 40
 
     return QualityReport(
         passed=not reasons,

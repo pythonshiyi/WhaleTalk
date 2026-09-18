@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第三方 / OpenCode Go 网关兼容回归。
 
 背景：DeepSeek 官方专属参数（thinking extra_body、reasoning_effort、/beta、

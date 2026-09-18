@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """tool_code —— P0-1 批量拆分（工具域模块）：💻 编程与执行.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
@@ -13,13 +12,9 @@ import sys
 import threading
 import time
 
-import permissions
-
-from shared import clamp_int, RUN_PY_TIMEOUT, RUN_PY_MAX_CHARS, RUN_PY_MAX_OUTPUT, RUN_PY_MEMORY_MB, RUN_MEM_POLL_SEC, TOOL_RESULT_FAIL_PREFIXES, _SEARCH_SKIP_DIRS  # D4: 参数校验辅助
-from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
+import permissions
 from deepseek_client import (
-
     _atomic_write,
     _code_lookup_args,
     _kill_tree,
@@ -30,6 +25,17 @@ from deepseek_client import (
     _verify_build,
     get_active_client,
 )
+from shared import (  # D4: 参数校验辅助
+    _SEARCH_SKIP_DIRS,
+    RUN_MEM_POLL_SEC,
+    RUN_PY_MAX_CHARS,
+    RUN_PY_MAX_OUTPUT,
+    RUN_PY_MEMORY_MB,
+    RUN_PY_TIMEOUT,
+    TOOL_RESULT_FAIL_PREFIXES,
+    clamp_int,
+)
+from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
 class MemoryLimitError(RuntimeError):
@@ -123,7 +129,7 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
                 proc.wait(timeout=3)
             except Exception:
                 pass
-            raise TimeoutError(timeout)
+            raise TimeoutError(timeout) from None
         finally:
             stop_watch.set()
             if watch is not None:
@@ -186,7 +192,7 @@ def run_python(code):
             )
         if not out_data.strip():
             return f"执行成功（无输出），工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}"
-        permissions.audit("run_python", f"python -c <code>", f"{len(code)} 字符, rc={rc}")
+        permissions.audit("run_python", "python -c <code>", f"{len(code)} 字符, rc={rc}")
         return out_data + f"\n[工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}]"
     except Exception as e:
         return f"错误：{e}"
@@ -525,7 +531,7 @@ def project_scaffold(project_type, name=None, path=None):
 
     for rel in created:
         p = os.path.join(proj_dir, rel)
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             s = f.read()
         with open(p, "w", encoding="utf-8") as f:
             f.write(s.replace("__NAME__", name))
@@ -581,7 +587,7 @@ def dev_plan(action, title=None, goal=None, steps=None, step_index=None, path=No
 
     def load():
         try:
-            with open(plan_path, "r", encoding="utf-8") as f:
+            with open(plan_path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return None
@@ -717,7 +723,7 @@ def project_map(path=None, max_files=150):
     for p in py_files:
         rel = os.path.relpath(p, base)
         try:
-            with open(p, "r", encoding="utf-8", errors="replace") as f:
+            with open(p, encoding="utf-8", errors="replace") as f:
                 tree = ast.parse(f.read())
         except Exception:
             continue
@@ -805,7 +811,7 @@ def find_symbol(name, path=None, max_files=150):
                 p = os.path.join(root, fn)
                 rel = os.path.relpath(p, b)
                 try:
-                    with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    with open(p, encoding="utf-8", errors="replace") as f:
                         tree = ast.parse(f.read())
                 except Exception:
                     continue
@@ -814,9 +820,7 @@ def find_symbol(name, path=None, max_files=150):
                         d_local.append(f"{rel}:{node.lineno}  def {node.name}(...)")
                     elif isinstance(node, ast.ClassDef) and node.name == name:
                         d_local.append(f"{rel}:{node.lineno}  class {node.name}")
-                    elif isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Load):
-                        r_local.append(f"{rel}:{node.lineno}")
-                    elif isinstance(node, ast.Attribute) and node.attr == name:
+                    elif isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Load) or isinstance(node, ast.Attribute) and node.attr == name:
                         r_local.append(f"{rel}:{node.lineno}")
                     elif isinstance(node, ast.ImportFrom):
                         for a in node.names:
@@ -917,7 +921,7 @@ def code_lookup(path, symbol, kind="def", max_results=20):
         if len(hits) >= limit:
             break
         try:
-            with open(full, "r", encoding="utf-8", errors="replace") as fh:
+            with open(full, encoding="utf-8", errors="replace") as fh:
                 src = fh.read()
         except Exception:
             continue

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """失败记忆生命周期的 API / 工具 / 记账链路回归（G18 接线层）。
 
 覆盖：_record_failure 落盘（带指纹）/ _auto_resolve_failure /
@@ -34,7 +33,7 @@ def fail_paths(tmp_path, monkeypatch):
 
 
 def _items(path):
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """一键启动：WhaleTalk WebUI（生产模式）。
 
 流程：启动本地 API（api_server.py，8745 端口，同源服务前端静态页面）

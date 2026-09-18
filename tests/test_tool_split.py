@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P0-1 巨石拆分首批回归：agent_tools/ 域模块注册与 re-export。
 
 验证首批迁出的 4 个工具（get_date/get_weather/read_csv/write_csv）：
@@ -7,8 +6,6 @@
   3. 行为与迁移前一致（函数级冒烟）；
   4. toolkit.rebuild_layers 多文件 AST 重建与运行时六层一致（门禁等价）。
 """
-import os
-import sys
 from pathlib import Path
 
 import deepseek_client as dc

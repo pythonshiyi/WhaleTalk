@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """WhaleTalk MCP 出口（Model Context Protocol over stdio）——让外部 MCP 客户端接入。
 
 外部工具/Agent（Claude Desktop、Cline、其他 MCP host）可把 WhaleTalk 当作一个

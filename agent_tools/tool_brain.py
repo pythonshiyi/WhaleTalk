@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """tool_brain —— P0-1 批量拆分（工具域模块）：🧠 记忆与定时任务.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
@@ -15,14 +14,10 @@ import threading
 import time
 from datetime import datetime
 
+import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 import permissions
 import stores
-
-from shared import clamp_int, cron_field_ok, MEMORY_MAX_ITEMS, MEMORY_MAX_TEXT, _MEMORY_LOCK, SELF_PROFILE_LOCK, _SELF_PROFILE_LIST_FIELDS, SCHEDULES_LOCK, _WORKFLOW_LOCK
-from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
-import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
-
     _brain_sync_delete,
     _brain_sync_memory,
     _brain_sync_update,
@@ -39,6 +34,17 @@ from deepseek_client import (
     _save_self_profile,
     _workflow_step_text,
 )
+from shared import (
+    _MEMORY_LOCK,
+    _SELF_PROFILE_LIST_FIELDS,
+    _WORKFLOW_LOCK,
+    MEMORY_MAX_TEXT,
+    SCHEDULES_LOCK,
+    SELF_PROFILE_LOCK,
+    clamp_int,
+    cron_field_ok,
+)
+from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 # 流程运行互斥标志：模块级初始化（run_workflow 在函数内 global 声明并置位，
 # 若缺少此处初始化，首次调用在检查 `if _WORKFLOW_RUNNING` 时抛 NameError，
@@ -446,7 +452,7 @@ def read_memory(keyword="", max_items=20, type="", entity=""):
     if not entries:
         return "（暂无记忆）" if not kw else "（无匹配记忆）"
     lines = []
-    for label, v, f in entries:
+    for label, _v, f in entries:
         meta = []
         if f.get("type"):
             meta.append(f"类型:{f['type']}")
@@ -547,7 +553,7 @@ def knowledge_index(directory="", force=False):
         old_docs = {}
         if not force and _dc.KNOWLEDGE_INDEX_FILE and os.path.exists(_dc.KNOWLEDGE_INDEX_FILE):
             try:
-                with open(_dc.KNOWLEDGE_INDEX_FILE, "r", encoding="utf-8") as f:
+                with open(_dc.KNOWLEDGE_INDEX_FILE, encoding="utf-8") as f:
                     old = json.load(f)
                 for d in old.get("docs") or []:
                     if isinstance(d, dict) and d.get("path"):
@@ -576,7 +582,7 @@ def knowledge_index(directory="", force=False):
                     reused += 1
                 continue
             try:
-                with open(full, "r", encoding="utf-8", errors="replace") as f:
+                with open(full, encoding="utf-8", errors="replace") as f:
                     text = f.read(200000)
             except Exception:
                 continue
@@ -637,7 +643,7 @@ def knowledge_search(query, top_k=5):
     if not _dc.KNOWLEDGE_INDEX_FILE or not os.path.exists(_dc.KNOWLEDGE_INDEX_FILE):
         return "错误：知识库尚未建立索引（先用 knowledge_index 对目录建索引）"
     try:
-        with open(_dc.KNOWLEDGE_INDEX_FILE, "r", encoding="utf-8") as f:
+        with open(_dc.KNOWLEDGE_INDEX_FILE, encoding="utf-8") as f:
             index = json.load(f)
     except Exception:
         logging.exception("读取知识库索引失败")
@@ -904,7 +910,7 @@ def task_checkpoint_load():
     if not _dc.CHECKPOINT_FILE or not os.path.exists(_dc.CHECKPOINT_FILE):
         return "当前没有任务检查点"
     try:
-        with open(_dc.CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+        with open(_dc.CHECKPOINT_FILE, encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return "检查点文件损坏"
@@ -954,7 +960,7 @@ def run_workflow(name):
     try:
         if not os.path.exists(_dc.WORKFLOWS_FILE):
             return "错误：没有已保存的流程（workflows.json 为空）"
-        with open(_dc.WORKFLOWS_FILE, "r", encoding="utf-8") as f:
+        with open(_dc.WORKFLOWS_FILE, encoding="utf-8") as f:
             wf = json.load(f)
         steps = wf.get(str(name)) if isinstance(wf, dict) else None
         if not steps or not isinstance(steps, dict):
@@ -981,7 +987,7 @@ def run_workflow(name):
         def _run():
             global _WORKFLOW_RUNNING
             try:
-                for i, t in enumerate(texts, 1):
+                for _i, t in enumerate(texts, 1):
                     deadline = time.time() + 600
                     while _dc._BUSY_PROVIDER and _dc._BUSY_PROVIDER():
                         if time.time() > deadline:

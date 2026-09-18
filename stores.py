@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """本地 JSON 数据存取（最近产物/模式/失败/任务日志/记忆/调度）。
 
 从 main.py 中拆出，统一使用 persistence.atomic_json_write 保证原子写。
@@ -18,7 +17,7 @@ logger = logging.getLogger("whaletalk.stores")
 def load_recent(path):
     try:
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
                 return [str(x) for x in data if str(x).strip()]
@@ -35,7 +34,7 @@ def load_favs(path):
     """读取文件收藏（路径列表）。"""
     try:
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
                 return [str(x) for x in data if str(x).strip()]
@@ -72,7 +71,7 @@ def toggle_fav(path, favs_path, max_favs=100):
 def load_patterns(path):
     try:
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
                 return data
@@ -88,7 +87,7 @@ def save_patterns(path, pats):
 def load_failures(path):
     try:
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
                 return data
@@ -249,7 +248,7 @@ def _append_archive(archive_path, items):
     try:
         arch = []
         if os.path.exists(archive_path):
-            with open(archive_path, "r", encoding="utf-8") as f:
+            with open(archive_path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
                 arch = data
@@ -423,7 +422,7 @@ def failure_patterns_text(path, limit=3):
 def load_tasklog(path):
     try:
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 data.setdefault("tasks", [])
@@ -445,7 +444,7 @@ def save_tasklog(path, data):
 def load_memory(path):
     try:
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 data.setdefault("enabled", False)
@@ -463,7 +462,7 @@ def save_memory(path, data):
 def load_schedules(path):
     try:
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
                 return data

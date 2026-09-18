@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """进程工具：进程树终止。
 
 从 deepseek_client.py 中拆出，供 run_python / run_command / 后台进程管理等复用。

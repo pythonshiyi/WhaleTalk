@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """阶段二（文档/PPT 能力补齐）回归：S6 pptx_create + S7 markdown→docx 富文本。
 
 覆盖报告《文档表格PPT能力报告_v3.8.5.md》阶段二核心项：
@@ -224,15 +223,15 @@ def test_pdf_visual_check_renders_and_flags_blank(tmp_path):
     od = str(tmp_path / "prev")
     r = dc.pdf_visual_check(pdf, out_dir=od)
     assert "疑似空白页" in r, "第2页空应被标出"
-    imgs = [l.strip().lstrip('- ').strip() for l in r.split("\n") if ".png" in l]
+    imgs = [ln.strip().lstrip('- ').strip() for ln in r.split("\n") if ".png" in ln]
     assert len(imgs) == 3, "应渲染 3 页缩略图"
     assert all(os.path.exists(x) for x in imgs), "缩略图文件应存在"
 
 
 def test_asset_library_import_list_organize(tmp_path):
     """AI 素材库：import(复制进库/不碰原素材) → list → organize(重命名/归类)。"""
+
     import permissions
-    from PIL import Image
     ws = tmp_path / "workspace"; ws.mkdir()
     permissions.WORKSPACE_DIR = os.path.realpath(str(ws))
     src = tmp_path / "原素材_挂号"; src.mkdir()

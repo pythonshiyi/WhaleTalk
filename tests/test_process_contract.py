@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """后台进程契约回归（G20）。
 
 覆盖三处同根源缺陷与两处契约易错点：
@@ -9,7 +8,6 @@
   3. start_process 缺 cwd、_stop_process/_start_process 的 ok 恒为 True（不诚实）。
 """
 import collections
-import os
 import sys
 from pathlib import Path
 
@@ -18,8 +16,8 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-import deepseek_client as dc  # noqa: E402  必须先导入，构建工具注册表
 import api_server  # noqa: E402
+import deepseek_client as dc  # noqa: E402  必须先导入，构建工具注册表
 from agent_tools import tool_files  # noqa: E402
 
 

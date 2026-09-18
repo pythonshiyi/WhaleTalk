@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """技能结晶回归（G14）。
 
 现象：patterns.json 记录成功调用、tasklog 记录任务链，但都只是流水账——
@@ -10,8 +9,6 @@
 import json
 import sys
 from pathlib import Path
-
-import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -150,7 +147,6 @@ def test_record_tasklog_triggers_crystallization(tmp_path, monkeypatch):
     """任务链写入 → 自动触发结晶（无需人工调用）。"""
     prompts = str(tmp_path / "prompts.json")
     active = str(tmp_path / "ws2")
-    import os
     monkeypatch.setattr(api_server, "PROMPTS_PATH", prompts)
     monkeypatch.setattr(api_server, "PATTERNS_PATH", str(tmp_path / "patterns.json"))
     monkeypatch.setattr(api_server, "_status", lambda: {"active_dir": active})

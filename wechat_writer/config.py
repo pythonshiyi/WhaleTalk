@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """WeChat Writer 配置：默认值 + 用户配置文件合并（缺失/损坏时用默认，不抛异常）。"""
 import json
 import logging
@@ -110,7 +109,7 @@ def load_config(path=None):
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))
     if path and os.path.exists(path):
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 disk = json.load(f)
             if isinstance(disk, dict):
                 for k in _KNOWN_KEYS:

@@ -22,6 +22,25 @@ extend-exclude = [
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# 工具域聚合用 `from .tool_* import *` 做 re-export，F401/F403/F405 是设计使然（`__all__` 才是契约）。
+# 导入顺序本身是契约（tool_mv 依赖 tool_desktop 先加载），故 __init__ 不做 isort 重排。
+"agent_tools/__init__.py" = ["F401", "F403", "F405", "I001"]
+# `from agent_tools import *` 必须位于共享基建全部定义之后、六层构建之前——顺序是契约，
+# 禁止 isort 重排；它同时是对外（域模块/插件/测试）的历史 re-export 面，未用导入不清理。
+# E402：共享常量 / `from agent_tools import *` 位于共享基建之后，顺序是契约。
+# F405：star import 提供的工具函数（如 image_understand）在本模块内被调用。
+"deepseek_client.py" = ["I001", "F401", "E402", "F405"]
+# search_web 用 globals().get("_search_"+name) 动态派发引擎，导入看似未用实为运行必需；
+# _browser_* 亦为对齐 deepseek_client 的实现面。禁用 F401 防止误删。
+"agent_tools/tool_web.py" = ["F401"]
+# E402：依赖清单表放在模块顶部，导入紧随其后（单一来源可读性优先）。
+"deps.py" = ["E402"]
+# E402：测试/门禁脚本需先 sys.path.insert 再 import 被测模块，顺序使然。
+"tests/*" = ["E402"]
+"tools/*" = ["E402"]
+"agent_tools/tool_files.py" = ["E402"]
+
 [tool.mypy]
 python_version = "3.9"
 ignore_missing_imports = true

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """tool_desktop —— P0-1 批量拆分（工具域模块）：🖱 桌面与视觉语音.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
@@ -13,20 +12,16 @@ import threading
 import time
 from datetime import datetime
 
-import permissions
-
-from security import _safe_url
-from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
-from shared import RPA_FAILSAFE, MEDIA_MAX_INPUT, MEDIA_FORMATS, _VISION_LOOP_ACTIONS, _BYE_PAT, _TEAM_ROLE_PRESETS  # P1-3: 阈值常量下沉 shared
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
+import permissions
+from agent_tools.tool_media import image_understand  # 已迁工具跨模块复用
 from deepseek_client import (
-
-    DEFAULT_BASE_URL,
     _ACTIVE_SPEAK,
     _ACTIVE_SPEAK_LOCK,
     _WHISPER_CACHE,
     _WHISPER_CACHE_LOCK,
     _WHISPER_LOOP_LOCK,
+    DEFAULT_BASE_URL,
     _capture_screen_png,
     _extract_json_obj,
     _ffmpeg_run,
@@ -38,8 +33,16 @@ from deepseek_client import (
     _speak_aloud,
     get_active_client,
 )
-from agent_tools.tool_media import image_understand  # 已迁工具跨模块复用
-
+from security import _safe_url
+from shared import (  # P1-3: 阈值常量下沉 shared
+    _BYE_PAT,
+    _TEAM_ROLE_PRESETS,
+    _VISION_LOOP_ACTIONS,
+    MEDIA_FORMATS,
+    MEDIA_MAX_INPUT,
+    RPA_FAILSAFE,
+)
+from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
 @tool(
@@ -782,7 +785,7 @@ def tts_stop(sid=""):
                 targets.append((s, _ACTIVE_SPEAK[s]))
         else:
             targets = list(_ACTIVE_SPEAK.items())
-    for k, entry in targets:
+    for _k, entry in targets:
         try:
             entry["event"].set()
             sp = entry.get("voice")
@@ -1167,7 +1170,7 @@ def qrcode(action="generate", text="", output="", image_path="", size=300, error
         except ImportError:
             return "未安装 qrcode，请先执行 pip_install qrcode 后重试"
         try:
-            from qrcode.constants import ERROR_CORRECT_L, ERROR_CORRECT_M, ERROR_CORRECT_Q, ERROR_CORRECT_H
+            from qrcode.constants import ERROR_CORRECT_H, ERROR_CORRECT_L, ERROR_CORRECT_M, ERROR_CORRECT_Q
         except Exception:
             ERROR_CORRECT_L, ERROR_CORRECT_M, ERROR_CORRECT_Q, ERROR_CORRECT_H = 1, 0, 3, 2
         out = permissions.resolve(output)
@@ -1208,8 +1211,8 @@ def qrcode(action="generate", text="", output="", image_path="", size=300, error
     if not p or not os.path.isfile(p):
         return f"错误：图片不存在：{image_path}"
     try:
-        from PIL import Image
         import pyzbar.pyzbar as pyzbar
+        from PIL import Image
     except Exception:
         # pyzbar 在 Windows 依赖系统 zbar DLL，缺失时 import 即抛异常 → 统一降级提示
         return (

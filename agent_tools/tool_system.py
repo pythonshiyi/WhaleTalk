@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """tool_system —— P0-1 批量拆分（工具域模块）：🔧 系统与项目.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
@@ -15,14 +14,10 @@ import sys
 import time
 from datetime import datetime
 
+import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 import permissions
 import plugins as plugins_mod
-
-from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
-from shared import _SEARCH_SKIP_DIRS, PROJECT_DIR, PROJECT_READ_EXTS, EVO_WRITE_EXTS, _NOTIFY_PS  # P1-3: 阈值常量下沉 shared
-import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 from deepseek_client import (
-
     _atomic_write,
     _current_version,
     _evolve_compile,
@@ -38,7 +33,14 @@ from deepseek_client import (
     _which_any,
     _win_installed_apps,
 )
-
+from shared import (  # P1-3: 阈值常量下沉 shared
+    _NOTIFY_PS,
+    _SEARCH_SKIP_DIRS,
+    EVO_WRITE_EXTS,
+    PROJECT_DIR,
+    PROJECT_READ_EXTS,
+)
+from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
 @tool(
@@ -262,7 +264,7 @@ def read_project_file(path, offset=0, limit=0):
     if not any(p_lower.endswith(ext) for ext in PROJECT_READ_EXTS):
         return f"错误：不支持的文件类型（仅 {'/'.join(PROJECT_READ_EXTS)}）"
     try:
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
+        with open(p, encoding="utf-8", errors="replace") as f:
             content = f.read()
         try:
             off = max(0, int(offset or 0))
@@ -272,10 +274,7 @@ def read_project_file(path, offset=0, limit=0):
         total = len(content)
         if off >= total:
             return f"[已到达文件末尾] {p}（共 {total} 字符）"
-        if lim > 0:
-            chunk = content[off : off + lim]
-        else:
-            chunk = content[off : off + 80000]
+        chunk = content[off:off + lim] if lim > 0 else content[off:off + 80000]
         head = f"[{p} 第 {off}-{off + len(chunk)} 字符 / 共 {total} 字符]\n"
         return head + chunk + ("\n[已截断，可继续用 offset 读取后续]" if off + len(chunk) < total else "")
     except Exception as e:
@@ -560,7 +559,6 @@ def self_evolve(feature_name, files, project_dir=None):
           通过则提交分支并报告（合入权在用户）/ 失败则自动回滚删除分支，生产代码零改动。
     """
     import subprocess
-    from datetime import datetime
 
     name = (feature_name or "improvement").strip()[:40]
     if not files or not isinstance(files, list):
@@ -1390,8 +1388,10 @@ def usage_report(days=7):
     except (TypeError, ValueError):
         days = 7
     try:
+        from datetime import date as _date
+        from datetime import timedelta
+
         import stats as stats_mod
-        from datetime import date as _date, timedelta
 
         data = stats_mod.load_stats(_dc.STATS_FILE)
         totals = stats_mod.empty_day()

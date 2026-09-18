@@ -1,9 +1,13 @@
 # ── web_search 注入逻辑单元测试 ─────────────────
 # 验证 pure_chat + web_search 时：只注入联网工具、注入提示、纯对话不注入、任务模式不受影响。
 # 运行：python tests/test_web_search.py（仓库根目录）
-import os, sys, types
+import os
+import sys
+import types
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import deepseek_client as dc
+
 
 def fake_stream(content="联网测试结果"):
     c1 = types.SimpleNamespace(

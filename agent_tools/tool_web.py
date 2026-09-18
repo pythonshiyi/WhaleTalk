@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """tool_web —— P0-1 批量拆分（工具域模块）：🌐 浏览器与网页.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
@@ -14,15 +13,8 @@ import time
 from datetime import datetime, timedelta
 
 import permissions
-
-from security import _safe_url
-from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
-from shared import DOWNLOAD_MAX_BYTES, SEARCH_MAX_RESULTS, SEARCH_SOFT_DEADLINE, _SEARCH_ENGINES, CALL_API_MAX_BYTES, CALL_API_METHODS, CALL_API_MAX_HEADERS, RSS_FETCH_TIMEOUT, RSS_MAX_ITEMS, RSS_SUMMARY_MAX, RSS_PRESET_SOURCES, WEBDAV_MAX_SIZE  # P1-3: 阈值常量下沉 shared
 from deepseek_client import (
     _BROWSER_LOCK,
-    _browser_run,
-    _browser_thread,
-    _ensure_browser_visible,
     _NET_PROBE_REFS,
     _SEARCH_UA,
     _browser_active_page,
@@ -31,7 +23,10 @@ from deepseek_client import (
     _browser_match_page,
     _browser_new_page,
     _browser_pages,
+    _browser_run,
     _browser_switch_to,
+    _browser_thread,
+    _ensure_browser_visible,
     _fetch_blocked_impl,
     _fetch_url_raw,
     _get_browser_page,
@@ -53,8 +48,22 @@ from deepseek_client import (
     _webdav_request,
     _wrap_external,
 )
-
-
+from security import _safe_url
+from shared import (  # P1-3: 阈值常量下沉 shared
+    _SEARCH_ENGINES,
+    CALL_API_MAX_BYTES,
+    CALL_API_MAX_HEADERS,
+    CALL_API_METHODS,
+    DOWNLOAD_MAX_BYTES,
+    RSS_FETCH_TIMEOUT,
+    RSS_MAX_ITEMS,
+    RSS_PRESET_SOURCES,
+    RSS_SUMMARY_MAX,
+    SEARCH_MAX_RESULTS,
+    SEARCH_SOFT_DEADLINE,
+    WEBDAV_MAX_SIZE,
+)
+from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 # ---- C1: HTML 正文提取（纯标准库，防 fetch_url 返回整页 HTML 噪音） ----
 _HTML_SKIP_BLOCKS = re.compile(
@@ -165,7 +174,7 @@ def download_file(url, local_path="", expected_sha256=""):
     if exp and not re.match(r"^[0-9a-f]{64}$", exp):
         return "错误：expected_sha256 必须是 64 位十六进制字符串"
     try:
-        from urllib.parse import urlparse, unquote
+        from urllib.parse import unquote, urlparse
         fn = os.path.basename(unquote(urlparse(str(url)).path)) or f"download_{datetime.now():%Y%m%d_%H%M%S}.bin"
         fn = re.sub(r"[\\/:*?\"<>|]", "_", fn)[:120]
     except Exception:
@@ -885,7 +894,6 @@ def net_diagnose(target=""):
         up = urlparse(t)
         host = (up.hostname or "").strip()
         port = up.port or (443 if up.scheme == "https" else 80)
-        use_tls = up.scheme == "https"
     except Exception:
         return f"错误：无法解析目标：{target}"
     if not host:

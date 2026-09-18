@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """审查修复（第二批）回归门禁：shell 黑名单绕过、审计脱敏、信任内核撤销、会话索引防抖。"""
 import json
 import sys
@@ -13,7 +12,6 @@ import pytest
 import api_server  # noqa: E402
 import permissions  # noqa: E402
 import trust_kernel as tk  # noqa: E402
-
 
 # ── shell 黑名单：无空格分隔 / 引号 / 包装器 均不可绕过 ─────────────────
 
@@ -117,7 +115,7 @@ def test_corrupt_session_no_rebuild_loop(tmp_path, monkeypatch):
     (sess / "bad.json").write_text("{ not json", encoding="utf-8")
 
     api_server._Handler._list_sessions(None)  # 首次：建立索引（坏文件计入 bad）
-    assert api_server._SESSION_BAD_FILES == {"bad.json"}
+    assert {"bad.json"} == api_server._SESSION_BAD_FILES
 
     calls = {"n": 0}
     orig = api_server._rebuild_session_index

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P2-8/P2-2 路由表行为契约：do_POST / do_GET 轻量路由表（装饰器注册）的回归测试。
 
 覆盖：
@@ -11,8 +10,6 @@ import ast
 import re
 import sys
 from pathlib import Path
-
-import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))

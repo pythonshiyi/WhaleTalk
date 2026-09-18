@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """鲸语插件体系（.wtplugin）：零代码能力的插件化封装。
 
 插件格式（单文件 JSON，.wtplugin 后缀）：
@@ -159,7 +158,7 @@ def plugin_permissions(p):
 def parse_plugin_file(path):
     """读取 .wtplugin 文件并校验。返回 (plugin, error)。"""
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         return None, f"插件文件解析失败：{e}"
@@ -178,7 +177,7 @@ def list_plugins(plugins_dir):
         if not fn.endswith(PLUGIN_EXT):
             continue
         try:
-            with open(os.path.join(plugins_dir, fn), "r", encoding="utf-8") as f:
+            with open(os.path.join(plugins_dir, fn), encoding="utf-8") as f:
                 data = json.load(f)
             if data.get("format") != PLUGIN_FORMAT:
                 continue
@@ -311,7 +310,7 @@ def unapply_plugin(plugin, paths):
     # 从磁盘重读：applied 记录在安装时随文件写入，保证卸载精确
     if plugin.get("_file") and os.path.exists(str(plugin["_file"])):
         try:
-            with open(plugin["_file"], "r", encoding="utf-8") as f:
+            with open(plugin["_file"], encoding="utf-8") as f:
                 disk = json.load(f)
             if isinstance(disk, dict):
                 plugin = disk
@@ -365,7 +364,7 @@ def _read_json(path, default):
     if not path or not os.path.exists(path):
         return default
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, type(default)) else default
     except Exception:
@@ -415,7 +414,7 @@ def load_ratings(plugins_dir):
     try:
         path = _ratings_path(plugins_dir)
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data

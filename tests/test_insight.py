@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """自我洞察（insight）单元测试：能力热力图 / 自我述职 / 报告渲染。
 
 均为纯函数，不依赖项目运行时（不 import deepseek_client），可独立运行。

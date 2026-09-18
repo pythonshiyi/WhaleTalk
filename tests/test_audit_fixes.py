@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 r"""审查修复的回归门禁（Critical/High 项）。
 
 覆盖：
@@ -21,7 +20,6 @@ import api_server  # noqa: E402
 import config_utils  # noqa: E402
 import permissions  # noqa: E402
 import trust_kernel as tk  # noqa: E402
-
 
 # ── 信任内核：只读/无改动调用不得推进基线 ────────────────────────────────
 

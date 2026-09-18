@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """跨平台 app_manage（包管理器自动探测）纯逻辑回归测试。
 
 覆盖：包管理器 argv 模板（winget/scoop/choco/brew 与 Linux 系统管理器）、
@@ -7,12 +6,10 @@ action/source 枚举与 Python 参数一致（防止装饰器声明与实现漂�
 探测类函数只走 shutil.which / 目录存在性检查，不执行任何安装命令。
 """
 import os
-import sys
 
 # 必须先 import deepseek_client（其顶层会完整构建六层注册表并加载 agent_tools）；
 # 直接 import agent_tools.tool_system 会触发 __init__ 循环导入导致 TOOLS 未注册报错
 import deepseek_client as dsc  # noqa: F401
-
 from agent_tools.tool_system import (
     _PKG_PRIORITY,
     _find_pkg_manager,

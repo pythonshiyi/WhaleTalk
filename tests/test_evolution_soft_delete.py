@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 """进化提案「忽略 = 软删除」回归（G19）。
 
 历史事故：`_evolution_ignore` 原用 `shutil.rmtree` 硬删，叠加 `evolutions/` 在
 .gitignore 中 → 一次「忽略」即永久丢失，曾吃掉 4 份提案（最终靠会话记录里
 create_evolution 的入参才恢复）。本用例锁死"忽略必须可恢复"这一契约。
 """
-import json
 import os
 import sys
 from pathlib import Path

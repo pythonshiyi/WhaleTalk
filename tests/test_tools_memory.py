@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """记忆工具执行路径测试（TECH_NOTES TODO-3：按领域扩充分子级用例）。
 
 覆盖 write_memory / read_memory / update_memory / delete_memory /

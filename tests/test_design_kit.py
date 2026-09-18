@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """设计/图表/PDF 工具纯函数回归：Markdown→HTML、ECharts option、页范围、颜色、设计自检。"""
 import deepseek_client as dc  # noqa: F401  # 保证工具注册顺序
 from agent_tools import tool_docs as td

@@ -2,7 +2,9 @@
 # 验证：开启纯净对话后，三路个性上下文（长期记忆/核心自我/大脑）全部停止注入；
 #       关闭时正常注入；_chat_kwargs 正确透传 quiet_mode（body 优先、cfg 兜底）。
 # 运行：python tests/test_quiet_mode.py（仓库根目录）
-import os, sys, types
+import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import api_server
 import deepseek_client as dc
@@ -24,6 +26,7 @@ _REAL_MEMORY_FULL = api_server._memory_full
 api_server._memory_full = lambda: {"facts": [{"text": "用户偏好中文回复"}, {"text": "项目采用纯静态架构"}]}
 dc.self_profile = lambda *a, **k: "[核心自我状态] 我是鲸语，专注而冷静。"
 import brain_api
+
 _REAL_BRAIN_CONTEXT = brain_api.brain_context
 brain_api.brain_context = lambda *a, **k: "[大脑上下文] 身份：鲸语；近期记忆：正在开发纯净对话开关。"
 
@@ -72,6 +75,7 @@ print("\n✅ quiet_mode 纯净对话门控全部通过")
 
 # ── 恢复全局副作用（本文件为独立脚本式测试，模块级 stub 需归还）──
 import deepseek_client as _dcm
+
 if callable(_dcm.self_profile) and _dcm.self_profile.__module__ != "agent_tools.tool_brain":
     # 重新从域模块取回真实实现（自检隔离：不破坏后续 pytest 对工具归属的断言）
     from agent_tools.tool_brain import self_profile as _real_self_profile

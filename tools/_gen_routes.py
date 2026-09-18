@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P2-8 辅助脚本：把 api_server.py 的 do_POST if/elif 链抽取为
 装饰器注册的端点方法 + 轻量路由表。生成结果写入 .routes_new 文件供审查。
 
@@ -9,7 +8,8 @@ v2 修复：
 - 模块级设施（装饰器/查表函数）生成在 class _Handler 定义之前；
   端点方法与新 do_POST 生成在类内原 do_POST 位置
 """
-import re, pathlib
+import pathlib
+import re
 
 SRC = pathlib.Path("api_server.py")
 txt = SRC.read_text(encoding="utf-8")

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """鲸语 WhaleTalk · 唯一启动入口（纯 Web + 托盘常驻）。
 
 产品形态（v3.1 定版）：
@@ -186,8 +185,9 @@ def _start_tray(port, stop_cb):
     """启动系统托盘（委托 tray.TrayController）。返回控制器或 None。"""
     try:
         import threading
-        import tray as tray_mod
+
         import api_server
+        import tray as tray_mod
     except Exception as e:
         print(f"[托盘] 不可用：{e}（--no-tray 可跳过）")
         return None
@@ -209,6 +209,7 @@ def _start_tray(port, stop_cb):
     def _check_update():
         try:
             import webbrowser
+
             import config_defaults
             url = str(config_defaults.UPDATE_URL or "")
             url = url.replace("api.github.com/repos/", "github.com/").replace("/releases/latest", "/releases")
@@ -300,7 +301,7 @@ def _webui_deps_stale():
         return False
     try:
         import json as _json
-        with open(pkg_path, "r", encoding="utf-8") as f:
+        with open(pkg_path, encoding="utf-8") as f:
             pkg = _json.load(f)
         deps = dict(pkg.get("dependencies") or {})
         # 顶层依赖存在性：npm 会把装好的包放在 node_modules/<name>（scoped 在 node_modules/@scope/name）
@@ -431,10 +432,10 @@ def _setup_progress_window(title, subtitle, run_steps):
       - on_stage(label) 切换阶段标题（如"正在下载前端依赖…"）
       - on_log(line)    追加一行日志
     返回 True=成功 / False=失败（run_steps 应返回 bool）。tkinter 不可用返回 None。"""
-    import tkinter as tk
-    from tkinter import ttk
     import queue as _queue
     import threading as _th
+    import tkinter as tk
+    from tkinter import ttk
     root = tk.Tk()
     root.title(title)
     root.geometry("560x360")
@@ -486,7 +487,7 @@ def _setup_progress_window(title, subtitle, run_steps):
         try:
             result["ok"] = bool(run_steps(
                 lambda s: (q.put(("stage", s)), _write("[阶段] " + s)),
-                lambda l: (q.put(("log", l)), _write(l)),
+                lambda line: (q.put(("log", line)), _write(line)),
                 _idle,
             ))
         except Exception as e:
@@ -722,11 +723,12 @@ def _hard_deps_window(hard_miss):
     API 服务未起、前端尚不可用，用系统窗口让用户明确感知「正在安装」，
     避免双击后无任何反馈的干等。装完自动关闭进入程序。
     """
-    import deps
     import queue
     import threading as _th
     import tkinter as tk
     from tkinter import ttk
+
+    import deps
 
     root = tk.Tk()
     root.title("鲸语 · 正在初始化")
@@ -885,12 +887,11 @@ def main():
     parser.add_argument("--no-deps-check", action="store_true", help="跳过 Python 依赖自检/自动安装")
     args = parser.parse_args()
 
-    if not args.no_deps_check:
-        # 硬依赖安装失败 = API 无法启动，明确报错退出，避免带病运行
-        if not _ensure_python_deps():
-            print("❌ 必需依赖安装失败，程序未启动。请检查网络后重新运行（或加 --no-deps-check 强制启动调试）。")
-            input("按回车退出…") if not args.server else None
-            return 1
+    # 硬依赖安装失败 = API 无法启动，明确报错退出，避免带病运行
+    if not args.no_deps_check and not _ensure_python_deps():
+        print("❌ 必需依赖安装失败，程序未启动。请检查网络后重新运行（或加 --no-deps-check 强制启动调试）。")
+        input("按回车退出…") if not args.server else None
+        return 1
     if not args.server:
         _hide_console()
     # 快捷方式：强制 / 首次启动自动创建（不指定 --no-shortcuts）

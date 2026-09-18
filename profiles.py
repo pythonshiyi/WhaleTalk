@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Profile 多账号配置读写（API Key DPAPI 加密）。
 
 从 main.py 中拆出，供 Profile 管理对话框与客户端切换复用。
@@ -23,7 +22,7 @@ def load_profiles(path=None):
         path = DEFAULT_PROFILES_PATH
     try:
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             profiles = data.get("profiles") or {}
             if isinstance(profiles, dict):

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """DeepSeek API 封装：读鲸语 config.json（api_key 为 DPAPI 密文，自动解密）+ 重试。
 
 独立运行兼容：环境变量 DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_MODEL。
@@ -68,7 +67,7 @@ def load_api_config(config_path=None):
     # 2) 直读兼容（独立运行降级）
     if path:
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 cfg = json.load(f)
             api_key = str(cfg.get("api_key") or cfg.get("API_KEY") or "").strip()
             base_url = str(cfg.get("base_url") or cfg.get("BASE_URL") or "https://api.deepseek.com").strip()
@@ -157,7 +156,7 @@ def chat_json(messages, max_tokens=2000, temperature=0.4, config_path=None):
     try:
         data = json.loads(m.group(0))
     except json.JSONDecodeError as e:
-        raise RuntimeError(f"JSON 解析失败：{e}；原始：{text[:200]}")
+        raise RuntimeError(f"JSON 解析失败：{e}；原始：{text[:200]}") from e
     if not isinstance(data, dict):
         raise RuntimeError("模型输出 JSON 非对象")
     return data

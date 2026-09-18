@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """P0-P1 前端/预览改造的后端支撑回归：
 - api_server._file_preview 对 docx/pptx 返回结构化 markdown 内容（原为 content 空）
 - xlsx 预览保留原生数值类型（供前端可编辑表格回写维持类型）
 - pdf_create 封面/目录/总页码（P1.2）
 """
-import os
 
 import api_server
 import deepseek_client as dc
@@ -40,7 +38,7 @@ def test_preview_pptx_returns_markdown(tmp_path):
 
 def test_preview_xlsx_preserves_numeric_type(tmp_path):
     _boot(tmp_path)
-    from openpyxl import Workbook, load_workbook
+    from openpyxl import Workbook
     p = str(tmp_path / "n.xlsx")
     wb = Workbook(); ws = wb.active
     ws.append(["名称", "数值"]); ws.append(["甲", 100]); ws.append(["乙", 80])

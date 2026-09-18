@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """出网账本（Egress Ledger）：让「智能体往外发了什么」可审计。
 
 ## 为什么需要它
@@ -172,10 +171,7 @@ def _applies(spec, args):
         method = str(args.get("method") or "GET").strip().upper()
         if method in tuple(m.upper() for m in notm):
             return False
-    if spec.get("read_only_if_no_payload"):
-        if not _payload_text(spec, args).strip():
-            return False
-    return True
+    return not (spec.get("read_only_if_no_payload") and not _payload_text(spec, args).strip())
 
 
 def record(tool, args, *, ok=True, duration=0.0, result="", channel=None):
@@ -305,7 +301,7 @@ def read_ledger(limit=200):
     try:
         if not LEDGER_PATH or not os.path.exists(LEDGER_PATH):
             return []
-        with open(LEDGER_PATH, "r", encoding="utf-8") as f:
+        with open(LEDGER_PATH, encoding="utf-8") as f:
             lines = f.readlines()
         out = []
         for line in lines[-max(1, int(limit)):]:

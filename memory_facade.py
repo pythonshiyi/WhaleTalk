@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """记忆单一门面（Memory Facade）：让长期记忆带上「血缘」与「作废」语义。
 
 ## 为什么需要它
@@ -58,7 +57,6 @@ import logging
 import os
 import re
 import threading
-import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -132,7 +130,7 @@ def _load():
     if not MEMORY_PATH or not os.path.exists(MEMORY_PATH):
         return {"enabled": False, "facts": []}
     try:
-        with open(MEMORY_PATH, "r", encoding="utf-8") as f:
+        with open(MEMORY_PATH, encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return {"enabled": False, "facts": []}
@@ -316,7 +314,7 @@ def remember(text, *, origin="agent", type="", tags="", key=None,
                 return {"ok": False, "action": "error",
                         "message": f"错误：未找到要取代的记忆：{sk}"}
         else:
-            for i, n in norm:
+            for _i, n in norm:
                 if n["status"] != "active":
                     continue
                 sim = similarity(str(n.get("value") or ""), text)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P2-8 回归：/v1/token 发 token 的放行判定（Origin 白名单 + 无 Origin 时 Host 回环校验）。
 
 覆盖 _token_request_allowed / _host_is_loopback 纯函数判定矩阵：

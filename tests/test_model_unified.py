@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """统一模型（DeepSeek V4.1 Flash）集成回归。
 
 背景：2026-09-10 DeepSeek 发布 V4.1 Flash 并把全部模型升级为**单一原生多模态

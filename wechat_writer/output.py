@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """输出：草稿箱（publish_draft 兼容格式）+ 本地存档 + 可选 HTML。
 
 草稿格式：drafts/{platform}_{safe_title}_{ts}.md，内容 "# {title}\n\n{content}"

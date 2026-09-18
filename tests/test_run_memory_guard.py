@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """run_python 内存看门狗回归（T3）。
 
 策略仍是"默认自由"（不做静态拦截、不隔离），这里只加防误伤兜底：
@@ -11,7 +10,6 @@ import pytest
 # 必须先 import deepseek_client（其顶层会完整构建六层注册表并加载 agent_tools）；
 # 直接 import agent_tools.tool_code 会触发 __init__ 循环导入导致 TOOLS 未注册报错
 import deepseek_client as dsc  # noqa: F401
-import permissions
 from agent_tools import tool_code
 from agent_tools.tool_code import MemoryLimitError, _proc_tree_rss_mb, _run_capture
 
@@ -61,4 +59,4 @@ def test_run_python_reports_memory_limit(monkeypatch):
 def test_run_python_still_runs_normally():
     out = tool_code.run_python("print('ok-' + str(1 + 1))")
     assert "ok-2" in out
-    assert permissions.WORKSPACE_DIR or True  # 工作目录注入了才好，未注入也不阻断
+    assert True  # 工作目录注入了才好，未注入也不阻断

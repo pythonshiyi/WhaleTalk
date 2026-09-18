@@ -127,7 +127,7 @@ import snapshot as snapshot_mod
 # 按需加载能力：fetch_blocked（机场代理访问被墙站点）。独立模块按用户需要放
 # 入项目目录并启用后才生效；文件缺失/被剔除时功能静默降级（不阻塞主程序）。
 # P1-3 工具单一来源：@tool() 装饰器 + 六层注册表生成（toolkit.py）
-from toolkit import tool, register_tool, build_tool_list, build_call_map, build_groups, build_phrases, build_preactivate
+from toolkit import register_tool, build_tool_list, build_call_map, build_groups, build_phrases, build_preactivate
 
 try:
     from fetch_blocked import fetch_blocked as _fetch_blocked_impl
@@ -473,7 +473,7 @@ def embed_message_images(messages, model, _log=None, detail="auto"):
                         try:
                             size = os.path.getsize(local)
                         except OSError as e:
-                            raise ValueError(f"图片文件读取失败：{p}: {e}")
+                            raise ValueError(f"图片文件读取失败：{p}: {e}") from e
                         if size > IMAGE_MAX_BYTES:
                             raise ValueError(
                                 f"图片超过 {IMAGE_MAX_BYTES // (1024 * 1024)}MB，请先用 image_process 压缩：{os.path.basename(p)}"
@@ -492,7 +492,7 @@ def embed_message_images(messages, model, _log=None, detail="auto"):
                         )
                         total_b64 += len(b64)
                 except Exception as e:
-                    raise ValueError(f"图片 {p} 处理失败: {e}")
+                    raise ValueError(f"图片 {p} 处理失败: {e}") from e
             if total_b64 > IMAGE_INLINE_TOTAL_BASE64:
                 raise ValueError("本轮图片总量过大（超过请求体限制），请减少图片或先压缩")
             if not blocks:
@@ -564,9 +564,7 @@ def _auto_effort(work):
             or ln.lstrip().startswith(("步骤", "第一步", "然后", "接着", "- "))
         )
     ]
-    if len(step_lines) >= 3:
-        score += 1
-    elif text.count("\n") >= 5:
+    if len(step_lines) >= 3 or text.count("\n") >= 5:
         score += 1
     if score >= 2:
         return "max"
@@ -745,7 +743,7 @@ def _load_webhooks():
     if not WEBHOOK_CONFIG_FILE or not os.path.exists(WEBHOOK_CONFIG_FILE):
         return {}
     try:
-        with open(WEBHOOK_CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(WEBHOOK_CONFIG_FILE, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
             return {k: _decrypt_secret(v) for k, v in data.items()}
@@ -766,7 +764,7 @@ def _webhook_sign(secret, body, ts):
     """C6: HMAC-SHA256 签名：sign = hex(hmac_sha256(secret, \"{ts}.{body}\"))，防篡改 + 时间窗防重放。"""
     import hashlib
     import hmac
-    msg = f"{ts}.{body}".encode("utf-8")
+    msg = f"{ts}.{body}".encode()
     return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
 
@@ -783,10 +781,7 @@ def send_webhook_notify(text, title="鲸语提醒", channel=""):
     cfgs = _load_webhooks()
     if not cfgs:
         return "错误：未配置 Webhook（数据目录 webhooks.json 为空）"
-    if channel:
-        candidates = {str(channel).strip().lower(): cfgs.get(channel)} if cfgs.get(channel) else {}
-    else:
-        candidates = cfgs
+    candidates = ({str(channel).strip().lower(): cfgs.get(channel)} if cfgs.get(channel) else {}) if channel else cfgs
     sent = []
     for name, cfg in candidates.items():
         url, secret = _webhook_url_secret(cfg)
@@ -845,7 +840,7 @@ def _load_im_config():
             "支持 wecom_webhook（企业微信群机器人）或 telegram_bot_token+chat_id"
         )
     try:
-        with open(IM_CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(IM_CONFIG_FILE, encoding="utf-8") as f:
             cfg = json.load(f)
         if not isinstance(cfg, dict):
             return {}, "错误：im_config.json 格式不是对象"
@@ -1015,7 +1010,7 @@ def _db_conn(kind, name):
     try:
         if not os.path.exists(DB_CONFIG_FILE):
             return None, "错误：未找到数据库配置文件 db_config.json（需先在数据目录配置）"
-        with open(DB_CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(DB_CONFIG_FILE, encoding="utf-8") as f:
             data = json.load(f)
         conns = data.get(kind) or {}
         cfg = conns.get(str(name or "default"))
@@ -1079,7 +1074,7 @@ def _load_memory():
     if not MEMORY_FILE or not os.path.exists(MEMORY_FILE):
         return {"enabled": False, "facts": [], "notes": []}
     try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+        with open(MEMORY_FILE, encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return {"enabled": False, "facts": [], "notes": []}
@@ -1253,7 +1248,7 @@ def _load_self_profile():
     if not SELF_PROFILE_FILE or not os.path.exists(SELF_PROFILE_FILE):
         return dict(_SELF_PROFILE_EMPTY)
     try:
-        with open(SELF_PROFILE_FILE, "r", encoding="utf-8") as f:
+        with open(SELF_PROFILE_FILE, encoding="utf-8") as f:
             d = json.load(f)
         out = dict(_SELF_PROFILE_EMPTY)
         if isinstance(d, dict):
@@ -1666,10 +1661,7 @@ def cleanup_idle_processes(max_idle_seconds=3600, force_all=False):
             with _PROCESSES_LOCK:
                 PROCESSES.pop(name, None)
             continue
-        if force_all:
-            idle = True
-        else:
-            idle = (now - float(entry.get("started_ts") or now)) > max_idle_seconds
+        idle = True if force_all else now - float(entry.get("started_ts") or now) > max_idle_seconds
         if idle:
             # 只有确认退出才摘除条目：杀失败就摘 = 进程孤儿化（端口占着、
             # stop/list 都看不见、再也停不掉）。失败时保留条目并如实提示。
@@ -1719,7 +1711,7 @@ def _current_version():
 def _py_stats(path):
     """统计 py 文件函数/类数量（粗略）。"""
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             src = f.read()
         fn = len(re.findall(r"^    def |^def ", src, re.MULTILINE))
         cls = len(re.findall(r"^class ", src, re.MULTILINE))
@@ -2266,7 +2258,7 @@ def _load_schedules_plain():
     if not SCHEDULES_FILE or not os.path.exists(SCHEDULES_FILE):
         return []
     try:
-        with open(SCHEDULES_FILE, "r", encoding="utf-8") as f:
+        with open(SCHEDULES_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except Exception:
@@ -2734,7 +2726,7 @@ def task_checkpoint_clear():
     if not CHECKPOINT_FILE or not os.path.exists(CHECKPOINT_FILE):
         return "当前没有检查点"
     try:
-        with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+        with open(CHECKPOINT_FILE, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict) and data.get("auto"):
             os.remove(CHECKPOINT_FILE)
@@ -2753,7 +2745,7 @@ def _recipe_chain(name):
     if not PATTERNS_FILE or not os.path.exists(PATTERNS_FILE):
         return []
     try:
-        with open(PATTERNS_FILE, "r", encoding="utf-8") as f:
+        with open(PATTERNS_FILE, encoding="utf-8") as f:
             pats = json.load(f)
         for p in pats if isinstance(pats, list) else []:
             if isinstance(p, dict) and str(p.get("name") or "") == str(name or "").strip():
@@ -2823,7 +2815,7 @@ def _load_rss_sources():
     if not RSS_SOURCES_FILE or not os.path.exists(RSS_SOURCES_FILE):
         return []
     try:
-        with open(RSS_SOURCES_FILE, "r", encoding="utf-8") as f:
+        with open(RSS_SOURCES_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except Exception:
@@ -2862,7 +2854,7 @@ def _load_secrets():
     if not os.path.exists(SECRETS_FILE):
         return {}
     try:
-        with open(SECRETS_FILE, "r", encoding="utf-8") as f:
+        with open(SECRETS_FILE, encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return {}
@@ -2942,7 +2934,7 @@ def _load_webdav_config():
             "（password 可先用 dpapi: 前缀的密文，或直接明文）"
         )
     try:
-        with open(WEBDAV_CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(WEBDAV_CONFIG_FILE, encoding="utf-8") as f:
             cfg = json.load(f)
         url = str(cfg.get("url") or "").strip().rstrip("/")
         user = str(cfg.get("username") or "").strip()
@@ -3637,7 +3629,7 @@ def _load_hint_hits():
     _hint_hits_loaded = True
     try:
         if HINT_HITS_FILE and os.path.exists(HINT_HITS_FILE):
-            with open(HINT_HITS_FILE, "r", encoding="utf-8") as f:
+            with open(HINT_HITS_FILE, encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 _hint_hits = {
@@ -3727,7 +3719,7 @@ def build_tool_index(tools=None):
         (t["function"]["name"], t["function"].get("description", ""))
         for t in (tools or [])
     ))
-    if _TOOL_INDEX_CACHE is not None and _TOOL_INDEX_KEY == key:
+    if _TOOL_INDEX_CACHE is not None and key == _TOOL_INDEX_KEY:
         return _TOOL_INDEX_CACHE
     by_name = {t["function"]["name"]: t for t in (tools or [])}
     lines = [
@@ -3969,7 +3961,7 @@ def _cached_all_tools(custom_tools):
     if not custom_tools:
         return copy.deepcopy(base)
     cid = id(custom_tools)
-    if _CUSTOM_TOOLS_CACHE is None or _CUSTOM_TOOLS_ID != cid:
+    if _CUSTOM_TOOLS_CACHE is None or cid != _CUSTOM_TOOLS_ID:
         _CUSTOM_TOOLS_CACHE = copy.deepcopy(custom_tools)
         _CUSTOM_TOOLS_ID = cid
     return copy.deepcopy(base + _CUSTOM_TOOLS_CACHE)
@@ -5000,10 +4992,7 @@ class DeepSeekClient:
                             if tool_calls:
                                 last_idx = max(tool_calls)
                                 last = tool_calls[last_idx]
-                                if tc.id and last.get("id") and last["id"] != tc.id:
-                                    idx = last_idx + 1
-                                else:
-                                    idx = last_idx
+                                idx = last_idx + 1 if tc.id and last.get("id") and last["id"] != tc.id else last_idx
                         entry = tool_calls.setdefault(idx, {"id": "", "name": "", "args": ""})
                         if tc.id:
                             entry["id"] = tc.id

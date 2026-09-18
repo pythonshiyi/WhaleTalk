@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """v3.8.5 增强批次二：B5 快照外置备份 + 异地恢复单元测试。
 
 B5：archive 后把新快照镜像到外部备份目录 <dir>/<brain_id>/ 并写 snapshot_manifest.json；
@@ -176,7 +175,6 @@ def test_restore_from_external_mirror(brain_b5):
     assert bk.cmd_restore(argparse.Namespace(whale=str(mirrored), passphrase="",
                                              dir=str(dest), replace=False, force=False)) == 0
     # 恢复出的 brain 应含该记忆
-    bk2 = dest  # restored dir layout
     # 恢复产物 manifest 应存在且指纹自洽
     man = bk.load_json(dest / "manifest.json", {})
     assert man.get("brain_id") == "whale-b5"

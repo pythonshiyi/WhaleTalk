@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """长任务自动打点回归（G15）。
 
 现象：task_checkpoint_save 带 auto 参数、注释也写着"每步工具后写入"，但 Web 版
@@ -14,8 +13,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 import api_server  # noqa: E402
-import shared  # noqa: E402
-import shared  # noqa: E402
+import shared  # noqa: E402  # noqa: E402
 
 
 @pytest.fixture()

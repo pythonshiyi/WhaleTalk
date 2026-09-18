@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """阶段一（文档/表格/PPT 能力止血）回归：S1–S5。
 
 覆盖报告《文档表格PPT能力报告_v3.8.5.md》阶段一止血项：
@@ -11,8 +10,9 @@
 """
 import os
 
-import deepseek_client as dc
 from openpyxl import Workbook
+
+import deepseek_client as dc
 
 
 def _perm(tmp_path):

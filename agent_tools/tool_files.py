@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """tool_files —— P0-1 批量拆分（工具域模块）：📁 文件与进程.
 
 共享符号策略：permissions / security / shared / toolkit 为独立模块直接 import；
@@ -14,15 +13,28 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
 from collections import deque
+from datetime import datetime
 
+import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 import permissions
 import snapshot as snapshot_mod
-
-from shared import clamp_int, READ_FILE_MAX_BYTES, _READ_LINE_MAX, EDIT_FILE_MAX_SIZE, EDIT_FILE_REGEX_MAX, EXTRACT_MAX_ENTRIES, EXTRACT_MAX_TOTAL_BYTES, EXTRACT_MAX_SINGLE_BYTES, MAX_PROCESSES, _COMMON_PACKAGES, _ARCHIVE_SKIP_DIRS, _SEARCH_EXTS, _SEARCH_SKIP_DIRS  # D4: 参数校验辅助
+from shared import (  # D4: 参数校验辅助
+    _ARCHIVE_SKIP_DIRS,
+    _COMMON_PACKAGES,
+    _READ_LINE_MAX,
+    _SEARCH_EXTS,
+    _SEARCH_SKIP_DIRS,
+    EDIT_FILE_MAX_SIZE,
+    EDIT_FILE_REGEX_MAX,
+    EXTRACT_MAX_ENTRIES,
+    EXTRACT_MAX_SINGLE_BYTES,
+    EXTRACT_MAX_TOTAL_BYTES,
+    MAX_PROCESSES,
+    READ_FILE_MAX_BYTES,
+    clamp_int,
+)
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
-import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 
 # ---- L5: search_local 进程内增量索引（避免每次调用全量重扫重读） ----
 # 结构：{normcase(root): {relpath: {"mtime": float, "size": int, "lines": [...], "trunc": bool}}}
@@ -36,9 +48,8 @@ _SEARCH_CACHE_LINES = 400        # 单文件行缓存行数上限
 _SEARCH_MAX_FILES = 3000         # 单 root 索引条目上限（防内存膨胀）
 _SEARCH_SKIP_BIG = 512 * 1024    # 超过该字节的文件不索引（与原实现一致）
 from deepseek_client import (
-
-    PROCESSES,
     _PROCESSES_LOCK,
+    PROCESSES,
     _atomic_write,
     _emit_process,
     _kill_tree,
@@ -49,7 +60,6 @@ from deepseek_client import (
     _win_clipboard_set,
     snapshot_processes,
 )
-
 
 
 def _detect_text_encoding(path):
@@ -126,7 +136,7 @@ def read_file(path, start_line=None, max_lines=None):
                 return "错误：start_line / max_lines 必须是正整数"
             if start > 1_000_000:
                 return "错误：start_line 过大（超过 100 万行，请缩小范围）"
-            with open(path, "r", encoding=enc, errors="replace") as f:
+            with open(path, encoding=enc, errors="replace") as f:
                 for _ in range(start - 1):
                     f.readline()
                 # readline(上限)：单行可达数百 MB（minified JSON/日志），
@@ -147,7 +157,7 @@ def read_file(path, start_line=None, max_lines=None):
                 body += "\n"
             prefix = f"[按行读取 {path} 第 {start}-{start + len(lines) - 1} 行]\n"
             return prefix + body + enc_note
-        with open(path, "r", encoding=enc, errors="replace") as f:
+        with open(path, encoding=enc, errors="replace") as f:
             content = f.read(READ_FILE_MAX_BYTES)
         if len(content) >= READ_FILE_MAX_BYTES:
             content += "\n[文件较大，已截断前 100KB]"
@@ -249,7 +259,7 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
         # 读入上限：允许目录内也可能有 GB 级文件，全量读入内存会 OOM
         if os.path.getsize(p) > EDIT_FILE_MAX_SIZE:
             return f"错误：文件超过 {EDIT_FILE_MAX_SIZE // 1024 // 1024}MB 上限，请改用其他方式处理"
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
+        with open(p, encoding="utf-8", errors="replace") as f:
             content = f.read()
     except Exception as e:
         return f"错误：读取失败: {e}"
@@ -376,7 +386,7 @@ def _search_index_file(full):
         lines = []
         total = 0
         truncated = False
-        with open(full, "r", encoding="utf-8", errors="replace") as f:
+        with open(full, encoding="utf-8", errors="replace") as f:
             for ln in f:
                 total += len(ln.encode("utf-8", errors="replace"))
                 if total > _SEARCH_CACHE_BYTES or len(lines) >= _SEARCH_CACHE_LINES:
@@ -446,7 +456,7 @@ def _search_match_root(idx, root_walk, q, limit, hits):
         if meta.get("trunc"):
             full = os.path.join(root_walk, *rel.split("/"))
             try:
-                with open(full, "r", encoding="utf-8", errors="replace") as f:
+                with open(full, encoding="utf-8", errors="replace") as f:
                     for ln in f:
                         if q in ln.lower():
                             hits.append(f"{rel}: {ln.strip()[:150]}")
@@ -752,7 +762,7 @@ def extract_archive(path, dest_dir):
                         return f"错误：压缩包单文件超过大小上限：{info.filename}"
                     total_size += info.file_size
                     if total_size > EXTRACT_MAX_TOTAL_BYTES:
-                        return f"错误：压缩包总解压大小超过上限，已中止"
+                        return "错误：压缩包总解压大小超过上限，已中止"
                 for info in infos:
                     zf.extract(info, dest)
                     count += 1
@@ -766,7 +776,7 @@ def extract_archive(path, dest_dir):
                     return f"错误：压缩包条目数超过上限（{EXTRACT_MAX_ENTRIES}），已中止"
                 total_size = sum(m.size for m in members)
                 if total_size > EXTRACT_MAX_TOTAL_BYTES:
-                    return f"错误：压缩包总解压大小超过上限，已中止"
+                    return "错误：压缩包总解压大小超过上限，已中止"
                 for m in members:
                     target = os.path.normpath(os.path.join(base, m.name))
                     if not (target == base or target.startswith(base + os.sep)):
@@ -816,7 +826,7 @@ def extract_archive(path, dest_dir):
                         return f"错误：压缩包单文件超过大小上限：{info.filename}"
                     total_size += info.file_size
                     if total_size > EXTRACT_MAX_TOTAL_BYTES:
-                        return f"错误：压缩包总解压大小超过上限，已中止"
+                        return "错误：压缩包总解压大小超过上限，已中止"
                 rf.extractall(dest)
             permissions.audit("extract_archive", dest, f"{len(infos)} 个条目")
             return f"已解压 {len(infos)} 个条目到 {dest}"
@@ -1272,7 +1282,7 @@ def find_images(dir, keyword="", ext=None, limit=30, recurse=True,
             break
     if not out:
         return f"未在 {p} 找到匹配图片（keyword={keyword or '任意'}）"
-    note = f"（递归）" if recurse else ""
+    note = "（递归）" if recurse else ""
     head = f"在 {p}{note} 找到 {len(out)} 张候选：\n" + "\n".join(out)
     head += "\n提示：用 image_understand 逐张查看候选确认内容贴合主题后再选用（文件名常是 hash，别只看名字判断）。"
     return head

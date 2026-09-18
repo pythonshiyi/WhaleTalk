@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P1 审查修复的回归测试。
 
 覆盖：
@@ -15,7 +14,6 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import api_server  # noqa: E402
-
 
 # ── 1. 失败前缀统一 ────────────────────────────────────────────────
 
@@ -88,8 +86,7 @@ def test_stop_server_stops_chat_jobs(monkeypatch):
 
 def test_chatpage_resets_batch_buffer():
     src = (PROJECT_ROOT and open(
-        os.path.join(PROJECT_ROOT, "webui", "src", "components", "ChatPage.jsx"),
-        "r", encoding="utf-8").read())
+        os.path.join(PROJECT_ROOT, "webui", "src", "components", "ChatPage.jsx"), encoding="utf-8").read())
     reset = 'batchRef.current = { think: "", text: "", gen: "" };'
     # flushBatch 内 1 处 + 卸载清理 1 处（修复点）= 至少 2 处
     assert src.count(reset) >= 2, "停止/卸载清理必须复位 rAF 累积缓冲"

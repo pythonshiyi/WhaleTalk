@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """配置加载/规范化/保存。
 
 从 main.py 中拆出，集中处理 config.json 的读取、默认值合并、字段钳制与
@@ -16,18 +15,18 @@ import threading
 
 import crypto
 import deepseek_client as _dc
+from app_utils import as_bool
+from config_defaults import (
+    BUILTIN_TOOL_NAMES,
+    DEFAULT_CONFIG,
+    DEFAULT_SYSTEM_PROMPT,
+)
 from deepseek_client import (
     DEFAULT_BASE_URL,
     SCENARIOS,
     THINKING_MODES,
     TOOLS,
 )
-from config_defaults import (
-    BUILTIN_TOOL_NAMES,
-    DEFAULT_CONFIG,
-    DEFAULT_SYSTEM_PROMPT,
-)
-from app_utils import as_bool
 from themes import THEMES
 from user_tools import load_user_tools
 
@@ -121,11 +120,11 @@ def normalize_config(cfg):
     # 仅限官方端点——自定义网关可能恰好重名，不擅自改写；用户仍可手填任意模型名。
     _default_model = getattr(_dc, "DEFAULT_MODEL", "deepseek-flash")
     _model = str(cfg.get("model") or "").strip() or _default_model
-    if cfg.get("base_url") == getattr(_dc, "DEFAULT_BASE_URL", "") and hasattr(_dc, "is_legacy_model"):
-        if _dc.is_legacy_model(_model):
-            _new = _dc.resolve_model(_model)
-            logging.info("模型名归一：%s → %s（官方已统一为 V4.1 Flash）", _model, _new)
-            _model = _new
+    if (cfg.get("base_url") == getattr(_dc, "DEFAULT_BASE_URL", "")
+            and hasattr(_dc, "is_legacy_model") and _dc.is_legacy_model(_model)):
+        _new = _dc.resolve_model(_model)
+        logging.info("模型名归一：%s → %s（官方已统一为 V4.1 Flash）", _model, _new)
+        _model = _new
     cfg["model"] = _model
     # 支持任意 OpenAI 兼容模型名（Profile 自定义端点场景），不再强制回退内置列表
     api_key = cfg.get("api_key")
@@ -294,7 +293,7 @@ def _load_config_uncached(config_path):
     cfg = dict(DEFAULT_CONFIG)
     if config_path and os.path.exists(config_path):
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 data = json.load(f)
             cfg.update({k: data[k] for k in data if k in cfg})
         except Exception as e:
@@ -309,7 +308,7 @@ def _disk_cipher(config_path, key):
     """读取磁盘上某敏感字段的 dpapi: 密文；不存在或非密文返回 None。"""
     try:
         if config_path and os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 v = json.load(f).get(key)
             if isinstance(v, str) and v.startswith(crypto.PREFIX):
                 return v

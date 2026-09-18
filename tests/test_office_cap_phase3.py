@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """阶段三（表格/文档/PDF 增强）回归：S8/S9/S11/S13/S14。
 
 - S8 write_excel：style（表头加粗/冻结/筛选/自适应列宽）、start_cell、mode=update、
@@ -8,7 +7,6 @@
 - S13 pdf_create 页脚页码 / 页眉
 - S14 shared 长度阈值族 + pptx_read 全局输出上限
 """
-import os
 import zipfile
 
 import deepseek_client as dc
@@ -96,9 +94,9 @@ def test_s9_xlsx_edit(tmp_path):
 # ---------------- S11 ----------------
 def test_s11_docx_read_image_placeholder(tmp_path):
     _perm(tmp_path)
-    from PIL import Image
     from docx import Document
     from docx.shared import Inches
+    from PIL import Image
     img = str(tmp_path / "t.png")
     Image.new("RGB", (60, 40), (200, 30, 30)).save(img)
     p = str(tmp_path / "p.docx")
@@ -109,8 +107,8 @@ def test_s11_docx_read_image_placeholder(tmp_path):
 
 def test_s11_create_doc_embeds_image(tmp_path):
     _perm(tmp_path)
-    from PIL import Image
     from docx import Document
+    from PIL import Image
     img = str(tmp_path / "t2.png")
     Image.new("RGB", (40, 40), (30, 30, 200)).save(img)
     p = str(tmp_path / "d.docx")
@@ -139,13 +137,14 @@ def test_s13_pdf_page_footer(tmp_path):
 def test_s14_pptx_read_global_cap(tmp_path):
     _perm(tmp_path)
     from pptx import Presentation
+
     from shared import PPTX_MAX_DEFAULT
     lp = str(tmp_path / "long.pptx")
     prs = Presentation()
     for i in range(40):
         s = prs.slides.add_slide(prs.slide_layouts[1])
         s.shapes.title.text = f"页{i}"
-        for j in range(30):
+        for _j in range(30):
             prs.slides[i].placeholders[1].text_frame.add_paragraph().text = "填充内容" * 40
     prs.save(lp)
     out = dc.pptx_read(lp)
@@ -157,8 +156,8 @@ def test_s14_pptx_read_global_cap(tmp_path):
 def test_ppt_layout_check_detects_oob_and_overlap(tmp_path):
     """美学自检：ppt_layout_check 应报越界/重叠，干净文件应通过。"""
     from pptx import Presentation
-    from pptx.util import Inches
     from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
     bad = str(tmp_path / "bad.pptx")
     prs = Presentation(); s = prs.slides.add_slide(prs.slide_layouts[6])
     s.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(4), Inches(1)).text = "标题"

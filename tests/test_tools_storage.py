@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 """存储执行路径测试（TECH_NOTES TODO-3：按领域扩充分子级用例）。
 
 覆盖 task_checkpoint_save/load、secret_store（DPAPI 加密保险箱）、
 kv_store（diskcache 嵌入式键值）、verify_files（产物核验）的真实执行。
 存储隔离：每个用例注入独立临时路径变量。
 """
-import os
 
 import pytest
 

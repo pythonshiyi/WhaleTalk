@@ -264,7 +264,8 @@ def _pygments_spans(code, lang, base):
     """可选语法高亮：返回 [(start, end, tag)]，pygments 缺失时返回空。"""
     try:
         from pygments import highlight as _pyg_highlight  # noqa: F401
-        from pygments import lexers, token as _tok
+        from pygments import lexers
+        from pygments import token as _tok
     except Exception:
         return []
     try:

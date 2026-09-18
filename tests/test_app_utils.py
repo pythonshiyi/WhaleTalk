@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """app_utils 回归：空壳判定按路径隔离 + 隐私日志切换不因缺少 logging.handlers
 预导入而抛 AttributeError。"""
 import logging

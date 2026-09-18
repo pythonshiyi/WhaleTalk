@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """tool_trace 异步留痕回归：后台聚合写盘、顺序保持、flush 排空、目录跟随 init。
 
 对应 P2：工具留痕从「同步 open/append/close」改为「有界队列 + 工作线程批量写」，
 保证高频工具循环下调用线程不被磁盘 I/O 拖累。
 """
-import os
 import time
 
 import permissions

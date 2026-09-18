@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """🔧 系统与基础 —— 首批拆分工具域（P0-1 巨石拆分）。
 
 从 deepseek_client.py 原样迁出的工具（装饰器 + 函数体），注册进 toolkit
@@ -13,9 +12,9 @@ import logging
 from datetime import datetime
 from urllib.parse import quote
 
-from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
-from shared import WEATHER_TIMEOUT  # 天气请求超时（工具域阈值，见 shared.py）
 from net_utils import _http_client
+from shared import WEATHER_TIMEOUT  # 天气请求超时（工具域阈值，见 shared.py）
+from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
 @tool(

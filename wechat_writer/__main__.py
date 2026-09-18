@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """python -m wechat_writer 入口（--dry-run / --run / --topic）。"""
 import sys
 

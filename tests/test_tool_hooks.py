@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """工具钩子管线测试。
 
 核心不变量：
@@ -13,8 +12,8 @@ import os
 
 import pytest
 
-import tool_hooks
 import degrade
+import tool_hooks
 
 
 @pytest.fixture(autouse=True)
@@ -88,7 +87,7 @@ def test_hook_failure_does_not_break_tool_and_is_recorded():
     tool_hooks.hook("pre", "boom", boom, 1)
     assert tool_hooks.wrap("t", lambda: "fine")() == "fine"
     snap = degrade.snapshot()
-    assert any("toolhook.pre.boom" == e["component"] for e in snap)
+    assert any(e["component"] == "toolhook.pre.boom" for e in snap)
 
 
 def test_tool_exception_propagates_and_post_hook_still_runs():

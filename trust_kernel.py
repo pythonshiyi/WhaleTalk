@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """信任内核（Trust Kernel）：让智能体的自我修改「可声明 · 可见 · 可回滚」。
 
 ## 为什么需要它
@@ -148,7 +147,7 @@ def _sha256(path):
 
 def _read_json(path, default=None):
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return default
@@ -473,9 +472,8 @@ def _git_matches_head(name):
         flags = subprocess.run(
             ["git", "-C", PROJECT_DIR, "ls-files", "-v", "--", rel],
             capture_output=True, text=True, timeout=5)
-        if flags.returncode == 0 and flags.stdout.strip():
-            if flags.stdout.strip()[0] in ("h", "S", "s"):
-                return None
+        if flags.returncode == 0 and flags.stdout.strip() and flags.stdout.strip()[0] in ("h", "S", "s"):
+            return None
         d = subprocess.run(
             ["git", "-C", PROJECT_DIR, "diff", "--quiet", "HEAD", "--", rel],
             capture_output=True, text=True, timeout=5)
@@ -592,10 +590,10 @@ def diff(name, max_lines=None):
         base = _baseline_path(name)
         a, b = [], []
         if os.path.isfile(base):
-            with open(base, "r", encoding="utf-8", errors="replace") as f:
+            with open(base, encoding="utf-8", errors="replace") as f:
                 a = f.readlines()
         if os.path.isfile(cur):
-            with open(cur, "r", encoding="utf-8", errors="replace") as f:
+            with open(cur, encoding="utf-8", errors="replace") as f:
                 b = f.readlines()
         out = list(difflib.unified_diff(a, b, fromfile=f"baseline/{name}",
                                         tofile=f"current/{name}", n=2))
@@ -1094,7 +1092,7 @@ def status(deep=False):
 
 def _count_lines(path):
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return sum(1 for _ in f)
     except Exception:
         return 0
@@ -1110,7 +1108,7 @@ def _count_dir(path):
 def ledger_tail(n=20):
     """账本末尾 n 条（新→旧）。"""
     try:
-        with open(_ledger_path(), "r", encoding="utf-8") as f:
+        with open(_ledger_path(), encoding="utf-8") as f:
             lines = f.readlines()
     except Exception:
         return []
@@ -1149,7 +1147,7 @@ def timeline(limit=100):
     events = []
     # 1) 账本
     try:
-        with open(_ledger_path(), "r", encoding="utf-8") as f:
+        with open(_ledger_path(), encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:

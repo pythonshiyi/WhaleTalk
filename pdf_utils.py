@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """PDF 工具：页码范围解析、中文字体注册。
 
 从 deepseek_client.py 中拆出，供 PDF 提取/生成功能复用。

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """技能结晶（Skill Factory）：把「成功工具链」固化为可复用资产（G14）。
 
 现状：`patterns.json` 已在记录成功调用（工具/参数/结果），`tasklog.json` 已在记录

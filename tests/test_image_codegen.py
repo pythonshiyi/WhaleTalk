@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """代码生图 image_codegen：源码提取 / 视觉自评闭环 / 降级路径 回归。
 
 用假 client + 假 html_render + 假 image_understand，端到端跑闭环而不依赖
@@ -7,15 +6,13 @@
 import os
 import sys
 
-import pytest
-
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import permissions  # noqa: E402
-import deepseek_client as dc  # noqa: E402,F401  （先完整初始化工具注册表）
 import agent_tools.tool_codegen as tg  # noqa: E402
+import deepseek_client as dc  # noqa: E402,F401  （先完整初始化工具注册表）
+import permissions  # noqa: E402
 
 
 def _fake_client(html="<html><body>ok</body></html>"):

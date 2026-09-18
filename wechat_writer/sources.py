@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """素材采集：RSS 并发抓取 + 搜索引擎兜底 + 全文抓取，统一为 Item 结构。
 
 任何单源失败跳过不中断整轮（RSS 源不可达是常态）。
@@ -71,7 +70,7 @@ def expand_rss(cfg):
     if enabled is not None:
         groups = {g: u for g, u in groups.items() if g in set(enabled)}
     out = []
-    for gname, urls in groups.items():
+    for _gname, urls in groups.items():
         if isinstance(urls, list):
             out.extend(str(u).strip() for u in urls if str(u).strip())
     return out
@@ -212,8 +211,9 @@ def collect_search(keywords, limit_per=5, timeout=SEARCH_TIMEOUT):
     kw_list = [k for k in (keywords or []) if str(k).strip()]
     if not kw_list:
         return []
-    import httpx
     from urllib.parse import quote
+
+    import httpx
 
     items = []
     try:

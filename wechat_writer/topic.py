@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """选题引擎：LLM 提炼候选主题 → 双通道去重（bigram Jaccard 粗筛 + LLM 精判）→ 评分排序。
 
 关键设计（方案文档 §3.3）：纯中文 bigram Jaccard 对同义改写敏感度不足
@@ -144,10 +143,9 @@ def pick_topic(items, history_topics, llm_chat=None):
     # 通道 B：LLM 精判（对剩余候选逐一比对最近 14 天）
     final = []
     for t in kept:
-        if history_topics:
-            if _llm_judge_duplicate(f"{t.name}（切入点：{t.angle}）", history_topics[-14:], llm_chat):
-                logger.info("选题被 LLM 精判剔除（换汤不换药）：%s", t.name)
-                continue
+        if history_topics and _llm_judge_duplicate(f"{t.name}（切入点：{t.angle}）", history_topics[-14:], llm_chat):
+            logger.info("选题被 LLM 精判剔除（换汤不换药）：%s", t.name)
+            continue
         final.append(t)
     if not final:
         logger.info("候选全部被 LLM 精判剔除，降级盘点型")
