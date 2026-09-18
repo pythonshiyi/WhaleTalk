@@ -124,8 +124,8 @@ def mv_compose(storyboard, output="", resolution="1920x1080", fps=30, duration=3
     if not m:
         return "错误：resolution 应为「宽x高」（如 1920x1080）"
     W, H = int(m.group(1)), int(m.group(2))
-    if not (64 <= W <= 4096 and 64 <= H <= 4096):
-        return f"错误：resolution 每边须在 64-4096（图片生成上限）：{resolution}"
+    if not (16 <= W <= 16384 and 16 <= H <= 16384):
+        return f"错误：resolution 每边须在 16-16384：{resolution}"
     fps = clamp_int(fps, 30, lo=1, hi=120)
     base_dur = clamp_float(duration, 3.0, lo=0.5, hi=600.0)
     trans = clamp_float(transition, 0.5, lo=0.0, hi=5.0)

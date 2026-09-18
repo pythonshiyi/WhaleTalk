@@ -2558,11 +2558,11 @@ def _db_execute_sqlite(path, stmt, backup):
                 try:
                     cnt = len(cur.execute(sel).fetchall())
                     preview = f"\n变更预览：命中 {cnt} 行"
-                    # L4: 执行前校验影响行数上限，防全表误操作
-                    if cnt > _DB_EXECUTE_MAX_ROWS:
+                    # 影响行数上限（<=0 = 不限，用户可配 WHALETALK_DB_EXECUTE_MAX_ROWS=0）
+                    if _DB_EXECUTE_MAX_ROWS and _DB_EXECUTE_MAX_ROWS > 0 and cnt > _DB_EXECUTE_MAX_ROWS:
                         return (
                             f"错误：该语句将影响 {cnt} 行，超过单次上限 "
-                            f"{_DB_EXECUTE_MAX_ROWS}；请加 WHERE 缩小范围或分批执行"
+                            f"{_DB_EXECUTE_MAX_ROWS}；可加 WHERE 缩小范围，或设 WHALETALK_DB_EXECUTE_MAX_ROWS=0 解除"
                         )
                 except Exception:
                     preview = ""
@@ -2606,11 +2606,11 @@ def _db_execute_mysql(connection, stmt, backup):
                     cur.execute(sel)
                     cnt = len(cur.fetchall())
                     preview = f"\n变更预览：命中 {cnt} 行"
-                    # L4: 执行前校验影响行数上限，防全表误操作
-                    if cnt > _DB_EXECUTE_MAX_ROWS:
+                    # 影响行数上限（<=0 = 不限，用户可配 WHALETALK_DB_EXECUTE_MAX_ROWS=0）
+                    if _DB_EXECUTE_MAX_ROWS and _DB_EXECUTE_MAX_ROWS > 0 and cnt > _DB_EXECUTE_MAX_ROWS:
                         return (
                             f"错误：该语句将影响 {cnt} 行，超过单次上限 "
-                            f"{_DB_EXECUTE_MAX_ROWS}；请加 WHERE 缩小范围或分批执行"
+                            f"{_DB_EXECUTE_MAX_ROWS}；可加 WHERE 缩小范围，或设 WHALETALK_DB_EXECUTE_MAX_ROWS=0 解除"
                         )
                 except Exception:
                     preview = ""
@@ -2651,11 +2651,11 @@ def _db_execute_postgres(connection, stmt, backup):
                     cur.execute(sel)
                     cnt = len(cur.fetchall())
                     preview = f"\n变更预览：命中 {cnt} 行"
-                    # L4: 执行前校验影响行数上限，防全表误操作
-                    if cnt > _DB_EXECUTE_MAX_ROWS:
+                    # 影响行数上限（<=0 = 不限，用户可配 WHALETALK_DB_EXECUTE_MAX_ROWS=0）
+                    if _DB_EXECUTE_MAX_ROWS and _DB_EXECUTE_MAX_ROWS > 0 and cnt > _DB_EXECUTE_MAX_ROWS:
                         return (
                             f"错误：该语句将影响 {cnt} 行，超过单次上限 "
-                            f"{_DB_EXECUTE_MAX_ROWS}；请加 WHERE 缩小范围或分批执行"
+                            f"{_DB_EXECUTE_MAX_ROWS}；可加 WHERE 缩小范围，或设 WHALETALK_DB_EXECUTE_MAX_ROWS=0 解除"
                         )
                 except Exception:
                     preview = ""

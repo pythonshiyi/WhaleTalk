@@ -2,13 +2,24 @@
 
 从 deepseek_client.py 中拆出的纯函数/常量，供数据库查询/执行工具复用。
 """
+import os
 import re
 
-# 单元格显示截断上限（防超长单元格撑爆上下文）
-TABLE_CELL_MAX = 100
 
-# 单次数据库写操作影响行数上限（L4：超过则拒绝执行，防止 DELETE/UPDATE 无谓全表扫）
-DB_EXECUTE_MAX_ROWS = 10000
+def _env_int(name, default):
+    """数值上限环境覆盖：WHALETALK_<NAME>；0/负 = 不限（由调用方解释）。"""
+    try:
+        raw = os.environ.get("WHALETALK_" + name)
+        return default if raw is None or str(raw).strip() == "" else int(raw)
+    except Exception:
+        return default
+
+
+# 单元格显示截断上限（防超长单元格撑爆上下文）；WHALETALK_TABLE_CELL_MAX=0 → 不限
+TABLE_CELL_MAX = _env_int("TABLE_CELL_MAX", 100)
+
+# 单次数据库写操作影响行数上限（超限拒绝，防误伤全表）；WHALETALK_DB_EXECUTE_MAX_ROWS=0 → 不限
+DB_EXECUTE_MAX_ROWS = _env_int("DB_EXECUTE_MAX_ROWS", 10000)
 
 # 只读查询禁止的服务器端功能关键字（前缀白名单可被其绕过，读写服务器文件 / DoS）：
 # MySQL: SELECT ... INTO OUTFILE/DUMPFILE、LOAD_FILE、LOAD DATA、SLEEP、BENCHMARK
@@ -75,7 +86,10 @@ def force_limit(stmt, limit):
 
     仅对 SELECT 生效；SHOW/DESC/PRAGMA/EXPLAIN 不追加。语句本身已含 LIMIT
     （含注释内出现 limit 字样）时跳过，避免重复限制或破坏子查询语义。尾部
-    行/块注释在拼接前剥除，避免 LIMIT 被注释吞掉。"""
+    行/块注释在拼接前剥除，避免 LIMIT 被注释吞掉。
+    是否强制由用户配置：WHALETALK_DB_FORCE_LIMIT=0 → 完全不追加（返回原语句）。"""
+    if _env_int("DB_FORCE_LIMIT", 1) <= 0:
+        return str(stmt or "").strip()
     s = str(stmt or "").strip().rstrip().rstrip(";").rstrip()
     if not s.upper().startswith("SELECT"):
         return s
@@ -111,7 +125,8 @@ def table_to_md(rows, cell_max=TABLE_CELL_MAX):
     （先剔除空文本段落再转表）行为对齐，避免表格中出现空行噪声。
     """
     rows = [[str(c).strip() for c in r] for r in rows]
-    rows = [[c[:cell_max] + ("…" if len(c) > cell_max else "") for c in r] for r in rows]
+    if cell_max and cell_max > 0:  # cell_max<=0 = 不截断
+        rows = [[c[:cell_max] + ("…" if len(c) > cell_max else "") for c in r] for r in rows]
     rows = [[c.replace("|", "\\|") for c in r] for r in rows]
     if not rows:
         return "（空表格）"

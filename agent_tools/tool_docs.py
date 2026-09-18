@@ -105,7 +105,7 @@ def database_query_mysql(connection="default", sql="", max_rows=20):
             lines = [" | ".join(cols)] if cols else []
             for r in rows:
                 cells = [str(x) if x is not None else "" for x in r]
-                cells = [c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "") for c in cells]
+                cells = [c if not (_TABLE_CELL_MAX and _TABLE_CELL_MAX > 0) else (c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "")) for c in cells]
                 lines.append(" | ".join(cells))
             extra = "" if len(rows) < limit else " [已截断]"
             return "\n".join(lines) + extra if lines else "执行成功（无结果集）"
@@ -173,7 +173,7 @@ def database_query_postgres(connection="default", sql="", max_rows=20):
             lines = [" | ".join(cols)] if cols else []
             for r in rows:
                 cells = [str(x) if x is not None else "" for x in r]
-                cells = [c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "") for c in cells]
+                cells = [c if not (_TABLE_CELL_MAX and _TABLE_CELL_MAX > 0) else (c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "")) for c in cells]
                 lines.append(" | ".join(cells))
             extra = "" if len(rows) < limit else " [已截断]"
             return "\n".join(lines) + extra if lines else "执行成功（无结果集）"
@@ -1208,7 +1208,7 @@ def database_query(db_path, sql, max_rows=20):
             lines = [f"查询结果（{len(rows)} 行）:", " | ".join(str(c) for c in cols)]
             for r in rows:
                 cells = ["" if v is None else str(v) for v in r]
-                cells = [c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "") for c in cells]
+                cells = [c if not (_TABLE_CELL_MAX and _TABLE_CELL_MAX > 0) else (c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "")) for c in cells]
                 lines.append(" | ".join(cells))
             if len(rows) >= limit:
                 lines.append("⚠ 已达行数上限，如需更多请缩小范围后分页查询")
@@ -1234,7 +1234,7 @@ def database_query(db_path, sql, max_rows=20):
                     "properties": {
                         "db_type": {"type": "string", "description": "sqlite / mysql / postgres"},
                         "connection": {"type": "string", "description": "sqlite=数据库文件绝对路径；mysql/postgres=连接名（默认 default）"},
-                        "sql": {"type": "string", "description": "写操作 SQL（UPDATE/INSERT/DELETE/DDL）。UPDATE/DELETE 必须带 WHERE 条件，否则直接拒绝执行（防全表误操作）；需清空整表请分步删除并确认"},
+                        "sql": {"type": "string", "description": "写操作 SQL（UPDATE/INSERT/DELETE/DDL）。是否强制 UPDATE/DELETE 带 WHERE 由用户配置（环境变量 WHALETALK_DB_REQUIRE_WHERE，默认 0=不强制）；无 WHERE 会全表生效，需自行判断"},
                         "backup": {"type": "boolean", "description": "可选：变更前备份（默认 true）"},
                     },
                     "required": ["db_type", "sql", "connection"],
@@ -1253,9 +1253,12 @@ def database_execute(db_type="sqlite", connection="default", sql="", backup=True
         return "错误：sql 必填"
     if not stmt.lstrip().upper().startswith(("UPDATE", "INSERT", "DELETE", "CREATE", "DROP", "ALTER", "REPLACE")):
         return "错误：database_execute 仅用于写操作；只读查询请用 database_query*"
-    # L4: 无 WHERE 的 UPDATE/DELETE 直接拒绝（防全表误操作；全表清空应分批带条件）
-    if stmt.lstrip().upper().startswith(("UPDATE", "DELETE")) and not re.search(r"\bWHERE\b", stmt, re.I):
-        return "错误：UPDATE/DELETE 必须带 WHERE 条件（防止全表误操作）；如需清空整表请分步删除并确认"
+    # 无 WHERE 的 UPDATE/DELETE：是否拦由用户配置（默认不拦；WHALETALK_DB_REQUIRE_WHERE=1 才强制）
+    _req_where = str(os.environ.get("WHALETALK_DB_REQUIRE_WHERE", "0")).strip().lower()
+    if (_req_where not in ("0", "false", "no", "")
+            and stmt.lstrip().upper().startswith(("UPDATE", "DELETE"))
+            and not re.search(r"\bWHERE\b", stmt, re.I)):
+        return "错误：UPDATE/DELETE 未带 WHERE（当前配置强制 WHERE；设 WHALETALK_DB_REQUIRE_WHERE=0 可关闭）"
     dbtype = str(db_type or "sqlite").lower()
     try:
         if dbtype == "sqlite":
