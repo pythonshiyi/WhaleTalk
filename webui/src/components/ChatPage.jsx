@@ -484,6 +484,9 @@ function useBackendChat({
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
+      // 清空累积缓冲：停止/中断走 AbortError 分支直接 return 不 flushNow，
+      // 残留的 think/text 会被下一轮 scheduleBatch 累加进新回复开头（串味）——必须复位。
+      batchRef.current = { think: "", text: "", gen: "" };
       // 中止进行中的流式请求：组件卸载/切换页面时立即断开，避免后台空跑
       try {
         if (stopSignalRef.current) stopSignalRef.current.abort();

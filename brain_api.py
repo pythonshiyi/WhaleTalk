@@ -915,8 +915,10 @@ def brain_context(max_memories=4, query="", budget_chars=0):
         if active_goals:
             add("进行中目标", [f"- {g.get('title')}" + (f"（{g.get('progress') or ''}）" if g.get("progress") else "")
                               for g in active_goals[:4]], 60)
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("context.brain.goals", e,
+                        "进行中目标未注入，AI 可能忘记当前目标", critical=True)
     try:
         sm = bk.load_json(bk.BRAIN_DIR / "self_model.json", {})
         cap_rows = []
@@ -926,8 +928,10 @@ def brain_context(max_memories=4, query="", budget_chars=0):
                 cap_rows.append(f"· {label}：" + "；".join(vals))
         if cap_rows:
             add("自我认知", cap_rows, 50)
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("context.brain.self_model", e,
+                        "自我认知（知道/不确定/局限）未注入", critical=True)
     try:
         open_decs = [d for d in bk.list_decisions(limit=120) if d.get("status") == "open"]
         if open_decs:
@@ -939,15 +943,18 @@ def brain_context(max_memories=4, query="", budget_chars=0):
                 rows.append(f"- {str(d.get('decision') or '')[:48]}{due_tag}"
                             + (f"（预期：{exp[:36]}）" if exp else ""))
             add("未决决策", rows, 45)
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("context.brain.decisions", e,
+                        "未决决策未注入，AI 可能不追问结果回执", critical=True)
     # F4 间隔复习
     try:
         review = _spaced_review_due(now_epoch, limit=2)
         if review:
             add("复习提醒", [f"- {str(e.get('text') or '')[:60]}" for e in review], 40)
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("context.brain.review", e, "间隔复习提醒未注入", critical=True)
     # 相关/近期记忆
     try:
         recent = []
@@ -966,8 +973,10 @@ def brain_context(max_memories=4, query="", budget_chars=0):
                 hits = int(e.get("hit_count") or 0)
                 rows.append(f"- [{t}·{imp}" + (f"·命中{hits}" if hits else "") + f"] {str(e.get('text') or '')[:70]}")
             add("近期记忆", rows, 35)
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("context.brain.memories", e,
+                        "近期记忆未注入，AI 可能答不出相关背景", critical=True)
     # L1 预算仲裁：按权重从低到高截断，直到总长不超 budget_chars
     segs.sort(key=lambda s: -s[2])
     total = 0

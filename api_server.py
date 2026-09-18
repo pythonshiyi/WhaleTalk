@@ -2786,8 +2786,9 @@ def _audit(action, target, detail=""):
         line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {action} {target} {str(detail)[:200]}"
         with open(os.path.join(log_dir, "actions.log"), "a", encoding="utf-8") as f:
             f.write(line + "\n")
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("api.audit", e, "审计日志未落盘（合规留痕缺失）", critical=False)
 
 
 def _record_tasklog(title, chain):
@@ -5183,8 +5184,9 @@ def _tool_bookkeeping(name, args, result):
     except Exception:
         pass
     rs = str(result or "")
-    fail_prefixes = ("错误", "权限拒绝", "超时", "（用户停止", "工具执行失败", "工具参数错误")
-    failed = rs.startswith(fail_prefixes)
+    # 统一走 shared 的失败前缀（含工具异常包装「工具执行失败」/「工具参数」），勿再本地维护
+    import shared as _shared
+    failed = rs.startswith(_shared.TOOL_RESULT_FAIL_PREFIXES)
     if failed:
         _record_failure(name, rs)
     else:
@@ -5625,8 +5627,10 @@ def _load_session_index():
                 for sid, v in entries.items()
                 if isinstance(v, list) and len(v) == 3 and isinstance(v[2], dict)
             }
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("api.session_index.load", e,
+                        "会话索引损坏/不可读，列表将惰性重建（可能变慢）", critical=True)
     return {}
 
 
@@ -5641,8 +5645,10 @@ def _save_session_index():
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"entries": snapshot}, f, ensure_ascii=False, separators=(",", ":"))
         os.replace(tmp, SESSION_INDEX_PATH)
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("api.session_index.save", e,
+                        "会话索引未落盘，重启后需全量重建", critical=False)
 
 
 def _index_session_file(fn, meta_override=None):
@@ -5820,8 +5826,10 @@ def _chat_harvest(reply: str, user_text: str, cfg: dict, messages=None):
                     # 否则标 origin="agent"（〔推断〕）——注入时模型不得把它当作用户明说的前提。
                     dc.write_memory(s, tags="自动", type="对话",
                                     origin=origin, confidence=confidence)
-        except Exception:
-            pass
+        except Exception as e:
+            import degrade
+            degrade.degrade("memory.harvest", e,
+                            "本轮对话未提炼记忆（长期记忆可能漏记）", critical=True)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -8705,18 +8713,42 @@ def stop_server():
     _INBOUND_SERVER = None
     _INBOUND_THREAD = None
     if _SERVER is not None:
+        # 1) 停掉在跑的后台生成作业：给短暂宽限让工具收尾 / 会话兜底落盘，
+        #    避免进程退出时生成线程被硬杀留下半截会话（此前从不收敛作业）。
         try:
-            # 终止全部后台子进程（AI 起的服务/浏览器等），防孤儿进程残留
-            try:
-                import deepseek_client as dc
-                dc.cleanup_all_processes()
-            except Exception:
-                logger.debug("服务停止时进程清理失败", exc_info=True)
+            with _CHAT_JOBS_LOCK:
+                _jobs = list(_CHAT_JOBS.values())
+            for _j in _jobs:
+                try:
+                    _j.stop_event.set()
+                except Exception:
+                    pass
+            import time as _time
+            _deadline = _time.time() + 4.0
+            for _j in _jobs:
+                _th = getattr(_j, "thread", None)
+                if _th is not None and _th.is_alive():
+                    _th.join(max(0.0, _deadline - _time.time()))
         except Exception:
-            pass
+            logger.debug("停止后台作业失败", exc_info=True)
+        # 2) 先停止接收新请求，再清常驻资源——避免清理期间又有新工具/进程被拉起
         try:
             _SERVER.shutdown()
             _SERVER.server_close()
+        except Exception:
+            pass
+        try:
+            import deepseek_client as dc
+            # 共享浏览器（Playwright/Chromium）此前无任何调用点 → 服务停止后成孤儿进程
+            try:
+                dc.close_browser()
+            except Exception:
+                logger.debug("关闭共享浏览器失败", exc_info=True)
+            # 终止全部后台子进程（AI 起的服务/浏览器等），防孤儿进程残留
+            try:
+                dc.cleanup_all_processes()
+            except Exception:
+                logger.debug("服务停止时进程清理失败", exc_info=True)
         except Exception:
             pass
         _SERVER = None

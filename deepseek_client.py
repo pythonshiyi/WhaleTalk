@@ -1193,8 +1193,10 @@ def _brain_sync_memory(text, key, type, entities, relations):
             relations=[r for r in (relations or []) if isinstance(r, dict)],
             source="对话",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("brain.sync.memory", e,
+                        "记忆未同步进鲸语大脑，跨会话可能检索不到", critical=True)
 
 
 def _find_brain_entry(bk, keyword):
@@ -1224,8 +1226,10 @@ def _brain_sync_delete(keyword):
         for e in bk.load_memories():
             if kw in str(e.get("text") or "").lower():
                 bk.delete_memory(e["id"])
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("brain.sync.delete", e,
+                        "大脑记忆未随删除同步，可能残留旧条目", critical=True)
 
 
 def _brain_sync_update(old, new):
@@ -1238,8 +1242,10 @@ def _brain_sync_update(old, new):
         e, _how = _find_brain_entry(bk, old)
         if e is not None:
             bk.update_memory(e["id"], text=new)
-    except Exception:
-        pass
+    except Exception as e:
+        import degrade
+        degrade.degrade("brain.sync.update", e,
+                        "大脑记忆未随修改同步，跨会话可能读到旧内容", critical=True)
 
 
 def _load_self_profile():
