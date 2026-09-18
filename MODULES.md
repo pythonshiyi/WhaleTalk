@@ -68,6 +68,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 162 工具 + smart_tools）
 | `memory_facade.py`（443 行） | 记忆门面（P1-B）：`memory.json` 唯一写入门面，为长期记忆补 **origin（血缘）+ confidence + status + supersede 双向链接**。① 血缘：非 user 来源注入时加 `〔推断〕`/`〔来自外部内容〕`标注；② 作废：同 `key` 取代旧条目——**只认显式 key，绝不按相似度**；相似度仅用于冲突提示。旧数据读时补默认值、不改写文件 |
 | `insight.py`（356 行） | 自我洞察（纯函数 · 仅标准库）：`build_heatmap`（能力热力图：工具使用频率/任务链长度/失败率/技能结晶/预激活命中）· `build_self_report`（自我述职）· `render_report`（Markdown）。不依赖运行时，便于单测 |
 | `memory_store.py`（250 行） | 统一记忆读取层（memory.json / knowledge_index / 大脑目录），供工具与 API 复用 |
+| `mv_engine.py` | 自建 MV 引擎（不依赖任何外部程序）：`analyze`（BPM/节拍/能量）、`align_lyrics`（faster-whisper 词级 + 顺序短语映射的声学对轴）、`build_shots`（卡点分镜网格）、`render_frames`（确定性 PIL 帧）、`build_srt`、`verify_shots`；被 `agent_tools/tool_mv.py` 的 `mv_produce` 消费 |
 | `genesis.py`（144 行） | 创世化初始：让 AI 完全自主设定自己的「前半生」，产出多版候选供选 |
 | `app_utils.py` | 布尔转换、空壳目录判断、清理、干净退出标记、隐私日志 |
 | `proc_utils.py` | 进程树终止（Windows taskkill /T，防孙进程残留） |

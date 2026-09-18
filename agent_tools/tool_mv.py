@@ -457,6 +457,118 @@ def _mv_report(kind, ev, checks, extra=None):
     return "\n".join(lines)
 
 
+def _mv_lyrics_text(lyrics):
+    """取歌词**原文**（路径→读取；否则视为文本）——原生引擎需要文本而非路径。"""
+    text = str(lyrics or "").strip()
+    if not text:
+        return ""
+    p = permissions.resolve(text)
+    if p and os.path.isfile(p) and p.lower().endswith((".txt", ".lrc", ".json")):
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except Exception:  # noqa: BLE001
+            return ""
+    return text
+
+
+def _mv_palette(style):
+    s = str(style or "").lower()
+    if "qing" in s or "hua" in s:
+        return "qinghua"
+    if "night" in s or "citypop" in s:
+        return "citypop_night_v1"
+    return "qinghua"
+
+
+def _mv_native_available():
+    try:
+        import mv_engine  # noqa: F401
+        import librosa  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
+                offline, resolution, fps, timeout, engine_model):
+    """原生引擎路径（不依赖外部 MV 程序）。返回报告文本；不可用返回 None。
+
+    action: plan / storyboard / render。分析 + 声学歌词对轴 + 卡点分镜全部本地完成。
+    """
+    try:
+        import mv_engine as me
+    except Exception:  # noqa: BLE001
+        return None
+    text = _mv_lyrics_text(lyrics)
+    analysis = me.analyze(audio_abs)
+    dur = float(analysis.get("duration") or 0.0)
+    lines = me.align_lyrics(audio_abs, text, model=engine_model) if text else []
+    shots = me.build_shots(dur, analysis.get("beats") or [], lines)
+    if not shots:
+        return "错误：原生分镜为空（音频时长异常？）"
+
+    if action == "plan":
+        hit = sum(1 for ln in lines if ln.get("start") is not None)
+        checks = me.verify_shots(shots, dur, lines)
+        ev = {"引擎": "native（自建）", "BPM": analysis.get("bpm"), "时长": f"{dur:.2f}s",
+              "节拍": len(analysis.get("beats") or []), "分镜": len(shots),
+              "歌词句": f"{hit}/{len(lines)}", "whisper": engine_model}
+        show = lines[:6]
+        extra = ["· 前几句歌词轴："] + [f"  {ln.get('start')}-{ln.get('end')}  {ln.get('text')}"
+                                        for ln in show]
+        return _mv_report("plan", ev, checks, extra=extra)
+
+    if action == "storyboard":
+        sb = [{"prompt": f"歌曲意境镜头 {s['index'] + 1}，青花/中国风", "subtitle": s.get("lyric_ref") or "",
+               "duration": s["duration"], "effect": "kenburns"} for s in shots]
+        cover = sum(s["duration"] for s in shots)
+        checks = [("分镜非空", bool(sb), f"{len(sb)} 镜"),
+                  ("时长合计≈全曲", abs(cover - dur) <= 2.0, f"合 {cover:.2f}s / 总 {dur:.2f}s")]
+        ev = {"引擎": "native（自建）", "分镜": len(sb), "总时长": f"{dur:.2f}s",
+              "分辨率": f"{resolution}@{fps}fps", "BPM": analysis.get("bpm")}
+        return _mv_report("storyboard", ev, checks,
+                          extra=["下一步：把该 storyboard 传给 mv_compose 出图合成。"])
+
+    # render：PIL 确定性帧 + 原生歌词 SRT + ffmpeg 合成
+    frames_dir = os.path.join(permissions.WORKSPACE_DIR or os.path.dirname(audio_abs),
+                              "video", f"mvnative_{datetime.now():%Y%m%d_%H%M%S}")
+    frames = me.render_frames(shots, frames_dir, palette=_mv_palette(style),
+                              w=int(resolution.split("x")[0]) if "x" in str(resolution) else 1080,
+                              h=int(resolution.split("x")[1]) if "x" in str(resolution) else 1920)
+    if not frames:
+        return "错误：原生帧渲染失败（PIL 缺失？）"
+    srt_path = os.path.join(frames_dir, "lyrics.srt")
+    if lines:
+        me.build_srt(lines, srt_path)
+    out_mp4 = str(output or "").strip()
+    if not out_mp4:
+        out_mp4 = os.path.join(os.path.dirname(frames_dir), f"mv_{datetime.now():%Y%m%d_%H%M%S}.mp4")
+    mates = [f["path"] for f in frames]
+    durs = [s["duration"] for s in shots]
+    # transition=0（硬切）：交叉转场会按重叠时长缩短总长，破坏「成片时长=歌曲时长」
+    res, note, err = _mv_compose(mates, out_mp4, durations=durs, resolution=str(resolution),
+                                 fps=int(fps), effect="kenburns", transition=0.0,
+                                 audio=audio_abs, subtitle=(srt_path if lines else ""),
+                                 workdir=frames_dir)
+    if err:
+        return f"错误：原生合成失败：{err}"
+    final = out_mp4 if str(out_mp4).lower().endswith(".mp4") else out_mp4 + ".mp4"
+    produced = os.path.isfile(final) and os.path.getsize(final) > 0
+    if not produced:
+        return f"错误：原生合成未产出成片（{final}）"
+    checks = [("终片存在且非空", produced, f"{os.path.getsize(final) / 1048576:.2f} MB"),
+              ("镜头数=分镜数", len(frames) == len(shots), f"{len(frames)} 帧")]
+    checks += me.verify_shots(shots, dur, lines)
+    vd = _ff_media_duration(final)
+    if vd and dur:
+        checks.append(("成片时长≈音频", abs(vd - dur) <= 1.0, f"{vd:.2f}s / {dur:.2f}s"))
+    ev = {"引擎": "native（自建）", "成片": final, "BPM": analysis.get("bpm"),
+          "时长": f"{dur:.2f}s", "分镜": len(shots),
+          "歌词句": sum(1 for ln in lines if ln.get("start") is not None), "调色": _mv_palette(style)}
+    return _mv_report("render", ev, checks)
+
+
 def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, timeout, style):
     """上游 render：出片 + manifest，跑自检门禁，返回报告文本。"""
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -494,7 +606,9 @@ def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, time
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["plan", "storyboard", "compose", "render", "styles"], "description": "plan=分镜计划(快) / storyboard=出 mv_compose 分镜包 / compose=分镜→mv_compose 出图合成 / render=上游直接出片 / styles=列风格包"},
+                        "action": {"type": "string", "enum": ["plan", "storyboard", "compose", "render", "styles"], "description": "plan=分镜计划(快) / storyboard=出 mv_compose 分镜包 / compose=分镜→mv_compose 出图合成 / render=直接出片 / styles=列风格包"},
+                        "engine": {"type": "string", "enum": ["native", "external"], "description": "native=鲸语自建引擎（默认，本地音频分析+声学歌词对轴+卡点分镜+确定性帧，不依赖外部程序）；external=调用可选的外部 AI MV 程序"},
+                        "whisper_model": {"type": "string", "description": "可选：声学歌词对轴用的 whisper 模型 tiny/base/small/medium（默认 small，越大越准越慢）"},
                         "audio": {"type": "string", "description": "歌曲音频路径（wav/mp3，ffmpeg 可解码）"},
                         "lyrics": {"type": "string", "description": "可选：歌词（.lrc/.txt 绝对路径，或直接贴歌词文本；有逐句时间戳的 lrc 对齐最准）"},
                         "style": {"type": "string", "description": "可选：风格包 id（默认 citypop_night_v1；用 action=styles 查看）"},
@@ -519,10 +633,27 @@ def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, time
 )
 def mv_produce(action="plan", audio="", lyrics="", style="citypop_night_v1", out="",
                output="", images_dir="", offline=True, generate_images=False,
-               resolution="1080x1920", fps=30, timeout=1800, mv_home=""):
-    """音频+歌词 → 卡点对词分镜/成片（调同机 AI MV 引擎；不 import 其重依赖）。"""
+               resolution="1080x1920", fps=30, timeout=1800, mv_home="",
+               engine="native", whisper_model="small"):
+    """音频+歌词 → 卡点对词分镜/成片。
+
+    默认走**鲸语自建原生引擎**（mv_engine：本地音频分析 + 声学歌词对轴 + 卡点分镜 +
+    确定性帧 + ffmpeg 合成），不依赖任何外部 MV 程序；engine=external 时才调用可选外部程序。
+    """
     act = str(action or "plan").strip().lower()
     timeout = clamp_int(timeout, 1800, lo=60, hi=36000)
+
+    # ── 原生引擎优先（自建、不依赖外部）──────────────────────────────
+    native_eng = str(engine or "native").lower() != "external"
+    if native_eng and act in ("plan", "storyboard", "render") and _mv_native_available():
+        audio_abs = _mv_resolve_audio(audio)
+        if not audio_abs:
+            return f"错误：音频文件不存在或未提供：{audio}"
+        native = _mv_native(act, audio_abs, lyrics, style, out, output, images_dir,
+                            offline, resolution, fps, timeout, str(whisper_model or "small"))
+        if native is not None:
+            return native
+
     root = _mv_find_root(mv_home)
     if not root:
         return ("错误：未找到 AI MV 程序（需含 mv_api.py 与 app/cli.py）。"

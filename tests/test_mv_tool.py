@@ -77,14 +77,14 @@ def test_report_pass_and_fail():
 # ── 错误路径（不触网/不跑 MV） ────────────────────────────────────────────
 def test_tool_root_not_found(monkeypatch):
     monkeypatch.setattr(_tm(), "_mv_find_root", lambda explicit="": "")
-    assert "未找到 AI MV 程序" in _tm().mv_produce(action="plan", audio="x.wav")
+    assert "未找到 AI MV 程序" in _tm().mv_produce(action="plan", audio="x.wav", engine="external")
 
 
 def test_tool_deps_missing(monkeypatch):
     tm = _tm()
     monkeypatch.setattr(tm, "_mv_find_root", lambda explicit="": r"D:\fake\MV")
     monkeypatch.setattr(tm, "_mv_python", lambda root: "")
-    out = tm.mv_produce(action="plan", audio="x.wav")
+    out = tm.mv_produce(action="plan", audio="x.wav", engine="external")
     assert "找不到能运行 AI MV 的 Python 环境" in out
 
 
