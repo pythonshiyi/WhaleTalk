@@ -8,10 +8,14 @@ _mv_compose（ffmpeg）与 shared 的钳制工具。
 故可安全 `from agent_tools.tool_desktop import ...`。
 """
 
+import contextlib
 import json
 import os
 import re
 import shutil
+import subprocess
+import sys
+import tempfile
 from datetime import datetime
 
 import permissions
@@ -252,4 +256,417 @@ def mv_compose(storyboard, output="", resolution="1920x1080", fps=30, duration=3
     )
 
 
-__all__ = ['mv_compose']
+# ═══════════════════════════════════════════════════════════════════════════
+# AI MV 上游引擎接入（薄封装，方案 ②）
+#
+# 「听觉解析 + 卡点 + 对词」交给同机的 AI MV 生产线上游程序（含 librosa 等重依赖），
+# 本工具**只通过 subprocess 调它的 mv_api/CLI**，绝不 import 其重依赖、不改动它。
+# 定位：mv_produce 负责「听 + 卡点分镜 + 可选成片」，mv_compose 负责「合成」。
+#
+# 关键修复（治「错且自认对」）：所有动作返回**对齐证据 + 自检门禁**，未过门禁不得
+# 宣称完成；时间轴一律来自上游引擎，禁止手写 SVG/ffmpeg 估算歌词与镜头位置。
+# ═══════════════════════════════════════════════════════════════════════════
+_MV_ENV_HOME = "AI_MV_HOME"
+_MV_ENV_PY = "AI_MV_PYTHON"
+_MV_PY_CACHE = {}  # python 路径 -> 是否可 import librosa/soundfile/scipy
+
+
+def _mv_find_root(explicit=""):
+    """定位 AI MV 项目根（含 mv_api.py + app/cli.py）；找不到返回 ""。"""
+    cands = []
+    for x in (explicit, os.environ.get(_MV_ENV_HOME)):
+        if x:
+            cands.append(x)
+    try:
+        import config_utils
+        cfg_home = str(config_utils.load_config().get("mv_home") or "").strip()
+        if cfg_home:
+            cands.append(cfg_home)
+    except Exception:  # noqa: BLE001
+        pass
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根
+    cands += [
+        os.path.join(os.path.dirname(base), "MV"),
+        os.path.join(base, "MV"),
+        r"D:\jingyu\MV",
+    ]
+    for c in cands:
+        try:
+            c = os.path.abspath(os.path.expanduser(str(c)))
+            if os.path.isfile(os.path.join(c, "mv_api.py")) and \
+                    os.path.isfile(os.path.join(c, "app", "cli.py")):
+                return c
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
+def _mv_can_import(py):
+    """该解释器能否 import MV 依赖（结果缓存；失败不抛）。"""
+    if not py or not os.path.isfile(py):
+        return False
+    if py in _MV_PY_CACHE:
+        return _MV_PY_CACHE[py]
+    ok = False
+    try:
+        r = subprocess.run([py, "-c", "import librosa,soundfile,scipy"],
+                           capture_output=True, timeout=90,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        ok = r.returncode == 0
+    except Exception:  # noqa: BLE001
+        ok = False
+    _MV_PY_CACHE[py] = ok
+    return ok
+
+
+def _mv_python(root):
+    """挑一个能跑 MV 的解释器：项目 venv > AI_MV_PYTHON > 当前解释器；都不行返回 ""。"""
+    cands = []
+    venv = (os.path.join(root, ".venv", "Scripts", "python.exe") if os.name == "nt"
+            else os.path.join(root, ".venv", "bin", "python"))
+    if os.path.isfile(venv):
+        cands.append(venv)
+    if os.environ.get(_MV_ENV_PY):
+        cands.append(os.environ[_MV_ENV_PY])
+    cands.append(sys.executable)
+    for p in cands:
+        if _mv_can_import(p):
+            return p
+    return ""
+
+
+def _mv_run(root, py, subcmd, timeout, offline):
+    """执行 `python -m app.cli <subcmd>`，返回 (stdout, err)。"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = root + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    # offline=False 时 MV 导演层需要 DeepSeek Key：复用鲸语已配的 key
+    if not offline and not env.get("DEEPSEEK_API_KEY"):
+        try:
+            import config_utils
+            key = str(config_utils.load_config().get("api_key") or "").strip()
+            if key:
+                env["DEEPSEEK_API_KEY"] = key
+        except Exception:  # noqa: BLE001
+            pass
+    argv = [py, "-m", "app.cli"] + list(subcmd)
+    try:
+        p = subprocess.run(argv, cwd=root, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env, timeout=timeout,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired:
+        return None, f"超时（>{timeout}s）；大工程可调大 timeout 参数或改用后台 start_process"
+    except Exception as e:  # noqa: BLE001
+        return None, str(e)
+    if p.returncode != 0:
+        return None, (p.stderr or p.stdout or "")[-1500:]
+    return p.stdout or "", ""
+
+
+def _mv_resolve_audio(audio):
+    a = str(audio or "").strip()
+    if not a:
+        return ""
+    p = permissions.resolve(a)
+    if p and os.path.isfile(p):
+        return p
+    return os.path.abspath(a) if os.path.isfile(a) else ""
+
+
+def _mv_lyrics_arg(lyrics):
+    """lyrics 可为 .lrc/.txt 路径，或原始歌词文本。返回 (参数列表, 需清理的临时文件)。"""
+    text = str(lyrics or "").strip()
+    if not text:
+        return [], ""
+    p = permissions.resolve(text)
+    if p and os.path.isfile(p) and p.lower().endswith((".lrc", ".txt", ".json")):
+        return ["--lyrics", p], ""
+    fd, tmp = tempfile.mkstemp(prefix="wt_mvlyrics_", suffix=".txt")
+    os.close(fd)
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    return ["--lyrics", tmp], tmp
+
+
+def _mv_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _mv_verify_grid(shots, duration):
+    """镜头时间网格自检：覆盖全曲 [0,duration]、单调、无空隙。返回 [(label, ok, detail)]。"""
+    checks = []
+    if not shots:
+        return [("分镜非空", False, "shots 为空")]
+    try:
+        starts = [float(s.get("t_start", 0.0)) for s in shots]
+        ends = [float(s.get("t_end", 0.0)) for s in shots]
+    except Exception:  # noqa: BLE001
+        return [("分镜字段可解析", False, "t_start/t_end 非法")]
+    # 卡点分镜常从第一个拍点起（留极短引子），故允许 ≤2s；重点是后续无空隙、覆盖到片尾
+    checks.append(("首镜起点接近开头", starts[0] <= 2.0, f"t_start={starts[0]:.3f}s"))
+    if duration:
+        checks.append(("末镜覆盖到片尾", ends[-1] >= float(duration) - 0.5,
+                       f"t_end={ends[-1]:.3f} / 时长={float(duration):.3f}"))
+    monotonic = all(ends[i] <= starts[i + 1] + 1e-6 for i in range(len(shots) - 1))
+    checks.append(("镜头时间单调递增", monotonic, ""))
+    gaps = [starts[i + 1] - ends[i] for i in range(len(shots) - 1)]
+    max_gap = max(gaps) if gaps else 0.0
+    checks.append(("镜头间无空隙", max_gap <= 0.05, f"最大间隙 {max_gap:.3f}s"))
+    return checks
+
+
+def _mv_verify_render(final, manifest):
+    """成片自检：文件存在 + 时长与音频一致 + 网格覆盖 + 字幕在片内。返回 (checks)。"""
+    checks = []
+    exists = bool(final) and os.path.isfile(final) and os.path.getsize(final) > 0
+    size_mb = round(os.path.getsize(final) / 1048576, 2) if exists else 0.0
+    checks.append(("终片存在且非空", exists, f"{size_mb} MB" if exists else final or "缺失"))
+    dur = float(manifest.get("duration") or 0.0)
+    vdur = _ff_media_duration(final) if exists else 0.0
+    if vdur and dur:
+        checks.append(("视频时长与音频一致", abs(vdur - dur) <= 1.0,
+                       f"视频 {vdur:.2f}s / 音频 {dur:.2f}s"))
+    checks.extend(_mv_verify_grid(manifest.get("shots") or [], dur))
+    caps = manifest.get("captions") or []
+    if caps:
+        in_range = all(float(c.get("start", 0)) >= -0.5 and float(c.get("end", 0)) <= dur + 0.5
+                       for c in caps)
+        checks.append(("字幕全部落在片内", in_range, f"{len(caps)} 句 · 0–{dur:.1f}s"))
+    return checks
+
+
+def _mv_report(kind, ev, checks, extra=None):
+    """统一输出：证据 + 自检门禁 + 判定。"""
+    lines = [f"[AI MV · {kind}]"]
+    lines += [f"· {k}：{v}" for k, v in ev.items()]
+    lines.append("· 自检门禁：")
+    allok = True
+    for label, ok, detail in checks:
+        lines.append(f"  {'✅' if ok else '❌'} {label}" + (f"（{detail}）" if detail else ""))
+        allok = allok and bool(ok)
+    lines.append("判定：" + ("PASS —— 可交付。" if allok else
+                             "FAIL —— 不得宣称完成；请修复后重跑，勿以容器规格冒充内容正确。"))
+    if extra:
+        lines += extra
+    lines.append("（完成门禁：时间轴一律来自 AI MV 引擎；禁止手写 SVG/ffmpeg 估算歌词与镜头位置。）")
+    return "\n".join(lines)
+
+
+def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, timeout, style):
+    """上游 render：出片 + manifest，跑自检门禁，返回报告文本。"""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    jid = f"mv_{stamp}"
+    out_root = (os.path.abspath(out) if str(out or "").strip()
+                else os.path.join(permissions.WORKSPACE_DIR or root, "video"))
+    cmd = ["run", "--audio", audio_abs, "--style", str(style), "--out", out_root,
+           "--job-id", jid, *ly_args, *offline_flag]
+    _stdout, err = _mv_run(root, py, cmd, timeout, offline)
+    if err:
+        return f"错误：render 失败：{err}"
+    job_dir = os.path.join(out_root, jid)
+    res = _mv_json(os.path.join(job_dir, "job_result.json"))
+    arts = res.get("artifacts") or {}
+    final = arts.get("final") or ""
+    manifest = _mv_json(arts.get("manifest") or "")
+    if not final or not os.path.isfile(final):
+        return f"错误：render 未产出终片（{final or job_dir}）"
+    checks = _mv_verify_render(final, manifest)
+    ev = {"终片": final, "封面": arts.get("cover"), "manifest": arts.get("manifest"),
+          "BPM": manifest.get("_bpm") or res.get("bpm"),
+          "时长": f"{float(manifest.get('duration') or 0):.2f}s",
+          "分镜": len(manifest.get("shots") or []), "字幕句": len(manifest.get("captions") or []),
+          "风格": manifest.get("style_id"), "离线": offline}
+    return _mv_report("render", ev, checks,
+                      extra=["（下游合成工具 mv_compose 只负责把分镜合成为 mp4；听觉/卡点/对词由本引擎完成。）"])
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "mv_produce",
+                "description": "专业音乐 MV 制作（唯一正确入口）：把一首歌（音频）+ 歌词交给同机的 AI MV 上游引擎，自动做 BPM/节拍/段落分析 + 歌词逐句对轴 + 卡点镜头规划。action=plan 出分镜计划（含对齐证据）、storyboard 出可直接喂 mv_compose 的分镜包、compose=分镜→mv_compose 出图合成（高画质；出图不可用时自动回退上游占位画面）、render 上游直接出片（卡点+对词，含封面/文案/manifest）、styles 列风格包。**做 MV 就用它**，绝不要手写 SVG/ffmpeg 去估算歌词与镜头时间轴（那必然对不上）。返回含自检门禁，未 PASS 不得宣称完成。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["plan", "storyboard", "compose", "render", "styles"], "description": "plan=分镜计划(快) / storyboard=出 mv_compose 分镜包 / compose=分镜→mv_compose 出图合成 / render=上游直接出片 / styles=列风格包"},
+                        "audio": {"type": "string", "description": "歌曲音频路径（wav/mp3，ffmpeg 可解码）"},
+                        "lyrics": {"type": "string", "description": "可选：歌词（.lrc/.txt 绝对路径，或直接贴歌词文本；有逐句时间戳的 lrc 对齐最准）"},
+                        "style": {"type": "string", "description": "可选：风格包 id（默认 citypop_night_v1；用 action=styles 查看）"},
+                        "out": {"type": "string", "description": "可选：成片输出根目录（render 用；默认工作区 video）"},
+                        "output": {"type": "string", "description": "可选：compose 成片 mp4 绝对路径（默认工作区 video/mv_时间戳.mp4）"},
+                        "images_dir": {"type": "string", "description": "可选：compose 用外部图片目录（按镜头顺序配图，跳过自动出图；图数=镜头数）"},
+                        "offline": {"type": "boolean", "description": "可选：true=纯本地确定性（不调 DeepSeek，默认）；false=调 DeepSeek 生成分镜文案（复用鲸语已配 Key）"},
+                        "generate_images": {"type": "boolean", "description": "可选：storyboard 模式是否让调用方（mv_compose）自行出图，默认 false"},
+                        "resolution": {"type": "string", "description": "可选：分辨率「宽x高」，默认 1080x1920（竖屏抖音）"},
+                        "fps": {"type": "integer", "description": "可选：帧率，默认 30"},
+                        "timeout": {"type": "integer", "description": "可选：超时秒数，默认 1800（render 出片较慢）"},
+                        "mv_home": {"type": "string", "description": "可选：AI MV 程序目录（默认自动探测 / 环境变量 AI_MV_HOME）"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    groups=['🎨 媒体与图像'],
+    phrases='做音乐MV（音频+歌词→卡点对词分镜/成片）',
+    preactivate=(('微电影', 'mv', '一键成片', '分镜', '故事板', '短片', '配音成片'),
+                 ('歌词', '卡点', '对词', '对轴', '歌曲', '音乐视频', '抖音mv')),
+)
+def mv_produce(action="plan", audio="", lyrics="", style="citypop_night_v1", out="",
+               output="", images_dir="", offline=True, generate_images=False,
+               resolution="1080x1920", fps=30, timeout=1800, mv_home=""):
+    """音频+歌词 → 卡点对词分镜/成片（调同机 AI MV 引擎；不 import 其重依赖）。"""
+    act = str(action or "plan").strip().lower()
+    timeout = clamp_int(timeout, 1800, lo=60, hi=36000)
+    root = _mv_find_root(mv_home)
+    if not root:
+        return ("错误：未找到 AI MV 程序（需含 mv_api.py 与 app/cli.py）。"
+                "请将其放到「鲸语同级目录/MV」，或设置环境变量 AI_MV_HOME 指向项目根。")
+    py = _mv_python(root)
+    if not py:
+        return ("错误：找不到能运行 AI MV 的 Python 环境（缺 librosa/soundfile/scipy）。\n"
+                f"对某个解释器执行：pip install -r {os.path.join(root, 'requirements.txt')}\n"
+                f"或设置环境变量 AI_MV_PYTHON 指向已装依赖的解释器。（当前解释器：{sys.executable}）")
+
+    if act == "styles":
+        out_s, err = _mv_run(root, py, ["styles"], 120, True)
+        if err:
+            return f"错误：风格包列举失败：{err}"
+        return f"[AI MV · styles] 可用风格包：\n{(out_s or '').strip()}\n（项目：{root}）"
+
+    if act not in ("plan", "storyboard", "compose", "render"):
+        return "错误：action 需为 plan / storyboard / compose / render / styles"
+
+    audio_abs = _mv_resolve_audio(audio)
+    if not audio_abs:
+        return f"错误：音频文件不存在或未提供：{audio}"
+    ly_args, tmp_ly = _mv_lyrics_arg(lyrics)
+    offline_flag = ["--offline"] if offline else []
+    try:
+        if act in ("plan", "storyboard"):
+            tmp_dir = tempfile.mkdtemp(prefix="wt_mv_")
+            if act == "plan":
+                jf = os.path.join(tmp_dir, "plan.json")
+                cmd = ["plan", "--audio", audio_abs, "--style", str(style),
+                       "--json", jf, *ly_args, *offline_flag]
+            else:
+                jf = os.path.join(tmp_dir, "storyboard.json")
+                cmd = ["storyboard", "--audio", audio_abs, "--style", str(style),
+                       "--json", jf, "--resolution", str(resolution), "--fps", str(int(fps)),
+                       *ly_args, *offline_flag]
+                if generate_images:
+                    cmd.append("--generate-images")
+            _stdout, err = _mv_run(root, py, cmd, timeout, offline)
+            if err:
+                return f"错误：{act} 失败：{err}"
+            data = _mv_json(jf)
+            if not data:
+                return f"错误：{act} 未产出结果文件（{jf}）"
+            if act == "plan":
+                shots = data.get("shots") or []
+                dur = float(data.get("duration") or 0.0)
+                checks = _mv_verify_grid(shots, dur)
+                caps = len(data.get("captions") or [])
+                ev = {"项目": root, "BPM": data.get("bpm"), "时长": f"{dur:.2f}s",
+                      "分镜": len(shots), "节拍": data.get("beats"),
+                      "段落": " / ".join(data.get("sections") or []),
+                      "歌词句": caps, "卡点对齐": data.get("beat_aligned"),
+                      "分镜文件": jf}
+                return _mv_report("plan", ev, checks)
+            # storyboard
+            sb = data.get("storyboard") or []
+            meta = data.get("meta") or {}
+            cover = sum(float(s.get("duration") or 0) for s in sb)
+            checks = [("分镜非空", bool(sb), f"{len(sb)} 镜"),
+                      ("时长合计≈全曲", abs(cover - float(meta.get("duration") or cover)) <= 2.0,
+                       f"合 {cover:.2f}s / 总 {float(meta.get('duration') or 0):.2f}s")]
+            checks.extend(_mv_verify_grid(
+                [{"t_start": 0.0, "t_end": 0.0}], 0)[:0])  # 占位（storyboard 无绝对时间轴）
+            ev = {"项目": root, "分镜": len(sb), "风格": meta.get("style_id"),
+                  "总时长": f"{float(meta.get('duration') or 0):.2f}s",
+                  "分辨率": f"{data.get('resolution')}@{data.get('fps')}fps",
+                  "音频": data.get("audio"), "分镜包文件": jf}
+            return _mv_report("storyboard", ev, checks,
+                              extra=["下一步：把该 storyboard 连同 resolution/fps/audio 传给 mv_compose 合成。"])
+        if act == "render":
+            return _mv_do_render(root, py, audio_abs, ly_args, offline_flag,
+                                 offline, out, timeout, style)
+
+        # compose：上游分镜 → 鲸语 mv_compose 出图合成（高画质；出图不可用则回退 render）
+        tmp_dir = tempfile.mkdtemp(prefix="wt_mvc_")
+        jf = os.path.join(tmp_dir, "storyboard.json")
+        cmd = ["storyboard", "--audio", audio_abs, "--style", str(style),
+               "--json", jf, "--resolution", str(resolution), "--fps", str(int(fps)),
+               *ly_args, *offline_flag]
+        _stdout, err = _mv_run(root, py, cmd, timeout, offline)
+        if err:
+            return f"错误：取分镜失败：{err}"
+        bundle = _mv_json(jf)
+        sb = bundle.get("storyboard") or []
+        meta = bundle.get("meta") or {}
+        if not sb:
+            return "错误：storyboard 为空（无法合成）"
+        total = float(meta.get("duration") or 0.0)
+        gen_images = bool(generate_images)
+        if str(images_dir or "").strip():
+            d = permissions.resolve(images_dir) or os.path.abspath(images_dir)
+            imgs = []
+            if os.path.isdir(d):
+                imgs = [os.path.join(d, fn) for fn in sorted(os.listdir(d))
+                        if fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))]
+            if imgs:
+                for i, it in enumerate(sb):
+                    if i < len(imgs):
+                        it["image"] = imgs[i]
+                gen_images = False
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_mp4 = str(output or "").strip()
+        if not out_mp4:
+            base_dir = (os.path.abspath(out) if str(out or "").strip()
+                        else os.path.join(permissions.WORKSPACE_DIR or root, "video"))
+            out_mp4 = os.path.join(base_dir, f"mv_{ts}.mp4")
+        res = mv_compose(
+            storyboard=sb, output=out_mp4,
+            resolution=str(bundle.get("resolution") or resolution),
+            fps=int(bundle.get("fps") or fps),
+            duration=float(bundle.get("duration") or 3),
+            effect=str(bundle.get("effect") or "kenburns"),
+            transition=float(bundle.get("transition") or 0.0),
+            generate_images=gen_images, narrate=bool(bundle.get("narrate")),
+            subtitle=bool(bundle.get("subtitle", True)), bgm=str(bundle.get("bgm") or ""))
+        final = out_mp4 if out_mp4.lower().endswith(".mp4") else out_mp4 + ".mp4"
+        # 关键：以「终片真实存在」为准，绝不允许在无产物时判 PASS（治假完成）
+        produced = os.path.isfile(final) and os.path.getsize(final) > 0
+        if (str(res).startswith("错误") or not produced) and gen_images:
+            # 出图不可用 / 合成未产出 → 回退上游占位画面，保证仍是正确成片
+            fallback = _mv_do_render(root, py, audio_abs, ly_args, offline_flag,
+                                     offline, out, timeout, style)
+            return "⚠ 图像生成/合成未产出成片，已回退上游占位画面（卡点/对词仍正确）：\n" + fallback
+        if str(res).startswith("错误") or not produced:
+            return f"错误：合成未产出成片（{final}）。{res}"
+        cover = sum(float(x.get("duration") or 0) for x in sb)
+        checks = [("终片存在且非空", produced, f"{os.path.getsize(final) / 1048576:.2f} MB"),
+                  ("分镜非空", bool(sb), f"{len(sb)} 镜"),
+                  ("镜头时长合计≈全曲", abs(cover - total) <= 2.0, f"合 {cover:.2f}s / 总 {total:.2f}s")]
+        if total:
+            vd = _ff_media_duration(final)
+            if vd:
+                checks.append(("成片时长≈音频", abs(vd - total) <= 1.0, f"{vd:.2f}s / {total:.2f}s"))
+        img_mode = "外部图" if str(images_dir or "").strip() else ("自动出图" if gen_images else "无图")
+        ev = {"成片": final, "分镜": len(sb), "出图": img_mode,
+              "风格": meta.get("style_id"), "总时长": f"{total:.2f}s",
+              "分辨率": f"{bundle.get('resolution')}@{bundle.get('fps')}fps"}
+        return _mv_report("compose", ev, checks,
+                          extra=["（分镜时间轴来自上游引擎；mv_compose 仅按分镜出图/合成。）"])
+    finally:
+        if tmp_ly:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_ly)
+
+
+__all__ = ['mv_compose', 'mv_produce']

@@ -152,6 +152,7 @@ __all__ = [
     'qrcode',
     'media_ffmpeg',
     'mv_compose',
+    'mv_produce',
     'team_run',
     'database_query_mysql',
     'database_query_postgres',

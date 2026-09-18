@@ -28,7 +28,7 @@ npm run build    # 产物输出 webui/dist（由 api_server 同源服务）
   - `web_app.py`：启动入口（本地 API + 浏览器 + 托盘/快捷方式/开机自启）
   - `api_server.py`：本地 HTTP API（REST + SSE 流式，99 个 `/v1` 路由），同源服务前端构建产物
   - `deepseek_client.py`：统一模型客户端 + 六层工具注册表 + smart_tools（工具实现已迁至 `agent_tools/`）
-  - `agent_tools/tool_*.py`：161 个工具的实现；用 `@tool()` 声明（单一事实源）
+  - `agent_tools/tool_*.py`：162 个工具的实现；用 `@tool()` 声明（单一事实源）
   - `permissions.py`：权限模型（默认自由：黑名单主导 + `blocklist_enabled` 一键开关；审计只记不拦）
 - 所有用户可见输入（路径 / 命令 / SQL/工具参数）必须经校验：路径走 `permissions.resolve()`；命令走 `permissions.check_shell()`；网络请求走 `permissions.check_network_host()`（blacklist 模式只拦用户黑名单；旧 whitelist 模式回退 `security._safe_url` 严格 SSRF 判断）；路径越界 / 注入防护不得绕过
 - 写文件类工具必须返回真实结果（字节数 / 行数 / 差异），禁止用"假成功"占位

@@ -8,7 +8,7 @@
 
 > Windows 本地优先的 AI 桌面智能体 · 本地 API + React 界面 + 系统托盘常驻 · 只接入统一模型 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**
 
-**鲸语 WhaleTalk** 不止是聊天窗口：它能**看屏幕、听语音、动键鼠**，调用 **161 项 Agent 工具**完成真实任务，并把每次经验沉淀为长期记忆——越用越懂你。数据只在本机流转，浏览器即界面，开箱即用。
+**鲸语 WhaleTalk** 不止是聊天窗口：它能**看屏幕、听语音、动键鼠**，调用 **162 项 Agent 工具**完成真实任务，并把每次经验沉淀为长期记忆——越用越懂你。数据只在本机流转，浏览器即界面，开箱即用。
 
 > 🌐 官网：<https://whaletalk.top/>　·　📦 更新记录：[CHANGELOG.md](CHANGELOG.md)
 
@@ -17,7 +17,7 @@
 ## 📑 目录
 
 - [它是什么](#-它是什么)
-- [能力总览](#-能力总览161-工具)
+- [能力总览](#-能力总览162-工具)
 - [界面与体验](#-界面与体验)
 - [鲸语大脑](#-鲸语大脑)
 - [系统架构](#-系统架构)
@@ -38,7 +38,7 @@
 |---|---|
 | 🖼 **看得见** | 原生多模态视觉——图片理解、图表阅读、OCR、扫码、屏幕截图自查；聊天模型直接看图，无需切换模式 |
 | 💬 **说得出** | 对话 / 深度思考 / 语音合成（Piper 本地离线 · Edge 在线 · SAPI，可逐句流式跟读）/ 语音转文字 |
-| ⚡ **做得了** | 文件 / 代码 / 数据库 / 浏览器 / 邮件 / 媒体 / 桌面 RPA / 应用管理 / 快照恢复，共 161 项工具 |
+| ⚡ **做得了** | 文件 / 代码 / 数据库 / 浏览器 / 邮件 / 媒体 / 桌面 RPA / 应用管理 / 快照恢复，共 162 项工具 |
 | 🧬 **会进化** | 提案分支审阅、失败模式库消解、成功模式复用、技能自动结晶——合入权始终在你 |
 | 🔁 **能自疗** | 工具失败自动沉淀并注入规避提示，同类任务优先复用已验证路径 |
 
@@ -46,11 +46,11 @@
 
 ---
 
-## ⚡ 能力总览（161 工具）
+## ⚡ 能力总览（162 工具）
 
-全部 161 项工具由 `@tool()` 装饰器统一声明（单一事实源），分为 11 个能力组。智能模式下不一次性注入全部 schema，而是常驻「能力地图」+ 关键词预激活 + `activate_tools` 按需点菜，兼顾成本与命中率。
+全部 162 项工具由 `@tool()` 装饰器统一声明（单一事实源），分为 11 个能力组。智能模式下不一次性注入全部 schema，而是常驻「能力地图」+ 关键词预激活 + `activate_tools` 按需点菜，兼顾成本与命中率。
 
-### Agent 工具链（161 项）
+### Agent 工具链（162 项）
 
 | 能力组 | 代表工具 |
 |---|---|
@@ -59,7 +59,7 @@
 | 📁 文件与目录 | `read_file` · `write_file` · `edit_file` · `list_dir` · `search_local` · `find_images` · `asset_import` · `list_snapshots` · `batch_rename` · `start_process` |
 | 📊 数据与文档 | `read_excel` · `write_excel` · `database_query` · `database_execute` · `pdf_extract` · `pdf_toolkit` · `docx_read/edit` · `pptx_create` · `html_to_ppt/pdf` · `create_doc` |
 | 📧 邮件与消息 | `send_email` · `read_email` · `email_summary` · `im_send` · `telegram_poll_updates` · `agent_mail` · `daily_brief` · `run_wechat_writer` |
-| 🎨 媒体与图像 | `image_generate` · `image_understand` · `ocr_image` · `screen_see` · `chart_read` · `media_ffmpeg` · `qrcode` · `image_codegen` · `image_inpaint` · `make_gif` |
+| 🎨 媒体与图像 | `image_generate` · `image_understand` · `ocr_image` · `screen_see` · `chart_read` · `media_ffmpeg` · **`mv_produce`（音频+歌词→卡点对词成片）** · `qrcode` · `image_codegen` · `image_inpaint` · `make_gif` |
 | 🖱 桌面自动化 | `rpa_click` · `rpa_type` · `rpa_hotkey` · `screen_find_click` · `vision_loop` · `tts_speak` · `speech_to_text` · `voice_chat_loop` · `team_run` · `mv_compose` |
 | 📦 应用与环境 | `app_manage`（winget/choco 装/卸/搜/升级）· `environment_info` · `pip_install` |
 | ⏰ 定时与任务 | `schedule_task` · `run_workflow` · `task_checkpoint_save/load` · `watch_files` · `recall_session` |
@@ -133,7 +133,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 ├───────────────────────────────────────────────────────────────┤
 │                    deepseek_client.py                         │
 │   统一模型客户端（thinking/多模态/tool/压缩/缓存）+ smart_tools │
-│   六层工具注册表（@tool 单一源 · 161 工具）                    │
+│   六层工具注册表（@tool 单一源 · 162 工具）                    │
 ├───────────────────────────────────────────────────────────────┤
 │  agent_tools/（13 个工具域模块） · toolkit.py（声明/注册）     │
 │  横切收口：context_providers · tool_hooks · degrade · egress · │
@@ -145,7 +145,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：161 工具（11 组）· 99 个 `/v1` 路由 · 后端 61 个 pytest 文件 / 671 用例 · 前端 14 个 node 套件。
+- **规模**：162 工具（11 组）· 99 个 `/v1` 路由 · 后端 61 个 pytest 文件 / 671 用例 · 前端 14 个 node 套件。
 
 ---
 
@@ -173,6 +173,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 - **`bootstrap.py` 逐包自举**：建 `.venv` → 按 `requirements.txt` **逐包**安装（单包失败不阻断其余，超时/重试兜底）→ 启动；安装前做代理预检，系统代理已配置但不可达时自动绕过直连（避免 pip 继承死代理导致全量失败）。
 - **核心组件**零操作自动安装（进度条 + 实时日志），装完自动进入主界面；`requirements.txt` 与核心清单严格一致。
+- **音乐 MV（`mv_produce`）**：做「音频 + 歌词 → 卡点对词成片」需另配同机的 **AI MV 上游引擎**（含 librosa 等听觉分析）。把该程序放到「鲸语同级目录/MV」，或设环境变量 `AI_MV_HOME` 指向它；工具会自动发现并调用。它负责 BPM/节拍/段落 + 歌词对轴 + 卡点分镜（`mv_compose` 只负责合成），返回带**对齐自检门禁**的结果——未 PASS 不得宣称完成。
 - **大型可选能力**（浏览器自动化 / 本地语音转写 / Piper 离线语音 / 二维码识别 / RAR 解压）不强制安装，进入程序后在**设置 → 🔌 可选能力**按需一键装。
 - **前端自动构建**：检测到 `webui/dist` 缺失或源码更新时自动执行 `npm ci/install && npm run build`；打包版已内置前端，无需 Node。前端单独开发：`cd webui && npm i && npm run dev`。
 
@@ -190,7 +191,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 安全模型为「**默认自由 + 用户黑名单 + 程序内置底线 + 硬限额**」四层：
 
-- **默认自由**：默认任务模式零审批、零白名单，AI 可调用全部 161 项工具；`run_python` / `run_command` 等同本机直接执行（无沙箱）。
+- **默认自由**：默认任务模式零审批、零白名单，AI 可调用全部 162 项工具；`run_python` / `run_command` 等同本机直接执行（无沙箱）。
 - **黑名单**：唯一限制来源——用户在权限页添加 shell 命令 / 文件路径 / 网络主机黑名单；`blocklist_enabled` 可一键全放行。
 - **程序内置底线（两条）**：
   1. **网络 SSRF 硬底线**——私网段 / 链路本地（含云元数据）/ 保留段一律拦截，域名先做 DNS 解析防重绑定；回环默认放行，可加严。
@@ -230,7 +231,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 **WhaleTalk v3.16.0** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
 
-- **Capabilities**: **161 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
+- **Capabilities**: **162 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
 - **Self-evolution**: proposal branches, failure-pattern lifecycle, success-pattern reuse — merging stays in your hands.
 - **Security**: default-open permission model, user blocklist as the only restriction source, plus an SSRF hard floor and a trust kernel that makes edits to authorization code declarable, visible, and reversible.
 - **Stack**: Python 3.9+ · React 19 (Vite 8) · local HTTP API (openai / httpx) · Windows 10/11.

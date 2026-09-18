@@ -195,8 +195,8 @@ def test_all_split_tools_module_ownership():
 
 def test_all_split_tools_in_all_six_layers():
     names = [t["function"]["name"] for t in dc.TOOLS]
-    assert len(names) == 161, "工具总数应为 161（151 + chart_render + pdf_toolkit + design_kit + mv_compose + 代码生图/重绘/控制图/精灵表/GIF/混合 6 项），实际 %d" % len(names)
-    assert len(dc._TOOL_ORDER) == 161, "顺序表必须与工具数一致"
+    assert len(names) == 162, "工具总数应为 162（151 + chart_render + pdf_toolkit + design_kit + mv_compose + mv_produce + 代码生图/重绘/控制图/精灵表/GIF/混合 6 项），实际 %d" % len(names)
+    assert len(dc._TOOL_ORDER) == 162, "顺序表必须与工具数一致"
     assert set(dc.TOOL_CALL_MAP) == set(dc._TOOL_ORDER), "CALL_MAP 键与 ORDER 必须一一对应"
     for n in _uniq(ALL_SPLIT_TOOLS):
         assert n in names, "%s 必须仍在 TOOLS 列表" % n

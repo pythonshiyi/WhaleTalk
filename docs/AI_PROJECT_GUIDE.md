@@ -18,12 +18,12 @@
 浏览器是唯一界面。
 
 - **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.0`）。
-- **能力规模（`tools/check_docs.py` 实测口径，2026-09）**：**161 个 Agent 工具**（11 组）、
-  **98 个 `/v1` 路由**、**61 个 pytest 文件 / 671 用例 + 14 个前端 node 套件**、
+- **能力规模（`tools/check_docs.py` 实测口径，2026-09）**：**162 个 Agent 工具**（11 组）、
+  **99 个 `/v1` 路由**、**61 个 pytest 文件 / 671 用例 + 14 个前端 node 套件**、
   源码约 **6.2 万行**（根目录 2.9 万 + `agent_tools/` 1.7 万 + `webui/src` 1.6 万；
   主力为 `api_server.py` 8,707 / `deepseek_client.py` 5,100 / `brainkit.py` 2,863）。
 - **三层架构**：`web_app.py`（入口）→ `api_server.py`（本地 API）→
-  `deepseek_client.py`（能力引擎：`DeepSeekClient` + 161 工具 + smart_tools 按需调取）。
+  `deepseek_client.py`（能力引擎：`DeepSeekClient` + 162 工具 + smart_tools 按需调取）。
 - **安全模型**：**默认自由**（零审批、零白名单），唯一程序内置两条底线 = **网络 SSRF 硬底线**
   + **信任内核（自我修改可声明/可见/可回滚）**；其余限制全部来自用户黑名单配置。
 - **品牌**：独立产品，与 DeepSeek 官方**无任何关联**（对外用品牌名，技术描述可写"基于 DeepSeek API"）。
@@ -53,7 +53,7 @@ cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typed
 python tools/audit_tools.py --strict     # 六层一致性审计（error 级门禁，可入 CI）
 python tools/validate_tools.py           # smart_tools 全链路回归（描述无损等）
 python tools/island_check.py --strict    # 十层孤岛对账（工具可达性，含 __all__ re-export）
-python tools/check_docs.py               # 文档数字 vs 源码实测（161 工具 / 98 路由 / 版本）
+python tools/check_docs.py               # 文档数字 vs 源码实测（162 工具 / 99 路由 / 版本）
 ```
 
 > **CI**：`.github/workflows/ci.yml` 含 4 个 job——`check`（ruff 关键规则 `E9,F63,F7,F82` +
@@ -94,8 +94,8 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（161 �
 每个域模块用 `@tool()` 声明工具；`__init__.py` 用 `from .tool_* import *` 聚合并显式
 `__all__` re-export 工具函数名，保证 `dc.<tool_name>` 旧访问路径不变。**加载顺序契约**：
 `deepseek_client.py` 必须在其共享基建全部定义后、六层构建前执行 `from agent_tools import *`
-（否则循环导入/工具重复注册）。13 个模块共 159 工具，另主模块 `register_tool()` 注册
-`ask_user`/`request_permission` 2 个特殊工具，合计 **161**。
+（否则循环导入/工具重复注册）。13 个模块共 160 工具，另主模块 `register_tool()` 注册
+`ask_user`/`request_permission` 2 个特殊工具，合计 **162**。
 
 | 模块 | 工具数 | 工具域（示例工具） |
 |---|---:|---|
@@ -307,7 +307,7 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：`reasoning`（思
 
 ### 5.4 smart_tools 智能调取（成本核心）
 
-完全智能模式不再全量注入 161 个工具 schema（约 15k token），改为：
+完全智能模式不再全量注入 162 个工具 schema（约 15k token），改为：
 
 1. 常驻注入「能力地图」（`build_tool_index`：11 组分类 + 工具名 + 核心动作短语）。
 2. `activate_tools` 点菜工具（支持**按组激活**，`_TOOL_GROUP_NAME_MAP`）。
@@ -477,7 +477,7 @@ def my_tool(...): ...
   核验同步用 `git ls-remote origin refs/heads/main` 与 `git rev-parse HEAD` 是否一致。
 - **本地不入库产物**：`能力差距分析_*.md` / `*能力报告_*.md` / `*阅读报告_*.md` 等分析文档历来
   不入库；`brain/`/`trust/`/`evolutions/`/`data/` 均在 `.gitignore`。
-- **文档数字由门禁守护**：`tools/check_docs.py` 从源码 AST 实测（161 工具 / 98 路由 / 版本），
+- **文档数字由门禁守护**：`tools/check_docs.py` 从源码 AST 实测（162 工具 / 99 路由 / 版本），
   与 README/TECH_NOTES/MODULES 比对，`--fix` 可自动修正（**保留原行尾写回**）。
   注意 README 需保留门禁匹配的固定短语（`N 项 Agent 工具` / `N Agent tools` / `（N 工具）` /
   `工具链（N 项）` / `全部 N 项工具`），重写 README 时勿丢失。
@@ -583,5 +583,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（161 工具 / 98 路由 / 671 用例 / 版本 3.16.0）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（162 工具 / 99 路由 / 671 用例 / 版本 3.16.0）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*
