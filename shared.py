@@ -295,6 +295,17 @@ def clamp_str(value, default="", max_len=None):
     return s
 
 
+def over_limit(value, limit):
+    """统一「上限」判定：limit<=0/None 表示**不限**，恒返回 False。
+
+    把「0=不限」契约落到实处——避免各工具写成 `x > LIMIT` 导致 0 反而全拦死。
+    """
+    try:
+        return bool(limit and limit > 0 and value > limit)
+    except TypeError:
+        return False
+
+
 def split_list(value, sep=",", dedup=False):
     """安全列表：字符串按分隔符拆分 / 已有列表直通 / None → []，strip 空项。"""
     if value is None:
@@ -397,7 +408,7 @@ AUTO_CHECKPOINT_EVERY = 5    # 之后每 N 步补一次（覆盖更长的任务�
 
 READ_FILE_MAX_BYTES = _env_int("READ_FILE_MAX_BYTES", 102400)
 
-_READ_LINE_MAX = _env_int("_READ_LINE_MAX", 102400)  # 按行读取的每行上限（防单行数百 MB 撑爆内存）
+READ_LINE_MAX = _env_int("READ_LINE_MAX", 102400)  # 按行读取的每行上限（防单行数百 MB 撑爆内存）
 
 EDIT_FILE_MAX_SIZE = _env_int("EDIT_FILE_MAX_SIZE", 20 * 1024 * 1024)  # edit_file 全量读入上限（20MB）
 
@@ -575,6 +586,9 @@ PPTX_MAX_PAGE_BODY = _env_int("PPTX_MAX_PAGE_BODY", 40)  # pptx_read 每页正�
 PPTX_MAX_NOTES = _env_int("PPTX_MAX_NOTES", 500)  # pptx_read 每页备注字符上限
 
 TABLE_READ_MAX_ROWS = _env_int("TABLE_READ_MAX_ROWS", 500)  # read_excel/read_csv 行数上限（clamp_int hi）
+
+# 表格单元格显示/输出截断上限（工具输出与前端渲染共用同一来源）；0 = 不限
+TABLE_CELL_MAX = _env_int("TABLE_CELL_MAX", 100)
 
 # ===== 嵌入式 KV 存储（diskcache 可选依赖；支持 TTL 与模糊检索）=====
 

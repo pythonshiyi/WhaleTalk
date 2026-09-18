@@ -64,7 +64,7 @@ logger = logging.getLogger("whaletalk.memory")
 
 MEMORY_PATH = None
 CONFLICT_SIM = 0.55            # 冲突提示阈值（**只提示，不动作**；实测见模块文档）
-MAX_ITEMS = 2000               # 与既有 MEMORY_MAX_ITEMS 同量级
+MAX_ITEMS = 2000               # 兜底默认；实际取 shared.MEMORY_MAX_ITEMS（<=0 = 不限）
 
 _lock = threading.RLock()
 
@@ -76,6 +76,16 @@ ORIGIN_LABEL = {"agent": "〔推断〕", "web": "〔来自外部内容〕", "sys
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_]+")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _max_items():
+    """长期记忆条数上限：读 shared.MEMORY_MAX_ITEMS；<=0 = 不限（返回 0）。"""
+    try:
+        import shared
+        n = int(shared.MEMORY_MAX_ITEMS)
+        return n if n and n > 0 else 0
+    except Exception:
+        return MAX_ITEMS
 
 
 def init(memory_path=None, *, conflict_sim=None, reset=False):
@@ -345,16 +355,17 @@ def remember(text, *, origin="agent", type="", tags="", key=None,
                 raw["id"] = superseded_id
                 entry["supersedes"] = superseded_id
         facts.append(entry)
-        if len(facts) > MAX_ITEMS:
+        cap = _max_items()
+        if cap and len(facts) > cap:
             # 溢出优先丢最旧的已作废条目（active 一律保留）
-            excess = len(facts) - MAX_ITEMS
+            excess = len(facts) - cap
             keep, dropped = [], 0
             for f in facts:
                 if dropped < excess and normalize(f).get("status") == "superseded":
                     dropped += 1
                     continue
                 keep.append(f)
-            facts = keep[-MAX_ITEMS:]
+            facts = keep[-cap:]
         data["facts"] = facts
         if not _save(data):
             return {"ok": False, "action": "error", "message": "错误：记忆写入失败"}

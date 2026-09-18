@@ -490,9 +490,14 @@ def _parse_args(argv):
 def main(argv=None):
     _harden_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
+    # 动作（run/check/doctor/build）可出现在任意位置：提取首个匹配项并移除，
+    # 其余参数原样透传给 web_app.py（如 --server --port 9000）。避免依赖 argv[0]。
     action = "run"
-    if argv and argv[0] in ("run", "check", "doctor", "build"):
-        action = argv.pop(0)
+    for i, tok in enumerate(argv):
+        if tok in ("run", "check", "doctor", "build"):
+            action = tok
+            argv.pop(i)
+            break
     args, passthrough = _parse_args(argv)
 
     if args.mirror:

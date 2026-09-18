@@ -9,7 +9,7 @@ import os
 
 import permissions
 from db_utils import table_to_md as _table_to_md  # 统一 markdown 表格渲染（含 | 转义）
-from shared import clamp_int  # D4: 参数校验辅助
+from shared import TABLE_READ_MAX_ROWS, clamp_int  # D4: 参数校验辅助
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
@@ -62,7 +62,8 @@ def read_csv(path, max_rows=100, delimiter=",", has_header=True):
     import csv as _csv
 
     try:
-        limit = clamp_int(max_rows, 100, lo=1, hi=500)
+        _hi = TABLE_READ_MAX_ROWS if (TABLE_READ_MAX_ROWS and TABLE_READ_MAX_ROWS > 0) else None
+        limit = clamp_int(max_rows, 100, lo=1, hi=_hi)
     except (TypeError, ValueError):
         limit = 100
     try:

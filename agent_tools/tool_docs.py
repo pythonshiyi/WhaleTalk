@@ -39,7 +39,11 @@ from shared import (  # D4: 参数校验辅助
     KV_VALUE_MAX_BYTES,
     PDF_EXTRACT_MAX_OUTPUT,
     PPTX_MAX_DEFAULT,
+    PPTX_MAX_NOTES,
+    PPTX_MAX_PAGE_BODY,
+    TABLE_READ_MAX_ROWS,
     clamp_int,
+    over_limit,
 )
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
@@ -223,7 +227,8 @@ def read_excel(path, sheet=0, max_rows=100, has_header=True):
     if not ok:
         return reason
     try:
-        limit = clamp_int(max_rows, 100, lo=1, hi=500)
+        _hi = TABLE_READ_MAX_ROWS if (TABLE_READ_MAX_ROWS and TABLE_READ_MAX_ROWS > 0) else None
+        limit = clamp_int(max_rows, 100, lo=1, hi=_hi)
     except (TypeError, ValueError):
         limit = 100
     try:
@@ -1345,7 +1350,7 @@ def pdf_extract(path, pages="all", mode="text"):
                         seg += "（本页无文本层，疑似扫描件；可先用 web_screenshot/pdf 导出页面图片再用 ocr_image 识别）"
                     else:
                         seg += text
-                    if out_len + len(seg) > PDF_EXTRACT_MAX_OUTPUT:
+                    if over_limit(out_len + len(seg), PDF_EXTRACT_MAX_OUTPUT):
                         out.append(truncated_hint)
                         break
                     out.append(seg)
@@ -1371,13 +1376,13 @@ def pdf_extract(path, pages="all", mode="text"):
                     except Exception:
                         seg_parts.append("（表格提取失败，可改用 mode=text 提取文本）")
                     seg = "\n".join(seg_parts)
-                    if out_len + len(seg) > PDF_EXTRACT_MAX_OUTPUT:
+                    if over_limit(out_len + len(seg), PDF_EXTRACT_MAX_OUTPUT):
                         out.append(truncated_hint)
                         break
                     out.append(seg)
                     out_len += len(seg)
             result = "\n".join(out)
-            if len(result) > PDF_EXTRACT_MAX_OUTPUT:
+            if over_limit(len(result), PDF_EXTRACT_MAX_OUTPUT):
                 result = result[:PDF_EXTRACT_MAX_OUTPUT] + truncated_hint
             return result
         finally:
@@ -1835,10 +1840,12 @@ def docx_read(path, max_chars=50000):
         return f"错误：文件不存在：{path}"
     if p.lower().endswith(".doc"):
         return "错误：暂不支持旧版 .doc 格式，请先用 Word 另存为 .docx 后重试"
+    # 输出上限：显式 max_chars 优先；否则用 DOCX_MAX_DEFAULT（<=0 = 不限）
+    _def = DOCX_MAX_DEFAULT if (DOCX_MAX_DEFAULT and DOCX_MAX_DEFAULT > 0) else 0
     try:
-        limit = clamp_int(max_chars or DOCX_MAX_DEFAULT, DOCX_MAX_DEFAULT, lo=200, hi=500000)
+        limit = clamp_int(max_chars, _def, lo=1) if max_chars else _def
     except (TypeError, ValueError):
-        limit = DOCX_MAX_DEFAULT
+        limit = _def
     try:
         from docx.table import Table as _Table
         from docx.text.paragraph import Paragraph as _Para
@@ -1884,7 +1891,7 @@ def docx_read(path, max_chars=50000):
         result = "\n\n".join(parts)
         if img_count:
             result += f"\n\n[图片: 共 {img_count} 张（占位标注，未提取图片本身）]"
-        if len(result) > limit:
+        if limit and limit > 0 and len(result) > limit:
             result = result[:limit] + f"\n[内容较长已截断前 {limit} 字符]"
         return result
     except Exception as e:
@@ -2077,7 +2084,8 @@ def pptx_read(path, include_notes=True):
             if title_holder[0]:
                 out.append(f"标题: {title_holder[0]}")
             if body_lines:
-                out.append("\n".join("- " + ln for ln in body_lines[:40]))
+                _bl = body_lines[:PPTX_MAX_PAGE_BODY] if (PPTX_MAX_PAGE_BODY and PPTX_MAX_PAGE_BODY > 0) else body_lines
+                out.append("\n".join("- " + ln for ln in _bl))
             elif not title_holder[0]:
                 out.append("（本页无文本）")
             if img_count[0]:
@@ -2086,12 +2094,13 @@ def pptx_read(path, include_notes=True):
                 try:
                     nt = slide.notes_slide.notes_text_frame.text.strip()
                     if nt:
-                        out.append(f"备注: {nt[:500]}")
+                        _nt = nt[:PPTX_MAX_NOTES] if (PPTX_MAX_NOTES and PPTX_MAX_NOTES > 0) else nt
+                        out.append(f"备注: {_nt}")
                 except Exception:
                     pass
         result = "\n".join(out)
         # S14：全局输出上限（此前 pptx_read 无总长截断，超长 PPT 会整篇灌入上下文）
-        if len(result) > PPTX_MAX_DEFAULT:
+        if over_limit(len(result), PPTX_MAX_DEFAULT):
             result = result[:PPTX_MAX_DEFAULT] + f"\n[内容较长已截断前 {PPTX_MAX_DEFAULT} 字符]"
         return result
     except Exception as e:
@@ -2863,8 +2872,8 @@ def kv_store(action="get", key="", value="", pattern="", ttl_seconds=0):
                     return "错误：key 过长（上限 256 字符）"
                 # 区分 None 与 0/False：None 存空串，0/False 保留字面值
                 v = str(value if value is not None else "")
-                if len(v.encode("utf-8", "replace")) > KV_VALUE_MAX_BYTES:
-                    return "错误：value 超过 1MB 上限"
+                if over_limit(len(v.encode("utf-8", "replace")), KV_VALUE_MAX_BYTES):
+                    return f"错误：value 超过 {KV_VALUE_MAX_BYTES // 1024 // 1024}MB 上限"
                 try:
                     ttl = max(0, min(365 * 24 * 3600, int(ttl_seconds or 0)))
                 except (TypeError, ValueError):

@@ -1019,8 +1019,9 @@ def write_code_project(project_dir, files):
         if not rel or rel in (".", "..") or ".." in rel.split("/"):
             failed.append((rel or "?", "非法相对路径"))
             continue
-        # 与 write_file 同规则：按 UTF-8 字节校验（中文 3 字节/字）
-        if len(str(content).encode("utf-8", "ignore")) > permissions.max_write_size():
+        # 与 write_file 同规则：按 UTF-8 字节校验（中文 3 字节/字；上限<=0 = 不限）
+        _mws = permissions.max_write_size()
+        if _mws and _mws > 0 and len(str(content).encode("utf-8", "ignore")) > _mws:
             failed.append((rel, "内容超过大小限制"))
             continue
         full = os.path.normpath(os.path.join(base, rel))

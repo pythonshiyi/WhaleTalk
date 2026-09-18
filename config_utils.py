@@ -142,10 +142,11 @@ def normalize_config(cfg):
         cfg["custom_top_p"] = max(0.0, min(1.0, float(cfg.get("custom_top_p", 1.0))))
     except (TypeError, ValueError):
         cfg["custom_top_p"] = 1.0
+    # 单条消息工具轮数上限：0 = 不限（默认不限）；不设人为上界
     try:
-        cfg["max_tool_rounds"] = max(1, min(100, int(cfg.get("max_tool_rounds", 100))))
+        cfg["max_tool_rounds"] = max(0, int(cfg.get("max_tool_rounds", 0)))
     except (TypeError, ValueError):
-        cfg["max_tool_rounds"] = 100
+        cfg["max_tool_rounds"] = 0
     try:
         cfg["monthly_budget"] = max(0.0, float(cfg.get("monthly_budget", 0.0)))
     except (TypeError, ValueError):
@@ -197,10 +198,11 @@ def normalize_config(cfg):
         cfg["min_kept_turns"] = max(3, min(500, int(cfg.get("min_kept_turns", 8))))
     except (TypeError, ValueError):
         cfg["min_kept_turns"] = 8
+    # 请求超时（秒）：0 = 不限（默认不限）
     try:
-        cfg["timeout"] = max(10, min(600, float(cfg.get("timeout", 120))))
+        cfg["timeout"] = max(0.0, float(cfg.get("timeout", 0)))
     except (TypeError, ValueError):
-        cfg["timeout"] = 120
+        cfg["timeout"] = 0.0
     # 自定义主题：仅接受 dict 值，且名称不覆盖内置主题
     try:
         custom_themes = cfg.get("custom_themes") or {}

@@ -69,7 +69,7 @@ def get_weather(location, date):
     if d:
         url += f"&date={quote(d)}"
     try:
-        resp = _http_client().get(url, timeout=WEATHER_TIMEOUT)
+        resp = _http_client().get(url, timeout=(WEATHER_TIMEOUT if (WEATHER_TIMEOUT and WEATHER_TIMEOUT > 0) else None))
         resp.raise_for_status()
         data = resp.json()
         cur = (data.get("current_condition") or [{}])[0]

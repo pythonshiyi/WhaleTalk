@@ -402,11 +402,11 @@ function AdvancedTab({ cfg, saveField, onReset, onGoPrompts }) {
       </div>
       <div className="svc-group">
         <div className="svc-title">⚙ 运行参数</div>
-        <Row label="请求超时（秒）">
-          <NumInput min={10} max={600} value={cfg?.timeout} onChange={(v) => saveField({ timeout: v })} />
+        <Row label="请求超时（秒）" desc="0 = 不限">
+          <NumInput min={0} max={86400} value={cfg?.timeout} onChange={(v) => saveField({ timeout: v })} />
         </Row>
-        <Row label="工具轮数上限" desc="单条消息最多工具循环轮数">
-          <NumInput min={1} max={100} value={cfg?.max_tool_rounds} onChange={(v) => saveField({ max_tool_rounds: v })} />
+        <Row label="工具轮数上限" desc="单条消息最多工具循环轮数；0 = 不限">
+          <NumInput min={0} max={10000} value={cfg?.max_tool_rounds} onChange={(v) => saveField({ max_tool_rounds: v })} />
         </Row>
       </div>
       <div className="svc-group">

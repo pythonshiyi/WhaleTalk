@@ -2,6 +2,8 @@ import re
 import unicodedata
 from collections import OrderedDict
 
+from shared import TABLE_CELL_MAX as _TABLE_CELL_MAX  # 单元格截断上限单一来源（0 = 不限）
+
 FENCE_RE = re.compile(r"^```([^`\s]*)\s*$", re.MULTILINE)
 HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*)$", re.MULTILINE)
 HR_RE = re.compile(r"^[ \t]*([-*_])([ \t]*\1){2,}[ \t]*$")
@@ -9,8 +11,6 @@ QUOTE_RE = re.compile(r"^(>+)[ \t]*(.*)$")
 LIST_RE = re.compile(r"^[ \t]*([-*+]|\d+[.)])[ \t]+(.*)$")
 TASK_LIST_RE = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])[ \t]+\[( |x|X)\][ \t]+(.*)$")
 TABLE_SEP_CELL_RE = re.compile(r"^:?-+:?$")
-# 表格单格显示宽度上限：超长单元格截断为省略号，避免撑爆聊天区
-_TABLE_CELL_MAX = 120
 
 _CODE_RE = re.compile(r"`([^`\n]+?)`")
 _IMAGE_RE = re.compile(r"!\[([^\]]*?)\]\(([^()\s]+?)\)")
@@ -241,7 +241,8 @@ def _render_table(block):
         cells = [c.strip() for c in s.split("|")]
         if all(TABLE_SEP_CELL_RE.match(c) for c in cells):
             continue
-        rows.append([_trunc_cjk(c, _TABLE_CELL_MAX) for c in cells])
+        rows.append([_trunc_cjk(c, _TABLE_CELL_MAX) if (_TABLE_CELL_MAX and _TABLE_CELL_MAX > 0) else c
+                     for c in cells])
     if not rows:
         return "", []
     width = max(len(r) for r in rows)

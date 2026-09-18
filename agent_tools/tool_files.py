@@ -22,7 +22,6 @@ import snapshot as snapshot_mod
 from shared import (  # D4: 参数校验辅助
     _ARCHIVE_SKIP_DIRS,
     _COMMON_PACKAGES,
-    _READ_LINE_MAX,
     _SEARCH_EXTS,
     _SEARCH_SKIP_DIRS,
     EDIT_FILE_MAX_SIZE,
@@ -32,7 +31,9 @@ from shared import (  # D4: 参数校验辅助
     EXTRACT_MAX_TOTAL_BYTES,
     MAX_PROCESSES,
     READ_FILE_MAX_BYTES,
+    READ_LINE_MAX,
     clamp_int,
+    over_limit,
 )
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
@@ -142,7 +143,7 @@ def read_file(path, start_line=None, max_lines=None):
                 # readline(上限)：单行可达数百 MB（minified JSON/日志），
                 # 不设上限会一次撑爆内存；超长行截断到 100KB 并标注
                 lines = []
-                _linecap = _READ_LINE_MAX if (_READ_LINE_MAX and _READ_LINE_MAX > 0) else None
+                _linecap = READ_LINE_MAX if (READ_LINE_MAX and READ_LINE_MAX > 0) else None
                 for _ in range(count):
                     ln = f.readline(_linecap) if _linecap else f.readline()
                     if ln == "":
@@ -679,19 +680,19 @@ def archive_files(paths, output):
                         dirs[:] = [d for d in dirs if d not in _ARCHIVE_SKIP_DIRS]
                         for fn in files:
                             full = os.path.join(root, fn)
-                            if count >= EXTRACT_MAX_ENTRIES:
+                            if EXTRACT_MAX_ENTRIES and EXTRACT_MAX_ENTRIES > 0 and count >= EXTRACT_MAX_ENTRIES:
                                 raise ValueError(f"文件数超过上限（{EXTRACT_MAX_ENTRIES}）")
                             fsize = os.path.getsize(full)
-                            if total_bytes + fsize > EXTRACT_MAX_TOTAL_BYTES:
+                            if over_limit(total_bytes + fsize, EXTRACT_MAX_TOTAL_BYTES):
                                 raise ValueError("总大小超过打包上限")
                             zf.write(full, os.path.relpath(full, os.path.dirname(p)))
                             count += 1
                             total_bytes += fsize
                 else:
-                    if count >= EXTRACT_MAX_ENTRIES:
+                    if EXTRACT_MAX_ENTRIES and EXTRACT_MAX_ENTRIES > 0 and count >= EXTRACT_MAX_ENTRIES:
                         raise ValueError(f"文件数超过上限（{EXTRACT_MAX_ENTRIES}）")
                     fsize = os.path.getsize(p)
-                    if total_bytes + fsize > EXTRACT_MAX_TOTAL_BYTES:
+                    if over_limit(total_bytes + fsize, EXTRACT_MAX_TOTAL_BYTES):
                         raise ValueError("总大小超过打包上限")
                     zf.write(p, os.path.basename(p))
                     count += 1
@@ -751,17 +752,17 @@ def extract_archive(path, dest_dir):
             count = 0
             with zipfile.ZipFile(p) as zf:
                 infos = zf.infolist()
-                if len(infos) > EXTRACT_MAX_ENTRIES:
+                if over_limit(len(infos), EXTRACT_MAX_ENTRIES):
                     return f"错误：压缩包条目数超过上限（{EXTRACT_MAX_ENTRIES}），已中止"
                 total_size = 0
                 for info in infos:
                     target = os.path.normpath(os.path.join(base, info.filename))
                     if not (target == base or target.startswith(base + os.sep)):
                         return f"错误：压缩包含越界条目，已中止：{info.filename}"
-                    if info.file_size > EXTRACT_MAX_SINGLE_BYTES:
+                    if over_limit(info.file_size, EXTRACT_MAX_SINGLE_BYTES):
                         return f"错误：压缩包单文件超过大小上限：{info.filename}"
                     total_size += info.file_size
-                    if total_size > EXTRACT_MAX_TOTAL_BYTES:
+                    if over_limit(total_size, EXTRACT_MAX_TOTAL_BYTES):
                         return "错误：压缩包总解压大小超过上限，已中止"
                 for info in infos:
                     zf.extract(info, dest)
@@ -772,10 +773,10 @@ def extract_archive(path, dest_dir):
             import tarfile
             with tarfile.open(p) as tf:
                 members = tf.getmembers()
-                if len(members) > EXTRACT_MAX_ENTRIES:
+                if over_limit(len(members), EXTRACT_MAX_ENTRIES):
                     return f"错误：压缩包条目数超过上限（{EXTRACT_MAX_ENTRIES}），已中止"
                 total_size = sum(m.size for m in members)
-                if total_size > EXTRACT_MAX_TOTAL_BYTES:
+                if over_limit(total_size, EXTRACT_MAX_TOTAL_BYTES):
                     return "错误：压缩包总解压大小超过上限，已中止"
                 for m in members:
                     target = os.path.normpath(os.path.join(base, m.name))
@@ -802,7 +803,7 @@ def extract_archive(path, dest_dir):
             import py7zr
             with py7zr.SevenZipFile(p, "r") as z:
                 names = z.getnames()
-                if len(names) > EXTRACT_MAX_ENTRIES:
+                if over_limit(len(names), EXTRACT_MAX_ENTRIES):
                     return f"错误：压缩包条目数超过上限（{EXTRACT_MAX_ENTRIES}），已中止"
                 for name in names:
                     target = os.path.normpath(os.path.join(base, name))
@@ -815,17 +816,17 @@ def extract_archive(path, dest_dir):
             import rarfile
             with rarfile.RarFile(p) as rf:
                 infos = rf.infolist()
-                if len(infos) > EXTRACT_MAX_ENTRIES:
+                if over_limit(len(infos), EXTRACT_MAX_ENTRIES):
                     return f"错误：压缩包条目数超过上限（{EXTRACT_MAX_ENTRIES}），已中止"
                 total_size = 0
                 for info in infos:
                     target = os.path.normpath(os.path.join(base, info.filename))
                     if not (target == base or target.startswith(base + os.sep)):
                         return f"错误：压缩包含越界条目，已中止：{info.filename}"
-                    if info.file_size > EXTRACT_MAX_SINGLE_BYTES:
+                    if over_limit(info.file_size, EXTRACT_MAX_SINGLE_BYTES):
                         return f"错误：压缩包单文件超过大小上限：{info.filename}"
                     total_size += info.file_size
-                    if total_size > EXTRACT_MAX_TOTAL_BYTES:
+                    if over_limit(total_size, EXTRACT_MAX_TOTAL_BYTES):
                         return "错误：压缩包总解压大小超过上限，已中止"
                 rf.extractall(dest)
             permissions.audit("extract_archive", dest, f"{len(infos)} 个条目")
@@ -1006,7 +1007,7 @@ def start_process(command, name="", cwd=""):
     with _PROCESSES_LOCK:
         for k in [k for k, v in PROCESSES.items() if v.get("exited")]:
             PROCESSES.pop(k, None)
-        if len(PROCESSES) >= MAX_PROCESSES:
+        if MAX_PROCESSES and MAX_PROCESSES > 0 and len(PROCESSES) >= MAX_PROCESSES:
             return f"错误：后台进程数已达上限（{MAX_PROCESSES} 个），请先 stop_process 停止部分进程"
     try:
         # shell=True：Windows 走 cmd /c、POSIX 走 /bin/sh -c，原生支持管道/重定向；
@@ -1040,7 +1041,7 @@ def start_process(command, name="", cwd=""):
     with _PROCESSES_LOCK:
         for k in [k for k, v in PROCESSES.items() if v.get("exited")]:
             PROCESSES.pop(k, None)
-        if len(PROCESSES) >= MAX_PROCESSES:
+        if MAX_PROCESSES and MAX_PROCESSES > 0 and len(PROCESSES) >= MAX_PROCESSES:
             _kill_tree(proc)  # 启动后才发现达上限：进程必须回收，不能留孤儿
             return f"错误：后台进程数已达上限（{MAX_PROCESSES} 个），请先 stop_process 停止部分进程"
         first_token = (cmd.split(None, 1) or [""])[0]

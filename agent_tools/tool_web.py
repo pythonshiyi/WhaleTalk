@@ -63,6 +63,7 @@ from shared import (  # P1-3: 阈值常量下沉 shared
     SEARCH_SOFT_DEADLINE,
     WEBDAV_MAX_SIZE,
     clamp_int,
+    over_limit,
 )
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
@@ -203,7 +204,7 @@ def download_file(url, local_path="", expected_sha256=""):
             with open(tmp, "wb") as f:
                 for chunk in resp.iter_bytes(64 * 1024):
                     total += len(chunk)
-                    if total > DOWNLOAD_MAX_BYTES:
+                    if over_limit(total, DOWNLOAD_MAX_BYTES):
                         too_large = True
                         break
                     f.write(chunk)
@@ -274,7 +275,9 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
     except (TypeError, ValueError):
         requested_num = SEARCH_MAX_RESULTS
     try:
-        num = clamp_int(num, 1, lo=1, hi=20)
+        # SEARCH_MAX_RESULTS<=0 = 不限条数（不设 hi 上限）；否则沿用至少 20 的上限
+        _hi = max(20, int(SEARCH_MAX_RESULTS)) if (SEARCH_MAX_RESULTS and SEARCH_MAX_RESULTS > 0) else None
+        num = clamp_int(num, 1, lo=1, hi=_hi)
         offset = clamp_int(offset, 0, lo=0, hi=200)
     except (TypeError, ValueError):
         num, offset = SEARCH_MAX_RESULTS, 0
@@ -1091,7 +1094,9 @@ def rss_fetch(action="list", url="", limit=10, since_hours=24):
     if act in ("add", "fetch") and not str(url or "").strip():
         return f"错误：{act} 需要 url（RSS 源地址）"
     try:
-        lim = max(1, min(RSS_MAX_ITEMS, int(limit or 10)))
+        _req = int(limit or 10)
+        # RSS_MAX_ITEMS<=0 = 不限（按请求条数）
+        lim = max(1, min(RSS_MAX_ITEMS, _req)) if (RSS_MAX_ITEMS and RSS_MAX_ITEMS > 0) else max(1, _req)
     except (TypeError, ValueError):
         lim = 10
     try:
@@ -1160,9 +1165,9 @@ def rss_fetch(action="list", url="", limit=10, since_hours=24):
 
     t = threading.Thread(target=_parse, daemon=True)
     t.start()
-    t.join(RSS_FETCH_TIMEOUT)
+    t.join(RSS_FETCH_TIMEOUT if (RSS_FETCH_TIMEOUT and RSS_FETCH_TIMEOUT > 0) else None)
     if t.is_alive():
-        return "错误：RSS 抓取超时（>10 秒），请稍后重试或检查源地址"
+        return f"错误：RSS 抓取超时（>{RSS_FETCH_TIMEOUT} 秒），请稍后重试或检查源地址"
     if "err" in box:
         return f"错误：RSS 抓取失败: {box['err']}"
     parsed = box["parsed"]
@@ -1212,7 +1217,9 @@ def rss_fetch(action="list", url="", limit=10, since_hours=24):
             except Exception:
                 pub = ""
         summary = re.sub(r"<[^>]+>", " ", str(getattr(e, "summary", "") or getattr(e, "description", "")))
-        summary = re.sub(r"\s+", " ", summary).strip()[:RSS_SUMMARY_MAX]
+        summary = re.sub(r"\s+", " ", summary).strip()
+        if RSS_SUMMARY_MAX and RSS_SUMMARY_MAX > 0:
+            summary = summary[:RSS_SUMMARY_MAX]
         lines.append(f"{i}. {title} | {pub} | {link}")
         if summary:
             lines.append(f"   {summary}")
@@ -1326,7 +1333,7 @@ def webdav(action="list", remote_path="/", local_path=""):
                         with open(tmp, "wb") as f:
                             for chunk in resp.iter_bytes(64 * 1024):
                                 total += len(chunk)
-                                if total > WEBDAV_MAX_SIZE:
+                                if over_limit(total, WEBDAV_MAX_SIZE):
                                     return (f"错误：远端文件超过 {WEBDAV_MAX_SIZE // 1024 // 1024}MB 上限，"
                                             "请分段下载（原文件未改动）")
                                 f.write(chunk)
@@ -1334,7 +1341,7 @@ def webdav(action="list", remote_path="/", local_path=""):
                     resp = _webdav_request(cfg, "GET", remote)
                     if resp.status_code != 200:
                         return f"错误：下载失败（HTTP {resp.status_code}）"
-                    if len(resp.content) > WEBDAV_MAX_SIZE:
+                    if over_limit(len(resp.content), WEBDAV_MAX_SIZE):
                         return (f"错误：远端文件超过 {WEBDAV_MAX_SIZE // 1024 // 1024}MB 上限，"
                                 "请分段下载（原文件未改动）")
                     total = len(resp.content)
@@ -1358,7 +1365,7 @@ def webdav(action="list", remote_path="/", local_path=""):
         if not src or not os.path.isfile(src):
             return f"错误：本地文件不存在：{local_path}"
         try:
-            if os.path.getsize(src) > WEBDAV_MAX_SIZE:
+            if over_limit(os.path.getsize(src), WEBDAV_MAX_SIZE):
                 return f"错误：本地文件超过 {WEBDAV_MAX_SIZE // 1024 // 1024}MB 上限，请压缩后上传"
         except Exception as e:
             return f"错误：读取本地文件信息失败: {e}"
@@ -1463,7 +1470,7 @@ def call_api(url, method="GET", params=None, json_body=None, data=None,
     if headers:
         if not isinstance(headers, dict):
             return "错误：headers 必须是键值对象"
-        if len(headers) > CALL_API_MAX_HEADERS:
+        if over_limit(len(headers), CALL_API_MAX_HEADERS):
             return f"错误：headers 最多 {CALL_API_MAX_HEADERS} 个"
         for k, v in headers.items():
             k, v = str(k).strip(), str(v or "").strip()
@@ -1495,16 +1502,19 @@ def call_api(url, method="GET", params=None, json_body=None, data=None,
             if hasattr(resp, "iter_bytes"):
                 for chunk in resp.iter_bytes(64 * 1024):
                     raw += chunk
-                    if len(raw) >= CALL_API_MAX_BYTES:
+                    if CALL_API_MAX_BYTES and CALL_API_MAX_BYTES > 0 and len(raw) >= CALL_API_MAX_BYTES:
                         truncated = True
                         break
             else:
                 # 兼容旧测试/自定义 mock 的普通响应对象（无流式接口）
                 raw = getattr(resp, "content", b"") or b""
-                truncated = len(raw) > CALL_API_MAX_BYTES
-                raw = raw[:CALL_API_MAX_BYTES]
+                truncated = over_limit(len(raw), CALL_API_MAX_BYTES)
+                if truncated:
+                    raw = raw[:CALL_API_MAX_BYTES]
         body = raw
-        text = body[:CALL_API_MAX_BYTES].decode("utf-8", errors="replace")
+        text = body[:CALL_API_MAX_BYTES].decode("utf-8", errors="replace") if (
+            CALL_API_MAX_BYTES and CALL_API_MAX_BYTES > 0
+        ) else body.decode("utf-8", errors="replace")
         # JSON 美化输出（若可解析），便于阅读
         try:
             if content_type.startswith("application/json"):

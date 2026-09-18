@@ -253,14 +253,14 @@ DEFAULT_CONFIG = {
     "max_context_chars": 500000,
     "max_context_tokens": 400000,
     "min_kept_turns": 8,
-    "timeout": 120,
+    "timeout": 0,  # 请求超时（秒）：0 = 不限（默认不限）
     "theme": "light",
     "custom_temperature": 1.0,
     "custom_top_p": 1.0,
     "privacy_mode": False,
     "check_update": True,  # 初始自动检测 GitHub Releases 更新
     "welcomed": False,
-    "max_tool_rounds": 100,  # 单条消息工具轮数上限：能力最大化，默认 100
+    "max_tool_rounds": 0,  # 单条消息工具轮数上限：0 = 不限（默认不限）
     "monthly_budget": 0.0,
     "block_on_budget": False,
     "confirm_over_cost": 0.0,  # 任务预检 HITL：单次请求预估费用 ≥ 此值(元) 需确认后执行（0=关闭）

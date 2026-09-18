@@ -71,7 +71,7 @@ from shared import (  # P1-3 re-export：工具域阈值常量/锁已下沉 shar
     _COMMON_PACKAGES,
     _MEMORY_LOCK,
     _NOTIFY_PS,
-    _READ_LINE_MAX,
+    READ_LINE_MAX,
     _SEARCH_ENGINES,
     _SEARCH_EXTS,
     _SEARCH_SKIP_DIRS,
@@ -892,11 +892,12 @@ def get_active_client():
     if not key:
         return None
     try:
+        _t = cfg.get("timeout")
         sig = (
             key,
             str(cfg.get("base_url") or DEFAULT_BASE_URL),
             str(cfg.get("model") or DEFAULT_MODEL),
-            float(cfg.get("timeout") or 120.0),
+            float(_t if _t not in (None, "") else 0.0),  # 0 = 不限（默认）
         )
     except (TypeError, ValueError):
         return None
@@ -4044,14 +4045,24 @@ def _apply_plan_edits(tool_calls, edits):
 
 
 class DeepSeekClient:
-    def __init__(self, api_key, base_url=DEFAULT_BASE_URL, model=DEFAULT_MODEL, timeout=120.0,
+    def __init__(self, api_key, base_url=DEFAULT_BASE_URL, model=DEFAULT_MODEL, timeout=0.0,
                  gateway_session=None):
         self.api_key = api_key
         # 规范化：去掉用户误粘的 /chat/completions 尾巴（否则 SDK 会再拼一次）
         base_url = normalize_base_url(base_url) or DEFAULT_BASE_URL
         self.base_url = base_url
         self.model = model
+        try:
+            timeout = float(timeout)
+        except (TypeError, ValueError):
+            timeout = 0.0
         self.timeout = timeout
+        # 请求超时：<=0 = 不限（默认）；仍保留连接超时 10s，读取/写入不设限，
+        # 避免网络正常但生成慢时被中途掐断。
+        if timeout and timeout > 0:
+            _http_timeout = (10.0, timeout)
+        else:
+            _http_timeout = httpx.Timeout(connect=10.0, read=None, write=None, pool=None)
         # 官方端点标记：决定是否下发 DeepSeek 专属参数（thinking / reasoning_effort
         # / prefix / strict 等）。第三方 OpenAI 兼容网关一律走通用路径。
         self.is_official = is_official_endpoint(base_url)
@@ -4060,7 +4071,7 @@ class DeepSeekClient:
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
-            timeout=(10.0, timeout),
+            timeout=_http_timeout,
             **({"default_headers": self.gateway_headers} if self.gateway_headers else {}),
         )
 

@@ -107,6 +107,25 @@ def count_endpoints():
     return len(paths)
 
 
+def count_test_files():
+    """后端自举回归测试文件数（tests/test_*.py）。"""
+    return len(sorted((REPO_ROOT / "tests").glob("test_*.py")))
+
+
+def count_test_cases():
+    """pytest 实际收集的用例数（含参数化）。缺 pytest/依赖时返回 None（跳过该项校验）。"""
+    import subprocess
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q", "tests"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=180)
+        m = re.search(r"(\d+)\s+tests?\s+collected",
+                      (r.stdout or "") + "\n" + (r.stderr or ""))
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
 def read_version():
     tree = ast.parse(CFG.read_text(encoding="utf-8"))
     v = _top_assign(tree, "VERSION")
@@ -139,6 +158,11 @@ CLAIMS = [
     (README, r"全部\s*(\d+)\s*项工具",  "tools",      "可用工具总数(全部N项工具)"),
     # MODULES 端点清单的另一种写法（此前改数字靠手工）
     (MODULES, r"等\s*(\d+)\s*端点",     "endpoints",  "/v1 端点数量(等N端点写法)"),
+    # 测试规模（此前为门禁盲区：README/MODULES 长期停留在 61 文件 / 671 用例）
+    (README, r"(\d+)\s*个 pytest 文件", "pytest_files", "测试文件数"),
+    (README, r"(\d+)\s*用例",           "pytest_cases", "测试用例数"),
+    (MODULES, r"(\d+)\s*个 pytest 文件", "pytest_files", "测试文件数"),
+    (MODULES, r"(\d+)\s*用例",           "pytest_cases", "测试用例数"),
 ]
 
 # ── 文本断言：文档不应再包含的过期表述 ──
@@ -191,14 +215,20 @@ def main(argv=None):
         "tools": count_tools(),
         "endpoints": count_endpoints(),
         "version": read_version(),
+        "pytest_files": count_test_files(),
+        "pytest_cases": count_test_cases(),
     }
     print(f"实测: 工具 {expected['tools']} · /v1 路由 {expected['endpoints']} · "
-          f"版本 {expected['version']}")
+          f"版本 {expected['version']} · 测试 {expected['pytest_files']} 文件 / "
+          f"{expected['pytest_cases'] if expected['pytest_cases'] is not None else '?'} 用例")
 
     problems = 0
     for path, pattern, key, label in CLAIMS:
         text = path.read_text(encoding="utf-8")
         exp = expected[key]
+        if exp is None:
+            print(f"[跳过] {path.name}:{label} — 无法实测（缺 pytest/依赖）")
+            continue
         hits = list(re.finditer(pattern, text))
         if not hits:
             problems += 1

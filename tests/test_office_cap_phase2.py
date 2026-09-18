@@ -23,6 +23,33 @@ def _reg(name):
     assert name in dc.TOOL_CALL_MAP, f"{name} 必须在 CALL_MAP"
 
 
+_browser_ok = None
+
+
+def _browser_skip():
+    """playwright 包已装 ≠ 浏览器内核已装：只有真正能启动才跑渲染用例。
+
+    此前仅 `import playwright` 就判定可用，而 playwright 是核心依赖，导致内核
+    缺失时用例不是 skip 而是失败。
+    """
+    global _browser_ok
+    if _browser_ok is None:
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                try:
+                    b = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
+                except Exception:
+                    b = p.chromium.launch(args=["--no-sandbox"])
+                b.close()
+            _browser_ok = True
+        except Exception:
+            _browser_ok = False
+    if not _browser_ok:
+        import pytest
+        pytest.skip("未安装浏览器内核（playwright install chromium，或系统 Edge）")
+
+
 def test_s6_pptx_create_registered_and_slides(tmp_path):
     _perm(tmp_path)
     _reg("pptx_create")
@@ -140,11 +167,7 @@ def test_pptx_create_cover_image_and_multi_photo(tmp_path):
 def test_html_render_produces_png(tmp_path):
     """html_render：把 HTML/CSS 渲染成 PNG（AI 以 HTML 做专业排版的输出通道）。
     需 playwright + 系统 Edge/chromium；缺则跳过。"""
-    pytest = __import__("pytest")
-    try:
-        import playwright  # noqa: F401
-    except Exception:
-        pytest.skip("未安装 playwright")
+    _browser_skip()
     out = str(tmp_path / "d.png")
     html = "<html><body style='margin:0'><div style='width:100vw;height:100vh;background:#0B3D63;color:#fff;display:flex;align-items:center;justify-content:center;font-family:sans-serif'>Hello 自助机</div></body></html>"
     r = dc.html_render(html=html, output=out, width=640, height=360)
@@ -154,11 +177,7 @@ def test_html_render_produces_png(tmp_path):
 
 def test_html_to_ppt_makes_full_bleed_slides(tmp_path):
     """html_to_ppt：多段 HTML 设计 → 每页全幅图的整份 PPT（HTML 专业排版闭环）。"""
-    pytest = __import__("pytest")
-    try:
-        import playwright  # noqa: F401
-    except Exception:
-        pytest.skip("未安装 playwright")
+    _browser_skip()
     from pptx import Presentation
     from pptx.enum.shapes import MSO_SHAPE_TYPE
     page1 = "<div style='width:100vw;height:100vh;background:#0B3D63;color:#fff'>封面</div>"
@@ -191,11 +210,7 @@ def test_find_images_search_local_assets(tmp_path):
 
 def test_html_to_pdf_chinese_embedded(tmp_path):
     """html_to_pdf：HTML/CSS 渲染成印刷级 PDF，中文可提取、支持分页。"""
-    pytest = __import__("pytest")
-    try:
-        import playwright  # noqa: F401
-    except Exception:
-        pytest.skip("未安装 playwright")
+    _browser_skip()
     out = str(tmp_path / "d.pdf")
     html = ("<html><head><meta charset='utf-8'><style>@page{size:A4}"
             "body{font-family:'Microsoft YaHei'}</style></head>"

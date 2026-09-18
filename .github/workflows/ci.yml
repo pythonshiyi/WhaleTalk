@@ -26,7 +26,9 @@ jobs:
         run: ruff check . --select E9,F63,F7,F82
       - name: Compile entrypoints
         run: |
-          python -m py_compile web_app.py api_server.py deepseek_client.py webui/start.py
+          python -m py_compile web_app.py api_server.py deepseek_client.py webui/start.py bootstrap.py deps.py
+      - name: Bootstrap self-check
+        run: python bootstrap.py check --no-venv --skip-install
 
   test-backend:
     runs-on: windows-latest
@@ -45,6 +47,8 @@ jobs:
           pip install -r requirements-dev.txt
       - name: Pytest
         run: pytest -q
+      - name: Docs numbers vs source
+        run: python tools/check_docs.py
 
   gate-tools:
     runs-on: windows-latest
@@ -59,8 +63,6 @@ jobs:
         run: python tools/validate_tools.py
       - name: Island check (nine-layer reconciliation)
         run: python tools/island_check.py
-      - name: Docs numbers vs source
-        run: python tools/check_docs.py
 
   webui:
     runs-on: windows-latest

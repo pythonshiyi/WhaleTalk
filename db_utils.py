@@ -2,21 +2,12 @@
 
 从 deepseek_client.py 中拆出的纯函数/常量，供数据库查询/执行工具复用。
 """
-import os
 import re
 
-
-def _env_int(name, default):
-    """数值上限环境覆盖：WHALETALK_<NAME>；0/负 = 不限（由调用方解释）。"""
-    try:
-        raw = os.environ.get("WHALETALK_" + name)
-        return default if raw is None or str(raw).strip() == "" else int(raw)
-    except Exception:
-        return default
-
+from shared import TABLE_CELL_MAX, _env_int  # 常量单一来源（shared 归口）
 
 # 单元格显示截断上限（防超长单元格撑爆上下文）；WHALETALK_TABLE_CELL_MAX=0 → 不限
-TABLE_CELL_MAX = _env_int("TABLE_CELL_MAX", 100)
+# 注：TABLE_CELL_MAX 由 shared 统一定义，工具输出与前端渲染共用同一来源。
 
 # 单次数据库写操作影响行数上限（超限拒绝，防误伤全表）；WHALETALK_DB_EXECUTE_MAX_ROWS=0 → 不限
 DB_EXECUTE_MAX_ROWS = _env_int("DB_EXECUTE_MAX_ROWS", 10000)

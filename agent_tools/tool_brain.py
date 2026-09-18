@@ -43,6 +43,7 @@ from shared import (
     SELF_PROFILE_LOCK,
     clamp_int,
     cron_field_ok,
+    over_limit,
 )
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
@@ -134,7 +135,7 @@ def write_memory(text, tags="", type="", entities="", relations="",
     text = str(text or "").strip()
     if not text:
         return "错误：记忆内容为空"
-    if len(text) > MEMORY_MAX_TEXT:
+    if over_limit(len(text), MEMORY_MAX_TEXT):
         text = text[:MEMORY_MAX_TEXT] + "…"
     import memory_facade as _mf
     # 门面路径随主文件注入（测试会 monkeypatch dc.MEMORY_FILE，故每次调用都对齐）
@@ -357,7 +358,10 @@ def update_memory(old, new, tags="", type="", entities="", relations=""):
         if idx is None:
             return "（未找到匹配的记忆，未修改）"
         entry = facts[idx]
-        entry["value"] = str(new)[:MEMORY_MAX_TEXT]
+        _nv = str(new)
+        if over_limit(len(_nv), MEMORY_MAX_TEXT):
+            _nv = _nv[:MEMORY_MAX_TEXT]
+        entry["value"] = _nv
         if str(tags or "").strip():
             entry["key"] = str(tags).strip().split(",")[0].strip()[:40]
         if str(type or "").strip():
@@ -373,8 +377,11 @@ def update_memory(old, new, tags="", type="", entities="", relations=""):
         if rels:
             entry["relations"] = rels
         entry["ts"] = datetime.now().isoformat(timespec="seconds")
+        _nv = str(new)
+        if over_limit(len(_nv), MEMORY_MAX_TEXT):
+            _nv = _nv[:MEMORY_MAX_TEXT]
         if _save_memory(data):
-            _brain_sync_update(old, str(new)[:MEMORY_MAX_TEXT])
+            _brain_sync_update(old, _nv)
             return f"已修改记忆（当前共 {len(facts)} 条）"
         return "错误：记忆修改失败"
 

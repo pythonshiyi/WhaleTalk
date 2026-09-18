@@ -3933,7 +3933,7 @@ def _headless_chat(text, reply_channel=""):
     client = dc.DeepSeekClient(
         key, base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
         model=cfg.get("model") or dc.DEFAULT_MODEL,
-        timeout=float(cfg.get("timeout") or 120),
+        timeout=float(cfg.get("timeout") or 0),  # 0 = 不限
     )
     parts = []
     try:
@@ -7117,8 +7117,8 @@ class _Handler(BaseHTTPRequestHandler):
             "max_context_tokens": int(cfg.get("max_context_tokens") or 400000),
             "max_context_chars": int(cfg.get("max_context_chars") or 500000),
             "min_kept_turns": int(cfg.get("min_kept_turns") or 8),
-            "timeout": float(cfg.get("timeout") or 120.0),
-            "max_tool_rounds": int(cfg.get("max_tool_rounds") or 100),
+            "timeout": float(cfg.get("timeout") or 0.0),  # 0 = 不限
+            "max_tool_rounds": int(cfg.get("max_tool_rounds") or 0),  # 0 = 不限
             "browser_headless": bool(cfg.get("browser_headless")),
             "peak_warning": bool(cfg.get("peak_warning")),
             "suggestions_enabled": bool(cfg.get("suggestions_enabled")),
@@ -8339,7 +8339,7 @@ class _Handler(BaseHTTPRequestHandler):
                 base_url = base_url.rstrip("/") + "/beta"
             if cfg.get("strict_tools") and not base_url.rstrip("/").endswith("/beta"):
                 base_url = base_url.rstrip("/") + "/beta"
-        timeout = float(cfg.get("timeout") or 120.0)
+        timeout = float(cfg.get("timeout") or 0.0)  # 0 = 不限
         # 网关会话头（OpenCode Go/Zen 需要 x-opencode-session）：优先前端每会话
         # 稳定的 gw_session，其次已有会话 id；都没有时由客户端生成随机值。
         client = dc.DeepSeekClient(
@@ -8430,8 +8430,8 @@ class _Handler(BaseHTTPRequestHandler):
             # 输出与工具模式：无条件透传（client.chat 内部判断生效场景）
             "json_output": bool(cfg.get("json_output")),
             "strict_tools": bool(cfg.get("strict_tools")),
-            # 工具轮数上限：透传用户配置（client.chat 默认 100）
-            "max_tool_rounds": int(cfg.get("max_tool_rounds") or 100),
+            # 工具轮数上限：透传用户配置（0 = 不限）
+            "max_tool_rounds": int(cfg.get("max_tool_rounds") or 0),
         }
 
     def _inject_system_messages(self, messages, cfg, pure_chat, quiet_mode=False):

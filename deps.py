@@ -355,7 +355,8 @@ def pip_install(pkg, on_line=None, python=None):
             if rc == 0:
                 return True
         except subprocess.TimeoutExpired:
-            last_err = f"安装超时（>{PIP_INSTALL_TIMEOUT}s）"
+            _lim = f"{int(PIP_INSTALL_TIMEOUT)}s" if (PIP_INSTALL_TIMEOUT and PIP_INSTALL_TIMEOUT > 0) else "不限"
+            last_err = f"安装超时（>{_lim}）"
             if on_line:
                 on_line(f"[{pkg}] {last_err}")
         except Exception as e:  # noqa: BLE001

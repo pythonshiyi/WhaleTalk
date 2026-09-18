@@ -38,10 +38,11 @@ from shared import (  # P1-3: 阈值常量下沉 shared
     _BYE_PAT,
     _TEAM_ROLE_PRESETS,
     _VISION_LOOP_ACTIONS,
-    clamp_int,
     MEDIA_FORMATS,
     MEDIA_MAX_INPUT,
     RPA_FAILSAFE,
+    clamp_int,
+    over_limit,
 )
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
@@ -1548,8 +1549,8 @@ def media_ffmpeg(action="info", input="", output="", time="", width=0, format=""
         if not src or not os.path.isfile(src):
             return f"错误：源文件不存在：{input}"
         try:
-            if os.path.getsize(src) > MEDIA_MAX_INPUT:
-                return "错误：输入文件超过 2GB 上限"
+            if over_limit(os.path.getsize(src), MEDIA_MAX_INPUT):
+                return f"错误：输入文件超过 {MEDIA_MAX_INPUT // 1024 // 1024}MB 上限"
         except OSError:
             pass
 
