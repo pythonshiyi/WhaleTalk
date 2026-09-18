@@ -1756,8 +1756,8 @@ def pdf_visual_check(path, out_dir="", max_pages=20, dpi=90):
     except Exception:
         import fitz as pymupdf
     try:
-        max_pages = max(1, min(int(max_pages or 20), 100))
-        dpi = max(30, min(int(dpi or 90), 300))
+        max_pages = clamp_int(max_pages or 20, 20, lo=1, hi=100)
+        dpi = clamp_int(dpi or 90, 90, lo=30, hi=300)
         # 输出目录
         if str(out_dir or "").strip():
             od = permissions.resolve(out_dir)
@@ -1836,7 +1836,7 @@ def docx_read(path, max_chars=50000):
     if p.lower().endswith(".doc"):
         return "错误：暂不支持旧版 .doc 格式，请先用 Word 另存为 .docx 后重试"
     try:
-        limit = max(200, min(500000, int(max_chars or DOCX_MAX_DEFAULT)))
+        limit = clamp_int(max_chars or DOCX_MAX_DEFAULT, DOCX_MAX_DEFAULT, lo=200, hi=500000)
     except (TypeError, ValueError):
         limit = DOCX_MAX_DEFAULT
     try:
@@ -3585,7 +3585,7 @@ def _html_to_pngs(items, w, h, sc, full_page, base_dir=None):
             todo.append((hdoc, out_path, needs_ready))
         if not todo:
             return "无有效 HTML 内容"
-        w, h, sc = int(w), int(h), max(1, min(int(sc or 1), 3))
+        w, h, sc = int(w), int(h), clamp_int(sc or 1, 1, lo=1, hi=3)
         with _html_render_lock(), sync_playwright() as p:
             browser = None
             tmp_files = []
@@ -3717,7 +3717,7 @@ def html_render(html="", source_path="", output="", width=1280, height=720,
     try:
         w = int(width) or 1280
         h = int(height) or 720
-        sc = max(1, min(int(scale or 1), 3))
+        sc = clamp_int(scale or 1, 1, lo=1, hi=3)
         base_dir = None
         if str(source_path or "").strip():
             _sp = permissions.resolve(source_path)
@@ -3776,7 +3776,7 @@ def html_to_ppt(path, pages, width=1280, height=720, scale=2):
         from pptx.util import Inches as _In
         w = int(width) or 1280
         h = int(height) or 720
-        sc = max(1, min(int(scale or 1), 3))
+        sc = clamp_int(scale or 1, 1, lo=1, hi=3)
         cache_dir = os.path.join(os.path.dirname(p) or ".", ".wt_htmlppt")
         os.makedirs(cache_dir, exist_ok=True)
         base_dir = os.path.dirname(p) or None  # 页面内相对图片以此目录为基准解析
@@ -4196,7 +4196,7 @@ def chart_render(output, data, labels=None, series=None, kind="line", title="", 
                 "<style>html,body{margin:0;background:#fff}</style></head><body>"
                 f"<div id='wtc' class='wt-chart' style='width:{w}px;height:{h}px'>"
                 f"<script type='application/json'>{opt_json}</script></div></body></html>")
-        err = _html_to_png(html, out, w, h, max(1, min(int(scale or 2), 3)), True)
+        err = _html_to_png(html, out, w, h, clamp_int(scale or 2, 2, lo=1, hi=3), True)
         if err:
             return "错误：" + err
         sz = os.path.getsize(out)

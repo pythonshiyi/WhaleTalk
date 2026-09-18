@@ -62,6 +62,7 @@ from shared import (  # P1-3: 阈值常量下沉 shared
     SEARCH_MAX_RESULTS,
     SEARCH_SOFT_DEADLINE,
     WEBDAV_MAX_SIZE,
+    clamp_int,
 )
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
@@ -273,8 +274,8 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
     except (TypeError, ValueError):
         requested_num = SEARCH_MAX_RESULTS
     try:
-        num = max(1, min(20, int(num)))
-        offset = max(0, min(200, int(offset)))
+        num = clamp_int(num, 1, lo=1, hi=20)
+        offset = clamp_int(offset, 0, lo=0, hi=200)
     except (TypeError, ValueError):
         num, offset = SEARCH_MAX_RESULTS, 0
     for tag, val in (("since", since), ("until", until)):
@@ -430,7 +431,7 @@ def search_github(query, num=5, language=""):
     if not query or not str(query).strip():
         return "错误：搜索词为空"
     try:
-        num = max(1, min(20, int(num)))
+        num = clamp_int(num, 1, lo=1, hi=20)
     except (TypeError, ValueError):
         num = 5
     q = str(query).strip()
@@ -651,7 +652,7 @@ def search_realtime(query="", num=5, source="hn"):
     """实时信息通道（多源）：hn / github / bilibili / stackoverflow。
     各源无 query 时返回热点榜，有 query 时按源能力做搜索（bilibili 无搜索 API）。"""
     try:
-        num = max(1, min(20, int(num)))
+        num = clamp_int(num, 1, lo=1, hi=20)
     except (TypeError, ValueError):
         num = 5
     src = str(source or "hn").strip().lower()
@@ -839,8 +840,8 @@ def web_screenshot(url, width=1280, height=800):
     if not permissions.WORKSPACE_DIR:
         return "错误：工作区未初始化"
     try:
-        w = max(320, min(2560, int(width or 1280)))
-        h = max(240, min(1920, int(height or 800)))
+        w = clamp_int(width or 1280, 1280, lo=320, hi=2560)
+        h = clamp_int(height or 800, 800, lo=240, hi=1920)
     except (TypeError, ValueError):
         w, h = 1280, 800
     err = _safe_url(url)
@@ -1455,7 +1456,7 @@ def call_api(url, method="GET", params=None, json_body=None, data=None,
     if method not in CALL_API_METHODS:
         return f"错误：method 仅支持 {'/'.join(CALL_API_METHODS)}"
     try:
-        timeout = max(1, min(180, int(timeout or 15)))
+        timeout = clamp_int(timeout or 15, 15, lo=1, hi=180)
     except (TypeError, ValueError):
         timeout = 15
     hdrs = {}

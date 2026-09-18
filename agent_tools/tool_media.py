@@ -25,7 +25,7 @@ from deepseek_client import (
     is_vision_model,
 )
 from security import _safe_url
-from shared import OCR_IMAGE_PS
+from shared import OCR_IMAGE_PS, clamp_int
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
@@ -125,7 +125,7 @@ def image_process(path, output, ops=""):
                     draw.text((w - tw - 10, h - th - 10), val, fill=(255, 255, 255, 200), font=font)
                 elif key == "quality" and val:
                     try:
-                        quality = max(1, min(100, int(val)))
+                        quality = clamp_int(val, 1, lo=1, hi=100)
                     except ValueError:
                         return f"错误：quality 应为 1-100 的数字，收到：{op}"
                     applied += 1  # quality 不算图像变换，但记录已生效

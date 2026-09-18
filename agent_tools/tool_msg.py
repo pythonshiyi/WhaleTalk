@@ -22,6 +22,7 @@ from deepseek_client import (
     get_active_client,
     send_webhook_notify,
 )
+from shared import clamp_int
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
@@ -275,8 +276,8 @@ def telegram_poll_updates(timeout=15, limit=5):
     if not token:
         return "未配置 telegram_bot_token（系统菜单 → IM 通道配置 可开启）"
     try:
-        timeout = max(1, min(60, int(timeout or 15)))
-        limit = max(1, min(20, int(limit or 5)))
+        timeout = clamp_int(timeout or 15, 15, lo=1, hi=60)
+        limit = clamp_int(limit or 5, 5, lo=1, hi=20)
     except (TypeError, ValueError):
         timeout, limit = 15, 5
     try:
@@ -342,11 +343,11 @@ def read_email(limit=10, since_days=3):
         if not (host and user and pwd):
             return "错误：imap 配置不完整（host/user/password 必填）"
         try:
-            lim = max(1, min(50, int(limit or 10)))
+            lim = clamp_int(limit or 10, 10, lo=1, hi=50)
         except (TypeError, ValueError):
             lim = 10
         try:
-            days = max(0, min(30, int(since_days or 3)))
+            days = clamp_int(since_days or 3, 3, lo=0, hi=30)
         except (TypeError, ValueError):
             days = 3
         import imaplib
@@ -484,7 +485,7 @@ def agent_mail(action="list", q="", id="", to="", subject="", body="", dir="",
 
     cmd = []
     try:
-        limit = max(1, min(50, int(limit or 10)))
+        limit = clamp_int(limit or 10, 10, lo=1, hi=50)
     except (TypeError, ValueError):
         limit = 10
 
@@ -689,7 +690,7 @@ def daily_brief(topic="", max_items=8):
     if not items:
         return "今日暂无资讯素材（RSS 与搜索均无结果），可稍后再试"
     try:
-        limit = max(3, min(15, int(max_items or 8)))
+        limit = clamp_int(max_items or 8, 8, lo=3, hi=15)
     except (TypeError, ValueError):
         limit = 8
     items = items[:limit]

@@ -221,6 +221,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 | [TECH_NOTES.md](TECH_NOTES.md) | 架构笔记与踩坑记录 |
 | [MODULES.md](MODULES.md) | 模块拆分清单与职责边界 |
 | [docs/AI_PROJECT_GUIDE.md](docs/AI_PROJECT_GUIDE.md) | **接手开发者的可执行地图**（推荐先读） |
+| [docs/配置与上限.md](docs/配置与上限.md) | **全部 `WHALETALK_*` 开关速查**（上限可配、0=不限；含 config 开关） |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
 | [SECURITY.md](SECURITY.md) | 安全策略与加固路径 |
 | [docs/](docs/) | 信任内核 / 出网账本与记忆门面 / 架构收口 / 插件开发 / 设计系统 |

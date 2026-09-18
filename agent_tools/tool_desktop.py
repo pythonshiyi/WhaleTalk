@@ -38,6 +38,7 @@ from shared import (  # P1-3: 阈值常量下沉 shared
     _BYE_PAT,
     _TEAM_ROLE_PRESETS,
     _VISION_LOOP_ACTIONS,
+    clamp_int,
     MEDIA_FORMATS,
     MEDIA_MAX_INPUT,
     RPA_FAILSAFE,
@@ -1032,7 +1033,7 @@ def image_generate(prompt, path="", size="1024x1024", n=1, reference="", mask=""
             return f"错误：size 每边须在 64-4096 之间：{size}"
         sz = f"{w}x{h}"
     try:
-        num = max(1, min(10, int(n)))
+        num = clamp_int(n, 1, lo=1, hi=10)
     except (TypeError, ValueError):
         num = 1
     key = str(_dc.IMAGE_GEN_KEY or "").strip()
@@ -1172,7 +1173,7 @@ def qrcode(action="generate", text="", output="", image_path="", size=300, error
         if not ok:
             return reason
         try:
-            s = max(64, min(1024, int(size or 300)))
+            s = clamp_int(size or 300, 300, lo=64, hi=1024)
         except (TypeError, ValueError):
             s = 300
         ec_map = {"L": ERROR_CORRECT_L, "M": ERROR_CORRECT_M,
@@ -1356,7 +1357,7 @@ def _mv_compose(items, output, durations=None, duration=3.0, effect="kenburns",
     if not (16 <= W <= 7680 and 16 <= H <= 7680):
         return "", "", f"resolution 每边须在 16-7680：{resolution}"
     try:
-        fps = max(1, min(120, int(fps or 30)))
+        fps = clamp_int(fps or 30, 30, lo=1, hi=120)
     except (TypeError, ValueError):
         fps = 30
     eff = str(effect or "none").strip().lower()
@@ -1651,7 +1652,7 @@ def media_ffmpeg(action="info", input="", output="", time="", width=0, format=""
         w = 0
         if width:
             try:
-                w = max(16, min(7680, int(width)))
+                w = clamp_int(width, 16, lo=16, hi=7680)
             except (TypeError, ValueError):
                 return "错误：width 应为 16-7680 的整数"
         args = ["-hide_banner", "-y", "-i", src]
@@ -1722,7 +1723,7 @@ def team_run(goal, roles=("研究员", "工程师", "评审"), steps=0):
         role_list = ["研究员", "工程师", "评审"]
     role_list = role_list[:5]
     try:
-        steps_n = max(0, min(8, int(steps or 0)))
+        steps_n = clamp_int(steps or 0, 0, lo=0, hi=8)
     except (TypeError, ValueError):
         steps_n = 0
 

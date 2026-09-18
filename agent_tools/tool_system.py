@@ -39,6 +39,7 @@ from shared import (  # P1-3: 阈值常量下沉 shared
     EVO_WRITE_EXTS,
     PROJECT_DIR,
     PROJECT_READ_EXTS,
+    clamp_int,
 )
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
@@ -105,7 +106,7 @@ def watch_files(path, pattern="", max_items=50):
     if not (added or removed or modified):
         return f"无变化（{len(snap)} 个文件，自上次检查后无新增/修改/删除）"
     try:
-        limit = max(1, min(100, int(max_items or 50)))
+        limit = clamp_int(max_items or 50, 50, lo=1, hi=100)
     except (TypeError, ValueError):
         limit = 50
     lines = [f"文件变化（{p}）："]
@@ -149,7 +150,7 @@ def recall_session(query="", date="", limit=5):
         return "（会话库不可用，无法回顾）"
     import glob as _glob
     try:
-        limit = max(1, min(20, int(limit or 5)))
+        limit = clamp_int(limit or 5, 5, lo=1, hi=20)
     except (TypeError, ValueError):
         limit = 5
     q = str(query or "").strip().lower()
@@ -1393,7 +1394,7 @@ def usage_report(days=7):
     if not _dc.STATS_FILE or not os.path.exists(_dc.STATS_FILE):
         return "暂无用量统计数据"
     try:
-        days = max(1, min(90, int(days or 7)))
+        days = clamp_int(days or 7, 7, lo=1, hi=90)
     except (TypeError, ValueError):
         days = 7
     try:
@@ -1494,7 +1495,7 @@ def capability_heatmap(days=30):
     """能力热力图：工具使用/失败率/结晶/预激活命中（返回文本摘要）。"""
     import insight
     try:
-        days = max(0, min(3650, int(days if days is not None else 30)))
+        days = clamp_int(days if days is not None else 30, 0, lo=0, hi=3650)
     except (TypeError, ValueError):
         days = 30
     try:
@@ -1560,7 +1561,7 @@ def self_report(days=7, write=False):
     """自我述职：汇总工作/决策/目标/进化/成长/用量（可写盘为 Markdown）。"""
     import insight
     try:
-        days = max(1, min(3650, int(days or 7)))
+        days = clamp_int(days or 7, 7, lo=1, hi=3650)
     except (TypeError, ValueError):
         days = 7
     try:
