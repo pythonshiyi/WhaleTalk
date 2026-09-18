@@ -61,3 +61,26 @@ def test_verify_shots_ok():
              {"index": 1, "t_start": 5.0, "t_end": 10.0, "duration": 5.0}]
     d = {label: ok for label, ok, _ in me.verify_shots(shots, 10.0)}
     assert all(d.values())
+
+
+def test_words_to_spans():
+    w = [("a", 1.0, 1.4), ("b", 1.5, 1.9), ("c", 5.0, 5.4)]
+    assert me._words_to_spans(w) == [(1.0, 1.9), (5.0, 5.4)]
+
+
+def test_merge_spans():
+    assert me._merge_spans([(0, 1), (1.2, 2)], [(0.5, 1.5)]) == [(0.0, 2.0)]
+    assert me._merge_spans([], []) == []
+
+
+def test_assign_lines_monotonic_no_collapse():
+    lines = [f"L{i}" for i in range(6)]
+    spans = [(26.0, 30.0), (30.0, 60.0)]  # 2 段 vs 6 行 → 需切分
+    out = me._assign_lines(lines, spans)
+    assert [o["text"] for o in out] == lines
+    starts = [o["start"] for o in out]
+    assert starts == sorted(starts), "必须单调"
+    assert len(set(starts)) == len(starts), "不得塌缩到同一时间"
+    assert out[0]["start"] >= 26.0 - 1e-6
+    assert out[-1]["end"] <= 60.0 + 1e-6
+

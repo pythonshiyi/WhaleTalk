@@ -177,24 +177,140 @@ def align_lyrics(audio, lyrics_text, model="base", sr=16000):
     优先：faster-whisper 词级时间戳 + 字符级模糊匹配；
     回退：能量谷 + 人声频段切句（不做均匀估算）。
     """
-    lines = parse_lyrics_text(lyrics_text) if not str(lyrics_text).lstrip().startswith("[") \
-        else [r["text"] for r in parse_lrc(lyrics_text)]
     lrc = parse_lrc(lyrics_text)
-    if lrc:  # 有现成 LRC 时间戳：直接用，缺口按下一句补
+    if lrc:  # ① 现成 LRC 时间戳：直接采信（精确）
         return _fill_lrc_gaps(lrc)
+    lines = parse_lyrics_text(lyrics_text)
     if not lines:
         return []
     words = _whisper_words(audio, model, prompt=" ".join(lines))
+    active = _active_spans(audio, sr)
     if words:
-        # A) 顺序短语映射（歌唱场景首选：第 i 句 ≈ 第 i 个演唱短语）
-        seq = _match_by_phrases(lines, words)
-        if seq and _match_quality(seq) >= 0.4:
-            return seq
-        # B) 文本模糊匹配（识别较好时的精修）
-        aligned = _match_lines(lines, words)
-        if aligned and _match_quality(aligned) >= 0.4:
-            return aligned
-    return _align_by_energy(audio, lines, sr)
+        # ② whisper 词级短语 ∪ 能量活跃段 → 单调分配；用首/末人声锚定，剔除前奏尾奏
+        first_on, last_off = words[0][1], max(w[2] for w in words)
+        merged = _merge_spans(_words_to_spans(words), active)
+        clipped = []
+        for s, e in merged:
+            s2, e2 = max(s, first_on), min(e, last_off + 1.5)
+            if e2 - s2 > 0.3:
+                clipped.append((s2, e2))
+        assigned = _assign_lines(lines, clipped)
+        if assigned and _match_quality(assigned) >= 0.8:
+            return assigned
+    if active:
+        # ③ 纯能量活跃段兜底（无 whisper）
+        assigned = _assign_lines(lines, active)
+        if assigned:
+            return assigned
+    return [{"text": t, "start": None, "end": None, "index": i, "confidence": 0.0}
+            for i, t in enumerate(lines)]
+
+
+def _words_to_spans(words, gap=0.8):
+    """词序列 → 演唱短语跨度（按停顿切）。"""
+    if not words:
+        return []
+    spans, s, e = [], words[0][1], words[0][2]
+    for _t, ws, we in words[1:]:
+        if ws - e > gap:
+            spans.append((s, e))
+            s, e = ws, we
+        else:
+            e = max(e, we)
+    spans.append((s, e))
+    return spans
+
+
+def _active_spans(audio, sr=22050, hop=512, thr_k=0.35, min_span=0.5, merge_gap=0.6):
+    """能量活跃段（自适应阈值 RMS）：作曲段/演唱段的粗切，用于填补 whisper 漏识别。"""
+    try:
+        import numpy as np
+    except Exception:  # noqa: BLE001
+        return []
+    y, e_sr = _load_mono(audio, sr)
+    if len(y) == 0:
+        return []
+    es = _energy_curve(y, e_sr, hop)
+    if len(es) < 4:
+        return []
+    ts = np.array([e[0] for e in es], dtype="float32")
+    rms = np.array([e[1] for e in es], dtype="float32")
+    thr = float(rms.mean() + thr_k * rms.std())
+    active = rms > thr
+    spans, i, n = [], 0, len(active)
+    while i < n:
+        if active[i]:
+            j = i
+            while j + 1 < n and active[j + 1]:
+                j += 1
+            spans.append([float(ts[i]), float(ts[j])])
+            i = j + 1
+        else:
+            i += 1
+    merged = []
+    for s, e in spans:
+        if merged and s - merged[-1][1] < merge_gap:
+            merged[-1][1] = e
+        else:
+            merged.append([s, e])
+    return [(s, e) for s, e in merged if e - s >= min_span]
+
+
+def _merge_spans(a, b, gap=0.5):
+    """合并两组跨度并去重叠（取并集后合并相邻）。"""
+    allsp = sorted([tuple(x) for x in (a or [])] + [tuple(x) for x in (b or [])])
+    if not allsp:
+        return []
+    out = [list(allsp[0])]
+    for s, e in allsp[1:]:
+        if s - out[-1][1] <= gap:
+            out[-1][1] = max(out[-1][1], e)
+        else:
+            out.append([s, e])
+    return [(s, e) for s, e in out if e > s]
+
+
+def _assign_lines(lines, spans):
+    """把 n 行歌词**单调、不塌缩**地分配到 spans（行多→按跨度切分；行少→合并短语）。"""
+    spans = [(float(s), float(e)) for s, e in (spans or []) if e > s]
+    n, m = len(lines), len(spans)
+    if n <= 0 or m <= 0:
+        return []
+    out = []
+    if m >= n:
+        per = m / n
+        for i, line in enumerate(lines):
+            a = spans[min(int(i * per), m - 1)][0]
+            b = spans[min(int((i + 1) * per) - 1, m - 1)][1]
+            out.append((line, a, b))
+    else:
+        total = sum(e - s for s, e in spans) or 1.0
+        alloc, remaining = [], n
+        for idx, (s, e) in enumerate(spans):
+            if idx == m - 1:
+                k = remaining
+            else:
+                k = max(1, int(round(n * (e - s) / total)))
+                k = min(k, remaining - (m - 1 - idx))
+            alloc.append(k)
+            remaining -= k
+        li = 0
+        for (s, e), k in zip(spans, alloc):
+            step = (e - s) / max(1, k)
+            for j in range(k):
+                if li >= n:
+                    break
+                out.append((lines[li], s + j * step, s + (j + 1) * step))
+                li += 1
+    res = []
+    prev_start = 0.0
+    for i, (line, a, b) in enumerate(out):
+        a = max(a, prev_start)
+        b = max(b, a + 0.6)
+        res.append({"text": line, "start": round(a, 3), "end": round(b, 3),
+                    "index": i, "confidence": 0.5})
+        prev_start = a + 0.01
+    return res
 
 
 def _whisper_words(audio, model, prompt=""):
