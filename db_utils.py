@@ -74,6 +74,9 @@ def readonly_stmt(sql):
     # 分号隔离的附加语句（SELECT 1; DROP TABLE ...）：带内部分号的整句拒绝
     if ";" in stmt.rstrip(";"):
         return False
+    # 服务器端功能关键字过滤：用户可关（WHALETALK_DB_READ_FILTER=0 → 只按前缀判定）
+    if _env_int("DB_READ_FILTER", 1) <= 0:
+        return True
     for kw in DB_FORBIDDEN_KEYWORDS:
         if kw in upper:
             return False

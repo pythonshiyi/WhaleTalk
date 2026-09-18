@@ -5535,7 +5535,10 @@ def _abilities():
         })
     return {"domains": domains, "total": len(dc.TOOLS)}
 
-MAX_BODY = 1_000_000
+try:
+    MAX_BODY = int(os.environ.get("WHALETALK_MAX_BODY", "1000000") or 1000000)  # 0 = 不限请求体
+except Exception:
+    MAX_BODY = 1_000_000
 # 图片上传专用请求体上限：base64 会把原图放大 4/3，需容纳 ≤48MB 原图直传
 # （超出部分由 _upload 的自动压缩兜底）；仅 /v1/upload 使用，其余接口保持 1MB 基线。
 UPLOAD_BODY_MAX = 64 * 1024 * 1024
@@ -6139,7 +6142,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _read_body(self, max_len=None):
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
-            if length <= 0 or length > (max_len or MAX_BODY):
+            _limit = max_len or MAX_BODY  # MAX_BODY<=0 = 不限
+            if length <= 0 or (_limit and _limit > 0 and length > _limit):
                 return None
             # 防挂起：恶意客户端声明 Content-Length 却不发完，30s 内放弃，
             # 避免连接被永久占用导致线程累积（SSE 长连接不经过这里，不受影响）

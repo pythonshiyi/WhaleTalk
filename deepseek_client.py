@@ -2780,7 +2780,8 @@ def _workflow_step_text(st, name=""):
 
 def _persist_long_result(name, text):
     """工具结果过长时自动落盘到工作区，上下文只保留路径 + 首尾摘要（省 token 不丢信息）。"""
-    if len(str(text)) <= _RESULT_INTO_CONTEXT_MAX:
+    cap = _RESULT_INTO_CONTEXT_MAX
+    if not (cap and cap > 0) or len(str(text)) <= cap:  # cap<=0 = 不限
         return text
     if not permissions.WORKSPACE_DIR:
         return text
@@ -2791,7 +2792,7 @@ def _persist_long_result(name, text):
         path = os.path.join(d, fn)
         with open(path, "w", encoding="utf-8", errors="replace") as f:
             f.write(str(text))
-        keep = _RESULT_INTO_CONTEXT_MAX // 8
+        keep = cap // 8
         body = str(text)
         head = body[:keep]
         tail = body[-keep:]
@@ -2802,7 +2803,7 @@ def _persist_long_result(name, text):
         )
     except Exception:
         logging.exception("长结果落盘失败，按截断处理")
-        return str(text)[:_RESULT_INTO_CONTEXT_MAX] + "\n[结果过大，已截断，请缩小范围后重试]"
+        return str(text)[:cap] + "\n[结果过大，已截断，请缩小范围后重试]"
 
 
 # ============================================================================
@@ -3489,11 +3490,20 @@ TOOL_GROUPS = build_groups(_GROUP_ORDER, _TOOL_ORDER)
 _TOOL_ACTION_PHRASES = build_phrases()
 _PREACTIVATE_HINTS = build_preactivate(_HINT_ORDER, _TOOL_ORDER)
 
-MAX_TOOL_ROUNDS = 100
-MAX_EMPTY_RETRIES = 1
-MAX_SAME_TOOL_REPEATS = 3
-MAX_PLAN_REJECTIONS = 3
-_RESULT_INTO_CONTEXT_MAX = 40000  # 工具结果写入历史的字符上限（≈1 万 token）
+def _env_int(name, default):
+    """循环/上限的用户配置：WHALETALK_<NAME>；0/负 = 不限（由用途解释）。"""
+    try:
+        raw = os.environ.get("WHALETALK_" + name)
+        return default if raw is None or str(raw).strip() == "" else int(raw)
+    except Exception:
+        return default
+
+
+MAX_TOOL_ROUNDS = _env_int("MAX_TOOL_ROUNDS", 100)          # 0 = 不限轮数
+MAX_EMPTY_RETRIES = _env_int("MAX_EMPTY_RETRIES", 1)
+MAX_SAME_TOOL_REPEATS = _env_int("MAX_SAME_TOOL_REPEATS", 3)  # 0 = 关闭重复防护
+MAX_PLAN_REJECTIONS = _env_int("MAX_PLAN_REJECTIONS", 3)      # 0 = 不限
+_RESULT_INTO_CONTEXT_MAX = _env_int("RESULT_INTO_CONTEXT_MAX", 40000)  # 0 = 不落盘/不截断
 # 停止后等待已提交工具结果的宽限期：副作用已发生的工具（发信/写文件/启进程）
 # 要拿到真实结果写回历史，模型下轮才不会重试造成重复执行
 _STOP_TOOL_GRACE_S = 1.5
@@ -4368,7 +4378,9 @@ class DeepSeekClient:
         empty_retries = 0
         plan_rejections = 0
         json_retried = False  # JSON 输出自校验重试只允许一次
-        rounds = max_tool_rounds if max_tool_rounds and max_tool_rounds > 0 else MAX_TOOL_ROUNDS
+        # MAX_TOOL_ROUNDS<=0 → 不限轮数（用大数近似；仍受停止/上下文/循环防护约束）
+        _def_rounds = MAX_TOOL_ROUNDS if MAX_TOOL_ROUNDS and MAX_TOOL_ROUNDS > 0 else 10 ** 9
+        rounds = max_tool_rounds if max_tool_rounds and max_tool_rounds > 0 else _def_rounds
         last_tool_key = None
         same_repeats = 0
         try:
@@ -4632,7 +4644,7 @@ class DeepSeekClient:
                         ok_plan, reason_plan, plan_edits = bool(res), "", None
                     if not ok_plan:
                         plan_rejections += 1
-                        if plan_rejections >= MAX_PLAN_REJECTIONS:
+                        if MAX_PLAN_REJECTIONS and MAX_PLAN_REJECTIONS > 0 and plan_rejections >= MAX_PLAN_REJECTIONS:
                             logger.warning("计划连续被拒绝 %s 次，终止工具循环", plan_rejections)
                             for tc in tool_calls:
                                 work.append(
@@ -4670,7 +4682,7 @@ class DeepSeekClient:
                     else:
                         same_repeats = 1
                         last_tool_key = key
-                    if same_repeats >= MAX_SAME_TOOL_REPEATS:
+                    if MAX_SAME_TOOL_REPEATS and MAX_SAME_TOOL_REPEATS > 0 and same_repeats >= MAX_SAME_TOOL_REPEATS:
                         guarded = True
                         break
                 if guarded:
@@ -4898,7 +4910,7 @@ class DeepSeekClient:
                     # 重传给模型会白白消耗数万 token（费用 + 延迟 + 逼近 1M 上限）。
                     # 超长结果自动落盘到工作区，上下文只留路径 + 首尾摘要。
                     text = str(result)
-                    if len(text) > _RESULT_INTO_CONTEXT_MAX:
+                    if _RESULT_INTO_CONTEXT_MAX and _RESULT_INTO_CONTEXT_MAX > 0 and len(text) > _RESULT_INTO_CONTEXT_MAX:
                         text = _persist_long_result(name, text)
                     # 视觉自审（config vision_self_review 开启且为视觉模型）：工具产出图片时，
                     # 自动调用视觉模型审图，把审阅意见附在结果里，模型据此迭代（B 自我审图闭环）。
