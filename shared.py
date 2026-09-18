@@ -242,12 +242,29 @@ def _sleep(sec):
 # ============================ 参数校验辅助（D4） ============================
 # 收敛各工具手写的 try:int/except 三段式，统一语义：
 # 非法/缺省 → 默认值；显式合法 → 生效。返回类型稳定。
+def _env_flag(name, default=False):
+    """布尔开关：WHALETALK_<NAME>；'0/false/no/off/空' = False。"""
+    try:
+        raw = os.environ.get("WHALETALK_" + name)
+        if raw is None or str(raw).strip() == "":
+            return default
+        return str(raw).strip().lower() not in ("0", "false", "no", "off")
+    except Exception:
+        return default
+
+
 def clamp_int(value, default, lo=None, hi=None):
-    """安全整数：非数值/None → default；越界 → 钳制到 [lo, hi]。"""
+    """安全整数：非法值/None → default；越界 → 钳制到 [lo, hi]。
+
+    WHALETALK_NO_CLAMP=1 时**跳过上下限钳制**（仍做类型归一，非法值回 default）——
+    是否设限由用户决定，不因个别实验替模型定死范围。
+    """
     try:
         v = int(value)
     except (TypeError, ValueError):
         v = int(default)
+    if _env_flag("NO_CLAMP"):
+        return v
     if lo is not None and v < lo:
         v = lo
     if hi is not None and v > hi:
@@ -256,11 +273,13 @@ def clamp_int(value, default, lo=None, hi=None):
 
 
 def clamp_float(value, default, lo=None, hi=None):
-    """安全浮点数：非数值/None → default；越界 → 钳制到 [lo, hi]。"""
+    """安全浮点：非法值/None → default；越界 → 钳制到 [lo, hi]。WHALETALK_NO_CLAMP=1 时不钳制。"""
     try:
         v = float(value)
     except (TypeError, ValueError):
         v = float(default)
+    if _env_flag("NO_CLAMP"):
+        return v
     if lo is not None and v < lo:
         v = lo
     if hi is not None and v > hi:
@@ -269,9 +288,9 @@ def clamp_float(value, default, lo=None, hi=None):
 
 
 def clamp_str(value, default="", max_len=None):
-    """安全字符串：None → default；可选截断上限。"""
+    """安全字符串：None → default；可选截断上限。WHALETALK_NO_CLAMP=1 时不截断。"""
     s = str(value) if value is not None else str(default)
-    if max_len is not None and len(s) > max_len:
+    if not _env_flag("NO_CLAMP") and max_len is not None and len(s) > max_len:
         s = s[:max_len]
     return s
 

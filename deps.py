@@ -127,9 +127,16 @@ from urllib.parse import urlparse
 
 PIP_MIRROR = os.environ.get("WHALETALK_PIP_MIRROR", "https://pypi.tuna.tsinghua.edu.cn/simple")
 
-# 每包安装超时与重试（防单个包卡死拖停全部依赖）
-PIP_INSTALL_TIMEOUT = 300        # 单包安装上限（秒）
-PIP_RETRIES = 1                  # 失败重试次数
+# 每包安装超时与重试（防单个包卡死拖停全部依赖）；可由 WHALETALK_PIP_INSTALL_TIMEOUT /
+# WHALETALK_PIP_RETRIES 覆盖；超时 <=0 = 不限。
+try:
+    PIP_INSTALL_TIMEOUT = int(os.environ.get("WHALETALK_PIP_INSTALL_TIMEOUT", "300") or 300)
+except Exception:
+    PIP_INSTALL_TIMEOUT = 300
+try:
+    PIP_RETRIES = int(os.environ.get("WHALETALK_PIP_RETRIES", "1") or 0)
+except Exception:
+    PIP_RETRIES = 1
 
 # ── pip 代理预检：系统代理已配置但不可达时自动绕过 ─────────────────────
 # 真实故障：Windows 系统代理（如 Clash 127.0.0.1:7890）残留为「已启用」但进程
@@ -259,12 +266,14 @@ def install_many(miss, on_line=None, python=None):
             _INSTALL.update({"running": False, "current": "", "failed": failed})
 
 
-def run_verbose(cmd, on_line=None, timeout=PIP_INSTALL_TIMEOUT):
+def run_verbose(cmd, on_line=None, timeout=None):
     """逐行执行命令，实时回调每行输出；超时强制终止（防卡死拖停全部依赖）。
 
     用独立 reader 线程逐行读 stdout（阻塞读不影响超时检测），
-    主循环轮询 poll() + 超时 kill。返回 returncode。
+    主循环轮询 poll() + 超时 kill。返回 returncode。timeout<=0 = 不限。
     """
+    if timeout is None:
+        timeout = PIP_INSTALL_TIMEOUT
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1, errors="replace")
@@ -294,7 +303,7 @@ def run_verbose(cmd, on_line=None, timeout=PIP_INSTALL_TIMEOUT):
         except queue.Empty:
             if proc.poll() is not None:
                 continue  # 进程已退，等 reader 收尾（EOF → None）
-            if time.monotonic() - start > timeout:
+            if timeout and timeout > 0 and time.monotonic() - start > timeout:
                 try:
                     proc.kill()
                 except Exception:
@@ -337,8 +346,9 @@ def pip_install(pkg, on_line=None, python=None):
             if on_line:
                 rc = run_verbose(base, on_line)
             else:
+                _t = PIP_INSTALL_TIMEOUT if (PIP_INSTALL_TIMEOUT and PIP_INSTALL_TIMEOUT > 0) else None
                 r = subprocess.run(base, capture_output=True, text=True,
-                                   timeout=PIP_INSTALL_TIMEOUT, errors="replace")
+                                   timeout=_t, errors="replace")
                 rc = r.returncode
                 if rc != 0:
                     last_err = (r.stderr or r.stdout or "")[-300:]
