@@ -83,7 +83,8 @@ def _mv_make_srt(cues, path):
                         "narrate": {"type": "boolean", "description": "可选：是否自动合成旁白语音，默认 true"},
                         "voice": {"type": "string", "description": "可选：TTS 音色名子串（如 Huihui / Xiaoxiao，留空=系统默认）"},
                         "rate": {"type": "integer", "description": "可选：TTS 语速 -10~10，默认 0"},
-                        "bgm": {"type": "string", "description": "可选：背景音乐文件绝对路径（0.25 音量与旁白混音）"},
+                        "audio": {"type": "string", "description": "可选：主音轨文件绝对路径（如原曲）——作为整片主音轨，提供后不再合成旁白；音乐 MV 用它承载歌曲"},
+                        "bgm": {"type": "string", "description": "可选：背景音乐文件绝对路径（0.25 音量与主音轨/旁白混音）"},
                         "subtitle": {"type": "boolean", "description": "可选：是否把旁白烧录成字幕，默认 true（需 ffmpeg 含 libass）"},
                         "reference": {"type": "string", "description": "可选：全局参考图路径或 URL（角色/画风一致性），所有自动出图的镜头都以它为参考图"},
                     },
@@ -97,11 +98,13 @@ def _mv_make_srt(cues, path):
 )
 def mv_compose(storyboard, output="", resolution="1920x1080", fps=30, duration=3,
                effect="kenburns", transition=0.5, generate_images=True,
-               image_size="", narrate=True, voice="", rate=0, bgm="", subtitle=True,
+               image_size="", narrate=True, voice="", rate=0, audio="", bgm="", subtitle=True,
                reference=""):
-    """分镜脚本 → 微电影/MV 成片（出图 + 配音 + 运镜/转场/字幕/BGM 合成）。
+    """分镜脚本 → 微电影/MV 成片（出图 + 配音 + 运镜/转场/字幕/音轨合成）。
 
     storyboard 每镜：{prompt, image, narration, subtitle, duration, effect}。
+    audio：可选**主音轨**（如原曲）——提供后作为整片主音轨，不再合成旁白；
+    bgm：可选背景音乐（0.25 音量与主音轨混音，无主音轨时单独以 0.25 播放）。
     出图与配音失败不中断成片（记入日志并降级），素材缺失才报错。
     """
     shots = storyboard
@@ -116,8 +119,6 @@ def mv_compose(storyboard, output="", resolution="1920x1080", fps=30, duration=3
             shots = shots.get("shots") or shots.get("storyboard") or []
     if not isinstance(shots, list) or not shots:
         return "错误：storyboard 至少需要一个镜头"
-    if len(shots) > 80:
-        shots = shots[:80]
 
     m = re.match(r"^(\d{2,4})\s*[x×*]\s*(\d{2,4})$", str(resolution or "").strip().lower())
     if not m:
@@ -186,7 +187,7 @@ def mv_compose(storyboard, output="", resolution="1920x1080", fps=30, duration=3
         # 2) 时长：有旁白按语音长度顺延，否则用镜头/全局时长
         sd = clamp_float(shot.get("duration"), base_dur, lo=0.5, hi=600.0)
         audio_file = ""
-        if narration and narrate:
+        if narration and narrate and not str(audio or "").strip():  # 有主音轨时不再合成旁白
             wav = os.path.join(workdir, f"voice_{i:03d}.wav")
             rr = tts_save(narration, wav, rate=rate, voice=voice)
             if os.path.isfile(wav) and os.path.getsize(wav) > 44:
@@ -238,10 +239,11 @@ def mv_compose(storyboard, output="", resolution="1920x1080", fps=30, duration=3
             log.append(f"字幕生成失败：{e}")
             srt_path = ""
 
+    main_audio = str(audio or "").strip() or combined_audio  # 主音轨优先（原曲）
     res, note, err = _mv_compose(
         mats, out, durations=seg_durs, duration=base_dur, effect=effect,
         transition=trans, resolution=resolution, fps=fps,
-        audio=combined_audio, bgm=bgm, subtitle=srt_path, workdir=workdir)
+        audio=main_audio, bgm=bgm, subtitle=srt_path, workdir=workdir)
     if err:
         return f"错误：合成失败：{err}"
     size = os.path.getsize(res) if os.path.exists(res) else 0
@@ -453,7 +455,7 @@ def _mv_report(kind, ev, checks, extra=None):
                              "FAIL —— 不得宣称完成；请修复后重跑，勿以容器规格冒充内容正确。"))
     if extra:
         lines += extra
-    lines.append("（完成门禁：时间轴一律来自 AI MV 引擎；禁止手写 SVG/ffmpeg 估算歌词与镜头位置。）")
+    lines.append("（自检证据：以上为实测核验项，PASS = 产物真实存在且与音频对齐。）")
     return "\n".join(lines)
 
 
@@ -483,15 +485,16 @@ def _mv_palette(style):
 
 def _mv_native_available():
     try:
-        import mv_engine  # noqa: F401
         import librosa  # noqa: F401
+
+        import mv_engine  # noqa: F401
         return True
     except Exception:  # noqa: BLE001
         return False
 
 
 def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
-                offline, resolution, fps, timeout, engine_model):
+                offline, resolution, fps, timeout, engine_model, effect="kenburns", transition=0.0):
     """原生引擎路径（不依赖外部 MV 程序）。返回报告文本；不可用返回 None。
 
     action: plan / storyboard / render。分析 + 声学歌词对轴 + 卡点分镜全部本地完成。
@@ -549,9 +552,10 @@ def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
         out_mp4 = os.path.join(os.path.dirname(frames_dir), f"mv_{datetime.now():%Y%m%d_%H%M%S}.mp4")
     mates = [f["path"] for f in frames]
     durs = [s["duration"] for s in shots]
-    # transition=0（硬切）：交叉转场会按重叠时长缩短总长，破坏「成片时长=歌曲时长」
+    # transition 默认 0（硬切）：交叉转场按重叠缩短总长，会破坏「成片时长=歌曲时长」；可显式传入
     res, note, err = _mv_compose(mates, out_mp4, durations=durs, resolution=str(resolution),
-                                 fps=int(fps), effect="kenburns", transition=0.0,
+                                 fps=int(fps), effect=str(effect or "kenburns"),
+                                 transition=float(transition or 0.0),
                                  audio=audio_abs, subtitle=(srt_path if lines else ""),
                                  workdir=frames_dir)
     if err:
@@ -605,7 +609,7 @@ def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, time
             "type": "function",
             "function": {
                 "name": "mv_produce",
-                "description": "专业音乐 MV 制作（唯一正确入口）：把一首歌（音频）+ 歌词交给同机的 AI MV 上游引擎，自动做 BPM/节拍/段落分析 + 歌词逐句对轴 + 卡点镜头规划。action=plan 出分镜计划（含对齐证据）、storyboard 出可直接喂 mv_compose 的分镜包、compose=分镜→mv_compose 出图合成（高画质；出图不可用时自动回退上游占位画面）、render 上游直接出片（卡点+对词，含封面/文案/manifest）、styles 列风格包。**做 MV 就用它**，绝不要手写 SVG/ffmpeg 去估算歌词与镜头时间轴（那必然对不上）。返回含自检门禁，未 PASS 不得宣称完成。",
+                "description": "音乐 MV 能力：输入音频（可选歌词），可完成 音频分析(BPM/节拍/段落) · 歌词声学对轴 · 卡点分镜 · 画面生成/合成。action=plan(分析+分镜+对齐证据) / storyboard(可喂 mv_compose 的分镜包) / compose(分镜→mv_compose 出图合成) / render(直接出片) / styles(列风格包)。engine=native(默认，鲸语自建引擎，零外部依赖) 或 external(可选同机外部 AI MV 程序，自动探测/可设 mv_home)。可调 style/resolution/fps/effect/transition/offline/whisper_model；render 可 images_dir 供图或 generate_images 出图。已知事实：外部出图后端曾 404；本机可确定性帧渲染兜底。返回含**实测自检**（产物是否落盘、时长是否一致、镜头是否覆盖全曲、歌词是否落片内）——据此判断，按实际情况决定怎么组合实现。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -622,6 +626,8 @@ def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, time
                         "generate_images": {"type": "boolean", "description": "可选：storyboard 模式是否让调用方（mv_compose）自行出图，默认 false"},
                         "resolution": {"type": "string", "description": "可选：分辨率「宽x高」，默认 1080x1920（竖屏抖音）"},
                         "fps": {"type": "integer", "description": "可选：帧率，默认 30"},
+                        "effect": {"type": "string", "description": "可选：运镜 none/kenburns/kenburns-in/kenburns-out，默认 kenburns"},
+                        "transition": {"type": "number", "description": "可选：镜头间交叉淡化秒数（0=硬切；>0 会按重叠缩短总长），默认 0"},
                         "timeout": {"type": "integer", "description": "可选：超时秒数，默认 1800（render 出片较慢）"},
                         "mv_home": {"type": "string", "description": "可选：AI MV 程序目录（默认自动探测 / 环境变量 AI_MV_HOME）"},
                     },
@@ -636,8 +642,8 @@ def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, time
 )
 def mv_produce(action="plan", audio="", lyrics="", style="citypop_night_v1", out="",
                output="", images_dir="", offline=True, generate_images=False,
-               resolution="1080x1920", fps=30, timeout=1800, mv_home="",
-               engine="native", whisper_model="small"):
+               resolution="1080x1920", fps=30, effect="kenburns", transition=0.0,
+               timeout=1800, mv_home="", engine="native", whisper_model="small"):
     """音频+歌词 → 卡点对词分镜/成片。
 
     默认走**鲸语自建原生引擎**（mv_engine：本地音频分析 + 声学歌词对轴 + 卡点分镜 +
@@ -653,7 +659,8 @@ def mv_produce(action="plan", audio="", lyrics="", style="citypop_night_v1", out
         if not audio_abs:
             return f"错误：音频文件不存在或未提供：{audio}"
         native = _mv_native(act, audio_abs, lyrics, style, out, output, images_dir,
-                            offline, resolution, fps, timeout, str(whisper_model or "small"))
+                            offline, resolution, fps, timeout, str(whisper_model or "small"),
+                            effect, transition)
         if native is not None:
             return native
 

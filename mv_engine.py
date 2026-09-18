@@ -707,8 +707,8 @@ def render_frames(shots, outdir, palette="qinghua", w=1080, h=1920,
     pal = _PALETTES.get(palette) or _PALETTES["default"]
     out = []
     total = len(shots)
-    for i in range(total):
-        img = _frame_image(Image, ImageDraw, ImageFilter, w, h, pal, i, total,
+    for i, sh in enumerate(shots):
+        img = _frame_image(Image, ImageDraw, ImageFilter, w, h, pal, i, total, sh or {},
                            title=title, artist=artist, credits=credits)
         p = os.path.join(outdir, f"shot_{i:03d}.png")
         img.save(p, "PNG")
@@ -729,10 +729,13 @@ def _vignette(d, w, h):
         d.line([(0, h - 1 - y), (w, h - 1 - y)], fill=(0, 0, 0, a))
 
 
-def _frame_image(Image, ImageDraw, ImageFilter, w, h, pal, i, total,
+def _frame_image(Image, ImageDraw, ImageFilter, w, h, pal, i, total, sh=None,
                  title="", artist="", credits=""):
     import random
-    rnd = random.Random(1000 + i)
+    sh = sh or {}
+    lyric = str(sh.get("lyric_ref") or "")
+    # 构图随歌词变化（同句稳定）：画面与内容相关，而非纯占位
+    rnd = random.Random((hash(lyric) & 0xFFFFFFFF) if lyric else (1000 + i))
     top, mid, base, accent = pal
     phase = i % 4                       # 分段调色：整体明暗/冷暖轻微起伏
     shift = (phase - 1.5) * 0.05
@@ -781,6 +784,14 @@ def _frame_image(Image, ImageDraw, ImageFilter, w, h, pal, i, total,
         v = rnd.randint(0, 34)
         d.point((x, y), fill=(v, v, v, 55))
     img = img.filter(ImageFilter.GaussianBlur(0.7))
+    # 字印：该镜歌词首字以淡色大字作印章——画面承载内容（非纯占位）
+    if lyric and not (i == 0 and title):
+        f = _find_font(int(w * 0.44))
+        if f:
+            d2 = ImageDraw.Draw(img, "RGBA")
+            ch = lyric[0]
+            tw = d2.textlength(ch, font=f)
+            d2.text(((w - tw) / 2, int(h * 0.18)), ch, font=f, fill=accent + (44,))
     # 片头（首帧）：歌名 + 制作人；片尾（末帧）：署名
     if i == 0 and title:
         _draw_center(ImageDraw, img, w, h, title, artist, big=96, small=40, y=int(h * 0.40))
