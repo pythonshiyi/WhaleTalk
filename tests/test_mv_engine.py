@@ -1,7 +1,10 @@
-"""mv_engine（自建 MV 引擎）回归：歌词解析/卡点网格/字幕/校验。
+"""mv_engine（自建 MV 引擎）回归：歌词解析/卡点网格/字幕/校验/序列对齐/帧渲染。
 
 不触发 whisper/音频解码（纯函数），保证 CI 快且确定。
 """
+import importlib.util
+import os
+
 import mv_engine as me
 
 
@@ -71,6 +74,34 @@ def test_words_to_spans():
 def test_merge_spans():
     assert me._merge_spans([(0, 1), (1.2, 2)], [(0.5, 1.5)]) == [(0.0, 2.0)]
     assert me._merge_spans([], []) == []
+
+
+def test_align_by_sequence_maps_lines():
+    words = [("第", 1.0, 1.2), ("一", 1.2, 1.4), ("句", 1.4, 1.6), ("歌", 1.6, 1.8), ("词", 1.8, 2.0),
+             ("第", 3.0, 3.2), ("二", 3.2, 3.4), ("句", 3.4, 3.6), ("歌", 3.6, 3.8), ("词", 3.8, 4.0)]
+    rows = me._align_by_sequence(["第一句歌词", "第二句歌词"], words)
+    assert rows[0]["start"] == 1.0 and rows[1]["start"] == 3.0
+
+
+def test_fill_gaps_interpolates_and_is_monotonic():
+    rows = [{"text": "a", "start": 1.0, "end": 2.0, "index": 0, "confidence": 1.0},
+            {"text": "b", "start": None, "end": None, "index": 1, "confidence": 0.0},
+            {"text": "c", "start": 5.0, "end": 6.0, "index": 2, "confidence": 1.0}]
+    out = me._fill_gaps(rows)
+    assert out[1]["start"] is not None
+    assert 2.0 <= out[1]["start"] <= 5.0
+    assert out[1]["end"] <= 5.0 + 1e-6
+    assert [r["start"] for r in out] == sorted(r["start"] for r in out)
+
+
+def test_render_frames_creates_files(tmp_path):
+    if importlib.util.find_spec("PIL") is None:
+        import pytest
+        pytest.skip("无 PIL")
+    shots = [{"index": 0, "lyric_ref": "第一句"}, {"index": 1, "lyric_ref": ""}]
+    frames = me.render_frames(shots, str(tmp_path), w=180, h=320, title="测试歌", artist="歌手")
+    assert len(frames) == 2
+    assert all(os.path.isfile(f["path"]) and os.path.getsize(f["path"]) > 0 for f in frames)
 
 
 def test_assign_lines_monotonic_no_collapse():

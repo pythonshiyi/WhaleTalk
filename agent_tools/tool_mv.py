@@ -533,9 +533,12 @@ def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
     # render：PIL 确定性帧 + 原生歌词 SRT + ffmpeg 合成
     frames_dir = os.path.join(permissions.WORKSPACE_DIR or os.path.dirname(audio_abs),
                               "video", f"mvnative_{datetime.now():%Y%m%d_%H%M%S}")
+    _stem = os.path.splitext(os.path.basename(audio_abs))[0]
+    _title = re.sub(r"^\d+_[0-9a-fA-F]+_", "", _stem) or _stem
     frames = me.render_frames(shots, frames_dir, palette=_mv_palette(style),
                               w=int(resolution.split("x")[0]) if "x" in str(resolution) else 1080,
-                              h=int(resolution.split("x")[1]) if "x" in str(resolution) else 1920)
+                              h=int(resolution.split("x")[1]) if "x" in str(resolution) else 1920,
+                              title=_title)
     if not frames:
         return "错误：原生帧渲染失败（PIL 缺失？）"
     srt_path = os.path.join(frames_dir, "lyrics.srt")

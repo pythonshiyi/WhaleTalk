@@ -23,6 +23,12 @@ import os
 import re
 
 _SECTION_ORDER = ("intro", "verse", "prechorus", "chorus", "bridge", "outro")
+_SECTION_WORDS = set(_SECTION_ORDER) | {
+    "主歌", "副歌", "前奏", "间奏", "尾奏", "尾声", "桥段", "预副歌", "说唱", "念白",
+    "独白", "合唱", "合", "复歌", "结束", "outro", "intro",
+}
+# 段落/演出标注（如「复歌（多次）」「副歌 x2」）——不当歌词行
+_ANNOT = re.compile(r"^[\u4e00-\u9fffA-Za-z]{1,8}\s*[（(][^）)]{0,20}[）)]\s*[x×\d]*$")
 
 # 中文/全角标点归一，供歌词匹配
 _PUNCT = re.compile(r"[\s，。、！？：；「」『』（）()\[\]{}，,\.!?:;\"'—…·~\-]+")
@@ -44,9 +50,9 @@ def parse_lyrics_text(text: str):
         # 去纯元信息标签 [ti:..] / [ar:..]
         if re.match(r"^\[[a-zA-Z]+:.*\]$", line):
             continue
-        # 去纯段落标签（intro/verse/主歌/副歌…）——不当作歌词行
+        # 去纯段落标签（intro/verse/主歌/副歌/说唱/尾奏…）与演出标注（复歌（多次））——不当歌词行
         low = line.lower().strip("[]（）() :：")
-        if low in _SECTION_ORDER or low in ("主歌", "副歌", "前奏", "间奏", "尾奏", "桥段", "预副歌"):
+        if low in _SECTION_WORDS or _ANNOT.match(line):
             continue
         if line:
             out.append(line)
@@ -186,7 +192,11 @@ def align_lyrics(audio, lyrics_text, model="base", sr=16000):
     words = _whisper_words(audio, model, prompt=" ".join(lines))
     active = _active_spans(audio, sr)
     if words:
-        # ② whisper 词级短语 ∪ 能量活跃段 → 单调分配；用首/末人声锚定，剔除前奏尾奏
+        # ② 字符级序列对齐（whisper 字符时间 ↔ 歌词行）：命中即真实时间，最精确
+        seq = _align_by_sequence(lines, words)
+        if seq and _match_quality(seq) >= 0.6:
+            return _fill_gaps(seq)
+        # ③ whisper 短语 ∪ 能量活跃段 → 单调分配（识别稀疏时的稳健兜底）
         first_on, last_off = words[0][1], max(w[2] for w in words)
         merged = _merge_spans(_words_to_spans(words), active)
         clipped = []
@@ -198,12 +208,85 @@ def align_lyrics(audio, lyrics_text, model="base", sr=16000):
         if assigned and _match_quality(assigned) >= 0.8:
             return assigned
     if active:
-        # ③ 纯能量活跃段兜底（无 whisper）
+        # ④ 纯能量活跃段兜底（无 whisper）
         assigned = _assign_lines(lines, active)
         if assigned:
             return assigned
     return [{"text": t, "start": None, "end": None, "index": i, "confidence": 0.0}
             for i, t in enumerate(lines)]
+
+
+def _align_by_sequence(lines, words):
+    """字符级序列对齐：whisper 字符时间戳 ↔ 歌词行字符 → 每行真实起止时间。
+
+    用 difflib 匹配块把歌词字符映射到 whisper 字符时间；命中行取真实时间，
+    未命中行留给 `_fill_gaps` 插值。比「按段均分」精确得多，且对识别错误稳健。
+    """
+    import difflib
+    wchars, wtime = [], []
+    for tok, s, e in words:
+        n = len(tok)
+        for k in range(n):
+            wchars.append(tok[k])
+            wtime.append((s + (e - s) * k / n, s + (e - s) * (k + 1) / n))
+    norm_lines = [_norm(ln) for ln in lines]
+    lchars, lidx = [], []
+    for i, nl in enumerate(norm_lines):
+        for ch in nl:
+            lchars.append(ch)
+            lidx.append(i)
+    if not lchars or not wchars:
+        return []
+    sm = difflib.SequenceMatcher(None, "".join(lchars), "".join(wchars), autojunk=False)
+    hits = {}
+    for blk in sm.get_matching_blocks():
+        for k in range(blk.size):
+            hits.setdefault(lidx[blk.a + k], []).append(blk.b + k)
+    out = []
+    for i, line in enumerate(lines):
+        idxs = hits.get(i)
+        if idxs:
+            st = min(wtime[j][0] for j in idxs)
+            en = max(wtime[j][1] for j in idxs)
+            cov = len(idxs) / max(1, len(norm_lines[i]))
+            out.append({"text": line, "start": round(st, 3), "end": round(en, 3),
+                        "index": i, "confidence": round(min(1.0, 0.5 + 0.5 * cov), 3)})
+        else:
+            out.append({"text": line, "start": None, "end": None, "index": i, "confidence": 0.0})
+    return out
+
+
+def _fill_gaps(rows):
+    """为无时间的行按相邻锚点插值：中间线性插值，首/末用最近锚点外推。"""
+    n = len(rows)
+    anchors = [i for i, r in enumerate(rows) if r.get("start") is not None]
+    if not anchors:
+        return rows
+    out = [dict(r) for r in rows]
+    first, last = anchors[0], anchors[-1]
+    step = 1.5
+    for i in range(first - 1, -1, -1):
+        a = max(0.0, out[first]["start"] - (first - i) * step)
+        out[i]["start"], out[i]["end"] = round(a, 3), round(a + step, 3)
+    for i in range(last + 1, n):
+        a = out[last]["end"] + (i - last) * step
+        out[i]["start"], out[i]["end"] = round(a, 3), round(a + step, 3)
+    for ai in range(len(anchors) - 1):
+        i0, i1 = anchors[ai], anchors[ai + 1]
+        if i1 - i0 <= 1:
+            continue
+        t0, t1 = out[i0]["end"], out[i1]["start"]
+        span = i1 - i0
+        for k in range(1, span):
+            t = t0 + (t1 - t0) * k / span
+            out[i0 + k]["start"] = round(t, 3)
+            out[i0 + k]["end"] = round(t + (t1 - t0) / span, 3)
+    for i in range(1, n):
+        if out[i]["start"] < out[i - 1]["start"]:
+            out[i]["start"] = out[i - 1]["start"]
+        if out[i]["end"] <= out[i]["start"]:
+            out[i]["end"] = round(out[i]["start"] + 0.6, 3)
+    return out
 
 
 def _words_to_spans(words, gap=0.8):
@@ -582,8 +665,37 @@ _PALETTES = {
 }
 
 
-def render_frames(shots, outdir, palette="qinghua", w=1080, h=1920, lyric=True):
-    """为每个镜头渲染一张确定性竖屏帧（渐变 + 青花几何 + 可选歌词）。
+_CJK_FONTS = (
+    r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\msyhbd.ttc",
+    r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\simsun.ttc",
+    r"C:\Windows\Fonts\NotoSansSC-VF.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+)
+_FONT_CACHE = {}
+
+
+def _find_font(size):
+    if size in _FONT_CACHE:
+        return _FONT_CACHE[size]
+    f = None
+    try:
+        from PIL import ImageFont
+        for path in _CJK_FONTS:
+            if os.path.isfile(path):
+                try:
+                    f = ImageFont.truetype(path, size)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+    except Exception:  # noqa: BLE001
+        f = None
+    _FONT_CACHE[size] = f
+    return f
+
+
+def render_frames(shots, outdir, palette="qinghua", w=1080, h=1920,
+                  title="", artist="", credits=""):
+    """为每个镜头渲染一张确定性竖屏帧（分段调色 + 青花意象 + 片头/片尾署名）。
 
     返回 [{path,index}]；PIL 缺失时返回 []（上层可改用 image_generate）。
     """
@@ -594,42 +706,100 @@ def render_frames(shots, outdir, palette="qinghua", w=1080, h=1920, lyric=True):
     os.makedirs(outdir, exist_ok=True)
     pal = _PALETTES.get(palette) or _PALETTES["default"]
     out = []
-    for i, sh in enumerate(shots):
-        img = _frame_image(Image, ImageDraw, ImageFilter, w, h, pal, i, sh)
+    total = len(shots)
+    for i in range(total):
+        img = _frame_image(Image, ImageDraw, ImageFilter, w, h, pal, i, total,
+                           title=title, artist=artist, credits=credits)
         p = os.path.join(outdir, f"shot_{i:03d}.png")
         img.save(p, "PNG")
         out.append({"path": p, "index": i})
     return out
 
 
-def _frame_image(Image, ImageDraw, ImageFilter, w, h, pal, i, sh):
+def _vignette(d, w, h):
+    """四边线性压暗（细化步进以避免横纹带）。"""
+    steps = 220
+    for k in range(steps):
+        t = k / steps
+        a = int(95 * (1 - t) ** 1.6)
+        if a <= 0:
+            continue
+        y = int(h * 0.20 * t)
+        d.line([(0, y), (w, y)], fill=(0, 0, 0, a))
+        d.line([(0, h - 1 - y), (w, h - 1 - y)], fill=(0, 0, 0, a))
+
+
+def _frame_image(Image, ImageDraw, ImageFilter, w, h, pal, i, total,
+                 title="", artist="", credits=""):
     import random
     rnd = random.Random(1000 + i)
     top, mid, base, accent = pal
+    phase = i % 4                       # 分段调色：整体明暗/冷暖轻微起伏
+    shift = (phase - 1.5) * 0.05
+    sc = lambda c: tuple(max(0, min(255, int(v * (1 + shift)))) for v in c)  # noqa: E731
+    top, mid, base = sc(top), sc(mid), sc(base)
     img = Image.new("RGB", (w, h), top)
     d = ImageDraw.Draw(img, "RGBA")
-    # 垂直渐变
+    # 垂直渐变（三段）
     for y in range(h):
         f = y / max(1, h - 1)
-        c = tuple(int(top[k] + (mid[k] - top[k]) * f) for k in range(3)) if f < 0.6 else \
-            tuple(int(mid[k] + (base[k] - mid[k]) * (f - 0.6) / 0.4) for k in range(3))
+        if f < 0.6:
+            c = tuple(int(top[k] + (mid[k] - top[k]) * (f / 0.6)) for k in range(3))
+        else:
+            c = tuple(int(mid[k] + (base[k] - mid[k]) * ((f - 0.6) / 0.4)) for k in range(3))
         d.line([(0, y), (w, y)], fill=c)
-    # 青花式同心弧纹
-    for _ in range(5):
-        cx = rnd.randint(int(w * 0.12), int(w * 0.88))
-        cy = rnd.randint(int(h * 0.15), int(h * 0.85))
-        r = rnd.randint(int(w * 0.10), int(w * 0.34))
+    # 青花同心弧（主体）
+    for _ in range(6):
+        cx = rnd.randint(int(w * 0.1), int(w * 0.9))
+        cy = rnd.randint(int(h * 0.12), int(h * 0.88))
+        r = rnd.randint(int(w * 0.1), int(w * 0.36))
         for k in range(3):
-            d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=accent + (70,), width=2 + k)
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=accent + (60,), width=2 + k)
             r = int(r * 0.72)
-    # 光带
-    d.polygon([(0, h), (w, int(h * 0.55)), (w, h)], fill=accent + (28,))
-    # 颗粒
-    for _ in range(1400):
+    # 云纹/笔触（青色斜线，带锥度）
+    for _ in range(3):
+        x0 = rnd.randint(-int(w * 0.2), int(w * 0.5))
+        y0 = rnd.randint(int(h * 0.1), int(h * 0.9))
+        x1 = x0 + rnd.randint(int(w * 0.5), int(w * 1.2))
+        y1 = y0 + rnd.randint(-int(h * 0.1), int(h * 0.1))
+        for k in range(6):
+            t = k / 5.0
+            xx = int(x0 + (x1 - x0) * t)
+            yy = int(y0 + (y1 - y0) * t)
+            rr = int(10 * (1 - t)) + 2
+            d.ellipse([xx - rr, yy - rr, xx + rr, yy + rr], fill=accent + (40,))
+    # 飞白点
+    for _ in range(500):
         x, y = rnd.randint(0, w - 1), rnd.randint(0, h - 1)
-        v = rnd.randint(0, 40)
-        d.point((x, y), fill=(v, v, v, 60))
-    return img.filter(ImageFilter.GaussianBlur(0.4))
+        d.point((x, y), fill=accent + (60,))
+    # 光带
+    d.polygon([(0, h), (w, int(h * 0.55)), (w, h)], fill=accent + (26,))
+    _vignette(d, w, h)
+    # 颗粒
+    for _ in range(1200):
+        x, y = rnd.randint(0, w - 1), rnd.randint(0, h - 1)
+        v = rnd.randint(0, 34)
+        d.point((x, y), fill=(v, v, v, 55))
+    img = img.filter(ImageFilter.GaussianBlur(0.7))
+    # 片头（首帧）：歌名 + 制作人；片尾（末帧）：署名
+    if i == 0 and title:
+        _draw_center(ImageDraw, img, w, h, title, artist, big=96, small=40, y=int(h * 0.40))
+    if total and i == total - 1 and (credits or artist):
+        _draw_center(ImageDraw, img, w, h, credits or "", artist, big=56, small=36,
+                     y=int(h * 0.46), alpha=230)
+    return img
+
+
+def _draw_center(ImageDraw, img, w, h, big_text, small_text, big=96, small=40, y=0, alpha=255):
+    d = ImageDraw.Draw(img, "RGBA")
+    f_big = _find_font(big)
+    f_small = _find_font(small)
+    if f_big and big_text:
+        tw = d.textlength(big_text, font=f_big)
+        d.text(((w - tw) / 2, y), big_text, font=f_big, fill=(240, 244, 248, alpha))
+    if f_small and small_text:
+        tw = d.textlength(small_text, font=f_small)
+        d.text(((w - tw) / 2, y + big + 24), small_text, font=f_small, fill=(210, 220, 230, alpha))
 
 
 # ── 校验门禁 ────────────────────────────────────────────────────────────
