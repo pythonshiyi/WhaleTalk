@@ -5225,10 +5225,26 @@ def _start_im():
 
 
 def _play_completion_sound():
-    """Windows 系统提示音（回复/任务完成，浏览器在后台或已关闭时也能听到）。"""
+    """Windows 系统提示音（回复/任务完成，浏览器在后台或已关闭时也能听到）。
+
+    崩溃加固：在**独立子进程**里播放，而非本进程调用 winsound。本机音频栈
+    （AMD 音频驱动 / MMDevApi）不稳时，进程内播放会触发 0xc0000005 访问冲突
+    （故障模块 MMDevApi.dll_unloaded，2026-09-18 22:06 真实崩溃），属**原生崩溃、
+    Python 无法捕获**，会直接终止整个鲸语进程。隔离后即使提示音子进程崩溃，
+    主程序照常运行。
+    """
     try:
-        import winsound
-        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        import subprocess
+        import sys
+        if getattr(sys, "frozen", False):
+            # 打包版：sys.executable 是 WhaleTalk.exe，不能当解释器用；退回进程内。
+            import winsound
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            return
+        code = "import winsound; winsound.MessageBeep(winsound.MB_ICONASTERISK)"
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+        subprocess.Popen([sys.executable, "-c", code], creationflags=flags,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 

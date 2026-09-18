@@ -957,11 +957,20 @@ def notify_desktop(title="鲸语提醒", text="", fallback_sound=True, silent=Fa
             if proc.returncode != 0:
                 # Toast 不可用（老系统/受限环境）时兜底为提示音（可关闭）
                 if fallback_sound:
+                    # 崩溃加固：提示音在独立子进程播放——进程内 winsound 遇到不稳的
+                    # 音频栈（MMDevApi）会原生崩溃，杀死整个鲸语进程，Python 无法捕获。
                     try:
-                        import winsound
-
-                        winsound.Beep(880, 250)
-                        winsound.Beep(660, 250)
+                        import subprocess as _sp
+                        import sys as _sys
+                        if getattr(_sys, "frozen", False):
+                            import winsound
+                            winsound.Beep(880, 250)
+                            winsound.Beep(660, 250)
+                        else:
+                            _code = "import winsound; winsound.Beep(880,250); winsound.Beep(660,250)"
+                            _flags = getattr(_sp, "CREATE_NO_WINDOW", 0) | getattr(_sp, "DETACHED_PROCESS", 0)
+                            _sp.Popen([_sys.executable, "-c", _code], creationflags=_flags,
+                                      stdin=_sp.DEVNULL, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
                     except Exception:
                         pass
                 return f"通知显示失败{'（已静音）' if not fallback_sound else '（已播放提示音）'}：{_ps_err[:150]}"

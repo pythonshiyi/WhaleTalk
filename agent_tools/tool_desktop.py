@@ -787,19 +787,9 @@ def tts_stop(sid=""):
             targets = list(_ACTIVE_SPEAK.items())
     for _k, entry in targets:
         try:
+            # 只置停止标志：由朗读线程在自己的 COM 单元内完成 purge。跨线程调用 SAPI
+            # COM 对象是未定义行为（会引发 MMDevApi 卸载竞态 → 原生访问冲突终止进程）。
             entry["event"].set()
-            sp = entry.get("voice")
-            if sp is not None:
-                import pythoncom
-
-                def _purge(sp=sp):
-                    pythoncom.CoInitialize()
-                    try:
-                        sp.Speak("", 1 | 2)  # async + purge：立即中断并清空朗读队列
-                    finally:
-                        pythoncom.CoUninitialize()
-
-                threading.Thread(target=_purge, daemon=True).start()
             stopped += 1
         except Exception:
             pass

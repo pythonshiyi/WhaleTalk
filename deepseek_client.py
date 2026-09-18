@@ -3316,8 +3316,17 @@ def _speak_aloud(text, rate=0, volume=None, voice="", label=""):
                 _sapi_pick_voice(speaker, voice)
                 with _ACTIVE_SPEAK_LOCK:
                     _ACTIVE_SPEAK[sid] = {"event": stop_event, "voice": speaker, "thread": threading.current_thread()}
-                # 同步 Speak 占住线程；被 stop 投递空句后此调用立即返回
-                speaker.Speak(synth)
+                # 异步朗读：SPF_ASYNC(1) 立即返回，本线程轮询状态；停止/清队全部在
+                # 本线程（同一 COM 单元）完成——杜绝跨线程调用 SAPI COM 对象（未定义
+                # 行为，会引发 MMDevApi 卸载竞态 → 原生访问冲突终止进程）。
+                speaker.Speak(synth, 1)
+                while not stop_event.is_set():
+                    try:
+                        if int(speaker.Status.RunningState) == 1:  # SRSEDone
+                            break
+                    except Exception:
+                        break
+                    time.sleep(0.05)
             except Exception:
                 pass
             finally:
@@ -3325,7 +3334,7 @@ def _speak_aloud(text, rate=0, volume=None, voice="", label=""):
                     with _ACTIVE_SPEAK_LOCK:
                         _ACTIVE_SPEAK.pop(sid, None)
                     try:
-                        speaker.Speak("", 1 | 2)  # async + purge：确保队列清空释放
+                        speaker.Speak("", 1 | 2)  # async + purge：同线程清空并释放队列
                     except Exception:
                         pass
                 try:
