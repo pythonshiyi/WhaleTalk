@@ -483,9 +483,11 @@ def my_tool(...): ...
   `工具链（N 项）` / `全部 N 项工具`），重写 README 时勿丢失。
 - **更新纪律**：CHANGELOG 标题与 `config_defaults.VERSION` 一致；更新包 Ed25519 签名 + SHA-256 校验；
   更新前自动备份 `backups/WhaleTalk_v<版本>_<时间戳>.zip`。
-- **打包**：`build_exe.bat` → PyInstaller（`WhaleTalk.spec`：webui/dist + sample_plugins 内置，
+- **引导/打包**：`python bootstrap.py`（建 `.venv` + 逐包装依赖 + 启动）· `python bootstrap.py build`
+  → PyInstaller（`WhaleTalk.spec`：webui/dist + sample_plugins 内置，
   playwright/faster-whisper/PyMuPDF 等大型可选依赖排除）。
-- **依赖**：`deps.py` 分层（硬依赖同步安装 / 自动安装后台 / 重型可选）；清华源镜像。
+- **依赖**：`deps.py` 分层（硬依赖同步安装 / 自动安装后台 / 重型可选）；清华源镜像；
+  `guard_pip_proxy` 代理预检（系统代理不可达自动绕过，防 pip 死代理全量失败）。
 
 ---
 

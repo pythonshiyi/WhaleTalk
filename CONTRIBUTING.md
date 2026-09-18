@@ -8,8 +8,9 @@
 
 - Python 3.9+（推荐 3.12）
 - 安装依赖：`pip install -r requirements.txt`（核心依赖 openai / httpx 已在清单中，其余为可选增强）
-- 运行：`python web_app.py`（本地 API + 自动打开浏览器 + 托盘常驻；首次启动自动构建 WebUI——`webui/dist` 缺失或源码更新时自动 `npm run build`，已构建则跳过，`--no-webui-build` 可跳过）
-- 打包：`python build_exe.bat`（产出 `dist\WhaleTalk.exe`）
+- 引导/运行：`python bootstrap.py`（建 `.venv` + 逐包装依赖 + 启动；`--no-venv` 复用当前解释器，`check` 只体检，其余参数透传 `web_app.py`）
+- 运行（跳过引导）：`python web_app.py`（本地 API + 自动打开浏览器 + 托盘常驻；首次启动自动构建 WebUI——`webui/dist` 缺失或源码更新时自动 `npm run build`，已构建则跳过，`--no-webui-build` 可跳过）
+- 打包：`python bootstrap.py build`（产出 `dist\WhaleTalk.exe`）
 
 ## 前端开发 / Frontend Dev
 
@@ -25,7 +26,7 @@ npm run build    # 产物输出 webui/dist（由 api_server 同源服务）
 - 产品形态：**纯 Web + 本地 API 常驻**。浏览器是唯一界面；`web_app.py` 是唯一入口；旧 Tkinter 桌面已移除
 - 模块职责（完整清单见 [MODULES.md](MODULES.md)，接手先读 [docs/AI_PROJECT_GUIDE.md](docs/AI_PROJECT_GUIDE.md)）：
   - `web_app.py`：启动入口（本地 API + 浏览器 + 托盘/快捷方式/开机自启）
-  - `api_server.py`：本地 HTTP API（REST + SSE 流式，98 个 `/v1` 路由），同源服务前端构建产物
+  - `api_server.py`：本地 HTTP API（REST + SSE 流式，99 个 `/v1` 路由），同源服务前端构建产物
   - `deepseek_client.py`：统一模型客户端 + 六层工具注册表 + smart_tools（工具实现已迁至 `agent_tools/`）
   - `agent_tools/tool_*.py`：161 个工具的实现；用 `@tool()` 声明（单一事实源）
   - `permissions.py`：权限模型（默认自由：黑名单主导 + `blocklist_enabled` 一键开关；审计只记不拦）

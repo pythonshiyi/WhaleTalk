@@ -3994,6 +3994,37 @@ def _strictify_tools(tools):
     return out
 
 
+def _apply_plan_edits(tool_calls, edits):
+    """③b 计划编辑：把用户改过的步骤参数写回本轮 tool_calls。
+
+    edits 形如 [{"id"?: str, "index"?: int, "args": str|obj}]；按 id 优先、否则按 index 定位。
+    只改参数（args），不改工具名——工具名的改动会与已下发的 assistant.tool_calls 不一致，
+    可能触发网关校验错误。返回改动后的 tool_calls。
+    """
+    import json as _json
+    for pos, ed in enumerate(edits or []):
+        if not isinstance(ed, dict) or "args" not in ed:
+            continue
+        target = None
+        tid = ed.get("id")
+        if tid:
+            target = next((tc for tc in tool_calls if tc.get("id") == tid), None)
+        if target is None:
+            idx = ed.get("index")
+            idx = pos if idx is None else idx
+            try:
+                idx = int(idx)
+            except (TypeError, ValueError):
+                idx = pos
+            if 0 <= idx < len(tool_calls):
+                target = tool_calls[idx]
+        if target is None:
+            continue
+        new_args = ed["args"]
+        target["args"] = new_args if isinstance(new_args, str) else _json.dumps(new_args, ensure_ascii=False)
+    return tool_calls
+
+
 class DeepSeekClient:
     def __init__(self, api_key, base_url=DEFAULT_BASE_URL, model=DEFAULT_MODEL, timeout=120.0,
                  gateway_session=None):
@@ -4583,9 +4614,14 @@ class DeepSeekClient:
                         _index_shown = True
 
                 if on_plan is not None:
-                    ok_plan, reason_plan = on_plan(
+                    res = on_plan(
                         [(tc["name"], (tc["args"] or "")[:300]) for tc in tool_calls]
                     )
+                    if isinstance(res, (list, tuple)) and len(res) >= 2:
+                        ok_plan, reason_plan = res[0], res[1]
+                        plan_edits = res[2] if len(res) >= 3 else None
+                    else:
+                        ok_plan, reason_plan, plan_edits = bool(res), "", None
                     if not ok_plan:
                         plan_rejections += 1
                         if plan_rejections >= MAX_PLAN_REJECTIONS:
@@ -4608,6 +4644,8 @@ class DeepSeekClient:
                                 }
                             )
                         continue
+                    if plan_edits:
+                        _apply_plan_edits(tool_calls, plan_edits)
 
                 # 计划确认期间用户可能已点停止：执行前再查一次
                 if stop_event and stop_event.is_set():

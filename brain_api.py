@@ -170,6 +170,144 @@ def consolidate_with_llm():
         return base
 
 
+def memory_digest(days=7, now=None):
+    """记忆周报（②c）：近 N 天新增记忆的聚合视角（不改任何存储）。
+
+    返回 {days, generated_at, active_total, new_count, types, superseded_count, new, top}。
+    「被取代」= 有别的记忆把它的 id 填进了 supersedes（版本替换链）。
+    """
+    now = float(now if now is not None else time.time())
+    days = max(1, int(days or 7))
+    cutoff = now - days * 86400.0
+    try:
+        items = bk.load_memories(include_archived=True)
+    except Exception:  # noqa: BLE001
+        items = []
+    active = [e for e in items if not e.get("archived")]
+    new = [e for e in items if bk._ts_epoch(e.get("ts")) >= cutoff]
+    superseded_ids = {str(e.get("supersedes")) for e in items if e.get("supersedes")}
+    replaced = [e for e in items if str(e.get("id") or "") in superseded_ids]
+    types = {}
+    for e in new:
+        t = str(e.get("type") or "记忆")
+        types[t] = types.get(t, 0) + 1
+    try:
+        from memory_store import confidence
+    except Exception:  # noqa: BLE001
+        def confidence(_e, now=None):  # type: ignore[misc]
+            return 0.0
+    ranked = sorted(new, key=lambda e: -(int(e.get("importance") or 3) + confidence(e, now=now)))
+
+    def _brief(e):
+        return {"id": e.get("id"), "type": e.get("type") or "记忆",
+                "importance": int(e.get("importance") or 3),
+                "text": str(e.get("text") or "")[:200], "ts": e.get("ts") or ""}
+
+    return {"days": days, "generated_at": bk.now_iso(),
+            "active_total": len(active), "new_count": len(new),
+            "types": types, "superseded_count": len(replaced),
+            "new": [_brief(e) for e in new[:50]],
+            "top": [_brief(e) for e in ranked[:5]]}
+
+
+def render_memory_digest(d):
+    """把记忆周报 dict 渲染为可直接保存/阅读的 Markdown。"""
+    lines = [f"# 记忆周报 · 近 {d.get('days')} 天", "",
+             f"生成时间：{d.get('generated_at')}",
+             f"现存记忆 {d.get('active_total')} 条 · 新增 {d.get('new_count')} 条 · 被取代 {d.get('superseded_count')} 条", ""]
+    if d.get("types"):
+        lines.append("## 新增类型分布")
+        for t, c in sorted(d["types"].items(), key=lambda x: -x[1]):
+            lines.append(f"- {t}：{c}")
+        lines.append("")
+    if d.get("top"):
+        lines.append("## 本周最值得记住")
+        for e in d["top"]:
+            lines.append(f"- [{e.get('type')}·{e.get('importance')}] {e.get('text')}")
+        lines.append("")
+    if d.get("new"):
+        lines.append("## 新增记忆")
+        for e in d["new"]:
+            lines.append(f"- ({e.get('ts') or ''}) {e.get('text')}")
+    return "\n".join(lines)
+
+
+def _sync_machine():
+    """本机标识（用于同步目录里区分来源设备）。"""
+    try:
+        import socket
+        return (socket.gethostname() or "unknown").strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _sync_brain_dir(sync_dir):
+    bid = str((bk.load_manifest() or {}).get("brain_id") or "brain")
+    return Path(sync_dir) / bid
+
+
+def sync_push(sync_dir):
+    """②d 推送：先归档生成本机最新 .whale 快照，再镜像到共享目录，并记录设备版本。
+
+    `.whale` 本身已加密（凭钥解锁），故共享目录（网盘/局域网盘）无需再加密。
+    """
+    sync_dir = str(sync_dir or "").strip()
+    if not sync_dir:
+        return {"ok": False, "message": "请提供同步目录"}
+    code, out = _run(bk.cmd_archive, passphrase="", keep=bk.DEFAULT_KEEP)
+    if code != 0:
+        return {"ok": False, "message": f"归档失败：{out}"}
+    code2, out2 = _run(bk.cmd_mirror, dir=sync_dir)
+    if code2 != 0:
+        return {"ok": False, "message": f"镜像失败：{out2}"}
+    snaps = _snapshot_list()
+    ver = snaps[-1]["version"] if snaps else 0
+    idx_path = _sync_brain_dir(sync_dir) / "sync_index.json"
+    idx = bk.load_json(idx_path, {}) or {}
+    idx[_sync_machine()] = {"version": ver, "ts": bk.now_iso(), "file": f"brain_v{ver}.whale"}
+    bk.save_json(idx_path, idx)
+    return {"ok": True, "message": f"已推送本机快照 v{ver} 到同步目录",
+            "data": {"version": ver, "dir": sync_dir}}
+
+
+def sync_status(sync_dir):
+    """②d 状态：对比本机最新快照与同步目录中各设备版本，列出可拉取的更新。"""
+    sync_dir = str(sync_dir or "").strip()
+    if not sync_dir:
+        return {"ok": False, "message": "请提供同步目录"}
+    base = _sync_brain_dir(sync_dir)
+    local = _snapshot_list()
+    local_ver = local[-1]["version"] if local else 0
+    me = _sync_machine()
+    idx = bk.load_json(base / "sync_index.json", {}) or {}
+    remote = []
+    for m, info in idx.items():
+        fn = str(info.get("file") or "")
+        remote.append({"machine": m, "version": int(info.get("version") or 0), "ts": info.get("ts") or "",
+                       "is_self": m == me, "path": str(base / fn) if fn else ""})
+    remote.sort(key=lambda r: -r["version"])
+    newer = [r for r in remote if not r["is_self"] and r["version"] > local_ver
+             and r["path"] and Path(r["path"]).exists()]
+    return {"ok": True, "data": {"dir": sync_dir, "brain_id": base.name, "machine": me,
+                                 "local_version": local_ver, "remote": remote, "newer": newer}}
+
+
+def sync_pull(sync_dir, machine=None):
+    """②d 拉取：返回远端更新的 .whale 绝对路径，供 merge-preview / merge / diff 直接使用。"""
+    st = sync_status(sync_dir)
+    if not st.get("ok"):
+        return st
+    d = st["data"]
+    cands = d["newer"] if not machine else [r for r in d["remote"] if r["machine"] == machine]
+    cands = [c for c in cands if c.get("path") and Path(c["path"]).exists() and not c.get("is_self")]
+    if not cands:
+        return {"ok": False, "message": "同步目录没有可拉取的更新"}
+    c = cands[0]
+    return {"ok": True, "message": f"找到远端快照 v{c['version']}（来自 {c['machine']}）",
+            "data": {"snapshot": c["path"], "version": c["version"], "machine": c["machine"],
+                     "candidates": cands}}
+
+
 def refresh_self_model():
     """动态校准自我模型：LLM 基于真实工具能力 + 记忆 + 目标重写 knows/unknowns/limits。
 
@@ -572,6 +710,12 @@ def brain_action(action, payload=None):
         for d in dirs:
             d["current"] = str(Path(d["path"]).resolve()) == current
         return {"ok": True, "data": {"dirs": dirs, "current": current}}
+    if action == "sync-push":
+        return sync_push(str(payload.get("dir") or ""))
+    if action == "sync-status":
+        return sync_status(str(payload.get("dir") or ""))
+    if action == "sync-pull":
+        return sync_pull(str(payload.get("dir") or ""), machine=payload.get("machine"))
     if action == "self-refresh":
         ok = refresh_self_model()
         return {"ok": ok, "message": "自我模型已动态校准" if ok else "校准未执行（需配置 API Key 并初始化大脑）"}
@@ -593,6 +737,11 @@ def brain_action(action, payload=None):
                                   note=str(payload.get("note") or ""))
         return {"ok": bool(rec), "message": f"演化账本已记录 {rec['id']}" if rec else "标题为空",
                 "data": {"record": rec}}
+    if action == "memory-digest":
+        d = memory_digest(days=int(payload.get("days") or 7))
+        if payload.get("markdown"):
+            d = {**d, "markdown": render_memory_digest(d)}
+        return {"ok": True, "message": f"近 {d['days']} 天新增 {d['new_count']} 条记忆", "data": d}
     if action == "context-preview":
         # 对话上下文预览（懒加载：状态页展开「对话中的我」时才计算）
         return {"ok": True, "data": {"preview": context_preview(int(payload.get("max_memories") or 3))}}

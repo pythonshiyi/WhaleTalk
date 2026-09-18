@@ -19,8 +19,10 @@ B2 目标：基于 mtime 失效的内存缓存 + 倒排索引，让跨源检索�
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
+import time as _time
 from pathlib import Path
 
 # 运行时注入（由 api_server._init_dc_paths 设置后赋值；未设置时函数级兜底探测）
@@ -248,3 +250,141 @@ def search_all(query: str, limit=8):
     hits = search(query, limit=limit)
     kd = knowledge_docs(query, limit=2)
     return hits + kd
+
+
+# ── B3 记忆洞察（只读，不改任一落盘 schema）──────────────────────────────
+# 目标：给统一条目补上「可信度」视角——重要性 × 时效衰减 × 命中反馈，并暴露
+# 溯源字段、检测疑似互相矛盾的记忆。全部在读取层计算，旧数据无需迁移。
+DEFAULT_HALF_LIFE_DAYS = 30.0
+
+
+def _parse_ts(value):
+    """尽力把 ts/last_hit 解析为 epoch 秒；失败返回 0.0。"""
+    if value in (None, ""):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _entry_time(entry):
+    """条目的「最近活跃时间」：优先 last_hit，其次 ts。"""
+    for key in ("last_hit", "ts"):
+        t = _parse_ts(entry.get(key))
+        if t:
+            return t
+    return 0.0
+
+
+def confidence(entry, now=None, half_life_days=DEFAULT_HALF_LIFE_DAYS):
+    """0..1 置信度：importance(0.6) + 时效衰减(0.25) + 命中反馈(0.15)。
+
+    时效按「最近活跃时间」半衰：recency = 0.5 ** (age_days / half_life)。归档条目为 0。
+    """
+    if entry.get("archived"):
+        return 0.0
+    now = _time.time() if now is None else now
+    imp = max(1, min(5, int(entry.get("importance") or 3)))
+    rec = 1.0
+    t = _entry_time(entry)
+    if t and half_life_days > 0:
+        age_days = max(0.0, (now - t) / 86400.0)
+        rec = 0.5 ** (age_days / half_life_days)
+    hc = max(0, int(entry.get("hit_count") or 0))
+    hit_boost = min(1.0, math.log1p(hc) / math.log1p(10))
+    conf = 0.6 * (imp / 5.0) + 0.25 * rec + 0.15 * hit_boost
+    return round(max(0.0, min(1.0, conf)), 4)
+
+
+def rank(entries, now=None, half_life_days=DEFAULT_HALF_LIFE_DAYS):
+    """按置信度排序（同分再按 importance 降序）。返回带 confidence 的新列表（不改入参）。"""
+    scored = []
+    for e in entries or []:
+        c = confidence(e, now=now, half_life_days=half_life_days)
+        scored.append((c, int(e.get("importance") or 3), e))
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    out = []
+    for c, _imp, e in scored:
+        item = dict(e)
+        item["confidence"] = c
+        out.append(item)
+    return out
+
+
+def provenance(entry):
+    """记忆溯源：这条记忆来自哪个存储、何时写入/命中、是否取代了别的版本。"""
+    return {
+        "id": str(entry.get("id") or ""),
+        "source": entry.get("source") or "?",
+        "type": entry.get("type") or "",
+        "ts": entry.get("ts") or "",
+        "last_hit": entry.get("last_hit") or "",
+        "hit_count": int(entry.get("hit_count") or 0),
+        "supersedes": entry.get("supersedes") or "",
+        "version_id": entry.get("version_id") or "",
+        "sensitivity": entry.get("sensitivity") or "public",
+        "confidence": confidence(entry),
+    }
+
+
+def _jaccard(a, b):
+    sa, sb = set(a), set(b)
+    if not sa or not sb:
+        return 0.0
+    return len(sa & sb) / len(sa | sb)
+
+
+def _topic_keys(entry):
+    keys = set()
+    for field in ("tags", "entities"):
+        for x in entry.get(field) or []:
+            s = str(x).strip().lower()
+            if s:
+                keys.add(s)
+    return keys
+
+
+def conflicts(entries=None, threshold=0.35, max_pairs=50):
+    """检测疑似冲突记忆：共享同一 tag/entity 但文本相似度低（可能互相矛盾）。
+
+    启发式，用于「请用户仲裁」的候选列表——命中不一定真冲突，故交由上层/用户裁决。
+    返回 [{topic, a_id, b_id, a_text, b_text, similarity}]。
+    """
+    items = entries if entries is not None else unified_entries()
+    buckets = {}
+    for e in items:
+        if e.get("archived"):
+            continue
+        for k in _topic_keys(e):
+            buckets.setdefault(k, []).append(e)
+    pairs, seen = [], set()
+    for topic, group in buckets.items():
+        if len(group) < 2:
+            continue
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a, b = group[i], group[j]
+                ta, tb = str(a.get("text") or ""), str(b.get("text") or "")
+                if not ta or ta == tb:
+                    continue
+                pid = tuple(sorted([str(a.get("id") or ""), str(b.get("id") or "")]))
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                sim = _jaccard(_tokens(ta), _tokens(tb))
+                if sim < threshold:
+                    pairs.append({"topic": topic, "a_id": a.get("id"), "b_id": b.get("id"),
+                                  "a_text": ta[:200], "b_text": tb[:200],
+                                  "similarity": round(sim, 3)})
+                    if len(pairs) >= max_pairs:
+                        return pairs
+    return pairs

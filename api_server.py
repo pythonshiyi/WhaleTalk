@@ -134,6 +134,7 @@ _CURRENT_TASK = {"title": ""}
 _LAST_AUTO_CHECKPOINT = 0  # 本会话已自动打点的链长（防每步写盘）
 
 ASK_TIMEOUT = 180.0
+PLAN_TIMEOUT = 300.0   # ③b 工具批计划确认超时（用户可能逐条改参数）
 
 
 def _respond(body):
@@ -164,6 +165,10 @@ def _respond(body):
     elif typ == "approval":
         box["allow"] = bool(body.get("allow"))
         box["reason"] = str(body.get("reason") or ("用户允许" if box["allow"] else "用户拒绝"))
+    elif typ == "plan":
+        box["approve"] = bool(body.get("approve"))
+        edits = body.get("edits")
+        box["edits"] = edits if isinstance(edits, list) else []
     else:
         return False, f"不支持的请求类型：{typ}"
     entry["ev"].set()
@@ -284,6 +289,37 @@ def _make_ask_cb(send, stop_event):
             "reason": answer_str[:200],
         })
         return answer_str
+
+    return cb
+
+
+def _make_plan_cb(send, stop_event, enabled=False):
+    """③b on_plan：把「本轮工具批」推给前端确认，可携带编辑后的参数。
+
+    默认关闭（confirm_plan=False）时直接放行（返回 True, ""）。开启后等待前端经
+    POST /v1/respond 回传 {id, approve, edits}；edits=[{index,args}] 由
+    deepseek_client._apply_plan_edits 写回本轮 tool_calls（仅改参数，不改工具名）。
+    """
+    def cb(calls):
+        if not enabled:
+            return True, ""
+        rid = secrets_token(4)
+        ev = threading.Event()
+        box = {"approve": False, "edits": []}
+        with _PENDING_LOCK:
+            _PENDING[rid] = {"ev": ev, "box": box, "type": "plan"}
+        send("plan_request", {"id": rid, "steps": [{"name": n, "args": a} for n, a in calls]})
+        deadline = time.monotonic() + PLAN_TIMEOUT
+        while not ev.wait(0.5):
+            if stop_event and stop_event.is_set():
+                break
+            if time.monotonic() >= deadline:
+                break
+        with _PENDING_LOCK:
+            _PENDING.pop(rid, None)
+        if not box["approve"]:
+            return False, "用户取消了本轮工具计划"
+        return True, "", box.get("edits") or []
 
     return cb
 
@@ -846,6 +882,48 @@ def _monthly_cost():
         return round(cost, 2)
     except Exception:
         return 0.0
+
+
+_TIKTOKEN_ENC = None
+
+
+def _estimate_text_tokens(text):
+    """文本 token 粗估：优先 tiktoken，缺失时按字符数/2 兜底（中文近似）。"""
+    global _TIKTOKEN_ENC
+    s = str(text or "")
+    if not s:
+        return 0
+    if _TIKTOKEN_ENC is None:
+        try:
+            import tiktoken
+            _TIKTOKEN_ENC = tiktoken.get_encoding("cl100k_base")
+        except Exception:  # noqa: BLE001
+            _TIKTOKEN_ENC = False
+    if _TIKTOKEN_ENC:
+        try:
+            return len(_TIKTOKEN_ENC.encode(s))
+        except Exception:  # noqa: BLE001
+            pass
+    return max(1, len(s) // 2)
+
+
+def _estimate_request_cost(messages, max_tokens, model):
+    """单次请求预估费用（元）：输入 token 估算 + max_tokens 上限作为输出估算。"""
+    import stats as stats_mod
+    prompt = 0
+    for m in messages or []:
+        if isinstance(m, dict):
+            prompt += _estimate_text_tokens(m.get("content"))
+    usage = {"prompt": prompt, "cache_hit": 0, "completion": int(max_tokens or 0)}
+    try:
+        return stats_mod.estimate_cost(usage, model)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _cost_gate_decision(estimate, limit):
+    """③c 预检判定：阈值>0 且预估≥阈值 → 需确认（纯函数，便于回归）。"""
+    return float(limit or 0.0) > 0 and float(estimate or 0.0) >= float(limit)
 
 
 def _usage_month_summary():
@@ -2840,6 +2918,29 @@ def _crystallize_skills():
     stores.save_patterns(PROMPTS_PATH, items)
     _audit("skill_crystallized", ", ".join(d["name"] for d in drafts), f"{len(drafts)} 条草稿")
     return len(drafts)
+
+
+def _crystallize_workflows():
+    """宏录制（③a）：把成功工具链固化为 workflows.json 中可 run_workflow 执行的宏。
+
+    与 _crystallize_skills 同源（tasklog 链 + patterns 参数），但产出可顺序执行的流程；
+    阈值更宽（≥2 步、出现 1 次即可），支持「录制一次成功操作」。
+    """
+    import skill_factory
+    import stores
+    active_dir = _status()["active_dir"]
+    tasklog = stores.load_tasklog(os.path.join(active_dir, ".whaletalk", "tasklog.json"))
+    patterns = stores.load_patterns(PATTERNS_PATH)
+    existing = _load_workflows()
+    drafts = skill_factory.workflow_drafts(tasklog.get("tasks") or [], existing, patterns)
+    if not drafts:
+        return []
+    for d in drafts:
+        existing[d["name"]] = {"steps": d["steps"], "auto": True,
+                               "source_sig": d["source_sig"], "hits": d["hits"]}
+    _atomic_write_json(WORKFLOWS_PATH, existing)
+    _audit("workflow_crystallized", ", ".join(d["name"] for d in drafts), f"{len(drafts)} 个宏")
+    return drafts
 
 
 def _active_dir():
@@ -6580,6 +6681,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {
             "failures": items[:100],
             "stats": stores.failure_stats(FAILURES_PATH),
+            "dashboard": stores.failure_dashboard(FAILURES_PATH),
             "active_path": FAILURES_PATH,
             "archive_path": FAILURES_ARCHIVE_PATH,
         })
@@ -6843,6 +6945,21 @@ class _Handler(BaseHTTPRequestHandler):
                 limit = 8
             limit = max(1, min(100, limit))
             src = (qs.get("sources") or ["all"])[0]
+            # B3：insights=1 时附上置信度排序 + 疑似冲突候选（复用本端点，不新增路由）
+            insights = (qs.get("insights") or ["0"])[0] not in ("0", "", "false", "no")
+            if insights:
+                if src == "memory.json":
+                    base = (ms.search(q, 100, sources=("memory.json",)) if q
+                            else [e for e in ms.unified_entries() if e.get("source") == "memory.json"])
+                elif src == "brain":
+                    base = (ms.search(q, 100, sources=("brain",)) if q
+                            else [e for e in ms.unified_entries() if e.get("source") == "brain"])
+                else:
+                    base = ms.search_all(q, 100) if q else ms.unified_entries()
+                items = ms.rank(base)[:limit]
+                self._json(200, {"ok": True, "query": q, "items": items, "count": len(items),
+                                 "conflicts": ms.conflicts(ms.unified_entries())[:20]})
+                return
             if src == "memory.json":
                 items = ms.search(q, limit, sources=("memory.json",))
             elif src == "brain":
@@ -7049,6 +7166,60 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid json or body too large"})
             return
         self._json(200, _stop_chat(body))
+
+
+    @_post_route("/v1/chat/completions")
+    def _p_v1_chat_completions(self):
+        """OpenAI 兼容端点（⑤b）：让本地 IDE / 其他客户端直接复用本机模型配置。
+
+        非流式；鉴权沿用既有的 Bearer token（OpenAI 客户端默认发送 Authorization 头）。
+        insight：不注入工具循环（tools_enabled=False），保持与外部客户端语义一致。
+        """
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": {"message": "invalid json or body too large",
+                                       "type": "invalid_request_error"}})
+            return
+        try:
+            import deepseek_client as dc
+            messages = body.get("messages")
+            if not isinstance(messages, list) or not messages:
+                self._json(400, {"error": {"message": "messages is required",
+                                           "type": "invalid_request_error"}})
+                return
+            client = dc.get_active_client()
+            if client is None:
+                self._json(503, {"error": {"message": "未配置 API Key（请在设置页填写）",
+                                           "type": "server_error"}})
+                return
+            effort = str(body.get("reasoning_effort") or "")
+            thinking = effort if effort in ("none", "low", "medium", "high", "max") else "none"
+            try:
+                max_tokens = int(body.get("max_tokens") or body.get("max_completion_tokens") or 4096)
+            except (TypeError, ValueError):
+                max_tokens = 4096
+            temp = body.get("temperature")
+            content, usage = [], []
+            client.chat(
+                [dict(m) for m in messages if isinstance(m, dict)],
+                thinking=thinking, max_tokens=max_tokens,
+                temperature=(float(temp) if temp is not None else None),
+                tools_enabled=False,
+                on_content=lambda t: content.append(t),
+                on_usage=lambda u: usage.append(u),
+            )
+            self._json(200, {
+                "id": "chatcmpl-" + os.urandom(8).hex(),
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": str(body.get("model") or getattr(client, "model", "") or "deepseek-flash"),
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "".join(content)},
+                             "finish_reason": "stop"}],
+                "usage": usage[-1] if usage else {},
+            })
+        except Exception as e:  # noqa: BLE001
+            logger.exception("OpenAI 兼容端点失败")
+            self._json(500, {"error": {"message": _friendly_error(e), "type": "server_error"}})
 
 
     @_post_route("/v1/brain")
@@ -7374,12 +7545,15 @@ class _Handler(BaseHTTPRequestHandler):
 
     @_post_route("/v1/skills/crystallize")
     def _p_v1_skills_crystallize(self):
-        """技能结晶（G14）：立即把重复出现的成功工具链固化为指令库草稿。"""
+        """技能结晶（G14）+ 宏录制（③a）：把成功工具链固化为指令库草稿与可执行 workflow。"""
         n = _crystallize_skills()
+        wf = _crystallize_workflows()
         self._json(200, {
             "ok": True,
             "created": n,
             "skills": [p for p in _prompts_load_user() if p.get("auto_skill")],
+            "workflows": wf,
+            "workflows_created": len(wf),
         })
 
 
@@ -8172,6 +8346,30 @@ class _Handler(BaseHTTPRequestHandler):
             pass
         return None
 
+    def _cost_gate(self, body, cfg, messages):
+        """③c 任务级成本预检（HITL）：预估费用 ≥ confirm_over_cost 且未确认 → 返回确认载荷。
+
+        与 _budget_block 的区别：后者是「月度总额硬阻断」，本闸是「单次请求金额提示」，
+        用户确认（前端带 cost_confirmed=True 重发）后放行。默认阈值 0=关闭，不改变既有行为。
+        """
+        try:
+            limit = float(cfg.get("confirm_over_cost") or 0.0)
+        except (TypeError, ValueError):
+            limit = 0.0
+        if limit <= 0 or body.get("cost_confirmed"):
+            return None
+        model = str(body.get("model") or cfg.get("model") or "")
+        try:
+            max_tokens = int(body.get("max_tokens") or cfg.get("max_tokens") or 16384)
+        except (TypeError, ValueError):
+            max_tokens = 16384
+        est = _estimate_request_cost(messages, max_tokens, model)
+        if not _cost_gate_decision(est, limit):
+            return None
+        return {"needs_confirmation": True, "reason": "cost",
+                "estimated_cost": round(est, 4), "threshold": limit, "model": model,
+                "message": f"本次请求预估费用约 ¥{est:.2f}（阈值 ¥{limit:.2f}），确认后继续。"}
+
     def _quiet_mode(self, body, cfg):
         """纯净对话开关：请求级 body 优先，否则回退全局配置（不进 client.chat kwargs）。"""
         return bool(body.get("quiet_mode", cfg.get("quiet_mode", False)))
@@ -8285,6 +8483,10 @@ class _Handler(BaseHTTPRequestHandler):
             if kb:
                 self._json(400, {"error": kb})
                 return
+            gate = self._cost_gate(body, cfg, messages)
+            if gate:
+                self._json(200, gate)
+                return
             kwargs = self._chat_kwargs(body, cfg)
             quiet_mode = self._quiet_mode(body, cfg)
             messages, memory_text = self._inject_system_messages(
@@ -8356,6 +8558,12 @@ class _Handler(BaseHTTPRequestHandler):
                 send("done", {})
                 job.finish("error")
                 return
+            gate = self._cost_gate(body, cfg, messages)
+            if gate:
+                send("needs_confirmation", gate)
+                send("done", {})
+                job.finish("done")
+                return
             kwargs = self._chat_kwargs(body, cfg)
             quiet_mode = self._quiet_mode(body, cfg)
             messages, memory_text = self._inject_system_messages(
@@ -8396,6 +8604,10 @@ class _Handler(BaseHTTPRequestHandler):
                     send, job.stop_event,
                     (str(body.get("mode") or "") == "task") or bool(cfg.get("full_auto"))),
                 "on_ask": _make_ask_cb(send, job.stop_event),
+                "on_plan": _make_plan_cb(
+                    send, job.stop_event,
+                    bool(cfg.get("confirm_plan")) and not (
+                        (str(body.get("mode") or "") == "task") or bool(cfg.get("full_auto")))),
                 "on_request_permission": _make_permission_cb(send, job.stop_event),
                 "stop_event": job.stop_event,
                 # 本轮新增消息（供断连兜底做「只追加本轮」的落盘，避免长会话丢历史）

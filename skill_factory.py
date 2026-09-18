@@ -132,6 +132,56 @@ def build_skill(info, patterns=None, now=None):
     }
 
 
+WORKFLOW_MIN_CHAIN = 2       # 宏（可执行流程）允许较短链，2 步即值得复用
+WORKFLOW_MIN_REPEATS = 1     # 手动宏：出现一次即可录制
+WORKFLOW_MAX_DRAFTS = 10
+
+
+def build_workflow(info, patterns=None, prefix="宏"):
+    """把一条成功工具链渲染成 workflows.json 形态的可执行流程（步骤=自然语言指令）。
+
+    与 build_skill 的区别：skill 是「给模型的指令模板」，workflow 是「run_workflow
+    可顺序执行的有序步骤」——同一份成功链路，两种复用粒度。
+    """
+    chain = [str(s) for s in (info.get("chain") or [])]
+    sig = chain_signature(chain)
+    title = (info.get("titles") or ["同类任务"])[-1]
+    steps = []
+    for i, t in enumerate(chain, 1):
+        hint = _arg_hint(t, patterns)
+        steps.append(f"{i}. 使用工具 {t} 完成本步骤" + (f"（参考参数：{hint}）" if hint else ""))
+    steps.append(f"{len(chain) + 1}. 核验全部产物真实存在，缺失立即修正；最后汇总完成情况。")
+    return {"name": f"{prefix} · {title}"[:60], "steps": steps,
+            "source_sig": sig, "hits": int(info.get("count") or 1), "auto": True}
+
+
+def workflow_drafts(tasks, existing_workflows=None, patterns=None,
+                    min_chain=WORKFLOW_MIN_CHAIN, min_repeats=WORKFLOW_MIN_REPEATS,
+                    max_drafts=WORKFLOW_MAX_DRAFTS, now=None):
+    """从 tasklog 成功链产出「宏」草稿（名称去重；跳过已存在同名 workflow）。
+
+    existing_workflows: workflows.json 形态 dict（{name: {...}}）。
+    返回 [{name, steps, source_sig, hits}]。
+    """
+    taken = {str(k).strip() for k in (existing_workflows or {})}
+    agg = collect_chains(tasks)
+    out = []
+    ordered = sorted(agg.items(), key=lambda kv: (-int(kv[1]["count"]), -len(kv[1]["chain"])))
+    for _sig, info in ordered:
+        if len(out) >= int(max_drafts):
+            break
+        if len(info.get("chain") or []) < int(min_chain):
+            continue
+        if int(info.get("count") or 0) < int(min_repeats):
+            continue
+        wf = build_workflow(info, patterns)
+        if wf["name"] in taken:
+            continue
+        taken.add(wf["name"])
+        out.append(wf)
+    return out
+
+
 def crystallize(tasks, patterns=None, existing=None,
                 min_chain=SKILL_MIN_CHAIN, min_repeats=SKILL_MIN_REPEATS,
                 max_drafts=SKILL_MAX_DRAFTS, now=None):

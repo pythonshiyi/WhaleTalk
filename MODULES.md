@@ -2,7 +2,7 @@
 
 本文档描述鲸语 WhaleTalk 当前（v3.16.0，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
 
-> 规模口径（`tools/check_docs.py` 实测）：**161 个 Agent 工具**（11 组）· **98 /v1 端点** · 后端 61 个 pytest 文件 / 671 用例 · 前端 14 个 node 套件；源码约 6.2 万行（根目录 2.9 万 + `agent_tools/` 1.7 万 + `webui/src` 1.6 万）。
+> 规模口径（`tools/check_docs.py` 实测）：**161 个 Agent 工具**（11 组）· **99 /v1 端点** · 后端 61 个 pytest 文件 / 671 用例 · 前端 14 个 node 套件；源码约 6.2 万行（根目录 2.9 万 + `agent_tools/` 1.7 万 + `webui/src` 1.6 万）。
 
 ## 分层总览
 
@@ -10,7 +10,7 @@
 web_app.py（唯一入口：浏览器 + 托盘 + 快捷方式 + 依赖自检）
     │
     ▼
-api_server.py（本地 HTTP API：REST + SSE，98 /v1 端点）
+api_server.py（本地 HTTP API：REST + SSE，99 /v1 端点）
     │
     ▼
 deepseek_client.py（能力引擎：DeepSeekClient + 161 工具 + smart_tools）
@@ -37,7 +37,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 161 工具 + smart_tools）
 | 模块 | 职责 |
 |---|---|
 | `web_app.py`（924 行） | 唯一启动入口：启动本地 API、自动打开浏览器、系统托盘常驻、桌面/开始菜单快捷方式、开机自启、单实例、WebUI 自动构建（npm）、Python 依赖自检与自动安装 |
-| `api_server.py`（8,707 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/插件/指令库/工作台/大脑/TTS/审计/备份/更新等 **98 个 /v1 端点**（等 98 端点，含失败记忆生命周期 `/v1/failures/resolve|reopen|forget` 与技能结晶 `/v1/skills/crystallize`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
+| `api_server.py`（8,707 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/插件/指令库/工作台/大脑/TTS/审计/备份/更新等 **98 个 /v1 端点**（等 99 端点，含失败记忆生命周期 `/v1/failures/resolve|reopen|forget` 与技能结晶 `/v1/skills/crystallize`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
 
 ### 能力引擎
 
@@ -125,9 +125,9 @@ deepseek_client.py（能力引擎：DeepSeekClient + 161 工具 + smart_tools）
 
 | 文件 | 职责 |
 |---|---|
+| `bootstrap.py` | 跨平台引导器（替代原 start.bat/build_exe.bat）：建 `.venv` → 逐包安装核心依赖（死代理自动绕过、单包失败不阻断）→ 启动 `web_app.py`；`bootstrap.py check` 体检、`bootstrap.py build` 打包 |
 | `backup.py` / `backup.bat` | 大版本更新前源码快照（`backups/WhaleTalk_v<版本>_<时间戳>.zip`） |
-| `build_exe.bat` / `WhaleTalk.spec` | PyInstaller 打包 `dist\WhaleTalk.exe`（前端内置，大型可选依赖排除） |
-| `start.bat` | 首次运行创建 .venv 并安装依赖后无窗启动 |
+| `WhaleTalk.spec` | PyInstaller 打包配置（`python bootstrap.py build` 调用；前端内置，大型可选依赖排除） |
 
 ## 数据目录
 

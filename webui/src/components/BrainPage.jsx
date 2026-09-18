@@ -1,6 +1,7 @@
 import React from "react";
 import BrainBlock from "./BrainBlock.jsx";
 import BrainSearch from "./BrainSearch.jsx";
+import BrainInsights from "./BrainInsights.jsx";
 import { MemoryPage } from "./Pages.jsx";
 import { Icon } from "./icons.jsx";
 import * as brainNav from "../brainNav.js";
@@ -34,6 +35,7 @@ export default function BrainPage() {
       </div>
 
       <BrainSearch />
+      <BrainInsights />
 
       <div
         className="brain-tabs"

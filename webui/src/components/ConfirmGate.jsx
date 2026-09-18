@@ -22,6 +22,7 @@ export default function ConfirmGate({ req, onRespond }) {
   const [answer, setAnswer] = React.useState("");
   const [sel, setSel] = React.useState([]); // 多选已勾选项（字符串数组）
   const [seconds, setSeconds] = React.useState(ASK_TIMEOUT_S);
+  const [planSteps, setPlanSteps] = React.useState([]); // ③b 计划步骤（可编辑 args）
 
   // 切换请求时重置
   React.useEffect(() => {
@@ -29,6 +30,12 @@ export default function ConfirmGate({ req, onRespond }) {
     setAnswer("");
     setSel([]);
     setSeconds(ASK_TIMEOUT_S);
+    setPlanSteps(Array.isArray(req.steps)
+      ? req.steps.map((s) => ({
+          name: String((s && s.name) || ""),
+          args: typeof (s && s.args) === "string" ? s.args : JSON.stringify((s && s.args) || {}, null, 0),
+        }))
+      : []);
   }, [req]);
 
   // 倒计时
@@ -52,6 +59,7 @@ export default function ConfirmGate({ req, onRespond }) {
   const rt = String(req.type || "");
   const isAsk = rt === "ask" || rt === "ask_request";
   const isApproval = rt === "approval" || rt === "approval_request";
+  const isPlan = rt === "plan" || rt === "plan_request";
   const options = isAsk && Array.isArray(req.options) && req.options.length ? req.options.slice(0, 6) : null;
   // 多选：仅当 AI 声明 multi 且有 options 时启用（否则单选一点即提交）
   const multi = !!(isAsk && options && (req.multi === true || req.multi === "true"));
@@ -66,7 +74,8 @@ export default function ConfirmGate({ req, onRespond }) {
 
   // 用户主动关闭（✕ 或点击遮罩）
   const dismiss = () => {
-    if (isAsk) finish({ id: req.id, answer: "（用户跳过了该询问）" });
+    if (isPlan) finish({ id: req.id, approve: false });
+    else if (isAsk) finish({ id: req.id, answer: "（用户跳过了该询问）" });
     else finish({ id: req.id, allow: false, reason: "用户关闭了请求框" });
   };
 
@@ -77,9 +86,9 @@ export default function ConfirmGate({ req, onRespond }) {
   return (
     <div className="confirm-mask" onClick={handleMaskClick}>
       <div ref={cardRef} className="confirm-card" role="dialog" aria-modal="true"
-        aria-label={isAsk ? "Agent 询问" : "权限确认"}>
+        aria-label={isAsk ? "Agent 询问" : isPlan ? "工具计划确认" : "权限确认"}>
         <div className="confirm-head">
-          <b><Icon name={isAsk ? "help" : "shield"} size={15} /> {isAsk ? "Agent 需要你确认" : "权限请求"}</b>
+          <b><Icon name={isAsk ? "help" : isPlan ? "activity" : "shield"} size={15} /> {isAsk ? "Agent 需要你确认" : isPlan ? "工具计划确认" : "权限请求"}</b>
           <span className="confirm-head-right">
             <span className={`confirm-timer ${expired ? "confirm-timer-over" : ""}`}>
               {expired ? "已超时" : `${seconds}s`}
@@ -162,6 +171,37 @@ export default function ConfirmGate({ req, onRespond }) {
                 </div>
               </>
             )}
+          </>
+        ) : isPlan ? (
+          <>
+            <div className="confirm-prompt">
+              本轮将执行 <b>{planSteps.length}</b> 个工具调用，可修改参数后执行：
+            </div>
+            <div className="confirm-args" style={{ maxHeight: 280, overflow: "auto" }}>
+              {planSteps.map((s, i) => (
+                <div key={i} style={{ marginBottom: 8 }}>
+                  <div className="confirm-tool" style={{ fontSize: 12 }}>{i + 1}. {s.name}</div>
+                  <input
+                    className="confirm-input"
+                    value={s.args}
+                    onChange={(e) => setPlanSteps((prev) =>
+                      prev.map((p, j) => (j === i ? { ...p, args: e.target.value } : p)))}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="confirm-note">仅可修改参数（工具名不变）；确认后立即执行本轮计划。</div>
+            <div className="confirm-foot">
+              <button className="confirm-btn" onClick={dismiss}>取消</button>
+              <button className="confirm-btn confirm-primary"
+                disabled={planSteps.length === 0}
+                onClick={() => finish({
+                  id: req.id, approve: true,
+                  edits: planSteps.map((s, i) => ({ index: i, args: s.args })),
+                })}>
+                执行计划
+              </button>
+            </div>
           </>
         ) : (
           <>

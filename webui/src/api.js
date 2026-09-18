@@ -36,7 +36,7 @@ const REQUEST_TIMEOUT = 15000;
  * tool_duration→name+duration；usage→usage 对象；compressed→removed_turns 等；
  * ask/approval→id/kind/提示语；error→message。
  * @typedef {Object} SSEEvent
- * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"ask_request"|"approval_request"|"session"|"done"|"error"} type 事件类型
+ * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"ask_request"|"approval_request"|"plan_request"|"session"|"done"|"error"} type 事件类型
  * @property {string} [text] 增量文本
  * @property {string} [name] 工具名
  * @property {Object} [args] 工具参数
@@ -63,6 +63,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {(ev:SSEEvent)=>void} [onCompressed] 上下文已压缩
  * @property {(ev:SSEEvent)=>void} [onAskRequest] 询问（需 POST /v1/respond 回传）
  * @property {(ev:SSEEvent)=>void} [onApprovalRequest] 审批请求
+ * @property {(ev:SSEEvent)=>void} [onPlanRequest] 工具批计划确认（steps，可编辑参数后回传）
  * @property {(ev:SSEEvent)=>void} [onSession] 后端分配的会话 id（{id,stream_id}）
  * @property {()=>void} [onDone] 正常结束（后端已自动落盘会话）
  * @property {(message:string)=>void} [onError] 错误
@@ -400,6 +401,7 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
     else if (ev.type === "compressed") handlers.onCompressed?.(ev);
     else if (ev.type === "ask_request") handlers.onAskRequest?.(ev);
     else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);
+    else if (ev.type === "plan_request") handlers.onPlanRequest?.(ev);
     else if (ev.type === "session") handlers.onSession?.(ev);
     else if (ev.type === "done") handlers.onDone?.();
     else if (ev.type === "error") handlers.onError?.(ev.message);
@@ -825,6 +827,18 @@ export async function searchUnifiedMemories(query = "", sources = "all", limit =
   const p = new URLSearchParams({ limit: String(limit) });
   if (query) p.set("query", query);
   if (sources !== "all") p.set("sources", sources);
+  return api(`/v1/brain/unified-memories?${p.toString()}`);
+}
+
+/**
+ * B3 记忆洞察：置信度排序 + 疑似冲突候选（复用 unified-memories 端点，insights=1）。
+ * @param {string} [query] 关键词（空则按置信度列出全部）
+ * @param {number} [limit]
+ * @returns {Promise<{ok?:boolean, query?:string, items?:Array<any>, conflicts?:Array<any>, count?:number}>}
+ */
+export async function memoryInsights(query = "", limit = 20) {
+  const p = new URLSearchParams({ limit: String(limit), insights: "1" });
+  if (query) p.set("query", query);
   return api(`/v1/brain/unified-memories?${p.toString()}`);
 }
 

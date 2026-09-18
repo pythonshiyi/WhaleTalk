@@ -42,7 +42,7 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 ```
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
-├── api_server.py           # 本地 HTTP API（REST + SSE，98+ /v1 端点）
+├── api_server.py           # 本地 HTTP API（REST + SSE，99+ /v1 端点）
 ├── deepseek_client.py      # 能力引擎：DeepSeekClient + 161 工具 + smart_tools（5,100 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
 ├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop/mv/codegen 共 13 模块 159 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
@@ -61,7 +61,7 @@ WhaleTalk/
 ├── webui/                  # React 前端（dist/ 由 api_server 同源服务）
 ├── tools/                  # audit_tools.py（六层一致性审计）+ validate_tools.py（回归门禁）
 ├── sample_plugins/         # 10 个示例 .wtplugin 插件
-└── WhaleTalk.spec / build_exe.bat / start.bat / backup.bat
+└── WhaleTalk.spec / bootstrap.py / backup.bat
 ```
 
 完整模块职责见 [MODULES.md](MODULES.md)。
@@ -280,8 +280,9 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 - **CI**（.github/workflows/ci.yml）：`check`（ruff 关键规则 E9/F63/F7/F82 + 入口 py_compile）· `test-backend`（`pytest tests/`，671 用例，依赖 `requirements-dev.txt` 锁 pytest 版本）· `webui`（npm ci + build + `npm test` 14 个 node 套件）· 门禁 job（`tools/audit_tools.py --strict` / `tools/validate_tools.py` / `tools/island_check.py` / `tools/check_docs.py`）。pytest 的 `addopts=-p no:asyncio` 在 `pyproject.toml` 固化，本地与 CI 行为一致
 - **本地门禁**：`tools/audit_tools.py`（六层一致性，error 级 `--strict` 返回非 0；warn 级仅提示）· `tools/validate_tools.py`（smart_tools 全链路：能力地图 / compact **无损**校验（描述不得被删减）/ schema 可序列化 / 描述保真与参数覆盖 / 数组参数带 items）· `tools/island_check.py`（十层孤岛对账）· `tools/check_docs.py`（README/TECH_NOTES/MODULES 数字与源码一致，`--fix` 自动修正）
-- **依赖**：`deps.py` 分层（硬依赖同步安装 / 自动安装后台 / 重型可选）；清华源镜像（`WHALETALK_PIP_MIRROR` 可覆盖）
-- **打包**：`build_exe.bat` → PyInstaller（WhaleTalk.spec：webui/dist + sample_plugins 内置；playwright/faster-whisper/PyMuPDF 等大型依赖排除）
+- **依赖**：`deps.py` 分层（硬依赖同步安装 / 自动安装后台 / 重型可选）；清华源镜像（`WHALETALK_PIP_MIRROR` 可覆盖）；安装前 `guard_pip_proxy` 代理预检——系统代理不可达则设 `NO_PROXY=*` 自动绕过
+- **引导**：`bootstrap.py` 跨平台自举（校验版本 / 建 `.venv` / 逐包安装 / 启动），替代批处理（避免 UTF-8 `chcp 65001` 被 cmd 切行 + 一把梭整批失败）
+- **打包**：`python bootstrap.py build` → PyInstaller（WhaleTalk.spec：webui/dist + sample_plugins 内置；playwright/faster-whisper/PyMuPDF 等大型依赖排除）
 - **备份**：`backup.py` 源码快照（compresslevel=1；排除 .venv/dist/backups/.git 等）
 - **更新**：GitHub Releases 检测；Ed25519 签名（`update_public_key`）+ SHA-256 校验；更新前自动备份可回滚
 - **Git 推送（给维护 AI 的操作指引 · 2026-09-10 实测更新）**：

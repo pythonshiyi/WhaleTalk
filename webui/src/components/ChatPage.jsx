@@ -428,6 +428,9 @@ function useBackendChat({
             onApprovalRequest: (ev) => {
               if (alive && !stopRef.current) onPrompt && onPrompt({ ...ev, type: "approval" });
             },
+            onPlanRequest: (ev) => {
+              if (alive && !stopRef.current) onPrompt && onPrompt({ ...ev, type: "plan" });
+            },
             onSession: (ev) => {
               // 后端分配的会话 id（新会话也能拿到）：采用它统一落盘 id，避免
               // 「前端另存一份」与「后端无人订阅时兜底落盘」各生成一个 id → 重复会话。

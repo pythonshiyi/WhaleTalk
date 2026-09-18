@@ -152,6 +152,11 @@ def normalize_config(cfg):
         cfg["monthly_budget"] = 0.0
     cfg["block_on_budget"] = as_bool(cfg.get("block_on_budget", False))
     try:
+        cfg["confirm_over_cost"] = max(0.0, float(cfg.get("confirm_over_cost", 0.0)))
+    except (TypeError, ValueError):
+        cfg["confirm_over_cost"] = 0.0
+    cfg["confirm_plan"] = as_bool(cfg.get("confirm_plan", False))
+    try:
         all_tool_names = [t["function"]["name"] for t in TOOLS]
     except (KeyError, TypeError):
         all_tool_names = []

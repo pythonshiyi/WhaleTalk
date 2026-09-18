@@ -263,6 +263,8 @@ DEFAULT_CONFIG = {
     "max_tool_rounds": 100,  # 单条消息工具轮数上限：能力最大化，默认 100
     "monthly_budget": 0.0,
     "block_on_budget": False,
+    "confirm_over_cost": 0.0,  # 任务预检 HITL：单次请求预估费用 ≥ 此值(元) 需确认后执行（0=关闭）
+    "confirm_plan": False,     # ③b 计划确认 HITL：执行工具批前弹「可编辑计划」由用户确认（任务模式自动放行）
     "browser_headless": False,  # 初始浏览器可见（有头模式）
     "json_output": False,
     "beta_api": False,

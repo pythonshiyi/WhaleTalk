@@ -8,7 +8,7 @@
 
 > Windows 本地优先的 AI 桌面智能体 · 本地 API + React 界面 + 系统托盘常驻 · 只接入统一模型 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**
 
-**鲸语 WhaleTalk** 不止是聊天窗口：它能**看屏幕、听语音、动键鼠**，调用 **161 项 Agent 工具**完成真实任务，并把每次经验沉淀为长期记忆——越用越懂你。数据只在本机流转，浏览器即界面，双击即用。
+**鲸语 WhaleTalk** 不止是聊天窗口：它能**看屏幕、听语音、动键鼠**，调用 **161 项 Agent 工具**完成真实任务，并把每次经验沉淀为长期记忆——越用越懂你。数据只在本机流转，浏览器即界面，开箱即用。
 
 > 🌐 官网：<https://whaletalk.top/>　·　📦 更新记录：[CHANGELOG.md](CHANGELOG.md)
 
@@ -145,24 +145,33 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：161 工具（11 组）· 98 个 `/v1` 路由 · 后端 61 个 pytest 文件 / 671 用例 · 前端 14 个 node 套件。
+- **规模**：161 工具（11 组）· 99 个 `/v1` 路由 · 后端 61 个 pytest 文件 / 671 用例 · 前端 14 个 node 套件。
 
 ---
 
 ## 🚀 快速开始
 
 ```bash
-# 方式一：双击 start.bat（自动创建虚拟环境并安装依赖）
-# 方式二：手动
+# 方式一：一条命令自举（建 .venv → 逐包装依赖 → 启动；死代理自动绕过）
+python bootstrap.py               # 推荐
+python bootstrap.py --server      # 透传参数给 web_app.py：仅 API 服务
+python bootstrap.py --no-venv     # 直接用当前解释器（CI / 已激活 venv）
+python bootstrap.py check         # 只体检环境，不安装不启动
+python bootstrap.py doctor        # 生成可贴 issue 的诊断报告（代理/端口/系统件/依赖）
+python bootstrap.py --installer uv    # 有 uv 时自动用 uv 秒装（默认 auto）
+python bootstrap.py --offline --wheel-dir wheels   # 内网离线安装
+python bootstrap.py build         # 打包为 dist\WhaleTalk.exe
+
+# 方式二：手动（技术用户）
 pip install -r requirements.txt   # 核心 32 项依赖
 python web_app.py                 # 启动本地服务 + 打开浏览器 + 托盘常驻（推荐）
 python web_app.py --server        # 仅启动 API 服务（终端常驻，供远程/开发）
 python web_app.py --no-tray       # 常驻但不启用系统托盘
-# 方式三：双击 build_exe.bat 打包为 dist\WhaleTalk.exe
 ```
 
 要求：**Python 3.9+，Windows 10/11**。首次启动会自动准备环境：
 
+- **`bootstrap.py` 逐包自举**：建 `.venv` → 按 `requirements.txt` **逐包**安装（单包失败不阻断其余，超时/重试兜底）→ 启动；安装前做代理预检，系统代理已配置但不可达时自动绕过直连（避免 pip 继承死代理导致全量失败）。
 - **核心组件**零操作自动安装（进度条 + 实时日志），装完自动进入主界面；`requirements.txt` 与核心清单严格一致。
 - **大型可选能力**（浏览器自动化 / 本地语音转写 / Piper 离线语音 / 二维码识别 / RAR 解压）不强制安装，进入程序后在**设置 → 🔌 可选能力**按需一键装。
 - **前端自动构建**：检测到 `webui/dist` 缺失或源码更新时自动执行 `npm ci/install && npm run build`；打包版已内置前端，无需 Node。前端单独开发：`cd webui && npm i && npm run dev`。

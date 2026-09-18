@@ -118,16 +118,103 @@ HEAVY_DEPS = [
 # ── 安装执行（单一来源：启动弹窗与设置页共用）──────────────────────────
 import os
 import queue
+import socket
 import subprocess
 import sys
 import threading
 import time
+from urllib.parse import urlparse
 
 PIP_MIRROR = os.environ.get("WHALETALK_PIP_MIRROR", "https://pypi.tuna.tsinghua.edu.cn/simple")
 
 # 每包安装超时与重试（防单个包卡死拖停全部依赖）
 PIP_INSTALL_TIMEOUT = 300        # 单包安装上限（秒）
 PIP_RETRIES = 1                  # 失败重试次数
+
+# ── pip 代理预检：系统代理已配置但不可达时自动绕过 ─────────────────────
+# 真实故障：Windows 系统代理（如 Clash 127.0.0.1:7890）残留为「已启用」但进程
+# 未运行，pip 经 requests 继承该代理 → 所有安装请求 WinError 10061，整批失败，
+# 而用户往往以为「脚本坏了」。此处先探测，不可达则设 NO_PROXY=* 让本进程后续
+# pip 直连（代理存活时不干预）；WHALETALK_SKIP_PROXY_CHECK=1 可禁用。
+_PROXY_GUARDED = False
+_PROXY_ENV_KEYS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
+
+
+def _pick_proxy(server):
+    """从 Windows ProxyServer 取值：'host:port' 或 'http=h:p;https=h:p'。"""
+    server = str(server or "").strip()
+    if not server:
+        return None
+    if "=" in server:
+        parts = dict(p.split("=", 1) for p in server.split(";") if "=" in p)
+        return parts.get("https") or parts.get("http") or next(iter(parts.values()), None)
+    return server
+
+
+def _effective_proxy_env():
+    """返回 pip 将使用的代理 URL（环境变量优先，其次 Windows 注册表系统代理），无则 None。"""
+    for name in _PROXY_ENV_KEYS:
+        val = os.environ.get(name)
+        if val:
+            return val
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
+            server, _ = winreg.QueryValueEx(key, "ProxyServer")
+    except Exception:
+        return None
+    return _pick_proxy(server) if enabled else None
+
+
+def _proxy_hostport(proxy):
+    """'host:port' / 'scheme://host:port' → (host, port)；无法解析返回 None。"""
+    if not proxy:
+        return None
+    raw = proxy if "://" in proxy else "http://" + proxy
+    try:
+        u = urlparse(raw)
+    except Exception:
+        return None
+    if not u.hostname:
+        return None
+    return u.hostname, (u.port or (443 if u.scheme == "https" else 80))
+
+
+def _socket_reachable(host, port, timeout=1.0):
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def guard_pip_proxy(on_line=None):
+    """pip 安装前调用：系统代理不可达则设 NO_PROXY=* 绕过直连（幂等，只探测一次）。
+
+    返回提示文本（未触发为 None）。代理存活或未配置时不做任何改动。
+    """
+    global _PROXY_GUARDED
+    if _PROXY_GUARDED:
+        return None
+    _PROXY_GUARDED = True
+    if os.environ.get("WHALETALK_SKIP_PROXY_CHECK") == "1":
+        return None
+    proxy = _effective_proxy_env()
+    hp = _proxy_hostport(proxy)
+    if not hp:
+        return None
+    if _socket_reachable(*hp):
+        return None
+    for name in ("NO_PROXY", "no_proxy"):
+        os.environ[name] = "*"
+    msg = f"[代理] 检测到系统代理 {hp[0]}:{hp[1]} 不可达 → 本次安装自动绕过（直连）"
+    if on_line:
+        on_line(msg)
+    return msg
 
 # ── 安装状态（供前端轮询展示进度：启动后台安装时实时可见）────────────────
 _INSTALL_LOCK = threading.Lock()
@@ -140,10 +227,10 @@ def install_state():
         return dict(_INSTALL)
 
 
-def install_many(miss, on_line=None):
+def install_many(miss, on_line=None, python=None):
     """批量安装并实时更新全局状态。
 
-    miss: [(pip 包名, 显示名)]；on_line: 每行输出回调。
+    miss: [(pip 包名, 显示名)]；on_line: 每行输出回调；python: 目标解释器（默认当前）。
     关键修复：单包超时/失败**不中断**后续包——逐个隔离执行，全部尝试完才返回。
     返回 (全部成功?, 失败显示名列表)。
     """
@@ -157,7 +244,7 @@ def install_many(miss, on_line=None):
                 _INSTALL["done"] = i - 1
                 _INSTALL["current"] = label
             try:
-                ok = pip_install(pkg, on_line)
+                ok = pip_install(pkg, on_line, python=python)
             except Exception as e:  # noqa: BLE001 - 单包异常不得中断其余包
                 if on_line:
                     on_line(f"[{label}] 安装异常: {e}")
@@ -225,11 +312,12 @@ def run_verbose(cmd, on_line=None, timeout=PIP_INSTALL_TIMEOUT):
     return proc.returncode
 
 
-def pip_install(pkg, on_line=None):
+def pip_install(pkg, on_line=None, python=None):
     """用清华源安装包：带超时 + 失败重试，防单包卡死拖停全部依赖。
 
     pkg 支持空格分隔的多包名（如 "piper-tts[zh] g2pW sentence_stream unicode_rbnf"），
     会拆分为独立参数一次安装；单包名同样兼容。
+    python 指定目标解释器（默认 sys.executable）——bootstrap 用它把依赖装进新建的 .venv。
     显式 --timeout/--retries 让 pip 自身网络超时可控；
     外层 subprocess 超时（PIP_INSTALL_TIMEOUT）兜底防挂起。
     """
@@ -238,7 +326,9 @@ def pip_install(pkg, on_line=None):
         if on_line:
             on_line("[pip] 包名为空，跳过")
         return False
-    base = [sys.executable, "-m", "pip", "install"] + pkgs + ["-i", PIP_MIRROR,
+    guard_pip_proxy(on_line)
+    exe = python or sys.executable
+    base = [exe, "-m", "pip", "install"] + pkgs + ["-i", PIP_MIRROR,
             "--timeout", "20", "--retries", "2",
             "--disable-pip-version-check", "--no-warn-script-location"]
     last_err = ""

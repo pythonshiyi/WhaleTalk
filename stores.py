@@ -393,6 +393,36 @@ def failure_stats(path):
     }
 
 
+def failure_dashboard(path, limit=10):
+    """失败模式看板（③d）：聚合复现次数 / 工具分布 / 消解率，供前端可视化。
+
+    只读现有 failures.json，不改动记录（failure_stats 保持原契约不变）。
+    """
+    items = [x for x in (normalize_failure(i) for i in load_failures(path)) if x]
+    unresolved = [it for it in items if not it.get("resolved")]
+    resolved = [it for it in items if it.get("resolved")]
+    total = len(items)
+    by_tool = {}
+    for it in unresolved:
+        t = str(it.get("tool") or "?")
+        by_tool[t] = by_tool.get(t, 0) + 1
+    top = sorted(unresolved, key=lambda x: (-int(x.get("hits") or 1), str(x.get("last_ts") or "")))
+    return {
+        "total": total,
+        "unresolved": len(unresolved),
+        "resolved": len(resolved),
+        "resolution_rate": round(len(resolved) / total, 3) if total else 0.0,
+        "auto_resolved": sum(1 for it in resolved if str(it.get("resolved_by") or "").startswith("auto")),
+        "recurring": len([it for it in unresolved if int(it.get("hits") or 1) > 1]),
+        "unresolved_hits": sum(int(it.get("hits") or 1) for it in unresolved),
+        "by_tool": sorted(({"tool": t, "count": c} for t, c in by_tool.items()),
+                          key=lambda x: (-x["count"], x["tool"]))[:limit],
+        "top": [{"tool": it.get("tool"), "error": str(it.get("error") or "")[:160],
+                 "hits": int(it.get("hits") or 1), "last_ts": it.get("last_ts") or "",
+                 "fingerprint": it.get("fingerprint") or ""} for it in top[:limit]],
+    }
+
+
 def failure_patterns_text(path, limit=3):
     """已知失败模式注入：**只注入未消解项**（按最近出现排序），并带复现次数。
 
