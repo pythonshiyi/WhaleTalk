@@ -10,6 +10,20 @@ import re
 import threading
 from datetime import datetime, timedelta
 
+
+def _env_int(name, default):
+    """数值上限的环境覆盖：WHALETALK_<NAME> 可设；返回 int，0/负 表示「不限」（由调用方解释）。
+
+    目的：上限属**用户配置**而非程序硬编码——不因某次实验就替用户/模型定死边界。
+    """
+    try:
+        raw = os.environ.get("WHALETALK_" + name)
+        if raw is None or str(raw).strip() == "":
+            return default
+        return int(raw)
+    except Exception:
+        return default
+
 # ============================ 峰谷定价 ============================
 # DeepSeek 峰谷定价：工作日高峰时段（北京时间 9:00-12:00 / 14:00-18:00），
 # 其余为低谷；周六、周日全天统一按低谷计费（2026-08-23 起生效的规则）
@@ -316,7 +330,7 @@ if (-not $engine) { '当前系统语言不支持 OCR' } else {
 # P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
 # 新增工具域阈值常量请添加在此处，勿回写主文件。
 
-WEATHER_TIMEOUT = 5
+WEATHER_TIMEOUT = _env_int("WEATHER_TIMEOUT", 5)
 
 
 # ============================ 工具域阈值与锁（编程与执行域） ============================
@@ -331,21 +345,21 @@ WEATHER_TIMEOUT = 5
 # 编程主体都会超时被 kill。调大到 60s 覆盖多数交互需求（< 并行批总超时 300s 留余量）；
 # 更长的任务不应靠调大同步超时（会占线程/撞总超时），而应走后台通道：
 # 用 start_process 无超时启动 + list_processes 轮询 / stop_process 停止。
-RUN_PY_TIMEOUT = 60
+RUN_PY_TIMEOUT = _env_int("RUN_PY_TIMEOUT", 60)
 
 # 不再对 run_python 源码长度设人为上限（旧值 8000 会逼迫 AI 分块写入）。
 # 真实上限由模型上下文与请求体大小（api_server.MAX_BODY=1MB）决定；
 # 执行改走临时文件（python <file>），规避 Windows 命令行 ~32K 的隐性截断。
 
-RUN_PY_MAX_OUTPUT = 20000
+RUN_PY_MAX_OUTPUT = _env_int("RUN_PY_MAX_OUTPUT", 20000)
 
 # run_python 内存上限（MB）：超限杀进程树并如实报错。这不是沙箱（策略仍是默认自由、
 # 不做静态拦截），而是防误伤的兜底——一次失控分配（死循环里 append / 读超大文件进内存）
 # 会连带影响用户整机体验。2GB 足够常见数据分析；更重的任务请走 start_process 后台通道。
-RUN_PY_MEMORY_MB = 2048
+RUN_PY_MEMORY_MB = _env_int("RUN_PY_MEMORY_MB", 2048)
 
 # 内存看门狗轮询间隔（秒）：越小越及时、开销越大
-RUN_MEM_POLL_SEC = 0.5
+RUN_MEM_POLL_SEC = _env_int("RUN_MEM_POLL_SEC", 0.5)
 
 # 工具结果"失败"前缀统一判定（main/taskpanel 共享，防散落魔法字符串漂移）
 # 注意：deepseek_client / api_server 对工具异常会包成「工具执行失败:」「工具参数错误:」
@@ -362,21 +376,21 @@ AUTO_CHECKPOINT_EVERY = 5    # 之后每 N 步补一次（覆盖更长的任务�
 # P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
 # 新增工具域阈值常量请添加在此处，勿回写主文件。
 
-READ_FILE_MAX_BYTES = 102400
+READ_FILE_MAX_BYTES = _env_int("READ_FILE_MAX_BYTES", 102400)
 
-_READ_LINE_MAX = 102400  # 按行读取的每行上限（防单行数百 MB 撑爆内存）
+_READ_LINE_MAX = _env_int("_READ_LINE_MAX", 102400)  # 按行读取的每行上限（防单行数百 MB 撑爆内存）
 
-EDIT_FILE_MAX_SIZE = 20 * 1024 * 1024  # edit_file 全量读入上限（20MB）
+EDIT_FILE_MAX_SIZE = _env_int("EDIT_FILE_MAX_SIZE", 20 * 1024 * 1024)  # edit_file 全量读入上限（20MB）
 
-EDIT_FILE_REGEX_MAX = 1000  # 正则长度上限（防灾难性回溯挂死工具线程的粗略防线）
+EDIT_FILE_REGEX_MAX = _env_int("EDIT_FILE_REGEX_MAX", 1000)  # 正则长度上限（防灾难性回溯挂死工具线程的粗略防线）
 
-EXTRACT_MAX_ENTRIES = 10000  # 解压条目数上限（防 zip 海量小文件 DoS）
+EXTRACT_MAX_ENTRIES = _env_int("EXTRACT_MAX_ENTRIES", 10000)  # 解压条目数上限（防 zip 海量小文件 DoS）
 
-EXTRACT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 解压总字节上限（防磁盘写满）
+EXTRACT_MAX_TOTAL_BYTES = _env_int("EXTRACT_MAX_TOTAL_BYTES", 2 * 1024 * 1024 * 1024)  # 解压总字节上限（防磁盘写满）
 
-EXTRACT_MAX_SINGLE_BYTES = 2 * 1024 * 1024 * 1024  # 单文件解压大小上限
+EXTRACT_MAX_SINGLE_BYTES = _env_int("EXTRACT_MAX_SINGLE_BYTES", 2 * 1024 * 1024 * 1024)  # 单文件解压大小上限
 
-MAX_PROCESSES = 8
+MAX_PROCESSES = _env_int("MAX_PROCESSES", 8)
 
 _COMMON_PACKAGES = (
     "flask", "django", "fastapi", "uvicorn", "requests", "bs4", "pandas",
@@ -398,9 +412,9 @@ _SEARCH_SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "bu
 # P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
 # 新增工具域阈值常量请添加在此处，勿回写主文件。
 
-MEMORY_MAX_ITEMS = 2000  # v2.16.2 起扩容：伙伴需要记住的更多
+MEMORY_MAX_ITEMS = _env_int("MEMORY_MAX_ITEMS", 2000)  # v2.16.2 起扩容：伙伴需要记住的更多
 
-MEMORY_MAX_TEXT = 2000
+MEMORY_MAX_TEXT = _env_int("MEMORY_MAX_TEXT", 2000)
 
 _MEMORY_LOCK = threading.Lock()  # 并行 write_memory 读-改-写串行化，防丢失更新
 
@@ -419,9 +433,9 @@ _WORKFLOW_LOCK = threading.Lock()  # 检查-置位原子化：并行工具调用
 
 # ===== 二进制下载（P2）：图片/附件/安装包等任意文件 =====（单文件上限，防全量进内存）
 
-DOWNLOAD_MAX_BYTES = 200 * 1024 * 1024  # 单文件 200MB 上限（与 WebDAV 对齐）
+DOWNLOAD_MAX_BYTES = _env_int("DOWNLOAD_MAX_BYTES", 200 * 1024 * 1024)  # 单文件 200MB 上限（与 WebDAV 对齐）
 
-SEARCH_MAX_RESULTS = 5
+SEARCH_MAX_RESULTS = _env_int("SEARCH_MAX_RESULTS", 5)
 
 # 搜索聚合整体软超时（秒）：并行等引擎时，慢引擎（如 DDG 挂起）不得拖垮整次
 # 搜索——到点即返回已返回的引擎结果，未返回的按超时记入健康电路。
@@ -437,17 +451,17 @@ _SEARCH_ENGINES = (
     ("duckduckgo", 1),
 )
 
-CALL_API_MAX_BYTES = 500 * 1024  # 响应体上限 500KB（与 fetch_url 输出对齐）
+CALL_API_MAX_BYTES = _env_int("CALL_API_MAX_BYTES", 500 * 1024)  # 响应体上限 500KB（与 fetch_url 输出对齐）
 
 CALL_API_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD")
 
-CALL_API_MAX_HEADERS = 16
+CALL_API_MAX_HEADERS = _env_int("CALL_API_MAX_HEADERS", 16)
 
-RSS_FETCH_TIMEOUT = 10
+RSS_FETCH_TIMEOUT = _env_int("RSS_FETCH_TIMEOUT", 10)
 
-RSS_MAX_ITEMS = 20
+RSS_MAX_ITEMS = _env_int("RSS_MAX_ITEMS", 20)
 
-RSS_SUMMARY_MAX = 300
+RSS_SUMMARY_MAX = _env_int("RSS_SUMMARY_MAX", 300)
 
 # 精选 RSS 预置源（action=preset 一键添加）：中文 AI/科技/开发者为主
 
@@ -460,7 +474,7 @@ RSS_PRESET_SOURCES = [
     {"name": "Hacker News", "url": "https://news.ycombinator.com/rss"},
 ]
 
-WEBDAV_MAX_SIZE = 200 * 1024 * 1024  # 单文件 200MB 上限（防全量进内存）
+WEBDAV_MAX_SIZE = _env_int("WEBDAV_MAX_SIZE", 200 * 1024 * 1024)  # 单文件 200MB 上限（防全量进内存）
 
 
 # ============================ 工具域阈值与锁（桌面与视觉语音域） ============================
@@ -469,7 +483,7 @@ WEBDAV_MAX_SIZE = 200 * 1024 * 1024  # 单文件 200MB 上限（防全量进内�
 
 RPA_FAILSAFE = True  # 鼠标移到屏幕左上角时立即中断 RPA（pyautogui failsafe）
 
-MEDIA_MAX_INPUT = 2 * 1024 * 1024 * 1024   # 输入 2GB 上限
+MEDIA_MAX_INPUT = _env_int("MEDIA_MAX_INPUT", 2 * 1024 * 1024 * 1024)  # 输入 2GB 上限
 
 MEDIA_FORMATS = {"mp4", "mp3", "webm", "mkv", "avi", "mov", "ogg", "flac", "wav", "gif", "png", "jpg"}
 
@@ -533,16 +547,16 @@ $toast = New-Object Windows.UI.Notifications.ToastNotification $template
 # S14：Office 读出工具统一长度上限族。目标：长文档/大表一次性灌入上下文前先截断，
 # 由各工具在返回末尾追加 "[已截断前 N 字符/行]" 提示，保证 AI 不会被单文件撑爆。
 
-PDF_EXTRACT_MAX_OUTPUT = 60000   # pdf_extract 单次输出上限（防撑爆上下文）
+PDF_EXTRACT_MAX_OUTPUT = _env_int("PDF_EXTRACT_MAX_OUTPUT", 60000)  # pdf_extract 单次输出上限（防撑爆上下文）
 
-DOCX_MAX_DEFAULT = 50000         # docx_read 默认输出上限（clamp 200..500000）
+DOCX_MAX_DEFAULT = _env_int("DOCX_MAX_DEFAULT", 50000)  # docx_read 默认输出上限（clamp 200..500000）
 
-PPTX_MAX_DEFAULT = 50000         # pptx_read 默认输出上限（S14 补齐：此前无全局上限）
-PPTX_MAX_PAGE_BODY = 40          # pptx_read 每页正文行数上限
-PPTX_MAX_NOTES = 500             # pptx_read 每页备注字符上限
+PPTX_MAX_DEFAULT = _env_int("PPTX_MAX_DEFAULT", 50000)  # pptx_read 默认输出上限（S14 补齐：此前无全局上限）
+PPTX_MAX_PAGE_BODY = _env_int("PPTX_MAX_PAGE_BODY", 40)  # pptx_read 每页正文行数上限
+PPTX_MAX_NOTES = _env_int("PPTX_MAX_NOTES", 500)  # pptx_read 每页备注字符上限
 
-TABLE_READ_MAX_ROWS = 500        # read_excel/read_csv 行数上限（clamp_int hi）
+TABLE_READ_MAX_ROWS = _env_int("TABLE_READ_MAX_ROWS", 500)  # read_excel/read_csv 行数上限（clamp_int hi）
 
 # ===== 嵌入式 KV 存储（diskcache 可选依赖；支持 TTL 与模糊检索）=====
 
-KV_VALUE_MAX_BYTES = 1024 * 1024  # value 上限 1MB
+KV_VALUE_MAX_BYTES = _env_int("KV_VALUE_MAX_BYTES", 1024 * 1024)  # value 上限 1MB

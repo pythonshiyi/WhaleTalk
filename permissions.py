@@ -314,6 +314,13 @@ def check_filesystem(path, write=False):
 
 
 def max_write_size():
+    """单文件写入上限（字节）。可配：环境变量 WHALETALK_MAX_WRITE_SIZE 或配置 filesystem.max_write_size；**<=0 = 不限**。"""
+    try:
+        env = os.environ.get("WHALETALK_MAX_WRITE_SIZE")
+        if env is not None and str(env).strip() != "":
+            return int(env)
+    except (TypeError, ValueError):
+        pass
     try:
         return int(_data["filesystem"].get("max_write_size", 50 * 1024 * 1024))
     except (TypeError, ValueError):

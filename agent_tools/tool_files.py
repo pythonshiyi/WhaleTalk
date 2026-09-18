@@ -142,11 +142,12 @@ def read_file(path, start_line=None, max_lines=None):
                 # readline(上限)：单行可达数百 MB（minified JSON/日志），
                 # 不设上限会一次撑爆内存；超长行截断到 100KB 并标注
                 lines = []
+                _linecap = _READ_LINE_MAX if (_READ_LINE_MAX and _READ_LINE_MAX > 0) else None
                 for _ in range(count):
-                    ln = f.readline(_READ_LINE_MAX)
+                    ln = f.readline(_linecap) if _linecap else f.readline()
                     if ln == "":
                         break
-                    if len(ln) >= _READ_LINE_MAX and not ln.endswith("\n"):
+                    if _linecap and len(ln) >= _linecap and not ln.endswith("\n"):
                         ln = ln.rstrip("\n") + "…[超长行已截断]\n"
                     lines.append(ln)
             lines = [ln for ln in lines if ln != ""]
@@ -157,10 +158,11 @@ def read_file(path, start_line=None, max_lines=None):
                 body += "\n"
             prefix = f"[按行读取 {path} 第 {start}-{start + len(lines) - 1} 行]\n"
             return prefix + body + enc_note
+        _cap = READ_FILE_MAX_BYTES if (READ_FILE_MAX_BYTES and READ_FILE_MAX_BYTES > 0) else None
         with open(path, encoding=enc, errors="replace") as f:
-            content = f.read(READ_FILE_MAX_BYTES)
-        if len(content) >= READ_FILE_MAX_BYTES:
-            content += "\n[文件较大，已截断前 100KB]"
+            content = f.read(_cap) if _cap else f.read()
+        if _cap and len(content) >= _cap:
+            content += f"\n[文件较大，已截断前 {_cap} 字节]"
         return content + enc_note
     except Exception as e:
         return f"错误：无法读取文件 {path}: {e}"
@@ -197,13 +199,11 @@ def write_file(path, content):
         return reason
     if content is None:
         return "错误：内容为空"
-    # 中文按字符数会超限 3 倍：统一按 UTF-8 字节数校验
+    # 中文按字符数会超限 3 倍：统一按 UTF-8 字节数校验（上限<=0 = 不限，用户可配）
     content_bytes = len(str(content).encode("utf-8", "ignore"))
-    if content_bytes > permissions.max_write_size():
-        return (
-            f"错误：内容 {content_bytes} 字节超过大小限制 "
-            f"{permissions.max_write_size()}"
-        )
+    _mws = permissions.max_write_size()
+    if _mws and _mws > 0 and content_bytes > _mws:
+        return f"错误：内容 {content_bytes} 字节超过大小限制 {_mws}"
     p = permissions.resolve(path)
     try:
         created, real_size = _atomic_write(p, str(content))
@@ -256,8 +256,8 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
     if replacements and (old or regex):
         return "错误：replacements 与 old/regex 不能同时使用"
     try:
-        # 读入上限：允许目录内也可能有 GB 级文件，全量读入内存会 OOM
-        if os.path.getsize(p) > EDIT_FILE_MAX_SIZE:
+        # 读入上限：允许目录内也可能有 GB 级文件，全量读入内存会 OOM（<=0 = 不限，用户可配）
+        if EDIT_FILE_MAX_SIZE and EDIT_FILE_MAX_SIZE > 0 and os.path.getsize(p) > EDIT_FILE_MAX_SIZE:
             return f"错误：文件超过 {EDIT_FILE_MAX_SIZE // 1024 // 1024}MB 上限，请改用其他方式处理"
         with open(p, encoding="utf-8", errors="replace") as f:
             content = f.read()
@@ -281,7 +281,7 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
             if not r_old and not r_regex:
                 return f"错误：replacements[{i}] 缺少 old/regex"
             if r_regex:
-                if len(r_regex) > EDIT_FILE_REGEX_MAX:
+                if EDIT_FILE_REGEX_MAX and EDIT_FILE_REGEX_MAX > 0 and len(r_regex) > EDIT_FILE_REGEX_MAX:
                     return f"错误：replacements[{i}] 正则过长（>{EDIT_FILE_REGEX_MAX} 字符）"
                 try:
                     # lambda 返回 new 原样：re.sub 字符串替换会把 \1 /\g<1>/\\ 解释为分组引用，
@@ -297,7 +297,7 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
                 content = content.replace(r_old, r_new)
                 n += k
     elif regex:
-        if len(str(regex)) > EDIT_FILE_REGEX_MAX:
+        if EDIT_FILE_REGEX_MAX and EDIT_FILE_REGEX_MAX > 0 and len(str(regex)) > EDIT_FILE_REGEX_MAX:
             return f"错误：正则过长（>{EDIT_FILE_REGEX_MAX} 字符）"
         try:
             # lambda 返回 new 原样：re.sub 的字符串替换会把 new 中的 \1 / \g<1> /

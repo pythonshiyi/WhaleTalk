@@ -122,8 +122,9 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
                         return
             watch = threading.Thread(target=_watch, name="run-mem-watch", daemon=True)
             watch.start()
+        # timeout<=0 表示不限（用户可配 WHALETALK_RUN_PY_TIMEOUT=0）
         try:
-            proc.wait(timeout=timeout)
+            proc.wait(timeout=(timeout if timeout and timeout > 0 else None))
         except subprocess.TimeoutExpired:
             _kill_tree(proc)
             try:
@@ -139,10 +140,13 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
         if peak["over"]:
             raise MemoryLimitError(memory_mb, round(peak["mb"]))
         out.seek(0)
-        data = out.read(max_output)
-        out.seek(0, os.SEEK_END)
-        if out.tell() > max_output:
-            data += "\n[输出已截断]"
+        if max_output and max_output > 0:  # max_output<=0 表示不限输出
+            data = out.read(max_output)
+            out.seek(0, os.SEEK_END)
+            if out.tell() > max_output:
+                data += "\n[输出已截断]"
+        else:
+            data = out.read()
     return proc.returncode, data
 
 
@@ -152,11 +156,11 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
             "type": "function",
             "function": {
                 "name": "run_python",
-                "description": "在 Python 子进程中执行代码（无限制：可加载全部已安装第三方库、可访问网络、可调用系统能力）；需要新库时先调用 pip_install 安装。同步执行 60 秒超时、输出上限 20000 字符、进程树内存上限 2048MB（超限即杀并报错，防失控分配拖垮整机）；若任务需长时间运行或大内存（装包/下载/起服务/跑测试/大文件整体读入），请改用 start_process 后台启动而非此处等待。不支持交互式输入（input/阻塞等待）",
+                "description": "在 Python 子进程中执行代码（无隔离：可加载全部已安装第三方库、可访问网络、可调用系统能力）；需要新库时先调用 pip_install。同步执行默认超时 60s、输出默认上限 20000 字符、进程树内存默认上限 2048MB——**均可配置**（环境变量 WHALETALK_RUN_PY_TIMEOUT / WHALETALK_RUN_PY_MAX_OUTPUT / WHALETALK_RUN_PY_MEMORY_MB，设 0 = 不限）；超限即终止并如实报错。含 input() 会阻塞挂起（同步无交互）；长任务/大内存也可改用 start_process 后台。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "完整可执行的 Python 代码（长度不设人为上限，一次写全，勿分块）；用 print 输出结果；可 import 任何已安装库；不要写需要交互输入的语句（input），需要交互改用 start_process"},
+                        "code": {"type": "string", "description": "完整可执行的 Python 代码（长度不设人为上限，一次写全）；用 print 输出结果；可 import 任何已安装库；含 input() 会阻塞挂起（同步无交互），需交互请用 start_process"},
                     },
                     "required": ["code"],
                 },
@@ -187,15 +191,13 @@ def run_python(code):
                               f"memory_limit {me.seen_mb}MB > {me.limit_mb}MB")
             return (
                 f"错误：内存超限（峰值约 {me.seen_mb or '?'}MB，上限 {me.limit_mb}MB，进程树已终止）。"
-                f"多为死循环里累积数据或把超大文件整体读进内存——请改为流式/分块处理，"
-                f"或把重任务交给 start_process 后台通道（不受此上限约束，且不阻塞对话）。"
+                f"可调大 WHALETALK_RUN_PY_MEMORY_MB（设 0 = 不限），或改流式处理 / 用 start_process。"
             )
         except TimeoutError:
             return (
-                f"错误：执行超时（>{RUN_PY_TIMEOUT}秒，进程已终止）。"
-                f"若任务确需长时间运行（装包/下载/起服务/跑测试/长循环），请不要用 run_python"
-                f"同步等待——改用 start_process 后台启动（无超时），再用 list_processes 查询进度、"
-                f"stop_process 停止。"
+                f"错误：执行超时（超过同步上限 {RUN_PY_TIMEOUT}s，进程已终止）。"
+                f"可调大 WHALETALK_RUN_PY_TIMEOUT（设 0 = 不限）；长任务也可用 start_process 后台"
+                f"（list_processes 查进度 / stop_process 停止）。"
             )
         if not out_data.strip():
             return f"执行成功（无输出），工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}"
