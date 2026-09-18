@@ -43,7 +43,7 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
 ├── api_server.py           # 本地 HTTP API（REST + SSE，98+ /v1 端点）
-├── deepseek_client.py      # 能力引擎：DeepSeekClient + 161 工具 + smart_tools（4,735 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
+├── deepseek_client.py      # 能力引擎：DeepSeekClient + 161 工具 + smart_tools（5,100 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
 ├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop/mv/codegen 共 13 模块 159 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
 ├── security.py             # SSRF 防护（云元数据永远拦截）
@@ -278,7 +278,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 ## 17. 工程实践
 
-- **CI**（.github/workflows/ci.yml）：`check`（ruff 关键规则 E9/F63/F7/F82 + 入口 py_compile）· `test-backend`（`pytest tests/`，28 用例，依赖 `requirements-dev.txt` 锁 pytest 版本）· `webui`（npm ci + build + `npm test` 三个 node 套件）· 门禁 job（`tools/audit_tools.py --strict` / `tools/validate_tools.py` / `tools/island_check.py` / `tools/check_docs.py`）。pytest 的 `addopts=-p no:asyncio` 在 `pyproject.toml` 固化，本地与 CI 行为一致
+- **CI**（.github/workflows/ci.yml）：`check`（ruff 关键规则 E9/F63/F7/F82 + 入口 py_compile）· `test-backend`（`pytest tests/`，671 用例，依赖 `requirements-dev.txt` 锁 pytest 版本）· `webui`（npm ci + build + `npm test` 14 个 node 套件）· 门禁 job（`tools/audit_tools.py --strict` / `tools/validate_tools.py` / `tools/island_check.py` / `tools/check_docs.py`）。pytest 的 `addopts=-p no:asyncio` 在 `pyproject.toml` 固化，本地与 CI 行为一致
 - **本地门禁**：`tools/audit_tools.py`（六层一致性，error 级 `--strict` 返回非 0；warn 级仅提示）· `tools/validate_tools.py`（smart_tools 全链路：能力地图 / compact **无损**校验（描述不得被删减）/ schema 可序列化 / 描述保真与参数覆盖 / 数组参数带 items）· `tools/island_check.py`（十层孤岛对账）· `tools/check_docs.py`（README/TECH_NOTES/MODULES 数字与源码一致，`--fix` 自动修正）
 - **依赖**：`deps.py` 分层（硬依赖同步安装 / 自动安装后台 / 重型可选）；清华源镜像（`WHALETALK_PIP_MIRROR` 可覆盖）
 - **打包**：`build_exe.bat` → PyInstaller（WhaleTalk.spec：webui/dist + sample_plugins 内置；playwright/faster-whisper/PyMuPDF 等大型依赖排除）
@@ -320,9 +320,9 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 ## 19. 演进建议
 
-1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**已完成（v3.8.3 收官）**：共 11 域模块 117 工具迁出（tool_basic 2 / tool_data 2 / tool_media 10 / tool_docs 19 / tool_web 14 / tool_code 15 / tool_files 17 / tool_brain 14 / tool_msg 10 / tool_system 12 / tool_desktop 18），主文件 13,115 → **4,735 行**，工具定义清零（AST 断言）；关键经验：① 域模块对运行时注入配置（WORKING_DIR/KV_CACHE_DIR/MEMORY_FILE/EVOLUTIONS_DIR 等 36 个）不可值绑定 import，须 `import deepseek_client as _dc` 动态访问，否则 main/测试注入失效；② `fetch_blocked` 因保留字冲突实现名 `_run_fetch_blocked`，audit/migrate 门禁内置别名映射；③ 每批迁移后跑 pytest + 四门禁 + 前端三套件，`test_tool_split.py` 现有 17 用例覆盖全量 re-export/归属/六层
+1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**已完成（v3.8.3 收官，v3.16 扩展至 13 域模块 159 工具）**：tool_basic 2 / tool_data 2 / tool_media 10 / tool_docs 30 / tool_web 14 / tool_code 15 / tool_files 21 / tool_brain 15 / tool_msg 10 / tool_system 15 / tool_desktop 18 / tool_mv 1 / tool_codegen 6，另主模块 `register_tool()` 注册 ask_user / request_permission 2 个特殊工具（合计 161），主文件 13,115 → **5,100 行**，工具定义清零（AST 断言）；关键经验：① 域模块对运行时注入配置（WORKING_DIR/KV_CACHE_DIR/MEMORY_FILE/EVOLUTIONS_DIR 等 36 个）不可值绑定 import，须 `import deepseek_client as _dc` 动态访问，否则 main/测试注入失效；② `fetch_blocked` 因保留字冲突实现名 `_run_fetch_blocked`，audit/migrate 门禁内置别名映射；③ 每批迁移后跑 pytest + 四门禁 + 前端套件，`test_tool_split.py` 覆盖全量 re-export/归属/六层
 2. `@tool()` 装饰器统一六层声明（消除手工漂移）
-3. ~~补齐 pytest 测试资产并接入 CI~~ 已完成（v3.8.3 起 CI 跑 `pytest tests/` 28 用例 + 前端 3 套件 + 四道门禁）；下一步是**按领域扩充分子级 pytest 用例**（工具/权限/存储执行路径，当前覆盖集中在注册表与进化闸）
+3. ~~补齐 pytest 测试资产并接入 CI~~ 已完成（v3.8.3 起 CI 跑 `pytest tests/`，现 671 用例 + 前端 14 套件 + 四道门禁）；下一步是**按领域扩充分子级 pytest 用例**（工具/权限/存储执行路径，当前覆盖集中在注册表与进化闸）
 4. 进化闭环补门禁：`self_evolve` 合并前强制跑 audit/validate/测试；进化账本（效果回流）；评审 AI 前置
 5. 插件签名密钥分发与轮换流程；市场索引自动更新提醒
 

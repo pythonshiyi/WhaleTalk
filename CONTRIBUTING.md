@@ -23,12 +23,12 @@ npm run build    # 产物输出 webui/dist（由 api_server 同源服务）
 ## 架构规范 / Architecture
 
 - 产品形态：**纯 Web + 本地 API 常驻**。浏览器是唯一界面；`web_app.py` 是唯一入口；旧 Tkinter 桌面已移除
-- 模块职责：
+- 模块职责（完整清单见 [MODULES.md](MODULES.md)，接手先读 [docs/AI_PROJECT_GUIDE.md](docs/AI_PROJECT_GUIDE.md)）：
   - `web_app.py`：启动入口（本地 API + 浏览器 + 托盘/快捷方式/开机自启）
-  - `api_server.py`：本地 HTTP API（REST + SSE 流式），同源服务前端构建产物
-  - `deepseek_client.py`：DeepSeek API 客户端 + 全部工具实现
-  - `permissions.py`：权限模型（默认自由：黑名单主导 + `blocklist_enabled` 一键开关；路径/命令/网络判定；审计只记不拦）
-  - 其余小模块见 README 文件结构
+  - `api_server.py`：本地 HTTP API（REST + SSE 流式，98 个 `/v1` 路由），同源服务前端构建产物
+  - `deepseek_client.py`：统一模型客户端 + 六层工具注册表 + smart_tools（工具实现已迁至 `agent_tools/`）
+  - `agent_tools/tool_*.py`：161 个工具的实现；用 `@tool()` 声明（单一事实源）
+  - `permissions.py`：权限模型（默认自由：黑名单主导 + `blocklist_enabled` 一键开关；审计只记不拦）
 - 所有用户可见输入（路径 / 命令 / SQL/工具参数）必须经校验：路径走 `permissions.resolve()`；命令走 `permissions.check_shell()`；网络请求走 `permissions.check_network_host()`（blacklist 模式只拦用户黑名单；旧 whitelist 模式回退 `security._safe_url` 严格 SSRF 判断）；路径越界 / 注入防护不得绕过
 - 写文件类工具必须返回真实结果（字节数 / 行数 / 差异），禁止用"假成功"占位
 - 错误处理遵循"显式失败"原则：缺依赖/不可用时必须向用户明确报错与安装指引，禁止静默吞错后假装成功
@@ -38,17 +38,19 @@ npm run build    # 产物输出 webui/dist（由 api_server 同源服务）
 
 ## 质量门禁 / Quality Gates
 
-**改动工具系统（新增/修改/删除 `TOOLS`、`TOOL_CALL_MAP`、分组、预激活、审批清单）前，务必本地跑：**
+**改动工具系统前，务必本地跑：**
 
 ```bash
-python tools/audit_tools.py --strict   # 六层一致性审计（schema↔实现↔短语↔分组↔预激活↔审批），门禁模式
+python tools/audit_tools.py --strict   # 六层一致性审计（schema↔实现↔短语↔分组↔预激活），门禁模式
 python tools/validate_tools.py         # smart_tools 全链路回归（能力地图/compact/schema 合法性）
+python tools/island_check.py --strict  # 十层孤岛对账（工具可达性 + __all__ re-export）
+python tools/check_docs.py             # 文档数字 vs 源码实测
 ```
 
-- 新增工具必须同步维护六层数据（或引入 `@tool()` 装饰器后只写一处）：`TOOLS` schema、实现函数、`TOOL_CALL_MAP`、`_TOOL_ACTION_PHRASES`、`TOOL_GROUPS`、`_PREACTIVATE_HINTS`
+- 工具声明是**单一事实源**：新增/修改工具只在函数定义处写一次 `@tool()`（`schema` / `groups` / `phrases` / `preactivate` / `hooks`），六层数据由注册表自动生成。随后把工具名加入 `deepseek_client.py` 的 `_TOOL_ORDER`（涉及分组/预激活时再加 `_GROUP_ORDER` / `_HINT_ORDER`），并在域模块 `__all__` 与 `agent_tools/__init__.py.__all__` re-export
 - 新增工具默认**零审批**（blacklist 主导，`approval_actions` 默认空）。仅当设计上确需让用户可选加严时，才把工具名登记入 `permissions` 的 `approval_actions`（blacklist 模式）或 `ACTION_TOOLS`（旧 whitelist 模式），并在变更说明中写明理由；否则不要登记
-- 工具描述要完整说清「做什么 + 关键约束」，**没有长度上限**——smart 模式已不再截断描述（描述是工具能力的一部分，不得为省 token 删减）；参数描述必须 100% 覆盖；数组参数必须带 `items`（缺则 API 400）
-- 当前 CI（`.github/workflows/ci.yml`）执行 ruff 关键规则 + 入口编译检查 + WebUI 构建 + `pytest tests/`（后端回归）+ 工具系统四道门禁（`audit_tools.py --strict` / `validate_tools.py` / `island_check.py` / `check_docs.py`）；前端另有 `npm test`（11 个 node 套件）与 `npm run typecheck`。修改工具系统时本地先跑四道门禁，再 `python -m pytest -q` 与 `cd webui && npm test`。
+- 工具描述要完整说清「做什么 + 关键约束」，**没有长度上限**——smart 模式不截断描述（描述是工具能力的一部分，不得为省 token 删减）；参数描述必须 100% 覆盖；数组参数必须带 `items`（缺则 API 400）
+- 当前 CI（`.github/workflows/ci.yml`）执行 ruff 关键规则 + 入口编译检查 + WebUI 构建 + `pytest tests/`（61 文件 / 671 用例）+ 工具系统四道门禁；前端另有 `npm test`（14 个 node 套件）与 `npm run typecheck`。本地改完先跑四道门禁，再 `python -m pytest -q` 与 `cd webui && npm test`。
 
 ## 提交信息 / Commit Messages
 
@@ -57,47 +59,35 @@ python tools/validate_tools.py         # smart_tools 全链路回归（能力地
 
 ## 推送 / 远程协作 / Pushing
 
-远程仓库：`github.com/pythonshiyi/WhaleTalk`（分支 `main`）。origin 建议按如下配置：
+远程仓库：`github.com/pythonshiyi/WhaleTalk`（分支 `main`）。origin 的 fetch/push 都是 https，
+无需改 ssh：
 
 ```bash
-# fetch 走 https；push 走 ssh —— 见下方「HTTPS 代理坑」，不要两路都走 https
-git remote set-url origin            https://github.com/pythonshiyi/WhaleTalk.git   # fetch
-git remote set-url --push origin     git@github.com:pythonshiyi/WhaleTalk.git        # push
-```
-
-### HTTPS 经本地代理会卡死的坑（重要）
-
-本机设置了环境代理 `HTTP_PROXY / HTTPS_PROXY = http://127.0.0.1:4890`。
-当 `git push`/`git fetch` 走 **https** 远程时，会卡在 SSL 握手：
-`schannel: failed to receive handshake, SSL/TLS connection failed`，且可能长时间无输出（
-git 默认多次重试，几分钟都不退出）。**遇到 `git push` 无输出/SSL 握手失败时，先停掉该进程，
-改用 ssh 通道**（ssh 不受该代理影响，实测 8 秒完成）。
-
-### 推送（推荐 ssh）
-
-```bash
-# 显式走 ssh（最稳）：
-GIT_SSH_COMMAND="ssh -o ConnectTimeout=20 -o BatchMode=yes" \
-  git push git@github.com:pythonshiyi/WhaleTalk.git main:main
-# 或配置好 push URL 后直接：
+git remote -v          # 应为 https://github.com/pythonshiyi/WhaleTalk.git
 git push origin main
 ```
 
+凭据由 `credential.helper=wincred`（Windows 凭据管理器）自动提供。2026-09 实测 **https 直推可用**，
+不必盲配 ssh key。若 `git push` 长时间无输出 / SSL 握手失败：先 `env | grep -i proxy` 确认是否存在
+`HTTP_PROXY` / `HTTPS_PROXY`，停掉卡住的进程后重试。
+
 ### 核验是否推送成功（用 ls-remote，别信本地陈旧引用）
 
-本地跟踪引用 `origin/main` 在用显式 ssh URL 推送后**不会自动更新**，
-`git log origin/main..HEAD` 会误报"本地领先 N 个提交"（假象）。要以**远程真实 HEAD** 为准：
+本地跟踪引用 `origin/main` 可能不会自动更新，`git log origin/main..HEAD` 会误报"本地领先 N 个提交"。
+以**远程真实 HEAD** 为准：
 
 ```bash
-GIT_SSH_COMMAND="ssh -o ConnectTimeout=20" git ls-remote git@github.com:pythonshiyi/WhaleTalk.git refs/heads/main
-git rev-parse HEAD        # 两者输出一致 = 已同步
+git ls-remote origin refs/heads/main    # 远程真实 HEAD
+git rev-parse HEAD                       # 两者一致 = 已同步
 ```
 
-### 卡住/超时的处理
+### 行尾（提交前必读）
 
-- `git push` 后台跑了几分钟无输出 → 大概率 HTTPS 握手卡死，`Ctrl-C`/停掉任务，改走 ssh（见上）
-- 提交后 shell 若报 SIGTERM，先 `git log --oneline -1` 确认 commit 是否已落（commit 常已成功，只是收尾被打断）
+`.gitattributes` 声明 `eol=lf`，但历史 blob 是**混合**的（`api_server.py`/`deepseek_client.py`/`MODULES.md`
+存 CRLF，README/TECH_NOTES/CHANGELOG 是 LF）。`git add` 会把 CRLF 归一成 LF，只改几行会显示整文件差异。
+对策：提交前 `printf '* -text\n' > .git/info/attributes` → `git add -A` → `rm -f .git/info/attributes` → commit；
+判断"是否真有改动"用 `git diff --ignore-cr-at-eol`。
 
 ### 本地不入库产物
 
-`能力差距分析_*.md`、`*能力报告_*.md`、`*阅读报告_*.md` 等分析文档历来**不入库**（项目只提交代码/前端/测试/依赖），推送到远程前不必 `git add` 它们。
+`能力差距分析_*.md`、`*能力报告_*.md`、`*阅读报告_*.md` 等分析文档历来**不入库**（项目只提交代码/前端/测试/依赖），推送前不必 `git add` 它们。`brain/`/`trust/`/`evolutions/`/`data/` 已在 `.gitignore`。
