@@ -61,7 +61,19 @@ def _is_blocked_host(host):
         import permissions
         if permissions.security_mode() == "blacklist":
             ok, _reason = permissions.check_network_host(host)
-            return not ok
+            if not ok:
+                return True  # 命中用户黑名单
+            # 未命中用户黑名单仍要走 SSRF 硬底线（私网/链路本地/保留段）——
+            # 此前直接 return 会跳过下方判断，导致默认模式内网可打（与 fetch_url 的
+            # security._safe_url 语义不一致）。委托 security 复用同一套开关
+            # （blocklist_enabled / network.block_private / allow_loopback）。
+            try:
+                import security
+                if security._hard_floor_reason(host):
+                    return True
+                return False
+            except Exception:
+                pass  # security 不可用 → 继续走下方旧 SSRF 判断（更严）
     except Exception:
         pass
     if host in ("localhost", "ipv6-localhost"):

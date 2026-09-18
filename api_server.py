@@ -601,15 +601,21 @@ def _market_index(force=False):
 
 
 def _verify_plugin_download(raw, entry):
-    """校验下载的插件字节：SHA-256 必校验；配置公钥后强制 Ed25519 验签。返回 (ok, error)。"""
+    """校验下载的插件字节：SHA-256 必校验；配置公钥后强制 Ed25519 验签。返回 (ok, error)。
+
+    fail-closed：既无 sha256 也无签名（未配公钥）时一律拒绝——否则被篡改/自建的
+    市场索引可投放"零校验"插件，落盘并启用任意代码。
+    """
     import hashlib
     entry = entry or {}
     sha256 = str(entry.get("sha256") or "").strip().lower()
+    pub = _market_public_key()
+    if not sha256 and not pub:
+        return False, "该插件既无 sha256 校验值也无签名，已拒绝安装（fail-closed）"
     if sha256:
         actual = hashlib.sha256(raw).hexdigest()
         if actual != sha256:
             return False, f"SHA-256 校验失败（期望 {sha256[:16]}…，实际 {actual[:16]}…），已拒绝安装"
-    pub = _market_public_key()
     if pub:
         sig = str(entry.get("signature") or "").strip()
         if not sig:
@@ -677,9 +683,17 @@ def _plugin_market_install(body):
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "WhaleTalk/3.5"})
         with urllib.request.urlopen(req, timeout=_MARKET_TIMEOUT) as r:
+            final_url = r.geturl()
             raw = r.read(2 * 1024 * 1024)
     except Exception as e:
         return {"ok": False, "error": f"插件下载失败：{e}"}
+    # 重定向落点复核：首跳 _safe_url 无法阻止 302 跳到内网/保留段
+    try:
+        from security import _safe_url as _safe_url_final
+        if _safe_url_final(final_url):
+            return {"ok": False, "error": "插件下载重定向落点被安全策略拦截"}
+    except Exception:
+        pass
     # 签名/哈希校验（fail-closed）
     ok_v, err_v = _verify_plugin_download(raw, entry)
     if not ok_v:
@@ -3906,8 +3920,10 @@ def _save_session_data(body):
         "scenario": "通用",
         "saved_at": datetime.now().isoformat(timespec="seconds"),
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    with _SESSION_SAVE_LOCK:
+        from persistence import atomic_json_write
+        if not atomic_json_write(path, data, compact=True):
+            raise RuntimeError("会话写入失败（磁盘异常，详见服务端日志）")
     _index_session_file(f"{sid}.json")
     return sid
 
@@ -3984,8 +4000,9 @@ def _migrate_legacy_sessions():
                 "saved_at": f"{m.group(2)[:4]}-{m.group(2)[4:6]}-{m.group(2)[6:]}T{m.group(3)[:2]}:{m.group(3)[2:4]}:{m.group(3)[4:]}" if fn else datetime.now().isoformat(timespec="seconds"),
             }
             os.makedirs(SESSIONS_DIR, exist_ok=True)
-            with open(os.path.join(SESSIONS_DIR, f"{sid}.json"), "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+            from persistence import atomic_json_write
+            if not atomic_json_write(os.path.join(SESSIONS_DIR, f"{sid}.json"), data, compact=True):
+                raise RuntimeError("会话写入失败")
             _index_session_file(f"{sid}.json")
             _mark_migrated(full)
             imported += 1
@@ -5554,6 +5571,9 @@ SESSION_INDEX_PATH = os.path.join(DATA_DIR, "sessions_index.json")
 _SESSIONS_INDEX = {}      # sid -> [file_mtime, file_size, metadata_dict]
 _SESSIONS_INDEX_LOCK = threading.RLock()  # RLock：_rebuild_*_locked 内部会再调 _index_session_file
 _SESSION_BAD_FILES = set()  # 无法解析的会话文件名（计入「已处理」，避免每次列表都全量重建）
+# 会话读-改-写序列化锁：前端保存 / 断连兜底 / 多标签页可能并发写同一 sid，
+# 无锁会导致整段覆盖丢历史或写一半被读。同一把 RLock 覆盖所有会话写路径。
+_SESSION_SAVE_LOCK = threading.RLock()
 
 
 def _index_session_locked(fn):
@@ -6162,14 +6182,26 @@ class _Handler(BaseHTTPRequestHandler):
             return False, str(e)
 
     def _delete_sessions_batch(self, sids):
-        """批量删除会话。返回（ok, removed, error）。"""
+        """批量删除会话。返回（ok, removed, error）。
+
+        失败不再被吞：全部失败 → 返回错误（避免"删除 0 条"被显示成成功）；
+        部分失败 → 仍返回成功但记 warning（removed 如实反映成功数）。
+        """
         if not isinstance(sids, list) or not sids:
             return False, 0, "ids 必须是列表"
         removed = 0
+        failed = []
         for sid in sids:
             ok, err = self._delete_session(sid)
             if ok:
                 removed += 1
+            else:
+                failed.append((sid, err))
+        if failed:
+            logger.warning("批量删除会话：%s/%s 失败（示例：%s）",
+                           len(failed), len(sids), failed[0][1])
+            if removed == 0:
+                return False, 0, f"{len(failed)} 个会话删除失败：{failed[0][1]}"
         return True, removed, None
 
     def _pin_session(self, body):
@@ -6181,15 +6213,17 @@ class _Handler(BaseHTTPRequestHandler):
         if not os.path.exists(path):
             return False, "会话不存在"
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            # 置顶语义写入 top（bool）；pinned 专用于「消息固定」(list)
-            d["top"] = bool(body.get("pinned"))
-            # 迁移：旧版本曾把置顶误写入 pinned(bool)，清掉避免与消息固定(list)冲突
-            if isinstance(d.get("pinned"), bool):
-                d["pinned"] = []
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(d, f, ensure_ascii=False, separators=(",", ":"))
+            with _SESSION_SAVE_LOCK:
+                with open(path, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                # 置顶语义写入 top（bool）；pinned 专用于「消息固定」(list)
+                d["top"] = bool(body.get("pinned"))
+                # 迁移：旧版本曾把置顶误写入 pinned(bool)，清掉避免与消息固定(list)冲突
+                if isinstance(d.get("pinned"), bool):
+                    d["pinned"] = []
+                from persistence import atomic_json_write
+                if not atomic_json_write(path, d, compact=True):
+                    return False, "会话写入失败"
             _index_session_locked(f"{sid}.json")
             _save_session_index()
             return True, None
@@ -6205,17 +6239,19 @@ class _Handler(BaseHTTPRequestHandler):
         if not os.path.exists(path):
             return False, "会话不存在"
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            if "name" in fields and "name" in body:
-                d["name"] = str(body["name"] or "未命名会话")[:80]
-            if "tags" in fields and "tags" in body:
-                tags = body["tags"]
-                if not isinstance(tags, list):
-                    return False, "tags 必须是列表"
-                d["tags"] = [str(x)[:20] for x in tags if str(x).strip()][:20]
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(d, f, ensure_ascii=False, separators=(",", ":"))
+            with _SESSION_SAVE_LOCK:
+                with open(path, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                if "name" in fields and "name" in body:
+                    d["name"] = str(body["name"] or "未命名会话")[:80]
+                if "tags" in fields and "tags" in body:
+                    tags = body["tags"]
+                    if not isinstance(tags, list):
+                        return False, "tags 必须是列表"
+                    d["tags"] = [str(x)[:20] for x in tags if str(x).strip()][:20]
+                from persistence import atomic_json_write
+                if not atomic_json_write(path, d, compact=True):
+                    return False, "会话写入失败"
             _index_session_locked(f"{sid}.json")
             _save_session_index()
             return True, None
@@ -6294,6 +6330,12 @@ class _Handler(BaseHTTPRequestHandler):
         if not sid:
             sid = hex(int(time.time() * 1000))[2:] + secrets_token(4)
         path = os.path.join(SESSIONS_DIR, f"{sid}.json")
+        with _SESSION_SAVE_LOCK:
+            # 经类调用（而非 self.）：测试以假 handler 直调 _save_session，避免依赖实例属性
+            return _Handler._save_session_locked(self, sid, path, body, clean)
+
+    def _save_session_locked(self, sid, path, body, clean):
+        from datetime import datetime
         old = {}
         if os.path.exists(path):
             try:
@@ -6354,8 +6396,9 @@ class _Handler(BaseHTTPRequestHandler):
         }
         try:
             os.makedirs(SESSIONS_DIR, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+            from persistence import atomic_json_write
+            if not atomic_json_write(path, data, compact=True):
+                return None, "会话写入失败（磁盘异常，详见服务端日志）"
             _index_session_locked(f"{sid}.json")
             _save_session_index()
             return sid, None
@@ -8254,6 +8297,7 @@ class _Handler(BaseHTTPRequestHandler):
         persist_base = [dict(m) for m in messages if isinstance(m, dict)]
         is_continue = bool(body.get("continue_prefix"))
         generated = []
+        reply_parts = []
         try:
             global _LAST_AUTO_CHECKPOINT
             _LAST_AUTO_CHECKPOINT = 0
@@ -8302,7 +8346,7 @@ class _Handler(BaseHTTPRequestHandler):
 
             kwargs.update({
                 "on_reasoning": lambda t: send("reasoning", {"text": t}),
-                "on_content": lambda t: send("content", {"text": t}),
+                "on_content": lambda t: (send("content", {"text": t}), reply_parts.append(t)),
                 "on_tool_start": lambda n, a: send("tool_start", {"name": n, "args": a}),
                 "on_tool": lambda n, a, r: (send("tool", {"name": n, "args": a, "result": r}), _tool_bookkeeping(n, a, r)),
                 "on_tool_duration": lambda n, d: send("tool_duration", {"name": n, "duration": d}),
@@ -8325,6 +8369,18 @@ class _Handler(BaseHTTPRequestHandler):
                     _record_tasklog(str(user_msgs[-1].get("content") or "")[:40], chain)
             except Exception:
                 pass
+            # 对话回写：自动提炼长期记忆（与非流式 _handle_chat 一致）。此前流式作业
+            # 从未调用，导致 auto_memory 默认开启却永不生效——记忆不会从对话增长。
+            # _chat_harvest 自身起后台线程，不阻塞作业收尾。
+            try:
+                reply = "".join(reply_parts)
+                last_user = next((m.get("content") for m in reversed(messages)
+                                  if isinstance(m, dict) and m.get("role") == "user"
+                                  and isinstance(m.get("content"), str)), "")
+                if reply and last_user and not quiet_mode and not job.stop_event.is_set():
+                    _chat_harvest(reply, last_user[:600], cfg, messages=messages)
+            except Exception:
+                logger.exception("自动记忆提炼启动失败")
             with _TOOL_CHAIN_LOCK:
                 _LAST_TOOL_CHAIN.clear()
             # 任务正常结束 → 清掉本轮自动断点（避免留下过期断点干扰）；
