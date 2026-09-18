@@ -609,14 +609,16 @@ def request_whitelist(action_type, value):
         return False, "白名单请求通道异常"
 
 
-def request_approval(name, args):
+def request_approval(name, args, full_auto=None):
     """审批闸门。
 
     blacklist 模式：仅 approval_actions 列表中的动作需要用户确认。
     whitelist 模式：保持旧行为（ACTION_TOOLS + approval_mode）。
     完全智能模式：直接放行（黑名单仍生效）。
+    full_auto：请求级覆盖（None=按进程全局）——并发会话下按本次请求判定，避免全局竞态。
     """
-    if FULL_AUTO:
+    fa = FULL_AUTO if full_auto is None else bool(full_auto)
+    if fa:
         return True, ""
     if security_mode() == "blacklist":
         actions = _data.get("approval_actions") or []

@@ -171,8 +171,12 @@ def _respond(body):
     return True, None
 
 
-def _make_approval_cb(send, stop_event):
-    """on_approval：任务模式零审批直接放行；其余复用 request_approval 闸门，弹窗改走 SSE。"""
+def _make_approval_cb(send, stop_event, full_auto=None):
+    """on_approval：任务模式零审批直接放行；其余复用 request_approval 闸门，弹窗改走 SSE。
+
+    full_auto：本次请求的零审批判定（请求级快照），None 时回退全局。用请求级值而非
+    全局，避免并发会话（task/dialog 交错）互相翻转进程级 FULL_AUTO 导致审批边界漂移。
+    """
     import permissions
 
     def web_approval(name, args):
@@ -202,16 +206,16 @@ def _make_approval_cb(send, stop_event):
         return box["allow"], box.get("reason", "")
 
     def cb(name, args):
-        # 不再在此重读持久化配置覆盖 FULL_AUTO：那会击穿 _sync_request_full_auto 的
-        # 「task 模式强制零审批」保证（配置为 dialog 但本次请求是 task 时仍弹审批）。
-        # FULL_AUTO 已在请求入口按本次 mode 设置好，这里只读不写。
-        if permissions.is_full_auto():
+        # 用请求级 full_auto 快照（而非全局）：避免并发会话交错翻转进程级 FULL_AUTO，
+        # 使 task 会话突弹审批 / dialog 会话被"提权"为零审批。
+        fa = permissions.is_full_auto() if full_auto is None else bool(full_auto)
+        if fa:
             # 任务模式：零审批、零开关，黑名单仍生效
             return True, ""
         with _APPROVAL_LOCK:
             permissions.set_approval_callback(web_approval)
             try:
-                return permissions.request_approval(name, args)
+                return permissions.request_approval(name, args, full_auto=False)
             finally:
                 permissions.set_approval_callback(None)
 
@@ -3196,6 +3200,11 @@ def _config_reset():
     try:
         import permissions as _perms
         _perms.set_full_auto(bool(fresh.get("full_auto")))
+    except Exception:
+        pass
+    try:
+        import security as _sec
+        _sec.set_ssrf_trusted(fresh.get("ssrf_trusted"))
     except Exception:
         pass
     config_utils.save_config(fresh)
@@ -7765,12 +7774,22 @@ class _Handler(BaseHTTPRequestHandler):
                 new_key = str(body["api_key"]).strip()
                 if new_key:
                     cfg["api_key"] = new_key
+            if "ssrf_trusted" in body and body["ssrf_trusted"] is not None:
+                v = body["ssrf_trusted"]
+                if isinstance(v, list):
+                    cfg["ssrf_trusted"] = [str(x).strip() for x in v if str(x).strip()][:200]
             config_utils.save_config(cfg)
             # 开机自启注册（HKCU Run / 卸载）
             if "autostart" in body and body["autostart"] is not None:
                 _apply_autostart(bool(body["autostart"]))
             # 配置保存后热同步全部工具侧接线（路径/agent_mail/主题/工作目录/图片键）
             _init_dc_paths()
+            # SSRF 信任白名单热更新（ssrf_trusted 变更即时生效）
+            try:
+                import security as _sec
+                _sec.set_ssrf_trusted((cfg or {}).get("ssrf_trusted"))
+            except Exception:
+                logger.warning("SSRF 信任白名单热更新失败（可降级）", exc_info=True)
             # 密钥/网关/模型等影响 LLM 客户端的配置变更后，失效客户端缓存
             # （get_active_client 下次调用按新配置重建；会话注入的由下次对话刷新）
             if any(k in body for k in ("api_key", "base_url", "model")):
@@ -8360,7 +8379,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "on_tool_duration": lambda n, d: send("tool_duration", {"name": n, "duration": d}),
                 "on_usage": lambda u: (send("usage", u), _record_usage(u, cfg, body)),
                 "on_metrics": _on_metrics,
-                "on_approval": _make_approval_cb(send, job.stop_event),
+                "on_approval": _make_approval_cb(
+                    send, job.stop_event,
+                    (str(body.get("mode") or "") == "task") or bool(cfg.get("full_auto"))),
                 "on_ask": _make_ask_cb(send, job.stop_event),
                 "on_request_permission": _make_permission_cb(send, job.stop_event),
                 "stop_event": job.stop_event,
@@ -8628,6 +8649,13 @@ def start_server(port=8745, token=""):
         perms.set_full_auto(bool(_cu_load("full_auto")))
     except Exception:
         logger.warning("权限模块初始化失败（可降级，回落内置安全默认）：以黑名单默认权限运行")
+    # SSRF 信任白名单（内网/保留段显式信任）：把 config.ssrf_trusted 装配进 security。
+    # 此前该配置无任何消费点（文档承诺的"信任白名单可豁免内网"实际未生效）。
+    try:
+        import security as _sec
+        _sec.set_ssrf_trusted(_cu_load("ssrf_trusted"))
+    except Exception:
+        logger.warning("SSRF 信任白名单装配失败（可降级）：按默认硬底线运行")
     try:
         import snapshot as snapshot_mod
         snapshot_mod.init(os.path.join(DATA_DIR, "undo"))

@@ -93,3 +93,63 @@ def test_chatpage_resets_batch_buffer():
     reset = 'batchRef.current = { think: "", text: "", gen: "" };'
     # flushBatch 内 1 处 + 卸载清理 1 处（修复点）= 至少 2 处
     assert src.count(reset) >= 2, "停止/卸载清理必须复位 rAF 累积缓冲"
+
+
+# ── 5. 请求级 full_auto 覆盖（去全局竞态）──────────────────────────
+
+def test_request_approval_per_request_override():
+    import permissions
+    old_data = permissions._data
+    old_auto = permissions.FULL_AUTO
+    old_cb = permissions._approval_callback
+    try:
+        permissions._data = {
+            "security_mode": "blacklist",
+            "approval_actions": ["run_command"],
+            "approval_mode": "confirm",
+            "approval_timeout": 60,
+        }
+        permissions.FULL_AUTO = False
+        permissions._approval_callback = None
+        # 请求级 True：即便清单含该动作也放行（不再看全局）
+        assert permissions.request_approval("run_command", {}, full_auto=True) == (True, "")
+        # 请求级 False：清单内、无回调 → 拒绝
+        ok, reason = permissions.request_approval("run_command", {}, full_auto=False)
+        assert ok is False and "权限" in reason
+    finally:
+        permissions._data = old_data
+        permissions.FULL_AUTO = old_auto
+        permissions._approval_callback = old_cb
+
+
+def test_approval_cb_uses_request_full_auto():
+    """full_auto=True 请求快照时回调直接放行，不依赖全局 FULL_AUTO / 审批通道。"""
+    import permissions
+    old_auto = permissions.FULL_AUTO
+    try:
+        permissions.FULL_AUTO = False
+        cb = api_server._make_approval_cb(lambda *a: True, None, True)
+        assert cb("run_command", {}) == (True, "")
+    finally:
+        permissions.FULL_AUTO = old_auto
+
+
+# ── 6. SSRF 信任白名单接线 ─────────────────────────────────────────
+
+def test_ssrf_trusted_whitelist_exempts_hard_floor():
+    import permissions
+    import security
+    old_data = permissions._data
+    old_trusted = list(security.SSRF_TRUSTED)
+    try:
+        permissions._data = {
+            "security_mode": "blacklist",
+            "blocklist_enabled": True,
+            "network": {"blocklist": [], "block_private": True, "allow_loopback": True},
+        }
+        security.set_ssrf_trusted(["10.0.0.5"])
+        assert security._hard_floor_reason("10.0.0.5") == "", "显式信任的内网应豁免硬底线"
+        assert security._hard_floor_reason("10.0.0.6") != "", "未信任的内网仍须拦截"
+    finally:
+        security.set_ssrf_trusted(old_trusted)
+        permissions._data = old_data
