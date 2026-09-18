@@ -7,8 +7,10 @@
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -28,7 +30,6 @@ from deepseek_client import (
 from shared import (  # D4: 参数校验辅助
     _SEARCH_SKIP_DIRS,
     RUN_MEM_POLL_SEC,
-    RUN_PY_MAX_CHARS,
     RUN_PY_MAX_OUTPUT,
     RUN_PY_MEMORY_MB,
     RUN_PY_TIMEOUT,
@@ -155,7 +156,7 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "完整可执行的 Python 代码（上限 8000 字符）；用 print 输出结果；可 import 任何已安装库；不要写需要交互输入的语句（input），需要交互改用 start_process"},
+                        "code": {"type": "string", "description": "完整可执行的 Python 代码（长度不设人为上限，一次写全，勿分块）；用 print 输出结果；可 import 任何已安装库；不要写需要交互输入的语句（input），需要交互改用 start_process"},
                     },
                     "required": ["code"],
                 },
@@ -166,17 +167,23 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
     preactivate=(('代码', '编程', 'python', 'bug', '脚本', '函数'),),
 )
 def run_python(code):
-    if not code or len(code) > RUN_PY_MAX_CHARS:
-        return f"错误：代码为空或超过 {RUN_PY_MAX_CHARS} 字符"
+    text = str(code or "")
+    if not text.strip():
+        return "错误：代码为空"
+    # 写入临时文件执行：源码长度不设人为上限，并规避 Windows 命令行 ~32K 的隐性截断。
+    tmp_dir = tempfile.mkdtemp(prefix="wt_runpy_")
+    script = os.path.join(tmp_dir, "_wt_run.py")
     try:
-        # 无限制模式：不再 -I -S 隔离、不做静态危险拦截——与直接运行 python -c 等价
-        argv = [sys.executable, "-c", code]
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(text)
+        # 无限制模式：不隔离、不静态拦截——与直接运行 python <file> 等价
+        argv = [sys.executable, script]
         try:
             rc, out_data = _run_capture(argv, RUN_PY_TIMEOUT, RUN_PY_MAX_OUTPUT,
                                         cwd=permissions.WORKSPACE_DIR or None,
                                         memory_mb=RUN_PY_MEMORY_MB)
         except MemoryLimitError as me:
-            permissions.audit("run_python", "python -c <code>",
+            permissions.audit("run_python", "python <script>",
                               f"memory_limit {me.seen_mb}MB > {me.limit_mb}MB")
             return (
                 f"错误：内存超限（峰值约 {me.seen_mb or '?'}MB，上限 {me.limit_mb}MB，进程树已终止）。"
@@ -192,10 +199,12 @@ def run_python(code):
             )
         if not out_data.strip():
             return f"执行成功（无输出），工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}"
-        permissions.audit("run_python", "python -c <code>", f"{len(code)} 字符, rc={rc}")
+        permissions.audit("run_python", "python <script>", f"{len(text)} 字符, rc={rc}")
         return out_data + f"\n[工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}]"
     except Exception as e:
         return f"错误：{e}"
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @tool(

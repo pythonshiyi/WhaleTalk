@@ -92,7 +92,7 @@ def test_previously_damaged_params_keep_their_constraints():
         ("edit_file", "replacements"): "正则",       # JSON 格式示例曾整体被删
         ("batch_rename", "pattern"): "字面",
         ("database_execute", "sql"): "WHERE",
-        ("run_python", "code"): "8000",
+        ("run_python", "code"): "不设人为上限",
     }
     for (tool, param), kw in samples.items():
         assert tool in by_name, f"工具缺失：{tool}"

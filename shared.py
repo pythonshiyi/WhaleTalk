@@ -333,7 +333,9 @@ WEATHER_TIMEOUT = 5
 # 用 start_process 无超时启动 + list_processes 轮询 / stop_process 停止。
 RUN_PY_TIMEOUT = 60
 
-RUN_PY_MAX_CHARS = 8000
+# 不再对 run_python 源码长度设人为上限（旧值 8000 会逼迫 AI 分块写入）。
+# 真实上限由模型上下文与请求体大小（api_server.MAX_BODY=1MB）决定；
+# 执行改走临时文件（python <file>），规避 Windows 命令行 ~32K 的隐性截断。
 
 RUN_PY_MAX_OUTPUT = 20000
 

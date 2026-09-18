@@ -109,9 +109,11 @@ def test_run_python_timeout_text():
         tc.RUN_PY_TIMEOUT = orig
 
 
-def test_run_python_oversize_blocked():
+def test_run_python_oversize_not_blocked():
+    # 去上限回归：超大代码不再被入口按字符数拒绝（改为临时文件执行，跑到底）。
     r = run_python("x" * 100000)
-    assert "错误" in r
+    assert "超过" not in r
+    assert "Traceback" in r or "NameError" in r
 
 
 def test_run_python_empty():
