@@ -17,7 +17,7 @@
 ## 📑 目录
 
 - [它是什么](#-它是什么)
-- [能力总览](#-能力总览162-工具)
+- [能力总览](#-能力总览163-工具)
 - [界面与体验](#-界面与体验)
 - [鲸语大脑](#-鲸语大脑)
 - [系统架构](#-系统架构)
@@ -38,7 +38,7 @@
 |---|---|
 | 🖼 **看得见** | 原生多模态视觉——图片理解、图表阅读、OCR、扫码、屏幕截图自查；聊天模型直接看图，无需切换模式 |
 | 💬 **说得出** | 对话 / 深度思考 / 语音合成（Piper 本地离线 · Edge 在线 · SAPI，可逐句流式跟读）/ 语音转文字 |
-| ⚡ **做得了** | 文件 / 代码 / 数据库 / 浏览器 / 邮件 / 媒体 / 桌面 RPA / 应用管理 / 快照恢复，共 162 项工具 |
+| ⚡ **做得了** | 文件 / 代码 / 数据库 / 浏览器 / 邮件 / 媒体 / 桌面 RPA / 应用管理 / 快照恢复，共 163 项工具 |
 | 🧬 **会进化** | 提案分支审阅、失败模式库消解、成功模式复用、技能自动结晶——合入权始终在你 |
 | 🔁 **能自疗** | 工具失败自动沉淀并注入规避提示，同类任务优先复用已验证路径 |
 
@@ -133,7 +133,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 ├───────────────────────────────────────────────────────────────┤
 │                    deepseek_client.py                         │
 │   统一模型客户端（thinking/多模态/tool/压缩/缓存）+ smart_tools │
-│   六层工具注册表（@tool 单一源 · 162 工具）                    │
+│   六层工具注册表（@tool 单一源 · 163 工具）                    │
 ├───────────────────────────────────────────────────────────────┤
 │  agent_tools/（13 个工具域模块） · toolkit.py（声明/注册）     │
 │  横切收口：context_providers · tool_hooks · degrade · egress · │
@@ -145,7 +145,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：162 工具（11 组）· 99 个 `/v1` 路由 · 后端 79 个 pytest 文件 / 822 用例 · 前端 14 个 node 套件。
+- **规模**：163 工具（11 组）· 99 个 `/v1` 路由 · 后端 81 个 pytest 文件 / 830 用例 · 前端 20 个 node 套件。
 
 ---
 
@@ -205,7 +205,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 ## 🕘 更新与版本
 
-- **版本单一源**：`config_defaults.VERSION`（当前 **3.16.2**），最新变更见 [CHANGELOG.md](CHANGELOG.md)。
+- **版本单一源**：`config_defaults.VERSION`（当前 **3.16.6**），最新变更见 [CHANGELOG.md](CHANGELOG.md)。
 - **更新源**：GitHub Releases（`api.github.com/repos/pythonshiyi/WhaleTalk/releases/latest`，可自定义 `update_url`）。
 - **更新方式**：应用内「关于 → 检查更新」自动检测；更新包支持 Ed25519 签名 + SHA-256 校验；更新前自动备份，可一键回滚。
 - **兼容性**：旧配置自动迁移，旧数据目录无缝升级。
@@ -230,7 +230,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 ## English Introduction
 
-**WhaleTalk v3.16.2** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
+**WhaleTalk v3.16.6** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
 
 - **Capabilities**: **163 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
 - **Self-evolution**: proposal branches, failure-pattern lifecycle, success-pattern reuse — merging stays in your hands.

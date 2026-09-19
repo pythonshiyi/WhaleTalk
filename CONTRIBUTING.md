@@ -28,7 +28,7 @@ npm run build    # 产物输出 webui/dist（由 api_server 同源服务）
   - `web_app.py`：启动入口（本地 API + 浏览器 + 托盘/快捷方式/开机自启）
   - `api_server.py`：本地 HTTP API（REST + SSE 流式，99 个 `/v1` 路由），同源服务前端构建产物
   - `deepseek_client.py`：统一模型客户端 + 六层工具注册表 + smart_tools（工具实现已迁至 `agent_tools/`）
-  - `agent_tools/tool_*.py`：162 个工具的实现；用 `@tool()` 声明（单一事实源）
+  - `agent_tools/tool_*.py`：163 个工具的实现；用 `@tool()` 声明（单一事实源）
   - `permissions.py`：权限模型（默认自由：黑名单主导 + `blocklist_enabled` 一键开关；审计只记不拦）
 - 所有用户可见输入（路径 / 命令 / SQL/工具参数）必须经校验：路径走 `permissions.resolve()`；命令走 `permissions.check_shell()`；网络请求走 `permissions.check_network_host()`（blacklist 模式只拦用户黑名单；旧 whitelist 模式回退 `security._safe_url` 严格 SSRF 判断）；路径越界 / 注入防护不得绕过
 - 写文件类工具必须返回真实结果（字节数 / 行数 / 差异），禁止用"假成功"占位
@@ -51,7 +51,7 @@ python tools/check_docs.py             # 文档数字 vs 源码实测
 - 工具声明是**单一事实源**：新增/修改工具只在函数定义处写一次 `@tool()`（`schema` / `groups` / `phrases` / `preactivate` / `hooks`），六层数据由注册表自动生成。随后把工具名加入 `deepseek_client.py` 的 `_TOOL_ORDER`（涉及分组/预激活时再加 `_GROUP_ORDER` / `_HINT_ORDER`），并在域模块 `__all__` 与 `agent_tools/__init__.py.__all__` re-export
 - 新增工具默认**零审批**（blacklist 主导，`approval_actions` 默认空）。仅当设计上确需让用户可选加严时，才把工具名登记入 `permissions` 的 `approval_actions`（blacklist 模式）或 `ACTION_TOOLS`（旧 whitelist 模式），并在变更说明中写明理由；否则不要登记
 - 工具描述要完整说清「做什么 + 关键约束」，**没有长度上限**——smart 模式不截断描述（描述是工具能力的一部分，不得为省 token 删减）；参数描述必须 100% 覆盖；数组参数必须带 `items`（缺则 API 400）
-- 当前 CI（`.github/workflows/ci.yml`）执行 ruff 关键规则 + 入口编译检查 + WebUI 构建 + `pytest tests/`（61 文件 / 671 用例）+ 工具系统四道门禁；前端另有 `npm test`（14 个 node 套件）与 `npm run typecheck`。本地改完先跑四道门禁，再 `python -m pytest -q` 与 `cd webui && npm test`。
+- 当前 CI（`.github/workflows/ci.yml`）执行 ruff 关键规则 + 入口编译检查 + WebUI 构建 + `pytest tests/`（81 文件 / 830 用例）+ 工具系统四道门禁；前端另有 `npm test`（20 个 node 套件）与 `npm run typecheck`。本地改完先跑四道门禁，再 `python -m pytest -q` 与 `cd webui && npm test`。
 
 ## 提交信息 / Commit Messages
 
