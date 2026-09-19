@@ -1814,7 +1814,7 @@ def pdf_visual_check(path, out_dir="", max_pages=20, dpi=90):
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": ".docx 文件绝对路径"},
-                        "max_chars": {"type": "integer", "description": "可选：输出字符上限（默认 50000，防超长文档撑爆上下文）"},
+                        "max_chars": {"type": "integer", "description": "可选：输出字符上限（不传则用配置 WHALETALK_DOCX_MAX_DEFAULT，默认 50000；0=不限）"},
                     },
                     "required": ["path"],
                 },
@@ -1824,7 +1824,7 @@ def pdf_visual_check(path, out_dir="", max_pages=20, dpi=90):
     phrases='读取 Word 文档',
     preactivate=(('word', 'docx', '读word', '读取文档'),),
 )
-def docx_read(path, max_chars=50000):
+def docx_read(path, max_chars=None):
     """读取 Word .docx 为 Markdown 结构（标题/段落/列表/表格，保持文档顺序）。"""
     try:
         from docx import Document
@@ -1840,12 +1840,16 @@ def docx_read(path, max_chars=50000):
         return f"错误：文件不存在：{path}"
     if p.lower().endswith(".doc"):
         return "错误：暂不支持旧版 .doc 格式，请先用 Word 另存为 .docx 后重试"
-    # 输出上限：显式 max_chars 优先；否则用 DOCX_MAX_DEFAULT（<=0 = 不限）
+    # 输出上限：显式 max_chars 优先（<=0=不限）；未传则用 DOCX_MAX_DEFAULT（<=0=不限）
     _def = DOCX_MAX_DEFAULT if (DOCX_MAX_DEFAULT and DOCX_MAX_DEFAULT > 0) else 0
-    try:
-        limit = clamp_int(max_chars, _def, lo=1) if max_chars else _def
-    except (TypeError, ValueError):
+    if max_chars is None:
         limit = _def
+    else:
+        try:
+            _mc = int(max_chars)
+        except (TypeError, ValueError):
+            _mc = _def
+        limit = _mc if _mc > 0 else 0
     try:
         from docx.table import Table as _Table
         from docx.text.paragraph import Paragraph as _Para
@@ -2835,7 +2839,7 @@ def secret_store(action="get", name="", value=""):
                     "properties": {
                         "action": {"type": "string", "description": "set / get / delete / keys / search"},
                         "key": {"type": "string", "description": "set/get/delete 必填：键"},
-                        "value": {"type": "string", "description": "set 必填：值（上限 1MB）"},
+                        "value": {"type": "string", "description": "set 必填：值（上限可配置 WHALETALK_KV_VALUE_MAX_BYTES，默认 1MB；0=不限）"},
                         "ttl_seconds": {"type": "integer", "description": "可选：set 时有效秒数（0=长期）"},
                         "pattern": {"type": "string", "description": "search 必填：键或值的模糊检索关键词"},
                     },

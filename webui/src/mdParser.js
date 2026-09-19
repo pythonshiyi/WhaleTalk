@@ -80,7 +80,7 @@ function tryCollectFence(lines, i) {
 }
 
 // ── 列表（缩进树 + 任务 + 续行）─────────
-function tryCollectList(lines, i) {
+function tryCollectList(lines, i, depth) {
   const first = lines[i].match(LIST_RE);
   if (!first) return null;
   const baseIndent = first[1].length;
@@ -185,24 +185,24 @@ function tryCollectList(lines, i) {
 
   // body 续行再解析为段落/子块
   for (const lb of root) {
-    if (lb.t === "ul" || lb.t === "ol") for (const item of lb.items) finalizeItem(item);
+    if (lb.t === "ul" || lb.t === "ol") for (const item of lb.items) finalizeItem(item, depth);
   }
   return { blocks: root, next: j };
 }
 
-function finalizeItem(item) {
+function finalizeItem(item, depth) {
   if (!item.body.length) return;
   // 递归把 body 行解析为子块（支持子段落/子代码/子引用/子列表）
-  const sub = parseMarkdown(item.body.join("\n"));
+  const sub = parseMarkdown(item.body.join("\n"), { __depth: (depth || 0) + 1 });
   item.children.push(...sub.blocks);
   item.body = [];
   for (const c of item.children) {
-    if (c.t === "ul" || c.t === "ol") for (const it of c.items) finalizeItem(it);
+    if (c.t === "ul" || c.t === "ol") for (const it of c.items) finalizeItem(it, (depth || 0) + 1);
   }
 }
 
 // ── 引用 ─────────────────────────────
-function tryCollectQuote(lines, i) {
+function tryCollectQuote(lines, i, depth) {
   if (!QUOTE_RE.test(lines[i])) return null;
   const qlines = [];
   let j = i;
@@ -216,12 +216,12 @@ function tryCollectQuote(lines, i) {
       j++;
     } else break;
   }
-  const sub = parseMarkdown(qlines.join("\n"));
+  const sub = parseMarkdown(qlines.join("\n"), { __depth: (depth || 0) + 1 });
   return { block: { t: "quote", children: sub.blocks }, next: j };
 }
 
 // ── details 折叠 ─────────────────────
-function tryCollectDetails(lines, i) {
+function tryCollectDetails(lines, i, depth) {
   if (!DETAILS_OPEN_RE.test(lines[i])) return null;
   let j = i + 1;
   let summary = "";
@@ -236,13 +236,19 @@ function tryCollectDetails(lines, i) {
     if (sm && !summary) summary = sm[1];
     else inner.push(l);
   }
-  const sub = parseMarkdown(inner.join("\n"));
+  const sub = parseMarkdown(inner.join("\n"), { __depth: (depth || 0) + 1 });
   return { block: { t: "details", summary, children: sub.blocks }, next: j };
 }
 
 // ── 主入口 ───────────────────────────
+// 递归深度上限：嵌套列表/引用/details 过深会爆栈（RangeError）。超限时该层退化为
+// 纯段落，内容不丢、不再向下递归。
+const MAX_MD_DEPTH = 32;
+
 export function parseMarkdown(text, opts = {}) {
+  const depth = opts.__depth || 0;
   const lines = String(text == null ? "" : text).split("\n");
+  if (depth > MAX_MD_DEPTH) return { blocks: [{ t: "p", lines }] };
   const blocks = [];
   const defs = new Map();
   let i = 0;
@@ -285,7 +291,7 @@ export function parseMarkdown(text, opts = {}) {
     }
 
     // 引用
-    const quote = tryCollectQuote(lines, i);
+    const quote = tryCollectQuote(lines, i, depth);
     if (quote) {
       blocks.push(quote.block);
       i = quote.next;
@@ -293,7 +299,7 @@ export function parseMarkdown(text, opts = {}) {
     }
 
     // 列表
-    const list = tryCollectList(lines, i);
+    const list = tryCollectList(lines, i, depth);
     if (list) {
       blocks.push(...list.blocks);
       i = list.next;
@@ -301,7 +307,7 @@ export function parseMarkdown(text, opts = {}) {
     }
 
     // details
-    const details = tryCollectDetails(lines, i);
+    const details = tryCollectDetails(lines, i, depth);
     if (details) {
       blocks.push(details.block);
       i = details.next;

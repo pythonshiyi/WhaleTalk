@@ -304,7 +304,8 @@ def init(project_dir=None, mode=None):
 
     - 首次运行（无 manifest、无账本）：把当前文件登记为**基线**（mode=bootstrap）。
     - manifest 丢失但账本存在：**不静默重建**——记 incident 后重引导，并在
-      manifest 里标记 rebootstrap，避免「删掉索引 = 抹掉证据」。
+      manifest 里标记 rebootstrap；**已有基线副本绝不被当前内容覆盖**，若二者
+      不一致则另存证据并记 incident（删除 manifest 无法洗白改动）。
     - mode 传入时覆盖 config.json 中的 mode（供测试与启动参数使用）。
     """
     global PROJECT_DIR, TRUST_DIR, _init_done, _last_bootstrap
@@ -341,7 +342,24 @@ def init(project_dir=None, mode=None):
         for name in protected_names():
             p = _kernel_path(name)
             if os.path.isfile(p):
-                _copy_to_baseline(name)
+                bp = _baseline_path(name)
+                if os.path.isfile(bp):
+                    # 基线副本已存在：**绝不覆盖**——否则删除 manifest 再重引导
+                    # 就能把当前（可能被篡改的）内容洗白成可信基线。若当前与基线
+                    # 不一致，另存当前内容为证据并记 incident，交由 verify 报出。
+                    b_sha, k_sha = _sha256(bp), _sha256(p)
+                    if b_sha != k_sha:
+                        _record_incident("baseline_diverged", {
+                            "at": _now(),
+                            "file": name,
+                            "note": "manifest 丢失重引导时，基线副本与当前文件不一致——"
+                                    "保留原基线、不覆盖；当前内容已另存为证据。",
+                            "baseline_sha": b_sha,
+                            "current_sha": k_sha,
+                            "current_copy": _save_current_copy(name),
+                        })
+                else:
+                    _copy_to_baseline(name)
                 manifest["files"][name] = _entry_for(name, "bootstrap")
         _atomic_write_json(_manifest_path(), manifest)
         _append_line(_ledger_path(), {
@@ -353,18 +371,41 @@ def init(project_dir=None, mode=None):
 
 
 def _copy_to_baseline(name):
-    """把当前文件复制为基线副本。返回 (ok, msg)。"""
+    """把当前文件复制为基线副本（原子写：并发/崩溃不会留下截断的基线）。
+
+    返回 (ok, msg)。
+    """
     try:
         src = _kernel_path(name)
         if not os.path.isfile(src):
             return False, f"源文件不存在：{src}"
         dst = _baseline_path(name)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(src, dst)
+        with open(src, "rb") as f:
+            data = f.read()
+        _atomic_write_bytes(dst, data)
         return True, dst
     except Exception as e:
         logger.exception("基线备份失败: %s", name)
         return False, f"基线备份失败: {e}"
+
+
+def _save_current_copy(name):
+    """把内核文件当前内容另存为证据（重引导发现基线不一致时）。返回文件名或 ""。"""
+    try:
+        src = _kernel_path(name)
+        if not os.path.isfile(src):
+            return ""
+        os.makedirs(_incident_dir(), exist_ok=True)
+        dst = _unique_path(os.path.join(
+            _incident_dir(), f"{_now_compact()}_current_{_flat(name)}"))
+        with open(src, "rb") as f:
+            data = f.read()
+        _atomic_write_bytes(dst, data)
+        return os.path.basename(dst)
+    except Exception:
+        logger.exception("当前内容留证失败: %s", name)
+        return ""
 
 
 def _entry_for(name, how="declare", note=""):
@@ -1215,7 +1256,11 @@ def integrity_notice():
     """
     try:
         st = status(deep=False)
-        if st.get("state") in ("ok", "unknown") and not st.get("alerts"):
+        # last_check.json 缺失/损坏（state=unknown）不能当干净——否则删掉该文件即可
+        # 静默「不可隐瞒」提示。此时现场重算一次（只读，仅在异常态付出代价）。
+        if str(st.get("state") or "unknown") == "unknown":
+            st = status(deep=True)
+        if st.get("state") == "ok" and not st.get("alerts"):
             return ""
         lines = []
         changed = st.get("changed") or []
@@ -1230,6 +1275,11 @@ def integrity_notice():
                 "不要替用户决定是否保留，也不要在用户知情前继续依赖这些改动。")
         for a in st.get("alerts") or []:
             lines.append(f"[自我完整性] 告警：{a.get('note')}")
+        if not lines:
+            # 既非 ok 也无具体差异/告警：如实说明「无法确认」，不留静默缺口
+            lines.append(
+                "[自我完整性] 无法确认信任内核状态（状态文件缺失或核对失败）。"
+                "建议运行 `python trust_kernel.py verify` 现场核对。")
         if lines:
             lines.append(
                 "用户可执行 `python trust_kernel.py diff <文件>` 查看差异、"

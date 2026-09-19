@@ -143,19 +143,15 @@ def _maybe_flush(force=False):
     try:
         if not DATA_PATH:
             return False
-        now = time.monotonic()
-        if not force and _last_flush and now - _last_flush < FLUSH_MIN_INTERVAL:
-            return False
+        # 节流判定与置位须在同一临界区：否则两个线程可同时通过节流并写同一临时文件。
         with _lock:
+            now = time.monotonic()
+            if not force and _last_flush and now - _last_flush < FLUSH_MIN_INTERVAL:
+                return False
             payload = {"updated_at": _now(), "entries": snapshot(limit=MAX_ENTRIES)}
-        tmp = DATA_PATH + ".tmp"
-        os.makedirs(os.path.dirname(DATA_PATH) or ".", exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as f:
-            import json
-            json.dump(payload, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, DATA_PATH)
-        _last_flush = now
-        return True
+            _last_flush = now
+        from persistence import atomic_json_write
+        return atomic_json_write(DATA_PATH, payload, indent=1)
     except Exception:
         return False
 

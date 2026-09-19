@@ -110,8 +110,10 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
         peak = {"mb": 0.0, "over": False}
         watch = None
         if memory_mb and memory_mb > 0:
+            # 轮询间隔须为正：0/负会让 Event.wait(0) 立即返回 → 100% CPU 忙循环
+            _poll = RUN_MEM_POLL_SEC if (RUN_MEM_POLL_SEC and RUN_MEM_POLL_SEC > 0) else 0.5
             def _watch():
-                while not stop_watch.wait(RUN_MEM_POLL_SEC):
+                while not stop_watch.wait(_poll):
                     mb = _proc_tree_rss_mb(proc.pid)
                     if mb is None:
                         return

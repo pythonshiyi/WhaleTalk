@@ -93,7 +93,11 @@ function newStreamId() {
 export function BackendBanner() {
   const [down, setDown] = React.useState(false);
   const [retrying, setRetrying] = React.useState(false);
-  React.useEffect(() => api.watchBackend(5000, (ok) => setDown(!ok)), []);
+  React.useEffect(() => {
+    // 保存停止函数并在卸载时清理，避免 StrictMode/卸载后遗留 5s 心跳定时器
+    const stop = api.watchBackend(5000, (ok) => setDown(!ok));
+    return () => { if (typeof stop === "function") stop(); };
+  }, []);
   const retry = () => {
     setRetrying(true);
     (async () => {
@@ -192,7 +196,7 @@ function useBackendChat({
   pendingRef, historyRef,
   chatMode, webSearch, quietMode,
   onFinished, stopSignalRef, onPrompt, setGenState,
-  continueRef, sessionIdRef, gwSessionRef, streamIdRef, onSession, setGenTps, toast,
+  continueRef, sessionIdRef, gwSessionRef, streamIdRef, costConfirmedRef, onSession, setGenTps, toast,
 }) {
 
   const updateMsgs = (fn) => {
@@ -289,10 +293,22 @@ function useBackendChat({
 
     (async () => {
       let done = false;
+      let needsConfirm = false;   // 后端费用确认闸拦截：不落盘、不提示完成，等待确认重发
       const finish = (ok) => {
         if (done || !alive) return;
         flushNow();  // 冲刷 rAF 残余增量（防末尾半截内容丢失）
         done = true;
+        // 费用确认：移除空的 assistant 占位、不保存、不弹「回复完成」；
+        // 用户确认后由 resendLastUser 以 cost_confirmed 重发。
+        if (needsConfirm) {
+          if (costConfirmedRef) costConfirmedRef.current = false;
+          if (!isContinue) updateMsgs((m) => (m.length && m[m.length - 1].role === "assistant" ? m.slice(0, -1) : m));
+          updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, streaming: false } : x)));
+          setBusy(false);
+          setGenState({ on: false, text: "" });
+          setGenTps(0);
+          return;
+        }
         updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, streaming: false } : x)));
         setBusy(false);
         setGenState({ on: false, text: "" });
@@ -312,6 +328,9 @@ function useBackendChat({
           : (historyRef.current || []).slice(-80);
         // 纯图片（无文字）时给一句占位，避免部分网关拒绝空 content
         const userContent = withAttachRefs(userText, files) || (images.length ? "[图片]" : "");
+        // 费用确认闸：本次请求是否已带用户确认；读取后立即复位（只作用于这一次发送）
+        const costConfirmed = !!(costConfirmedRef && costConfirmedRef.current);
+        if (costConfirmedRef) costConfirmedRef.current = false;
         await api.streamChat(
           {
             messages: isContinue ? history : [...history, { role: "user", content: userContent, ...(images.length ? { images } : {}) }],
@@ -333,6 +352,7 @@ function useBackendChat({
             // 供网关做路由/缓存亲和；与业务 session_id 解耦（后端不用于落盘）。
             gw_session: (gwSessionRef && gwSessionRef.current) || undefined,
             continue_prefix: isContinue,
+            cost_confirmed: costConfirmed,
           },
           {
             onReasoning: (t) => {
@@ -430,6 +450,13 @@ function useBackendChat({
             },
             onPlanRequest: (ev) => {
               if (alive && !stopRef.current) onPrompt && onPrompt({ ...ev, type: "plan" });
+            },
+            onNeedsConfirmation: (ev) => {
+              // 成本预检拦截：标记本次为「待确认」，由 finish() 移除空占位并等待用户决定。
+              if (alive && !stopRef.current) {
+                needsConfirm = true;
+                onPrompt && onPrompt({ ...ev, type: "confirm" });
+              }
             },
             onSession: (ev) => {
               // 后端分配的会话 id（新会话也能拿到）：采用它统一落盘 id，避免
@@ -671,6 +698,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   // 本轮生成的稳定标识：后端用它把生成交给独立作业（切页/多标签页不打断）。
   // 每「轮」在 onSend/onContinue 时重新生成，同一轮内 effect 重跑复用同一个。
   const streamIdRef = React.useRef(null);
+  // 费用确认闸：用户确认成本后置 true，仅作用于紧接着的那一次请求（发送后复位）。
+  const costConfirmedRef = React.useRef(false);
   // 网关会话 id（OpenCode Go/Zen 的 x-opencode-session）：每次「新对话」重新生成，
   // 同一会话内跨轮稳定。与业务 session_id 解耦，后端只用于请求头，不用于落盘。
   const gwSessionRef = React.useRef(null);
@@ -1011,6 +1040,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     sessionIdRef: activeIdRef,
     gwSessionRef,
     streamIdRef,
+    costConfirmedRef,
     onSession: (sid) => onSessionRef.current && onSessionRef.current(sid),
     setGenTps,
     toast,
@@ -1229,13 +1259,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         };
       }));
       const u = got.usage || {};
-      if (u && (u.prompt_tokens || u.completion_tokens || u.total_tokens)) {
+      // 后端 usage_total 字段为 {prompt, completion, cache_hit, cache_miss}（非 OpenAI 的 *_tokens）
+      if (u && (u.prompt || u.completion)) {
         setCtx((prev) => ({
           ...prev,
           usage: {
-            prompt: u.prompt_tokens || 0,
-            completion: u.completion_tokens || 0,
-            cached: u.prompt_cache_hit_tokens ? `${((u.prompt_cache_hit_tokens / (u.prompt_tokens || 1)) * 100).toFixed(1)}%` : "—",
+            prompt: u.prompt || 0,
+            completion: u.completion || 0,
+            cached: (u.prompt && u.cache_hit) ? `${((u.cache_hit / u.prompt) * 100).toFixed(1)}%` : "—",
             cost: "—",
           },
         }));
@@ -1409,6 +1440,28 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       await api.pinSession(id, pinned);
       refreshSessions();
     } catch (e) { silentWarn(e, "ChatPage"); }
+  };
+
+  // 费用确认后重发最后一条 user（不新增用户消息、不重置会话 id；空 assistant 占位已由 finish 移除）。
+  const resendLastUser = () => {
+    if (busy) return;
+    const cur = msgsRef.current || msgs;
+    let lastUser = -1;
+    for (let i = cur.length - 1; i >= 0; i--) {
+      if (cur[i].role === "user") { lastUser = i; break; }
+    }
+    if (lastUser < 0) return;
+    const text = cur[lastUser].text;
+    const base = cur.slice(0, lastUser);
+    starsRef.current = new Set();
+    pinsRef.current = new Set();
+    historyRef.current = buildMessageChain(base);
+    setMsgs(base);
+    pendingRef.current = { text, images: cur[lastUser].images || [], files: cur[lastUser].files || [] };
+    // 后端旧作业已结束，必须换新 stream_id 新建作业，否则会被当作订阅已完成作业。
+    streamIdRef.current = newStreamId();
+    setBusy(true);
+    setBackendNote("");
   };
 
   // ── A7 多选消息模式（对齐原程序 multi-bar）──
@@ -1861,7 +1914,17 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       <ConfirmGate
         req={promptReq}
         onRespond={async (payload) => {
+          const isCost = promptReq && String(promptReq.type || "") === "confirm";
           setPromptReq(null);
+          if (isCost) {
+            // 费用确认：本地闸门，不走 /v1/respond（后端作业已结束）。确认则带
+            // cost_confirmed 重发；取消则静默丢弃（已移除了空 assistant 占位）。
+            if (payload && payload.confirm) {
+              costConfirmedRef.current = true;
+              resendLastUser();
+            }
+            return;
+          }
           try {
             await api.respond(payload);
           } catch (e) { silentWarn(e, "ChatPage"); }

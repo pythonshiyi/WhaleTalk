@@ -25,6 +25,11 @@ import threading
 import time as _time
 from pathlib import Path
 
+try:
+    from shared import MEMORY_MAX_TEXT as _MEMORY_MAX_TEXT
+except Exception:  # pragma: no cover
+    _MEMORY_MAX_TEXT = 2000
+
 # 运行时注入（由 api_server._init_dc_paths 设置后赋值；未设置时函数级兜底探测）
 MEMORY_JSON_PATH = None      # DATA_DIR/memory.json
 KNOWLEDGE_INDEX_PATH = None  # DATA_DIR/knowledge_index.json
@@ -82,9 +87,11 @@ def _load_memory_json():
         if not text:
             continue
         key = str(f.get("key") or "").strip()
+        # 截断上限与写入路径同源（MEMORY_MAX_TEXT；<=0 = 不限）
+        text = text[:_MEMORY_MAX_TEXT] if (_MEMORY_MAX_TEXT and _MEMORY_MAX_TEXT > 0) else text
         out.append({
             "id": str(f.get("id") or f"mem:{abs(hash(text)):x}"),
-            "text": text[:2000],
+            "text": text,
             "type": str(f.get("type") or key or "事实")[:20],
             "importance": int(f.get("importance") or (4 if f.get("type") in ("偏好", "规则", "联系") else 3)),
             "tags": [str(t).strip()[:20] for t in (f.get("tags") or []) if isinstance(t, str)][:10] or ([key] if key else []),

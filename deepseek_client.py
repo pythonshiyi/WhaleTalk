@@ -585,7 +585,9 @@ def _patch_array_items(tools):
     def fix(node):
         if not isinstance(node, dict):
             return
-        if node.get("type") == "array" and "items" not in node:
+        t = node.get("type")
+        # type 可能是字符串 "array"，也可能是联合类型列表 ["array", "null"]
+        if (t == "array" or (isinstance(t, list) and "array" in t)) and "items" not in node:
             node["items"] = {}
         for v in node.values():
             if isinstance(v, dict):
@@ -595,7 +597,11 @@ def _patch_array_items(tools):
                     fix(item)
 
     for tool in tools or []:
-        fix((tool.get("function") or {}).get("parameters"))
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
+        if isinstance(fn, dict):
+            fix(fn.get("parameters"))
 
 
 def _safe_request(method, url, *, allow_loopback=True, max_redirects=5,
@@ -3967,22 +3973,31 @@ def _strictify_schema(schema, is_root=False):
 
 _BASE_TOOLS_CACHE = None
 _CUSTOM_TOOLS_CACHE = None
-_CUSTOM_TOOLS_ID = None
+_CUSTOM_TOOLS_SIG = None
+
+
+def _custom_tools_fingerprint(tools):
+    """自定义工具的内容指纹（不用 id()：调用方返回的可能是被就地复用/释放的
+    列表对象，id 复用会命中陈旧缓存，返回错误工具）。"""
+    try:
+        return json.dumps(tools, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        return str(id(tools))
 
 
 def _cached_all_tools(custom_tools):
     """缓存内置工具/自定义工具的深拷贝，避免每轮 chat() 全量 deepcopy 100+ 工具。"""
-    global _BASE_TOOLS_CACHE, _CUSTOM_TOOLS_CACHE, _CUSTOM_TOOLS_ID
+    global _BASE_TOOLS_CACHE, _CUSTOM_TOOLS_CACHE, _CUSTOM_TOOLS_SIG
     if _BASE_TOOLS_CACHE is None or _BASE_TOOLS_CACHE[0] != id(TOOLS):
         _BASE_TOOLS_CACHE = (id(TOOLS), copy.deepcopy(TOOLS))
     base = _BASE_TOOLS_CACHE[1]
     custom_tools = custom_tools or []
     if not custom_tools:
         return copy.deepcopy(base)
-    cid = id(custom_tools)
-    if _CUSTOM_TOOLS_CACHE is None or cid != _CUSTOM_TOOLS_ID:
+    sig = _custom_tools_fingerprint(custom_tools)
+    if _CUSTOM_TOOLS_CACHE is None or sig != _CUSTOM_TOOLS_SIG:
         _CUSTOM_TOOLS_CACHE = copy.deepcopy(custom_tools)
-        _CUSTOM_TOOLS_ID = cid
+        _CUSTOM_TOOLS_SIG = sig
     return copy.deepcopy(base + _CUSTOM_TOOLS_CACHE)
 
 
@@ -4112,29 +4127,68 @@ class DeepSeekClient:
             if content is None:
                 m["content"] = ""
             cleaned.append(m)
-        # pass 2：删除「悬空 tool」——tool 消息必须紧跟声明了对应 id 的 assistant(tool_calls)。
-        # 历史保存错位（压缩裁剪/异常中断/并行轮次丢失 assistant 层）会产生孤立 tool 消息，
-        # 不清理则 DeepSeek API 以 400 拒绝（tool must be a response to preceding tool_calls）。
-        pending = set()
+        # pass 2：保证「assistant(tool_calls) → 配对 tool 消息」严格相邻完整。
+        # 历史保存错位（压缩裁剪/异常中断/并行轮次丢失 assistant 层）会产生孤立
+        # tool 消息，或 assistant 声明了 tool_calls 却没有对应 tool 响应——两者
+        # DeepSeek API 均以 400 拒绝（tool must be a response to preceding tool_calls）。
+        # 规则：tool 消息必须紧跟在声明其 id 的 assistant 之后，否则丢弃；
+        #       assistant 上未被满足的 tool_calls 一律剔除（必要时整条剔除）。
         final = []
+        pending_msg = None      # final 中等待被响应、可原地修正的 assistant 副本
+        pending_ids = set()
+
+        def _drop_pending():
+            nonlocal pending_msg, pending_ids
+            if pending_msg is not None and pending_ids:
+                kept = [
+                    tc for tc in (pending_msg.get("tool_calls") or [])
+                    if not (isinstance(tc, dict) and tc.get("id") in pending_ids)
+                ]
+                if kept:
+                    pending_msg["tool_calls"] = kept
+                else:
+                    pending_msg.pop("tool_calls", None)
+                    if not pending_msg.get("content"):
+                        try:
+                            final.remove(pending_msg)
+                        except ValueError:
+                            pass
+            pending_msg = None
+            pending_ids = set()
+
         for m in cleaned:
-            if not isinstance(m, dict) or m.get("role") == "assistant":
-                tcs = m.get("tool_calls") if isinstance(m, dict) else None
-                pending = {t.get("id") for t in tcs} if tcs else set()
+            if not isinstance(m, dict):
+                _drop_pending()
                 final.append(m)
-            elif m.get("role") == "tool":
+                continue
+            role = m.get("role")
+            if role == "assistant":
+                _drop_pending()
+                msg = dict(m)
+                tcs = msg.get("tool_calls")
+                if tcs:
+                    valid_tcs = [tc for tc in tcs if isinstance(tc, dict) and tc.get("id")]
+                    msg["tool_calls"] = valid_tcs
+                    if valid_tcs:
+                        pending_msg = msg
+                        pending_ids = {tc["id"] for tc in valid_tcs}
+                    else:
+                        msg.pop("tool_calls", None)
+                final.append(msg)
+            elif role == "tool":
                 tid = m.get("tool_call_id")
-                if tid and tid in pending:
-                    pending.discard(tid)
+                if pending_msg is not None and tid and tid in pending_ids:
+                    pending_ids.discard(tid)
                     final.append(m)
+                    if not pending_ids:
+                        pending_msg = None
                 else:
                     continue  # 悬空 tool：丢弃，避免 400
             else:
-                # 非 assistant 且非 tool（user/system）：清空待配对的 tool_calls——
-                # 否则「assistant(tool_calls) → user → tool」这种错位历史里，孤儿 tool
-                # 会被误判为合法配对而保留，API 仍以 400 拒绝。
-                pending = set()
+                # 非 assistant 且非 tool（user/system）：此前的 tool_calls 已无法满足
+                _drop_pending()
                 final.append(m)
+        _drop_pending()
         return final
 
     def chat(
@@ -4389,10 +4443,18 @@ class DeepSeekClient:
         empty_retries = 0
         plan_rejections = 0
         json_retried = False  # JSON 输出自校验重试只允许一次
-        # MAX_TOOL_ROUNDS<=0 → 不限轮数（用大数近似；仍受停止/上下文/循环防护约束）
-        _def_rounds = MAX_TOOL_ROUNDS if MAX_TOOL_ROUNDS and MAX_TOOL_ROUNDS > 0 else 10 ** 9
-        rounds = max_tool_rounds if max_tool_rounds and max_tool_rounds > 0 else _def_rounds
-        last_tool_key = None
+        # max_tool_rounds 语义：None（未提供）→ 回退环境变量默认；<=0 → 不限轮数
+        # （配置默认 0=不限）；>0 → 该值。旧实现把显式 0 当未设置回退到 100，与
+        # 「0=不限」契约不符。
+        if max_tool_rounds is None:
+            rounds = MAX_TOOL_ROUNDS if MAX_TOOL_ROUNDS and MAX_TOOL_ROUNDS > 0 else 10 ** 9
+        else:
+            try:
+                _mr = int(max_tool_rounds)
+            except (TypeError, ValueError):
+                _mr = 0
+            rounds = _mr if _mr > 0 else 10 ** 9
+        last_round_sig = None
         same_repeats = 0
         try:
             for _ in range(rounds):
@@ -4675,6 +4737,7 @@ class DeepSeekClient:
                                 }
                             )
                         continue
+                    plan_rejections = 0  # 批准即清零：MAX_PLAN_REJECTIONS 约束的是「连续」拒绝
                     if plan_edits:
                         _apply_plan_edits(tool_calls, plan_edits)
 
@@ -4683,26 +4746,28 @@ class DeepSeekClient:
                     work[-1].pop("tool_calls", None)
                     return False
 
-                # 循环防护：按 (name, args) 顺序预判连续重复，跨轮累计（每轮不重置，
-                # 模型换参数时自然清零），命中则整轮终止
+                # 循环防护：按整轮 (name, args) 签名连续重复判定，命中则整轮终止。
+                # 用整轮签名而非单个 last_tool_key——旧实现下 [A,B]→[A,B] 这类多工具
+                # 重复轮永远触发不了防护（相邻 key 总不同）。
                 guarded = False
-                for tc in tool_calls:
-                    key = (tc["name"], (tc["args"] or "").strip())
-                    if key == last_tool_key:
-                        same_repeats += 1
-                    else:
-                        same_repeats = 1
-                        last_tool_key = key
-                    if MAX_SAME_TOOL_REPEATS and MAX_SAME_TOOL_REPEATS > 0 and same_repeats >= MAX_SAME_TOOL_REPEATS:
-                        guarded = True
-                        break
+                round_sig = tuple(
+                    (tc["name"], (tc["args"] or "").strip()) for tc in tool_calls
+                ) if tool_calls else None
+                if round_sig is not None and round_sig == last_round_sig:
+                    same_repeats += 1
+                else:
+                    same_repeats = 1
+                    last_round_sig = round_sig
+                if round_sig is not None and MAX_SAME_TOOL_REPEATS and MAX_SAME_TOOL_REPEATS > 0 and same_repeats >= MAX_SAME_TOOL_REPEATS:
+                    guarded = True
                 if guarded:
+                    guard_name = "+".join(tc["name"] for tc in tool_calls[:3]) or "(未知)"
                     logger.warning(
-                        "工具循环防护：%s 连续调用 %s 次相同参数，终止工具循环",
-                        tc["name"], same_repeats,
+                        "工具循环防护：%s 连续 %s 轮相同调用，终止工具循环",
+                        guard_name, same_repeats,
                     )
                     if on_loop_guard:
-                        on_loop_guard(tc["name"], same_repeats)
+                        on_loop_guard(guard_name, same_repeats)
                     # 补齐本轮全部 tool 结果，避免历史残留「悬空 tool_call」
                     # （assistant 含 tool_calls 但无对应 tool 消息，下一次请求会被 API 以 400 拒绝）
                     for tc in tool_calls:
@@ -4884,7 +4949,15 @@ class DeepSeekClient:
                         )
                         for f in done:
                             tcid = next(k for k, v in futs.items() if v is f)
-                            name, args, result, duration = f.result()
+                            try:
+                                name, args, result, duration = f.result()
+                            except Exception as e:
+                                # execute_tool 有 try 之外的副作用回调（on_approval 等），
+                                # 单个工具异常不得中断整轮（否则留下悬空 tool_calls）。
+                                name = next(
+                                    (t["name"] for k2, t in futs.items() if futs[k2] is f), "?"
+                                )
+                                args, result, duration = {}, f"工具执行异常: {e}", None
                             exec_results[tcid] = (name, args, result, duration)
                             # 完成即回调 UI：快的工具不再被慢的拖到最后一齐出现
                             if on_tool:

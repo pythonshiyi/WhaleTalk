@@ -49,7 +49,10 @@ def _http_client():
             raise RuntimeError("HTTP client is shutting down")
         if _HTTP_CLIENT is None:
             _HTTP_CLIENT = httpx.Client(
-                follow_redirects=True,
+                # 默认不自动跟随重定向：跟随会绕过逐跳 SSRF 校验（用户可配的
+                # webhook/WebDAV 等被 302 到内网）。需重定向的路径统一走
+                # `_safe_request`/`_safe_stream`（逐跳校验后手动跟随）。
+                follow_redirects=False,
                 headers={"User-Agent": DEFAULT_UA},
                 limits=httpx.Limits(max_keepalive_connections=8, max_connections=16),
                 timeout=FETCH_URL_TIMEOUT,

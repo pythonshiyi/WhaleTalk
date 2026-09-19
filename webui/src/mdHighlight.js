@@ -140,33 +140,51 @@ function buildRules(name) {
 }
 
 // 高亮入口：返回 HTML（已转义，安全注入）
+// 性能：旧实现每次匹配后都从新位置对每条规则重新 exec，最坏 O(n²)（64KB 代码块
+// 需 ~1.5s，主线程卡死）。改为**一次性预计算**每条规则的全部匹配区间，再 k 路归并
+// 取「起点最早」的区间——语义与旧实现一致，复杂度降为近线性。
+const MAX_HIGHLIGHT_CHARS = 300000;   // 超大块直接转义不烧高亮（防御性上限）
+const MAX_MATCHES_PER_RULE = 200000;  // 单规则匹配数上限（防退化输入耗尽内存）
+
 export function highlight(code, lang) {
   const name = getLang(lang);
   if (name === "plaintext") return escapeHtml(code);
+  if (code.length > MAX_HIGHLIGHT_CHARS) return escapeHtml(code);
   const rules = buildRules(name);
+  const streams = rules.map((r) => {
+    const arr = [];
+    let m;
+    r.re.lastIndex = 0;
+    while ((m = r.re.exec(code)) !== null) {
+      if (m[0].length === 0) {
+        r.re.lastIndex++;
+        continue;
+      }
+      arr.push([m.index, m.index + m[0].length]);
+      if (arr.length >= MAX_MATCHES_PER_RULE) break;
+    }
+    return { cls: r.cls, arr, i: 0 };
+  });
   const out = [];
   let pos = 0;
   const n = code.length;
   while (pos < n) {
     let best = null;
-    for (const r of rules) {
-      r.re.lastIndex = pos;
-      const m = r.re.exec(code);
-      if (m && (best === null || m.index < best.m.index)) best = { r, m };
+    for (const s of streams) {
+      const a = s.arr;
+      while (s.i < a.length && a[s.i][1] <= pos) s.i++;   // 已完全越过的区间
+      if (s.i >= a.length) continue;
+      if (a[s.i][0] < pos) continue;                       // 跨过 pos 的重叠区间：跳过
+      if (best === null || a[s.i][0] < best.st) best = { s, st: a[s.i][0] };
     }
-    if (!best) {
+    if (best === null) {
       out.push(escapeHtml(code.slice(pos)));
       break;
     }
-    if (best.m.index > pos) out.push(escapeHtml(code.slice(pos, best.m.index)));
-    const len = best.m[0].length;
-    if (len > 0) {
-      out.push(`<span class="hl-${best.r.cls}">${escapeHtml(best.m[0])}</span>`);
-      pos = best.m.index + len;
-    } else {
-      out.push(escapeHtml(code[pos] || ""));
-      pos++;
-    }
+    if (best.st > pos) out.push(escapeHtml(code.slice(pos, best.st)));
+    const [st, en] = best.s.arr[best.s.i];
+    out.push(`<span class="hl-${best.s.cls}">${escapeHtml(code.slice(st, en))}</span>`);
+    pos = en;
   }
   return out.join("");
 }

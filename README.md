@@ -145,7 +145,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：162 工具（11 组）· 99 个 `/v1` 路由 · 后端 76 个 pytest 文件 / 774 用例 · 前端 14 个 node 套件。
+- **规模**：162 工具（11 组）· 99 个 `/v1` 路由 · 后端 76 个 pytest 文件 / 796 用例 · 前端 14 个 node 套件。
 
 ---
 

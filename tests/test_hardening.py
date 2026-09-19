@@ -120,6 +120,39 @@ def test_ssrf_rejects_non_http(net_cfg):
     assert _safe_url("file:///etc/passwd")
 
 
+@pytest.mark.parametrize("url", [
+    "http://2130706433:8731/",   # 整数形式 = 127.0.0.1（浏览器会归一化）
+    "http://0x7f000001/",        # 十六进制
+    "http://0177.0.0.1/",        # 八进制
+    "http://10.0.0.1./",         # 尾随点
+    "http://256.1.1.1/",         # 超范围
+    "http://2852039166/",        # 整数 = 169.254.169.254 云元数据
+])
+def test_ssrf_blocks_noncanonical_numeric_host(url, net_cfg):
+    """非规范数值型主机（整数/十六进制/八进制/尾随点/超范围）须拦截：
+    浏览器会将其归一化为真实 IP，逐字符串判定会被绕过。"""
+    assert _safe_url(url), f"应被拦截：{url}"
+
+
+def test_ssrf_allow_loopback_param_enforced_in_blacklist_mode(net_cfg):
+    """调用方传 allow_loopback=False 时，blacklist 模式也必须生效（搜索结果过滤依赖）。"""
+    assert _safe_url("http://127.0.0.1:8745/v1/token", allow_loopback=False)
+    assert _safe_url("http://localhost:3000/", allow_loopback=False)
+
+
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+def test_ssrf_dns_multi_record_order_independent(net_cfg, monkeypatch, order):
+    """多 A 记录含私网/元数据地址时须拦截，且结论与 DNS 返回顺序无关。"""
+    import security
+    records = [
+        (2, 1, 6, "", ("127.0.0.1", 0)),
+        (2, 1, 6, "", ("169.254.169.254", 0)),
+    ]
+    fake = [records[i] for i in order]
+    monkeypatch.setattr(security.socket, "getaddrinfo", lambda *a, **k: fake)
+    assert _safe_url("http://rebind.example/"), "多记录含元数据地址须拦截（与顺序无关）"
+
+
 # ── P2-1 路径片段消毒 ────────────────────────────────────────────
 @pytest.mark.parametrize("bad", [
     "../../config.json", "a/b", "a\\b", "..", "", "  ", "x" * 200, "a\nb", "a\x00b",

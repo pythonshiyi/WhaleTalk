@@ -27,14 +27,16 @@ def atomic_json_write(path, data, indent=1, compact=False):
                     json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
                 else:
                     json.dump(data, f, ensure_ascii=False, indent=indent)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
-        os.replace(tmp, path)
-        return True
+            os.replace(tmp, path)
+            return True
+        finally:
+            # replace 成功则 tmp 已不存在；写入异常或 replace 失败（跨盘/被占用）时清理，
+            # 避免临时文件泄漏（此前只在序列化异常时清理）。
+            if os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
     except Exception:
         logging.exception("原子 JSON 写入失败: %s", path)
         return False

@@ -492,12 +492,23 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     # 动作（run/check/doctor/build）可出现在任意位置：提取首个匹配项并移除，
     # 其余参数原样透传给 web_app.py（如 --server --port 9000）。避免依赖 argv[0]。
+    # 跳过「带值选项」的取值（否则 `--report check` 会把 check 误当动作）。
+    _VALUE_OPTS = {"--mirror", "--installer", "--wheel-dir", "--report", "--port"}
     action = "run"
-    for i, tok in enumerate(argv):
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok in _VALUE_OPTS:
+            i += 2
+            continue
+        if tok.startswith("--") and "=" in tok:
+            i += 1
+            continue
         if tok in ("run", "check", "doctor", "build"):
             action = tok
             argv.pop(i)
             break
+        i += 1
     args, passthrough = _parse_args(argv)
 
     if args.mirror:

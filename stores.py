@@ -2,16 +2,31 @@
 
 从 main.py 中拆出，统一使用 persistence.atomic_json_write 保证原子写。
 """
+import functools
 import hashlib
 import json
 import logging
 import os
 import re
+import threading
 import time
 
 from persistence import atomic_json_write
 
 logger = logging.getLogger("whaletalk.stores")
+
+# 读—改—写复合操作串行化：原子写只保证文件不写坏，不防「两个并发写各自基于旧快照
+# 覆盖对方的更新」（丢更新）。这里用可重入锁把所有变更操作串起来；纯读路径不加锁
+# （原子写保证读者只会看到完整旧/新文件）。_append_archive 等在锁内调用，RLock 可重入。
+_STORE_LOCK = threading.RLock()
+
+
+def _locked(fn):
+    @functools.wraps(fn)
+    def _w(*a, **k):
+        with _STORE_LOCK:
+            return fn(*a, **k)
+    return _w
 
 
 def load_recent(path):
@@ -47,6 +62,7 @@ def save_favs(path, favs):
     return atomic_json_write(path, favs)
 
 
+@_locked
 def toggle_fav(path, favs_path, max_favs=100):
     """收藏/取消收藏一个路径，返回 (是否已收藏, 新收藏列表)。"""
     favs = load_favs(favs_path)
@@ -171,6 +187,7 @@ def normalize_failure(item):
     return out
 
 
+@_locked
 def record_failures(path, new_items, max_failures=None, archive_path=None, now=None):
     """记录工具失败：按指纹归并 + 复现计数 + 溢出归档。返回活跃列表。
 
@@ -260,6 +277,7 @@ def _append_archive(archive_path, items):
         logger.exception("归档失败模式失败")
 
 
+@_locked
 def resolve_failures(path, fingerprint=None, tool=None, note="", by="user",
                      archive_path=None, max_failures=None, now=None):
     """标记失败已解决（修复验证通过）。返回 (消解条数, 活跃列表)。
@@ -296,6 +314,7 @@ def resolve_failures(path, fingerprint=None, tool=None, note="", by="user",
         return 0, load_failures(path)
 
 
+@_locked
 def reopen_failures(path, fingerprint=None, tool=None, now=None):
     """撤销消解（判定"其实没修好"）。返回 (重开条数, 活跃列表)。"""
     fp = str(fingerprint or "").strip()
@@ -321,6 +340,7 @@ def reopen_failures(path, fingerprint=None, tool=None, now=None):
         return 0, load_failures(path)
 
 
+@_locked
 def forget_failures(path, fingerprint=None, tool=None, now=None):
     """彻底移除失败记录（无论是否已消解）。返回 (移除条数, 活跃列表)。"""
     fp = str(fingerprint or "").strip()
@@ -342,6 +362,7 @@ def forget_failures(path, fingerprint=None, tool=None, now=None):
         return 0, load_failures(path)
 
 
+@_locked
 def auto_resolve_on_success(path, tool, archive_path=None, now=None, streak=None):
     """修复验证（自动）：某工具随后**连续**成功调用 → 其未消解的失败视为已修复。
 

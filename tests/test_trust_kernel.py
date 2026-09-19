@@ -110,6 +110,22 @@ def test_manifest_lost_alert_fires_once(sandbox):
     assert second["state"] == "ok"
 
 
+def test_rebootstrap_does_not_launder_tampered_baseline(sandbox):
+    """重引导绝不覆盖已有基线：先篡改内核文件再删 manifest，改动仍须被检出。"""
+    tk_, root = sandbox
+    (root / "permissions.py").write_text("# 篡改：关掉黑名单\n", encoding="utf-8")
+    (root / "trust" / "manifest.json").unlink()
+    tk_.init()
+    assert (root / "trust" / "baseline" / "permissions.py").read_text(
+        encoding="utf-8") == "# v1 permissions.py\n", "基线副本不得被当前内容覆盖"
+    res = tk_.verify()
+    assert res["ok"] is False
+    assert [c["name"] for c in res["changed"]] == ["permissions.py"]
+    assert res["changed"][0]["ref_source"] == "baseline"
+    # 篡改内容另存为证据
+    assert any("baseline_diverged" in n for n in _incidents(root))
+
+
 def test_missing_kernel_file_reported(sandbox):
     tk_, root = sandbox
     (root / "snapshot.py").unlink()

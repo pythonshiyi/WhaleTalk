@@ -120,7 +120,7 @@ def mv_compose(storyboard, output="", resolution="1920x1080", fps=30, duration=3
     if not isinstance(shots, list) or not shots:
         return "错误：storyboard 至少需要一个镜头"
 
-    m = re.match(r"^(\d{2,4})\s*[x×*]\s*(\d{2,4})$", str(resolution or "").strip().lower())
+    m = re.match(r"^(\d{2,5})\s*[x×*]\s*(\d{2,5})$", str(resolution or "").strip().lower())
     if not m:
         return "错误：resolution 应为「宽x高」（如 1920x1080）"
     W, H = int(m.group(1)), int(m.group(2))

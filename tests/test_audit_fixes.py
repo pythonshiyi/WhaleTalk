@@ -111,5 +111,33 @@ def test_save_config_keeps_disk_cipher_when_plaintext_empty(tmp_path):
 def test_resolve_rejects_unc_and_strips_extended_prefix():
     assert permissions.resolve("\\\\localhost\\C$\\Windows") is None
     assert permissions.resolve("\\\\server\\share\\x") is None
+    assert permissions.resolve("//server/share/x") is None      # 正斜杠 UNC 也不得绕过
+    assert permissions.resolve("//localhost/C$/Windows") is None
     stripped = permissions.resolve("\\\\?\\C:\\Windows")
     assert stripped is not None and not stripped.startswith("\\\\")
+
+
+# ── 快照 id 净化 / 配置加密失败 fail-closed ──────────────────────────────
+
+def test_restore_snapshot_rejects_traversal_id(tmp_path, monkeypatch):
+    import snapshot
+    monkeypatch.setattr(snapshot, "UNDO_DIR", str(tmp_path))
+    for bad in ("../evil", "a/b", "a\\b", "C:\\Windows", "..", ""):
+        ok, _msg = snapshot.restore_snapshot(bad)
+        assert ok is False, f"非法快照 id 应拒绝：{bad!r}"
+    # 合法条目名通过 id 校验，只是不存在
+    ok2, msg2 = snapshot.restore_snapshot("20240101-000000_write_ab12")
+    assert ok2 is False and "不存在" in msg2
+
+
+def test_save_config_aborts_when_encrypt_fails_without_disk_cipher(tmp_path, monkeypatch):
+    """加密失败且无磁盘密文：不得写明文、不得静默删除密钥，直接中止保存。"""
+    import crypto
+
+    def _boom(_v):
+        raise crypto.CryptError("boom")
+    monkeypatch.setattr(crypto, "encrypt", _boom)
+    cfg_path = tmp_path / "config.json"
+    r = config_utils.save_config({"api_key": "PLAIN", "model": "m"}, str(cfg_path))
+    assert r is False
+    assert not cfg_path.exists(), "加密失败时不应写盘（避免明文/丢密钥）"

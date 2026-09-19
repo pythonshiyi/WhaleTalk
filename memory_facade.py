@@ -175,12 +175,8 @@ def _save(data):
 
 def _save_impl(data):
     try:
-        os.makedirs(os.path.dirname(MEMORY_PATH) or ".", exist_ok=True)
-        tmp = MEMORY_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, MEMORY_PATH)
-        return True
+        from persistence import atomic_json_write
+        return atomic_json_write(MEMORY_PATH, data, indent=1)
     except Exception:
         logger.exception("写入长期记忆失败")
         return False

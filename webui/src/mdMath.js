@@ -49,6 +49,9 @@ const OPS = {
 
 const SPACE_MAP = { ",": "\u2009", ":": "\u2005", ";": "\u2004", "!": "\u200b", quad: "\u2003\u2003", qquad: "\u2003\u2003\u2003\u2003" };
 
+// 递归深度上限：深嵌套公式（如 "{"*2000）会爆栈（RangeError）打崩整页。
+const MAX_MATH_DEPTH = 64;
+
 // ── 词法：命令 / 花括号组 / 上下标 / 普通字符 ────────────
 function tokenize(src) {
   const toks = [];
@@ -74,11 +77,18 @@ function tokenize(src) {
 
 // ── 递归下降解析：返回 [nodes, 下一位置] ─────────────
 // 读取一个"单元"：单个字符 / 花括号组 / 命令
-function parseUnit(toks, pos) {
+function parseUnit(toks, pos, depth) {
   if (pos >= toks.length) return [null, pos];
   const tok = toks[pos];
+  if (depth > MAX_MATH_DEPTH) {
+    // 超深嵌套：不再向下递归（frac/sqrt/text/花括号都会继续下潜），按字面量输出
+    if (tok.t === "char") return [{ t: "text", v: tok.v }, pos + 1];
+    if (tok.t === "cmd") return [{ t: "text", v: "\\" + tok.name }, pos + 1];
+    if (tok.t === "lbrace") return [{ t: "text", v: "{" }, pos + 1];
+    return [null, pos];
+  }
   if (tok.t === "lbrace") {
-    const [c, next] = parseExpr(toks, pos + 1, true);
+    const [c, next] = parseExpr(toks, pos + 1, true, undefined, depth + 1);
     return [{ t: "group", c }, next];
   }
   if (tok.t === "char") return [{ t: "text", v: tok.v }, pos + 1];
@@ -86,24 +96,24 @@ function parseUnit(toks, pos) {
     const name = tok.name;
     if (name === " ") return [{ t: "space", v: "\u00a0" }, pos + 1];
     if (name === "frac") {
-      const [num, p1] = parseUnit(toks, pos + 1);
-      const [den, p2] = num ? parseUnit(toks, p1) : [null, p1];
+      const [num, p1] = parseUnit(toks, pos + 1, depth + 1);
+      const [den, p2] = num ? parseUnit(toks, p1, depth + 1) : [null, p1];
       return [{ t: "frac", num, den }, p2];
     }
     if (name === "sqrt") {
       let p = pos + 1;
       let index = null;
       if (p < toks.length && toks[p].t === "char" && toks[p].v === "[") {
-        const [idx, pn] = parseBracket(toks, p + 1);
+        const [idx, pn] = parseBracket(toks, p + 1, depth + 1);
         if (idx) { index = idx; p = pn; }
       }
-      const [body, p2] = parseUnit(toks, p);
+      const [body, p2] = parseUnit(toks, p, depth + 1);
       return [{ t: "sqrt", body, index }, p2];
     }
     if (name === "text") {
-      const [g, p2] = parseUnit(toks, pos + 1);
+      const [g, p2] = parseUnit(toks, pos + 1, depth + 1);
       if (g && g.t === "group") {
-        return [{ t: "text", v: collectText(g.c) }, p2];
+        return [{ t: "text", v: collectText(g.c, depth + 1) }, p2];
       }
       return [{ t: "text", v: `\\text{…}` }, p2];
     }
@@ -124,14 +134,14 @@ function parseUnit(toks, pos) {
 }
 
 // \sqrt[3]{x} 的 [..] 参数
-function parseBracket(toks, pos) {
-  const [c, next] = parseExpr(toks, pos, false, "rbrk");
+function parseBracket(toks, pos, depth) {
+  const [c, next] = parseExpr(toks, pos, false, "rbrk", depth + 1);
   return [c && c.length ? { t: "group", c } : null, next];
 }
 
 // 解析一串单元直到 }（stopAtRbrace）或 [（stopAtRbrk）或结尾；
 // 处理上下标（^ _ 后接一个单元，附着到前一个节点）
-function parseExpr(toks, pos, stopAtRbrace, stopAtRbrk) {
+function parseExpr(toks, pos, stopAtRbrace, stopAtRbrk, depth) {
   const nodes = [];
   let i = pos;
   const n = toks.length;
@@ -141,7 +151,7 @@ function parseExpr(toks, pos, stopAtRbrace, stopAtRbrk) {
     if (tok.t === "char" && tok.v === "]" && stopAtRbrk) { i++; break; }
     if (tok.t === "sup" || tok.t === "sub") {
       const kind = tok.t;
-      const [unit, p] = parseUnit(toks, i + 1);
+      const [unit, p] = parseUnit(toks, i + 1, depth);
       if (unit) {
         i = p;
         // 附着到前一个节点（x^2 / x_1 / x_i^2 连续附着）
@@ -155,11 +165,11 @@ function parseExpr(toks, pos, stopAtRbrace, stopAtRbrk) {
       }
       continue;
     }
-    const [unit, p] = parseUnit(toks, i);
+    const [unit, p] = parseUnit(toks, i, depth);
     if (unit) {
       if (unit.t === "lopen") {
         // \left( ... \right) 配对 → paren 节点
-        const [pair, p2] = parseParenGroup(toks, p, unit.delim);
+        const [pair, p2] = parseParenGroup(toks, p, unit.delim, depth + 1);
         if (pair) { nodes.push(pair.node); i = pair.next; continue; }
         nodes.push({ t: "text", v: "\\left" + unit.delim }); // 未闭合：原样
         i = p;
@@ -179,12 +189,12 @@ function parseExpr(toks, pos, stopAtRbrace, stopAtRbrk) {
 }
 
 // \left<delim> ... \right<delim> 配对：返回 {node, next}
-function parseParenGroup(toks, pos, openDelim) {
-  const { nodes, closeDelim, next } = parseExprUntilRight(toks, pos);
+function parseParenGroup(toks, pos, openDelim, depth) {
+  const { nodes, closeDelim, next } = parseExprUntilRight(toks, pos, depth + 1);
   return [{ node: { t: "paren", open: openDelim, close: closeDelim, c: nodes }, next }, next];
 }
 
-function parseExprUntilRight(toks, pos) {
+function parseExprUntilRight(toks, pos, depth) {
   const nodes = [];
   let i = pos;
   const n = toks.length;
@@ -201,7 +211,7 @@ function parseExprUntilRight(toks, pos) {
     if (tok.t === "rbrace") break;
     if (tok.t === "sup" || tok.t === "sub") {
       const kind = tok.t;
-      const [unit, p] = parseUnit(toks, i + 1);
+      const [unit, p] = parseUnit(toks, i + 1, depth);
       if (unit) {
         i = p;
         const base = nodes.pop() || { t: "text", v: "" };
@@ -211,10 +221,10 @@ function parseExprUntilRight(toks, pos) {
       } else i++;
       continue;
     }
-    const [unit, p] = parseUnit(toks, i);
+    const [unit, p] = parseUnit(toks, i, depth);
     if (unit) {
       if (unit.t === "lopen") {
-        const [pair, p2] = parseParenGroup(toks, p, unit.delim);
+        const [pair, p2] = parseParenGroup(toks, p, unit.delim, depth + 1);
         if (pair) { nodes.push(pair.node); i = pair.next; continue; }
         nodes.push({ t: "text", v: "\\left" + unit.delim });
         i = p;
@@ -234,15 +244,16 @@ function parseExprUntilRight(toks, pos) {
 }
 
 // 花括号组 → 纯文本（\text{...} 用）
-function collectText(nodes) {
+function collectText(nodes, depth) {
+  if ((depth || 0) > MAX_MATH_DEPTH) return "";
   let s = "";
   for (const nd of nodes) {
     if (nd.t === "text") s += nd.v;
     else if (nd.t === "space") s += nd.v;
-    else if (nd.t === "group") s += collectText(nd.c);
+    else if (nd.t === "group") s += collectText(nd.c, (depth || 0) + 1);
     else if (nd.t === "greek" || nd.t === "op") s += nd.v;
-    else if (nd.t === "script") s += collectText([nd.base]) + (nd.sup ? collectText([nd.sup]) : "") + (nd.sub ? collectText([nd.sub]) : "");
-    else if (nd.t === "paren") s += nd.open + collectText(nd.c) + (nd.close || "");
+    else if (nd.t === "script") s += collectText([nd.base], (depth || 0) + 1) + (nd.sup ? collectText([nd.sup], (depth || 0) + 1) : "") + (nd.sub ? collectText([nd.sub], (depth || 0) + 1) : "");
+    else if (nd.t === "paren") s += nd.open + collectText(nd.c, (depth || 0) + 1) + (nd.close || "");
     else s += "";
   }
   return s;
@@ -252,7 +263,7 @@ function collectText(nodes) {
 export function parseMath(src) {
   if (src == null) return [];
   const toks = tokenize(String(src));
-  const [nodes] = parseExpr(toks, 0, false);
+  const [nodes] = parseExpr(toks, 0, false, undefined, 0);
   return nodes;
 }
 

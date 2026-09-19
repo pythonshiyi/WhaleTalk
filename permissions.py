@@ -242,9 +242,13 @@ def resolve(path):
         if not p:
             return None
         p = os.path.expanduser(p)
-        if p.startswith("\\\\?\\") or p.startswith("\\\\.\\"):
+        # 统一正/反斜杠后判定前缀：`//host/share` 与 `\\host\share` 等价，只判反斜杠
+        # 会被正斜杠 UNC 绕过。
+        probe = p.replace("/", "\\") if os.name == "nt" else p
+        if probe.startswith("\\\\?\\") or probe.startswith("\\\\.\\"):
             p = p[4:]  # \\?\C:\x → C:\x
-        if p.startswith("\\\\"):
+            probe = p.replace("/", "\\") if os.name == "nt" else p
+        if probe.startswith("\\\\"):
             return None  # UNC：无法安全归一，拒绝（如需放行请在允许目录显式配置盘符路径）
         if not os.path.isabs(p) and WORKSPACE_DIR:
             p = os.path.join(WORKSPACE_DIR, p)
@@ -396,7 +400,11 @@ def _shell_command_tokens(argv):
 
 
 def _wrapper_inner_commands(argv):
-    """提取 `cmd /c X` / `powershell -Command X` 等包装器的内层命令名。"""
+    """提取 `cmd /c X` / `powershell -Command X` / `start X` / `call X` 的内层命令名。
+
+    `start notepad` / `call powershell` 里 notepad/powershell 是参数而非命令位置，
+    不递归提取就会被「首个 token 是 start/call」绕过黑名单。
+    """
     out = []
     toks = [str(t or "") for t in argv]
     for i, t in enumerate(toks):
@@ -415,6 +423,20 @@ def _wrapper_inner_commands(argv):
             if toks[j].startswith(("/", "-")):
                 j += 1
                 continue
+            break
+    # 启动器（cmd 内建）：其后首个「非开关、非空标题」token 视为命令
+    for i, t in enumerate(toks):
+        if _cmd_key(t) not in ("start", "call"):
+            continue
+        j = i + 1
+        while j < len(toks):
+            cand = _unquote_token(toks[j]).strip()
+            if not cand or cand.startswith(("/", "-")):
+                j += 1
+                continue
+            parts = cand.split()
+            if parts:
+                out.append(parts[0])
             break
     return out
 

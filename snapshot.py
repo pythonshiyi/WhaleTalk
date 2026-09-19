@@ -127,7 +127,13 @@ def restore_snapshot(snapshot_id):
     """按快照恢复：把 data 写回原路径。返回 (ok, message)。"""
     if not UNDO_DIR or not snapshot_id:
         return False, "快照未初始化或缺少 id"
-    d = os.path.join(UNDO_DIR, str(snapshot_id))
+    sid = str(snapshot_id).strip()
+    # 只接受 UNDO_DIR 下的纯条目名：拒绝分隔符/上级/绝对路径/盘符，防目录穿越读写。
+    if (not sid or sid in (".", "..")
+            or os.path.basename(sid) != sid
+            or any(c in sid for c in ("/", "\\", ":"))):
+        return False, f"非法快照 id：{snapshot_id}"
+    d = os.path.join(UNDO_DIR, sid)
     meta_path = os.path.join(d, "meta.json")
     data_path = os.path.join(d, "data")
     if not os.path.isfile(meta_path):

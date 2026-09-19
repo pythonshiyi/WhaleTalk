@@ -162,3 +162,46 @@ def test_stream_job_triggers_memory_harvest(monkeypatch):
     api_server._Handler._run_chat_job_thread(
         h, job, body, [{"role": "user", "content": "hi"}])
     assert called, "流式作业正常结束后应触发自动记忆提炼（此前从未调用 → auto_memory 失效）"
+
+
+# ── 6. _sanitize_messages：不得残留悬空 tool_calls（否则 API 400）─────
+
+def _tc(i):
+    return {"id": i, "type": "function", "function": {"name": "f", "arguments": "{}"}}
+
+
+def test_sanitize_messages_drops_dangling_tool_calls():
+    import deepseek_client as dc
+    # assistant 声明 a → user → tool(a)：tool 错位，assistant 的 tool_calls 必须一并剔除
+    msgs = [
+        {"role": "assistant", "content": None, "tool_calls": [_tc("a")]},
+        {"role": "user", "content": "hi"},
+        {"role": "tool", "tool_call_id": "a", "content": "r"},
+    ]
+    out = dc.DeepSeekClient._sanitize_messages(msgs)
+    assert out == [{"role": "user", "content": "hi"}]
+    assert not any(m.get("tool_calls") for m in out)
+
+
+def test_sanitize_messages_keeps_valid_pair():
+    import deepseek_client as dc
+    msgs = [
+        {"role": "assistant", "content": "", "tool_calls": [_tc("a")]},
+        {"role": "tool", "tool_call_id": "a", "content": "r"},
+    ]
+    out = dc.DeepSeekClient._sanitize_messages(msgs)
+    assert out[0].get("tool_calls"), "合法 assistant→tool 对应保留"
+    assert out[-1]["role"] == "tool"
+
+
+def test_sanitize_messages_partial_parallel_keeps_matched():
+    import deepseek_client as dc
+    # 并行两个调用，只回了一个 tool，另一个必须从 assistant 剔除
+    msgs = [
+        {"role": "assistant", "content": "", "tool_calls": [_tc("a"), _tc("b")]},
+        {"role": "tool", "tool_call_id": "a", "content": "r"},
+        {"role": "user", "content": "next"},
+    ]
+    out = dc.DeepSeekClient._sanitize_messages(msgs)
+    a_msg = next(m for m in out if m.get("role") == "assistant")
+    assert [t["id"] for t in a_msg["tool_calls"]] == ["a"]

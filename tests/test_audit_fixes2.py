@@ -36,6 +36,10 @@ def _perm_data(blocklist):
     "cmd /c del x",                # 包装器内层命令
     'cmd /c "del x"',
     "cmd.exe /k del x",
+    "start /B powershell",         # 启动器内层命令（旧实现漏检）
+    "start del x",
+    "call powershell -c calc",
+    "cmd /c start del x",
 ])
 def test_shell_blocklist_bypass_fixed(monkeypatch, cmd):
     monkeypatch.setattr(permissions, "_data", _perm_data(["powershell", "del"]))

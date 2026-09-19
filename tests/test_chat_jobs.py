@@ -153,7 +153,8 @@ def test_disconnect_does_not_stop_job(monkeypatch):
         _drop("st-detach")
 
 
-def test_chat_job_trim_if_unused_frees_buffer():
+def test_chat_job_retains_buffer_for_replay_until_gc():
+    """完成后缓冲须保留（供 TTL 内重连回放），由 GC 负责最终回收。"""
     job = api_server._ChatJob("st-trim", "sid", "gw")
     job.emit("content", {"text": "x"})
     job.subscribers = 1
@@ -162,7 +163,7 @@ def test_chat_job_trim_if_unused_frees_buffer():
     assert job.events, "仍有订阅者时不得释放缓冲（晚到订阅者会漏事件）"
     job.subscribers = 0
     job.trim_if_unused()
-    assert job.events == [], "作业已结束且无订阅者时应释放缓冲"
+    assert job.events, "完成后须保留缓冲以供 TTL 内回放（旧实现会误清）"
 
 
 def test_duplicate_stream_id_subscribes_same_job(monkeypatch):
@@ -281,3 +282,23 @@ def test_fallback_save_skipped_when_subscriber_present(monkeypatch):
 def test_chat_exposes_new_messages_out():
     params = inspect.signature(deepseek_client.DeepSeekClient.chat).parameters
     assert "new_messages_out" in params
+
+
+def test_stop_chat_without_key_requires_explicit_all():
+    """空 body 不得停止全部运行中作业；显式 all:true 才停全部。"""
+    jobs = []
+    for jid in ("st-stopall-a", "st-stopall-b"):
+        job = api_server._ChatJob(jid, "sid-" + jid, "gw-" + jid)
+        with api_server._CHAT_JOBS_LOCK:
+            api_server._CHAT_JOBS[jid] = job
+        jobs.append((jid, job))
+    try:
+        r = api_server._stop_chat({})
+        assert r["stopped"] == 0
+        assert all(not j.stop_event.is_set() for _, j in jobs), "无 key 时误停全部"
+        r2 = api_server._stop_chat({"all": True})
+        assert r2["stopped"] >= 2
+        assert all(j.stop_event.is_set() for _, j in jobs)
+    finally:
+        for jid, _ in jobs:
+            _drop(jid)

@@ -270,17 +270,26 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
     """
     if not query or not str(query).strip():
         return "错误：搜索词为空"
+    # 默认条数：SEARCH_MAX_RESULTS<=0（不限上限）时给合理默认 20——不能把 0 交给
+    # clamp_int(lo=1) 否则会被钳成 1（只返回一条）。
+    _default_num = SEARCH_MAX_RESULTS if (SEARCH_MAX_RESULTS and SEARCH_MAX_RESULTS > 0) else 20
     try:
         requested_num = max(1, int(num))
     except (TypeError, ValueError):
-        requested_num = SEARCH_MAX_RESULTS
+        requested_num = _default_num
+    try:
+        _n = int(num)
+    except (TypeError, ValueError):
+        _n = _default_num
+    if _n <= 0:
+        _n = _default_num
     try:
         # SEARCH_MAX_RESULTS<=0 = 不限条数（不设 hi 上限）；否则沿用至少 20 的上限
         _hi = max(20, int(SEARCH_MAX_RESULTS)) if (SEARCH_MAX_RESULTS and SEARCH_MAX_RESULTS > 0) else None
-        num = clamp_int(num, 1, lo=1, hi=_hi)
+        num = clamp_int(_n, _default_num, lo=1, hi=_hi)
         offset = clamp_int(offset, 0, lo=0, hi=200)
     except (TypeError, ValueError):
-        num, offset = SEARCH_MAX_RESULTS, 0
+        num, offset = _default_num, 0
     for tag, val in (("since", since), ("until", until)):
         if val and not re.match(r"^\d{4}-\d{2}-\d{2}$", str(val)):
             return f"错误：{tag} 日期格式应为 YYYY-MM-DD"

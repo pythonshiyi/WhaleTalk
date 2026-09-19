@@ -3,9 +3,39 @@
 从 deepseek_client.py 中拆出的纯安全函数，供客户端、测试与后续模块复用。
 云元数据地址（169.254.0.0/16）永远不可豁免。
 """
+import re
 import socket
 
 SSRF_TRUSTED = []
+
+# 单个点分标签：十进制数字或十六进制（0x…）
+_NUMERIC_LABEL_RE = re.compile(r"0x[0-9a-f]+|\d+", re.IGNORECASE)
+# 严格点分十进制（无前导零、每段 0-255）
+_STRICT_LABEL_RE = re.compile(r"0|[1-9]\d{0,2}")
+
+
+def _classify_numeric_host(host):
+    """区分「规范点分十进制」与「非规范数值型主机」。
+
+    返回 (kind, canonical)：
+      - ("clean", "1.2.3.4")  规范点分十进制（已去尾部点）
+      - ("ambiguous", None)   整数 / 十六进制 / 八进制 / 缺段等数值型写法
+      - (None, None)          普通主机名（含 IPv6 字面量）
+
+    为什么需要它：`http://2130706433/`、`http://0x7f000001/`、`http://10.0.0.1.`
+    等写法 `ipaddress` 无法解析，会落到 DNS 分支并因解析失败被 fail-open 放行，
+    而浏览器/Chromium 会把它们归一化为真实 IP——是 SSRF 硬底线的绕过面。
+    对这类非规范数值型一律判为需拒绝。
+    """
+    h = host[:-1] if (len(host) > 1 and host.endswith(".")) else host
+    labels = h.split(".")
+    if not all(_NUMERIC_LABEL_RE.fullmatch(p) for p in labels):
+        return (None, None)
+    if len(labels) == 4 and all(
+        _STRICT_LABEL_RE.fullmatch(p) and int(p) <= 255 for p in labels
+    ):
+        return ("clean", ".".join(labels))
+    return ("ambiguous", None)
 
 
 def _url_host(url):
@@ -73,6 +103,13 @@ def _is_private_host(host, allow_loopback=True):
     host = (host or "").strip().lower()
     if not host:
         return True
+    # 非规范数值型主机（整数/十六进制/八进制/缺段/超范围）：浏览器会归一化为
+    # 真实 IP，逐字符串判定可被绕过，一律拦截（须在信任白名单之前）。
+    kind, canon = _classify_numeric_host(host)
+    if kind == "ambiguous":
+        return True
+    if kind == "clean":
+        host = canon
     # 云元数据 / 链路本地（169.254.0.0/16）：永远阻止，信任白名单不可豁免
     if host.replace(".", "").isdigit():
         parts = host.split(".")
@@ -135,7 +172,11 @@ def _is_private_host(host, allow_loopback=True):
             seen.add(ip)
             addr = ipaddress.ip_address(ip)
             if addr.is_loopback:
-                return not allow_loopback
+                # 回环：仅当不允许时才拦截；允许时继续检查其余解析记录，
+                # 不能「见回环即放行」——多 A 记录可被攻击者控制（DNS 重绑定）。
+                if not allow_loopback:
+                    return True
+                continue
             if addr.is_link_local or addr.is_reserved or addr.is_private:
                 return True
         except ValueError:
@@ -143,7 +184,7 @@ def _is_private_host(host, allow_loopback=True):
     return False
 
 
-def _hard_floor_reason(host):
+def _hard_floor_reason(host, allow_loopback=None):
     """blacklist 模式下的 SSRF 硬底线：私网 / 链路本地 / 保留段一律拦截。
 
     为什么需要它：默认自由模式下 `_safe_url` 只查用户黑名单，而出厂黑名单仅一条
@@ -158,9 +199,11 @@ def _hard_floor_reason(host):
     允许 run_command/run_python（本机任意执行），把回环当作最后一道闸并无实际
     收益。需要加严时把 network.allow_loopback 置 false 即可。
 
-    返回 "" 表示放行，否则返回拒绝原因。开关：
+     返回 "" 表示放行，否则返回拒绝原因。开关：
       - blocklist_enabled=false（一键全放行）→ 整体跳过；
       - network.block_private=false → 单独关闭本底线。
+    `allow_loopback`：调用方若显式传 False（如搜索结果过滤），与配置取**更严**者
+    （任一禁止回环即禁止），避免调用方参数被配置文件静默覆盖。
     配置读取失败时放行（保持与其它判定一致的 fail-open，避免误杀可用功能）。
     """
     try:
@@ -171,7 +214,9 @@ def _hard_floor_reason(host):
         net = data.get("network") or {}
         if not bool(net.get("block_private", True)):
             return ""
-        allow_loop = bool(net.get("allow_loopback", True))
+        allow_loop = bool(net.get("allow_loopback", True)) and (
+            True if allow_loopback is None else bool(allow_loopback)
+        )
     except Exception:
         return ""
     if not _is_private_host(host, allow_loopback=allow_loop):
@@ -198,7 +243,7 @@ def _safe_url(url, allow_loopback=True):
             ok, reason = permissions.check_network_host(host)
             if not ok:
                 return f"{reason}：{url[:80]}"
-            hard = _hard_floor_reason(host)
+            hard = _hard_floor_reason(host, allow_loopback=allow_loopback)
             if hard:
                 return f"{hard}：{url[:80]}"
             return ""

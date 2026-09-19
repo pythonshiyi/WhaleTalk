@@ -36,7 +36,7 @@ const REQUEST_TIMEOUT = 15000;
  * tool_duration→name+duration；usage→usage 对象；compressed→removed_turns 等；
  * ask/approval→id/kind/提示语；error→message。
  * @typedef {Object} SSEEvent
- * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"ask_request"|"approval_request"|"plan_request"|"session"|"done"|"error"} type 事件类型
+ * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"ask_request"|"approval_request"|"plan_request"|"needs_confirmation"|"session"|"done"|"error"} type 事件类型
  * @property {string} [text] 增量文本
  * @property {string} [name] 工具名
  * @property {Object} [args] 工具参数
@@ -44,10 +44,12 @@ const REQUEST_TIMEOUT = 15000;
  * @property {number} [duration] 工具耗时（秒）
  * @property {{prompt:number, completion:number, cache_hit:number, cache_miss:number}} [usage] token 用量与缓存命中
  * @property {Object} [metrics] 实时速率统计（首次字延迟/输出 tok/s 等）
- * @property {{removed_turns:number, mode:string, archived_path?:string}} [compressed] 上下文压缩信息
+ * @property {{removed_turns:number, removed_msgs?:number, mode:string, archived_path?:string}} [compressed] 上下文压缩信息
  * @property {string} [id] 审批/询问请求 id（回传 /v1/respond）
  * @property {string} [kind] 审批类别（ask/approval）
- * @property {string} [message] 错误信息
+ * @property {string} [message] 错误信息；needs_confirmation 时为费用提示文案
+ * @property {number} [estimated_cost] needs_confirmation：本次请求预估费用（元）
+ * @property {number} [threshold] needs_confirmation：触发确认的费用阈值（元）
  */
 
 /**
@@ -64,6 +66,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {(ev:SSEEvent)=>void} [onAskRequest] 询问（需 POST /v1/respond 回传）
  * @property {(ev:SSEEvent)=>void} [onApprovalRequest] 审批请求
  * @property {(ev:SSEEvent)=>void} [onPlanRequest] 工具批计划确认（steps，可编辑参数后回传）
+ * @property {(ev:SSEEvent)=>void} [onNeedsConfirmation] 任务级成本预检需用户确认（确认后带 cost_confirmed 重发）
  * @property {(ev:SSEEvent)=>void} [onSession] 后端分配的会话 id（{id,stream_id}）
  * @property {()=>void} [onDone] 正常结束（后端已自动落盘会话）
  * @property {(message:string)=>void} [onError] 错误
@@ -85,6 +88,7 @@ const REQUEST_TIMEOUT = 15000;
  *   切换页面/多标签页不会中断；同 id 的重复请求视为订阅同一作业）
  * @property {string} [session_name] 会话名（后端兜底落盘用）
  * @property {string} [gw_session] 网关会话 id（第三方/OpenCode Go 网关的 x-opencode-session 头）
+ * @property {boolean} [cost_confirmed] 费用确认闸：已由用户确认成本，放行本次请求
  */
 
 /**
@@ -366,17 +370,28 @@ async function api(path, opts = {}) {
  * @param {AbortSignal} [signal] 停止生成信号（前端 AbortController）
  * @returns {Promise<void>} 流结束后 resolve；HTTP 错误时 throw
  */
-export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session }, handlers, signal) {
-  const r = await fetch(`${getBase()}/v1/chat/stream`, {
+export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed }, handlers, signal) {
+  const payload = JSON.stringify({ messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed });
+  /** @param {string} token */
+  const attempt = (token) => fetch(`${getBase()}/v1/chat/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${getToken()}`,
+      Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session }),
+    body: payload,
     signal,
   });
-  if (!r.ok || !r.body) throw new Error(`chat/stream → ${r.status}`);
+  let r = await attempt(getToken());
+  if (r.status === 401) {
+    // 与 api() 一致：token 缺失/失效时自取后重试一次（不吞 AbortError）
+    try {
+      _lsDel(TOKEN_KEY);
+    } catch (e) { silentWarn(e, "api"); }
+    const token = await _selfFetchToken();
+    if (token) r = await attempt(token);
+  }
+  if (!r.ok || !r.body) throw new Error(await _errMessage(r, `chat/stream → ${r.status}`));
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -402,6 +417,7 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
     else if (ev.type === "ask_request") handlers.onAskRequest?.(ev);
     else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);
     else if (ev.type === "plan_request") handlers.onPlanRequest?.(ev);
+    else if (ev.type === "needs_confirmation") handlers.onNeedsConfirmation?.(ev);
     else if (ev.type === "session") handlers.onSession?.(ev);
     else if (ev.type === "done") handlers.onDone?.();
     else if (ev.type === "error") handlers.onError?.(ev.message);

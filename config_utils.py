@@ -6,6 +6,7 @@
 v3.8.5 性能优化：load_config 加「mtime+size 签名」进程内缓存——
 对话/态势等高频路径不再每次读盘 + 3 次 DPAPI 解密 + 全量规范化；
 save_config 落盘后显式失效缓存（写路径唯一，磁盘直改也由签名变化兜底）。
+缓存本身只存一份解析结果，`load_config()` 每次返回其**深拷贝**，调用方可安全持有/修改。
 """
 import copy
 import json
@@ -259,10 +260,9 @@ def normalize_config(cfg):
 def load_config(config_path=None):
     """加载配置（进程内缓存，mtime+size 签名失效）。
 
-    ⚠️ **返回的是进程级共享对象本身**（v3.8.5 性能优化的直接结果：热点路径
-    不再每次深拷贝）。调用方必须视为**只读**——原地修改会污染缓存，让并发线程
-    读到「改了一半」的配置（例如 full_auto 已改、pure_chat 还没改）。
-    需要「读—改—写」时请用 `mutable_config()` 取副本。
+    返回的是缓存内容的**深拷贝**：缓存的只是「解析结果」本身，每次调用都给调用方
+    一份独立副本，可安全持有或原地修改（不会污染缓存、也不会影响并发读取方）。
+    「读—改—写」仍推荐用 `mutable_config()`（语义等价，表达更清晰）。
     """
     if config_path is None:
         config_path = DEFAULT_CONFIG_PATH
@@ -289,11 +289,11 @@ def load_config(config_path=None):
 def mutable_config(config_path=None):
     """取一份**可安全修改**的配置副本（深拷贝），供「读—改—写」流程使用。
 
-    背景：`load_config` 返回共享缓存对象，直接 `cfg[k] = v` 会污染缓存，并发
-    读取端可能观察到半更新的配置。所有「改配置再 save_config」的路径都应改用本
-    函数；save_config 会在 finally 里失效缓存，所以保存后不需要手动同步。
+    `load_config` 已返回缓存内容的深拷贝，故此处直接复用（避免再套一层 deepcopy）。
+    「改配置再 save_config」的路径都应改用本函数；save_config 会在 finally 里失效
+    缓存，所以保存后不需要手动同步。
     """
-    return copy.deepcopy(load_config(config_path))
+    return load_config(config_path)
 
 
 def _load_config_uncached(config_path):
@@ -345,9 +345,12 @@ def save_config(cfg, config_path=None):
             except crypto.CryptError:
                 if disk_cipher:
                     data[secret_key] = disk_cipher
+                    logger.error("%s 加密失败，已保留磁盘原密文，请检查系统环境", secret_key)
                 else:
-                    data.pop(secret_key, None)
-                logger.error("%s 加密失败，已保留磁盘原密文，请检查系统环境", secret_key)
+                    # 加密失败且无磁盘密文可留：绝不静默删除密钥（否则不可逆丢失）。
+                    # 直接中止本次保存，交由上层提示用户处理。
+                    logger.error("%s 加密失败且无磁盘密文，已中止本次配置保存（不写明文、不删密钥）", secret_key)
+                    return False
         tmp = config_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)

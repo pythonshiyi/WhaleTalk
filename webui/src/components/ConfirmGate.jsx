@@ -60,6 +60,7 @@ export default function ConfirmGate({ req, onRespond }) {
   const isAsk = rt === "ask" || rt === "ask_request";
   const isApproval = rt === "approval" || rt === "approval_request";
   const isPlan = rt === "plan" || rt === "plan_request";
+  const isConfirm = rt === "confirm";
   const options = isAsk && Array.isArray(req.options) && req.options.length ? req.options.slice(0, 6) : null;
   // 多选：仅当 AI 声明 multi 且有 options 时启用（否则单选一点即提交）
   const multi = !!(isAsk && options && (req.multi === true || req.multi === "true"));
@@ -74,7 +75,8 @@ export default function ConfirmGate({ req, onRespond }) {
 
   // 用户主动关闭（✕ 或点击遮罩）
   const dismiss = () => {
-    if (isPlan) finish({ id: req.id, approve: false });
+    if (isConfirm) finish({ confirm: false });
+    else if (isPlan) finish({ id: req.id, approve: false });
     else if (isAsk) finish({ id: req.id, answer: "（用户跳过了该询问）" });
     else finish({ id: req.id, allow: false, reason: "用户关闭了请求框" });
   };
@@ -86,9 +88,9 @@ export default function ConfirmGate({ req, onRespond }) {
   return (
     <div className="confirm-mask" onClick={handleMaskClick}>
       <div ref={cardRef} className="confirm-card" role="dialog" aria-modal="true"
-        aria-label={isAsk ? "Agent 询问" : isPlan ? "工具计划确认" : "权限确认"}>
+        aria-label={isConfirm ? "费用确认" : isAsk ? "Agent 询问" : isPlan ? "工具计划确认" : "权限确认"}>
         <div className="confirm-head">
-          <b><Icon name={isAsk ? "help" : isPlan ? "activity" : "shield"} size={15} /> {isAsk ? "Agent 需要你确认" : isPlan ? "工具计划确认" : "权限请求"}</b>
+          <b><Icon name={isConfirm ? "activity" : isAsk ? "help" : isPlan ? "activity" : "shield"} size={15} /> {isConfirm ? "费用确认" : isAsk ? "Agent 需要你确认" : isPlan ? "工具计划确认" : "权限请求"}</b>
           <span className="confirm-head-right">
             <span className={`confirm-timer ${expired ? "confirm-timer-over" : ""}`}>
               {expired ? "已超时" : `${seconds}s`}
@@ -97,7 +99,25 @@ export default function ConfirmGate({ req, onRespond }) {
           </span>
         </div>
 
-        {expired ? (
+        {isConfirm ? (
+          // 任务级成本预检（后端 _cost_gate 发 needs_confirmation）：确认后前端带
+          // cost_confirmed 重发同一条消息；取消则不发送、不产生空回复。
+          <>
+            <div className="confirm-prompt">{req.message || "本次请求预估费用超过阈值，确认后继续。"}</div>
+            {(req.estimated_cost != null || req.threshold != null) && (
+              <div className="confirm-note">
+                预估 ¥{Number(req.estimated_cost || 0).toFixed(2)} · 阈值 ¥{Number(req.threshold || 0).toFixed(2)}
+                （可在「设置 → 通知与安全」调整）
+              </div>
+            )}
+            <div className="confirm-foot">
+              <button className="confirm-btn" onClick={dismiss}>取消</button>
+              <button className="confirm-btn confirm-primary" onClick={() => finish({ confirm: true })}>
+                确认并继续
+              </button>
+            </div>
+          </>
+        ) : expired ? (
           // 超时：给出明确收尾，避免"卡死无出口"
           <div className="confirm-timeout-actions">
             <p className="confirm-prompt">已超时，请选择是否继续等待 AI 处理？</p>

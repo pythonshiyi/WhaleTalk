@@ -110,11 +110,13 @@ class _ChatJob:
             return self.status, len(self.events)
 
     def trim_if_unused(self):
-        """释放事件缓冲：仅当作业已结束且无订阅者时（再无人可能回放）。
-        生成期间或仍有订阅者时不动——避免晚到的订阅者漏掉尾部事件。"""
-        with self.cond:
-            if self.status != "running" and self.subscribers <= 0:
-                self.events = []
+        """保留事件缓冲直至 GC（_CHAT_JOB_TTL）。
+
+        完成后 15 分钟内刷新/新标签页可能凭同一 stream_id 重连回放，故此处**不**
+        释放缓冲（旧实现在订阅者刚断开时就清空，导致回放时灵时不灵）。真正的
+        内存回收由 `_chat_jobs_gc` 在 TTL 后整作业移除完成。
+        """
+        return
 
 
 def _chat_jobs_gc():
@@ -132,6 +134,47 @@ _LAST_TOOL_CHAIN = []
 _CURRENT_TASK_LOCK = threading.Lock()  # 保护 _CURRENT_TASK（当前任务标题，供自动断点命名）
 _CURRENT_TASK = {"title": ""}
 _LAST_AUTO_CHECKPOINT = 0  # 本会话已自动打点的链长（防每步写盘）
+
+# 每个生成作业线程私有的工具链/断点/任务态：多会话（后台作业）并发时互不串味。
+# 未进入作业线程（测试/旧调用路径）时回退到上面的模块级全局，行为不变。
+_JOB_TL = threading.local()
+
+
+class _JobToolState:
+    __slots__ = ("chain", "checkpoint", "task")
+
+    def __init__(self):
+        self.chain = []
+        self.checkpoint = 0
+        self.task = ""
+
+
+def _job_state():
+    """当前线程是否处于一次生成作业中；是则返回其私有状态，否则 None。"""
+    return getattr(_JOB_TL, "state", None)
+
+
+def _begin_job_state():
+    st = _JobToolState()
+    _JOB_TL.state = st
+    return st
+
+
+def _end_job_state():
+    _JOB_TL.state = None
+
+
+def _tool_chain():
+    st = _job_state()
+    return st.chain if st is not None else _LAST_TOOL_CHAIN
+
+
+def _current_task_title():
+    st = _job_state()
+    if st is not None:
+        return st.task
+    with _CURRENT_TASK_LOCK:
+        return str(_CURRENT_TASK.get("title") or "")
 
 ASK_TIMEOUT = 180.0
 PLAN_TIMEOUT = 300.0   # ③b 工具批计划确认超时（用户可能逐条改参数）
@@ -2747,8 +2790,13 @@ def _msg_text(msg):
 
 def _set_current_task(title):
     """记录当前任务标题（供自动断点命名）。会话开始/结束时设置与清理。"""
+    t = str(title or "")[:60]
+    st = _job_state()
+    if st is not None:
+        st.task = t
+        return
     with _CURRENT_TASK_LOCK:
-        _CURRENT_TASK["title"] = str(title or "")[:60]
+        _CURRENT_TASK["title"] = t
 
 
 def _auto_checkpoint(name):
@@ -2760,15 +2808,17 @@ def _auto_checkpoint(name):
     返回本次是否写入（1/0）。
     """
     global _LAST_AUTO_CHECKPOINT
+    st = _job_state()
+    chain_ref = st.chain if st is not None else _LAST_TOOL_CHAIN
     with _TOOL_CHAIN_LOCK:
-        n = len(_LAST_TOOL_CHAIN)
-        chain = list(_LAST_TOOL_CHAIN[:20])
+        n = len(chain_ref)
+        chain = list(chain_ref[:20])
     if n < shared.AUTO_CHECKPOINT_TOOLS:
         return 0
-    if _LAST_AUTO_CHECKPOINT and (n - _LAST_AUTO_CHECKPOINT) < shared.AUTO_CHECKPOINT_EVERY:
+    prev = st.checkpoint if st is not None else _LAST_AUTO_CHECKPOINT
+    if prev and (n - prev) < shared.AUTO_CHECKPOINT_EVERY:
         return 0
-    with _CURRENT_TASK_LOCK:
-        title = str(_CURRENT_TASK.get("title") or "")
+    title = _current_task_title()
     data = {
         "name": (title or f"长任务（自动断点 · {n} 步）")[:60],
         "status": "进行中",
@@ -2785,7 +2835,10 @@ def _auto_checkpoint(name):
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp, CHECKPOINT_PATH)
-        _LAST_AUTO_CHECKPOINT = n
+        if st is not None:
+            st.checkpoint = n
+        else:
+            _LAST_AUTO_CHECKPOINT = n
         _audit("auto_checkpoint", data["name"], f"{n} 步")
         return 1
     except Exception:
@@ -5116,7 +5169,7 @@ _INBOUND_THREAD = None
 
 def _inbound_loop(port, expected_token):
     """Webhook 接收端：POST {token, text} → 远程下达任务（对齐原程序 inbound）。"""
-    global _INBOUND_SERVER
+    global _INBOUND_SERVER, _INBOUND_THREAD
     from http.server import BaseHTTPRequestHandler as _BIH
 
     class _InboundHandler(_BIH):
@@ -5159,8 +5212,10 @@ def _inbound_loop(port, expected_token):
     except Exception:
         logger.exception("inbound 接收端退出")
     finally:
-        # 句柄复位：否则 stop_server 拿不到它做优雅关闭，端口会一直占着。
+        # 句柄复位：否则 stop_server 拿不到它做优雅关闭，端口会一直占着；
+        # 同时复位线程句柄，异常退出后仍可重新启动接收端。
         _INBOUND_SERVER = None
+        _INBOUND_THREAD = None
 
 
 def _start_inbound():
@@ -5220,7 +5275,14 @@ def _im_loop():
 def _start_im():
     global _IM_THREAD
     if _IM_THREAD is None:
-        _IM_THREAD = threading.Thread(target=_im_loop, daemon=True)
+        def _run():
+            global _IM_THREAD
+            try:
+                _im_loop()
+            finally:
+                # 异常退出后复位句柄，允许重新启动 IM 轮询（否则永久无法重启）
+                _IM_THREAD = None
+        _IM_THREAD = threading.Thread(target=_run, daemon=True)
         _IM_THREAD.start()
 
 
@@ -5315,7 +5377,7 @@ def _tool_bookkeeping(name, args, result):
     _audit("tool", str(name), str(args or "")[:100])
     try:
         with _TOOL_CHAIN_LOCK:
-            _LAST_TOOL_CHAIN.append(str(name))
+            _tool_chain().append(str(name))
     except Exception:
         pass
     # 长任务自动打点（G15）：链够长就落断点，崩溃/断电不至于全丢
@@ -5432,7 +5494,8 @@ def _studio_generate(body):
     if not key:
         return None, "未配置 DeepSeek API Key"
     client = dc.DeepSeekClient(key, base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
-                               model=cfg.get("model") or dc.DEFAULT_MODEL, timeout=120)
+                               model=cfg.get("model") or dc.DEFAULT_MODEL,
+                               timeout=float(cfg.get("timeout") or 0))
     user_req = f"插件名：{name or '（自动起名）'}\n类型偏好：{ptype or '（自动判断）'}\n需求：{desc}"
     parts = []
     client.chat(
@@ -6117,6 +6180,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        if self.close_connection:
+            # 拒绝超限请求体时已决定关闭连接（防 keep-alive 残留字节串包），如实声明
+            self.send_header("Connection", "close")
         self._cors_headers()
         self.end_headers()
         self.wfile.write(data)
@@ -6143,7 +6209,12 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
             _limit = max_len or MAX_BODY  # MAX_BODY<=0 = 不限
-            if length <= 0 or (_limit and _limit > 0 and length > _limit):
+            if length <= 0:
+                return None
+            if _limit and _limit > 0 and length > _limit:
+                # 声明体超限：请求体不读会残留在连接里，被 keep-alive 当成下一个请求
+                # 解析（请求走私/错路由）——显式关闭连接，让客户端另起连接重试。
+                self.close_connection = True
                 return None
             # 防挂起：恶意客户端声明 Content-Length 却不发完，30s 内放弃，
             # 避免连接被永久占用导致线程累积（SSE 长连接不经过这里，不受影响）
@@ -6205,7 +6276,8 @@ class _Handler(BaseHTTPRequestHandler):
         return path
 
     def _serve_static(self, path):
-        """服务 WebUI 构建产物（dist/）。SPA fallback 到 index.html。"""
+        """静态 WebUI 资源（dist/），SPA fallback 到 index.html。"""
+        path = str(path or "").split("?", 1)[0].split("#", 1)[0]  # 剥离查询串/片段（缓存戳 ?v= 等）
         rel = self._strip_api_prefix(path).lstrip("/")
         if not rel:
             rel = "index.html"
@@ -6680,7 +6752,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"text": f"（自我状态读取失败：{e}）"})
 
 
-    @_get_route("/v1/failures")
+    @_get_route(("qpath", "/v1/failures"))
     def _g_v1_failures(self):
         """失败模式列表（含生命周期状态）。
 
@@ -6914,7 +6986,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._fail_soft(e, report=None)
 
 
-    @_get_route("/v1/brain")
+    @_get_route(("qpath", "/v1/brain"))
     def _g_v1_brain(self):
         try:
             from urllib.parse import parse_qs, urlparse
@@ -7420,7 +7492,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": "未配置 DeepSeek API Key"})
             return
         base_url = str(cfg.get("base_url") or dc.DEFAULT_BASE_URL)
-        client = dc.DeepSeekClient(key, base_url=base_url, model=cfg.get("model") or dc.DEFAULT_MODEL, timeout=120)
+        client = dc.DeepSeekClient(key, base_url=base_url, model=cfg.get("model") or dc.DEFAULT_MODEL,
+                                   timeout=float(cfg.get("timeout") or 0))
         try:
             result = client.fim_complete(
                 str(body.get("prompt") or ""),
@@ -8497,6 +8570,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid messages"})
             return
         _sync_request_full_auto(body)
+        _begin_job_state()
         try:
             client, cfg = self._client_from_cfg(body)
             kb = self._budget_block(cfg)
@@ -8544,6 +8618,8 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.exception("API chat 失败")
             self._json(500, {"error": _friendly_error(e)})
+        finally:
+            _end_job_state()
 
     def _run_chat_job_thread(self, job, body, messages):
         """在独立线程里跑一次生成（不与任何 HTTP 连接绑定）。
@@ -8561,8 +8637,8 @@ class _Handler(BaseHTTPRequestHandler):
         generated = []
         reply_parts = []
         try:
-            global _LAST_AUTO_CHECKPOINT
-            _LAST_AUTO_CHECKPOINT = 0
+            # 本作业线程私有工具链/断点/任务态（并发会话互不串味）
+            _begin_job_state()
             try:
                 _um = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
                 _set_current_task(_msg_text(_um[-1])[:60] if _um else "")
@@ -8637,7 +8713,7 @@ class _Handler(BaseHTTPRequestHandler):
             # 任务记录：工具链写入工作目录 tasklog（对齐原程序 _record_tasklog）
             try:
                 with _TOOL_CHAIN_LOCK:
-                    chain = list(_LAST_TOOL_CHAIN[:20])
+                    chain = list(_tool_chain()[:20])
                 user_msgs = [m for m in messages if m.get("role") == "user"]
                 if chain and user_msgs:
                     _record_tasklog(str(user_msgs[-1].get("content") or "")[:40], chain)
@@ -8655,11 +8731,14 @@ class _Handler(BaseHTTPRequestHandler):
                     _chat_harvest(reply, last_user[:600], cfg, messages=messages)
             except Exception:
                 logger.exception("自动记忆提炼启动失败")
-            with _TOOL_CHAIN_LOCK:
-                _LAST_TOOL_CHAIN.clear()
+            # 作业私有工具链随作业态回收（不再 clear 全局，避免清掉并发会话的链）
+            st = _job_state()
+            made_checkpoint = bool(st and st.checkpoint)
+            _end_job_state()
             # 任务正常结束 → 清掉本轮自动断点（避免留下过期断点干扰）；
-            # 中断/异常则保留，正是"崩溃后还能续"的价值所在。
-            if not job.stop_event.is_set():
+            # 中断/异常则保留，正是"崩溃后还能续"的价值所在。仅当本作业确实
+            # 写过自动断点时才清理，避免误删并发作业的断点。
+            if not job.stop_event.is_set() and made_checkpoint:
                 _clear_auto_checkpoint()
             _notify_completed(ok=not job.stop_event.is_set())
             send("done", {"session_id": job.sid})
@@ -8685,6 +8764,7 @@ class _Handler(BaseHTTPRequestHandler):
                 for k in (job.stop_key, job.sid, job.id):
                     if k and _STREAM_STOPS.get(k) is job.stop_event:
                         _STREAM_STOPS.pop(k, None)
+            _end_job_state()
             job.trim_if_unused()
 
     def _stream_job_to_client(self, job):
@@ -8736,14 +8816,15 @@ class _Handler(BaseHTTPRequestHandler):
         if not stream_id:
             stream_id = "s" + hex(int(time.time() * 1000))[2:] + secrets_token(4)
 
-        _sync_request_full_auto(body)
         _chat_jobs_gc()
 
         start_new = False
         with _CHAT_JOBS_LOCK:
             job = _CHAT_JOBS.get(stream_id)
-            if job is not None and job.status == "running":
-                pass  # 同名作业在跑：本次请求只做订阅（重复连接/多标签页）
+            if job is not None:
+                # 已存在（运行中或已完成待回放）：本次请求只做订阅/回放，绝不重跑生成。
+                # 完成后 15 分钟内（_CHAT_JOB_TTL）刷新/新标签页据此重连看到完整输出。
+                pass
             else:
                 job = _ChatJob(
                     stream_id,
@@ -8754,6 +8835,8 @@ class _Handler(BaseHTTPRequestHandler):
                 start_new = True
 
         if start_new:
+            # 仅新作业才同步请求级权限（FULL_AUTO），订阅/回放请求不得翻转全局权限态。
+            _sync_request_full_auto(body)
             with _STREAM_STOPS_LOCK:
                 for k in (stop_key, sid, stream_id):
                     if k:
@@ -8813,11 +8896,17 @@ def _save_job_turn(job, body, persist_base, generated):
 
 
 def _stop_chat(body):
-    """停止进行中的流式对话（按 gw_session/session_id/stream_id 命中；无 key 则停全部）。"""
+    """停止进行中的流式对话（按 gw_session/session_id/stream_id 命中）。
+
+    无定位键时必须显式传 `all:true` 才停全部——空 body 不得误伤无关会话。
+    """
     body = body if isinstance(body, dict) else {}
     key = str(
         body.get("gw_session") or body.get("session_id") or body.get("stream_id") or ""
     ).strip()
+    stop_all = bool(body.get("all"))
+    if not key and not stop_all:
+        return {"ok": True, "stopped": 0}
     stopped = 0
     # 作业是真正的生成载体：命中即置位其停止句柄，令工具循环/子进程收敛
     with _CHAT_JOBS_LOCK:

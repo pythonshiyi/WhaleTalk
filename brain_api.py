@@ -365,7 +365,7 @@ def _genesis_model_call(prompt, max_tokens=900):
         client = dc.DeepSeekClient(
             key, base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
             model=cfg.get("model") or dc.DEFAULT_MODEL,
-            timeout=float(cfg.get("timeout") or 120))
+            timeout=float(cfg.get("timeout") or 0))
         acc = []
         client.chat(
             [{"role": "user", "content": prompt}],
