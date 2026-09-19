@@ -2,6 +2,43 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.5（2026-09-20）—— 🐛 修复：打开历史会话后无法发送消息 + 同轮输出分段
+
+**版本号 3.16.4 → 3.16.5。**
+
+### 同轮多段输出「分段」显示
+
+一轮里 AI 会跨多个工具轮次输出多段文字（每段本是一条独立 assistant 消息），前端合并进同一气泡时若不加分隔会粘成一整块（如 `…再制定MV制作方案。All 7 scenes…` 两段直接相连）。
+
+- 新增 `chatChain.js::withSegmentBreak`：某段之后发生过工具调用时，下一段文字开头补一个空行（Markdown 段落分隔）；上一段已以换行结尾则不重复补。
+- 流式回调 `onToolStart` 置「待分段」标记，`onContent` 落新段时补空行。分段写在正文里，**随文本持久化、重载后仍分段**（保持一个气泡内分段，不拆气泡）。
+
+### 现象
+
+用户反馈：打开一条历史会话后，输入任何内容都不显示，AI 也收不到；只有点「继续」才有反应。
+
+### 根因
+
+`continueRef.current.active`（续写标记）只在**续写成功保存**分支里复位。一旦续写被
+「停止 / 报错 / 切换会话」打断，标记就永久残留 `active=true`：
+
+- 之后每次正常发送，`useBackendChat` 的 effect 读到 `isContinue=true` → **不追加用户消息**、请求沿用旧的 `continue_prefix` 与旧的 `continueIdx`；
+- 于是用户输入既不显示、也没送给模型；而「继续」按钮本来就走续写路径，所以看起来只有它能用。
+
+### 修复
+
+在**所有**本轮结束/会话切换的出口复位续写标记，杜绝残留：
+
+- `onSend`（正常发送，进入即复位）、`onStop`（停止生成）、`onPickSession`（切换/新建会话）、
+  `onRegenerate` / `resendLastUser` / `onForkMsg`；
+- effect 内 `finish()`（本轮正常结束，含费用确认分支）、`onError` 错误分支、`AbortError` 中止分支。
+
+### 验证
+
+webui 新增 `tests/continueReset.test.mjs`（5 项，锁定各复位点不被删）；`tests/chatChain.test.mjs` 增补 `withSegmentBreak` 4 项；`npm run test` 全绿 · `pytest` 829 passed · `tsc` / `vite build` 通过。
+
+---
+
 ## v3.16.4（2026-09-20）—— 🧠 上下文压缩重做：结构化摘要 + 最近原文 + 长结果外置 + 滚动更新
 
 **版本号 3.16.3 → 3.16.4。** 把「超限硬截断」升级为可续接长任务的真正压缩。

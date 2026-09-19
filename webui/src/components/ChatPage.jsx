@@ -12,7 +12,7 @@ import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
-import { buildHistory, withAttachRefs } from "../chatChain.js";
+import { buildHistory, withAttachRefs, withSegmentBreak } from "../chatChain.js";
 import { speakText, getVoiceConfig, onSpeechState, stopSpeak, resumeSpeak } from "../ttsUtil.js";
 import { nowClock } from "../timeFmt.js";
 import formatToolResult from "../formatToolResult.js";
@@ -235,6 +235,10 @@ function useBackendChat({
     let voiceSettings = null;
     getVoiceConfig().then((v) => { voiceSettings = v; });
     let acc = "";              // 本轮流式全文累加
+    // 段间分隔：一轮里 AI 会跨多个工具轮次输出多段文字（各自是一条 assistant 消息），
+    // 前端合并进同一气泡时若不加分隔会粘成一整块。规则：某段之后发生过工具调用，
+    // 则下一段文字开头补一个空行（Markdown 段落分隔）——观感分段，且随文本持久化。
+    let needSegBreak = false;
     // 关键：自动朗读不在流式过程中逐句读（那会因流式重切分/缓冲累积导致同段被读多次）。
     // 统一改为「本条回复生成完成时，把最终稳定文本整段读一次」→ 每条消息恰好朗读一次，绝不重复。
     const feedAuto = () => { /* 流式过程不朗读：避免增量竞态导致重复 */ };
@@ -251,6 +255,11 @@ function useBackendChat({
         if (done || !alive) return;
         flushNow();  // 冲刷 rAF 残余增量（防末尾半截内容丢失）
         done = true;
+        // 本轮结束即复位续写标记。否则一旦续写被「停止/报错/切会话」打断，
+        // continueRef 会永久停留 active=true，导致之后每次正常发送都被当成续写
+        // （不追加用户消息、请求沿用旧 continue 前缀）——表现为「输入什么都不显示、
+        // AI 也收不到，只能点继续」。
+        continueRef.current = { active: false, idx: -1 };
         // 费用确认：移除空的 assistant 占位、不保存、不弹「回复完成」；
         // 用户确认后由 resendLastUser 以 cost_confirmed 重发。
         if (needsConfirm) {
@@ -317,12 +326,17 @@ function useBackendChat({
             },
             onContent: (t) => {
               if (!alive || stopRef.current) return;
-              acc += t;
+              // 新一段（前面已出过文字、且其间调用了工具）：补段间空行，避免多轮输出粘连
+              const chunk = withSegmentBreak(acc, t, needSegBreak);
+              needSegBreak = false;
+              acc += chunk;
               feedAuto();
-              scheduleBatch({ text: t, gen: "⏳ 等待模型响应…" });
+              scheduleBatch({ text: chunk, gen: "⏳ 等待模型响应…" });
             },
             onToolStart: ({ name, args, id }) => {
               if (!alive || stopRef.current) return;
+              // 工具调用发生 → 之后的文字属于新的一段（段间补空行）
+              needSegBreak = true;
               let parsed = args;
               try {
                 parsed = typeof args === "string" && args ? JSON.parse(args) : args;
@@ -435,6 +449,7 @@ function useBackendChat({
               setBusy(false);
               setGenState({ on: false, text: "" });
               setGenTps(0);
+              continueRef.current = { active: false, idx: -1 };
               try {
                 onFinished?.({ userText, msg: currentMsg(), ok: false, isContinue, error: String(e), images, files });
               } catch (err2) { silentWarn(err2, "ChatPage"); }
@@ -445,11 +460,15 @@ function useBackendChat({
         finish(true);
       } catch (err) {
         // 用户主动停止（AbortError）：不算失败，不弹错误 toast；streaming 状态由 onStop 统一清理
-        if (err && (err.name === "AbortError" || err.code === 20)) return;
+        if (err && (err.name === "AbortError" || err.code === 20)) {
+          continueRef.current = { active: false, idx: -1 };
+          return;
+        }
         if (!alive) return;
         setBusy(false);
         setGenState({ on: false, text: "" });
         setGenTps(0);
+        continueRef.current = { active: false, idx: -1 };
         try {
           onFinished?.({
             userText: pendingRef.current.text,
@@ -1101,6 +1120,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     // busy 一律拦截：busy 期间即使带 resendIdxRef 也会覆盖 pendingRef 且 effect 不重跑（新流不会启动），
     // 导致当前流结束后保存时 userText 错乱。编辑重发需等当前生成结束后再操作。
     if (busy) return;
+    // 正常发送绝不是续写：显式复位，杜绝残留的 continue 标记把本次当成续写。
+    continueRef.current = { active: false, idx: -1 };
     // 新消息 → 永久停止正在进行的朗读/自动朗读（真人对话：我开口，AI 就不该继续念）
     stopSpeak();
     // 高峰提示（每天首次发送；受「高峰提醒」开关与后端实时峰值判定控制）
@@ -1191,6 +1212,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     // 同步终结流式状态：把仍在 streaming 的 assistant 消息置为完成态，
     // 避免光标永久闪烁 / code-open 占位 / 操作条隐藏（停止不依赖 abort 竞态）。
     // updater 保持纯函数：msgsRef 由 useMsgs 同步 effect 统一维护。
+    // 关键：同时复位续写标记——续写被「停止」打断时不会走到 finish()，否则标记会永久残留。
+    continueRef.current = { active: false, idx: -1 };
     setMsgs((m) => m.map((x) => (x.streaming ? { ...x, streaming: false } : x)));
     setBusy(false);
     setGenStateThrottled({ on: false, text: "" });
@@ -1201,6 +1224,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const onPickSession = async (id) => {
     if (busy) return;
     // 切换/新建会话 → 更换网关会话 id（新对话上下文，路由亲和按会话走）
+    // 同时复位续写标记：绝不把上一个会话残留的「续写中」带进新打开的会话。
+    continueRef.current = { active: false, idx: -1 };
     gwSessionRef.current = newGwSessionId();
     setActiveId(id);
     setBackendNote("");
@@ -1310,6 +1335,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     if (busy) return;
     starsRef.current = new Set();
     pinsRef.current = new Set();
+    continueRef.current = { active: false, idx: -1 };
     historyRef.current = buildHistory(msgs.slice(0, idx + 1), chatMode);
     setActiveId(null);
     setMsgs(msgs.slice(0, idx + 1));
@@ -1390,6 +1416,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     const base = msgs.slice(0, lastUser);
     starsRef.current = new Set();
     pinsRef.current = new Set();
+    continueRef.current = { active: false, idx: -1 };
     historyRef.current = buildHistory(base, chatMode);
     setActiveId(null);
     setMsgs(base);
@@ -1418,6 +1445,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     const base = cur.slice(0, lastUser);
     starsRef.current = new Set();
     pinsRef.current = new Set();
+    continueRef.current = { active: false, idx: -1 };
     historyRef.current = buildHistory(base, chatMode);
     setMsgs(base);
     pendingRef.current = { text, images: cur[lastUser].images || [], files: cur[lastUser].files || [] };

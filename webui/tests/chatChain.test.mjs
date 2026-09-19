@@ -1,7 +1,7 @@
 // 送模型消息链构造（任务模式完整工具链 / 对话模式剔除工具链）。
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildHistory, buildMessageChain, fileRefsBlock, withAttachRefs } from "../src/chatChain.js";
+import { buildHistory, buildMessageChain, fileRefsBlock, withAttachRefs, withSegmentBreak } from "../src/chatChain.js";
 
 const MSGS = [
   { role: "user", text: "帮我做MV", files: [{ name: "a.txt", path: "D:/a.txt" }] },
@@ -74,5 +74,22 @@ describe("附件引用工具", () => {
     assert.equal(fileRefsBlock([]), "");
     assert.ok(fileRefsBlock([{ name: "n", path: "p" }]).startsWith("\n\n[本次附件]\n- n → p"));
     assert.equal(withAttachRefs("hi", null), "hi");
+  });
+});
+
+describe("withSegmentBreak 同轮多段输出分段", () => {
+  it("工具轮之间的新段补空行", () => {
+    assert.equal(withSegmentBreak("第一段。", "第二段。", true), "\n\n第二段。");
+  });
+  it("无工具调用（同一段流式增量）不补", () => {
+    assert.equal(withSegmentBreak("第一段", "继续", false), "继续");
+  });
+  it("已有正文为空时不补（首段）", () => {
+    assert.equal(withSegmentBreak("", "第一段", true), "第一段");
+    assert.equal(withSegmentBreak("   ", "第一段", true), "第一段");
+  });
+  it("上一段已以换行结尾时不重复补空行", () => {
+    assert.equal(withSegmentBreak("第一段。\n", "第二段", true), "第二段");
+    assert.equal(withSegmentBreak("第一段。\n\n", "第二段", true), "第二段");
   });
 });

@@ -62,3 +62,13 @@ export function buildMessageChain(msgs, { includeTools = true } = {}) {
 export function buildHistory(msgs, chatMode) {
   return buildMessageChain(msgs, { includeTools: chatMode !== "dialog" });
 }
+
+// 同一气泡内的「多段输出」分段：一轮里 AI 会跨多个工具轮次输出多段文字
+// （每段本是一条独立 assistant 消息），合并进同一气泡时若不加分隔会粘成一整块。
+// 规则：上一段之后发生过工具调用（pending=true）且已有正文时，在新段前补一个空行
+// （Markdown 段落分隔）——观感分段，且随文本持久化、重载后仍分段。
+export function withSegmentBreak(acc, chunk, pending) {
+  const prev = String(acc || "");
+  if (pending && prev.trim() && !/\n\s*$/.test(prev)) return "\n\n" + chunk;
+  return chunk;
+}
