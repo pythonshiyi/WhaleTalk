@@ -2,6 +2,47 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.6（2026-09-20）—— 🐛 修复：任何对话都发不出去（chatMode 未定义 ReferenceError）
+
+**版本号 3.16.5 → 3.16.6。**
+
+### 现象
+
+任何对话（含新对话）输入后点发送/回车都**毫无反应**，前后端都没有请求；点空状态的建议问题也无反应；但「继续」按钮正常。
+
+### 根因（浏览器控制台实锤）
+
+```
+Uncaught ReferenceError: chatMode is not defined
+    at onSend (onKeyDown / onClick)
+```
+
+v3.16.4 在 `ChatPage` **组件层**调用 `buildHistory(base, chatMode)`，但组件作用域里的变量其实叫 `mode`（`const { mode } = useContext(ModeContext)`）——`chatMode` 只是 `useBackendChat` 的入参名。于是每次发送都在 `onSend` 里抛 ReferenceError：
+
+- `onSend` 在 `setBusy(true)` 之前就抛错 → 界面毫无反应、请求根本不发出；
+- 建议问题同理（同一个 `onSend`）；
+- 「继续」(`onContinue`) 不走组件层 `buildHistory`，所以反而正常。
+- 构建与 `tsc` 都不报：`jsconfig.json` 的 `include` 只含 `src/api.js`，JSX 未参与类型检查；打包器对未定义变量只按全局查找，运行期才抛。
+
+### 修复
+
+- 组件层补 `const chatMode = mode;`（与 `useBackendChat` 入参同名），消除未定义引用。
+- 新增 `tests/chatModeScope.test.mjs` 锁定该定义不被误删。
+
+### 附带修复：后端离线可自恢复
+
+原 `useDataSources` 只在挂载时用**带缓存**的 `checkBackend` 探测一次，失败即 `offline` 且永不恢复（需手动刷新才可能恢复）：
+
+- 改用**不缓存**的 `probeBackendHealth` + 可重复调用的 `loadAll`（对外暴露 `reload`）；
+- `onSend` 后端离线时**先重连一次**再发送；
+- 监听 `watchBackend` 的「离线→恢复」翻转自动重载。
+
+### 验证
+
+`pytest` 829 passed · webui 新增 `tests/chatModeScope.test.mjs` 与 `tests/offlineRecovery.test.mjs`，`npm run test` 全绿 · `vite build` 通过。
+
+---
+
 ## v3.16.5（2026-09-20）—— 🐛 修复：打开历史会话后无法发送消息 + 同轮输出分段
 
 **版本号 3.16.4 → 3.16.5。**

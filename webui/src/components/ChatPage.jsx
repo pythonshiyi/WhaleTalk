@@ -529,45 +529,60 @@ function useDataSources() {
   const [loadErr, setLoadErr] = React.useState("");
   const [peakInfo, setPeakInfo] = React.useState({ on: false, warn: true });
 
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const ok = await api.checkBackend();
-        if (!ok) {
-          setMode("offline");
-          setLoadErr("后端服务未连接：请启动「鲸语 WhaleTalk」(web_app.py) 后刷新页面");
-          return;
-        }
-        setMode("backend");
-        setLoadErr("");
-        try {
-          const real = await api.listSessions();
-          setSessions((real || []).map(toSessionItem));
-        } catch (e) {
-          setLoadErr(`会话列表加载失败：${e.message || "网络异常"}`);
-        }
-        try {
-          const c = await api.getContext();
-          if (c) {
-            setCtx({
-              tools: (c.tools || []).slice(0, 12).map((name) => ({ name, desc: "", state: "on" })),
-              memory: (c.memory?.facts || []).map((f, i) => ({ id: `MEM#${i}`, text: f, tag: "记忆" })),
-              usage: c.usage,
-            });
-          }
-        } catch (e) { silentWarn(e, "ChatPage"); }
-        try {
-          const st = await api.getStatus();
-          if (st) setPeakInfo({ on: !!st.peak_hour, warn: st.peak_warning !== false });
-        } catch (e) { silentWarn(e, "ChatPage"); }
-
-        setLoadErr("");
-      } catch {
+  // 可重复调用：探测后端并加载会话/上下文/状态。返回是否在线。
+  // 用 probeBackendHealth（不缓存）而非 checkBackend（缓存）——否则「加载时后端恰好没起来」
+  // 会把 offline 永久钉死，之后即使服务恢复、所有发送仍被 dataMode 拦截（无任何反应）。
+  const loadAll = React.useCallback(async () => {
+    try {
+      const ok = await api.probeBackendHealth();
+      if (!ok) {
         setMode("offline");
         setLoadErr("后端服务未连接：请启动「鲸语 WhaleTalk」(web_app.py) 后刷新页面");
+        return false;
       }
-    })();
+      setMode("backend");
+      setLoadErr("");
+      try {
+        const real = await api.listSessions();
+        setSessions((real || []).map(toSessionItem));
+      } catch (e) {
+        setLoadErr(`会话列表加载失败：${e.message || "网络异常"}`);
+      }
+      try {
+        const c = await api.getContext();
+        if (c) {
+          setCtx({
+            tools: (c.tools || []).slice(0, 12).map((name) => ({ name, desc: "", state: "on" })),
+            memory: (c.memory?.facts || []).map((f, i) => ({ id: `MEM#${i}`, text: f, tag: "记忆" })),
+            usage: c.usage,
+          });
+        }
+      } catch (e) { silentWarn(e, "ChatPage"); }
+      try {
+        const st = await api.getStatus();
+        if (st) setPeakInfo({ on: !!st.peak_hour, warn: st.peak_warning !== false });
+      } catch (e) { silentWarn(e, "ChatPage"); }
+      setLoadErr("");
+      return true;
+    } catch {
+      setMode("offline");
+      setLoadErr("后端服务未连接：请启动「鲸语 WhaleTalk」(web_app.py) 后刷新页面");
+      return false;
+    }
   }, []);
+
+  React.useEffect(() => { loadAll(); }, [loadAll]);
+
+  // 后端恢复即自动回到在线（无需刷新页面）：监听健康探测「断开→恢复」的翻转，重新加载。
+  const onlineRef = React.useRef(null);
+  React.useEffect(() => {
+    const stop = api.watchBackend(5000, (ok) => {
+      const was = onlineRef.current;
+      onlineRef.current = ok;
+      if (ok && was === false) loadAll();  // 仅从「已知离线」翻回时重载，避免与首轮重复
+    });
+    return () => { if (typeof stop === "function") stop(); };
+  }, [loadAll]);
 
   const pickSession = React.useCallback(
     async (id) => {
@@ -669,11 +684,14 @@ function useDataSources() {
     }
   }, [mode]);
 
-  return { mode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr, peakInfo };
+  return { mode, sessions, ctx, history, pickSession, refreshSessions, reload: loadAll, setCtx, loadErr, peakInfo };
 }
 
 export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone, openSessionId, onOpenSessionDone, quietMode, onToggleQuiet, active = true }) {
   const { mode, switchMode } = React.useContext(ModeContext);
+  // 组件内统一用 chatMode 指代当前工作模式（"task" | "dialog"），与 useBackendChat
+  // 的入参同名，避免组件层引用到一个不存在的变量（chatMode）而抛 ReferenceError。
+  const chatMode = mode;
   const { density, fontSize } = React.useContext(DisplayContext);
   const { flash } = React.useContext(FlashContext);
   const { toast } = React.useContext(ToastContext);
@@ -988,7 +1006,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     setGenState(s);
   }, []);
 
-  const { mode: dataMode, sessions, ctx, history, pickSession, refreshSessions, setCtx, loadErr, peakInfo } = useDataSources();
+  const { mode: dataMode, sessions, ctx, history, pickSession, refreshSessions, reload: reloadDataSources, setCtx, loadErr, peakInfo } = useDataSources();
 
   React.useEffect(() => {
     setBackendNote(
@@ -1123,7 +1141,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     saveChatFinished();
   };
 
-  const onSend = (text, attachments = []) => {
+  const onSend = async (text, attachments = []) => {
     // busy 一律拦截：busy 期间即使带 resendIdxRef 也会覆盖 pendingRef 且 effect 不重跑（新流不会启动），
     // 导致当前流结束后保存时 userText 错乱。编辑重发需等当前生成结束后再操作。
     if (busy) return;
@@ -1152,9 +1170,15 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     starsRef.current = new Set();
     pinsRef.current = new Set();
     if (dataMode !== "backend") {
-      toast("⚠️ 后端未连接，发送已取消（请启动服务后刷新页面）");
-      setBackendNote("后端未连接：请启动「鲸语 WhaleTalk」(web_app.py) 后刷新页面");
-      return;
+      // 加载时后端恰好没起来 → 发送即重连一次；成功就继续发送，不再要求用户刷新页面。
+      // （此前 dataMode 一旦为 offline 就被永久钉死，导致「输入无任何反应、前后端都无请求」。）
+      toast("🔄 正在重连后端…");
+      const online = reloadDataSources ? await reloadDataSources() : false;
+      if (!online) {
+        toast("⚠️ 后端未连接：请启动「鲸语 WhaleTalk」后重试");
+        setBackendNote("后端未连接：请启动「鲸语 WhaleTalk」(web_app.py)");
+        return;
+      }
     }
     // 附件分流：图片走视觉链路（images），其余文件以路径随消息交给 AI 工具层（files）
     let images = (attachments || [])
