@@ -179,3 +179,60 @@ def test_call_falls_back_to_reasoning_content():
     client, _ = _capturing_client(reasoning="```html\n<html>from-reasoning</html>\n```")
     out = tg._call(client, "s", "u")
     assert "from-reasoning" in out
+
+
+def test_pixel_hint_allows_programmatic_drawing():
+    """回归：pixel 类型不得写死「手写 SVG 小矩形」实现（高密度下数学不可达），
+    必须放行 canvas + JS 程序化绘制，并给出对称/色板约束。"""
+    hint = tg._KIND_HINTS["pixel"]
+    assert "用 SVG 小矩形拼像素" not in hint
+    assert "canvas" in hint.lower()
+    assert "对称" in hint
+
+
+def test_author_prompt_allows_canvas_and_warns_manual_rects():
+    p = tg._author_prompt("像素人像", "pixel", 768, 1024, "")
+    assert "canvas" in p.lower()
+    assert "<script>" in p
+    assert "一切用 CSS / 内联 SVG 绘制" not in p
+
+
+def test_critique_prompt_has_pixel_specific_checks():
+    c = tg._critique_prompt("像素人像", "pixel")
+    assert "像素画专项" in c
+    assert "对称" in c
+    # 非像素类型不应注入专项检查（避免污染通用评审）
+    assert "像素画专项" not in tg._critique_prompt("图标", "icon")
+
+
+def test_low_score_triggers_strategy_switch(monkeypatch, tmp_path):
+    """回归：低分（<=4）时下一轮应「换方案重写」而非仅按意见微调。"""
+    calls = []
+
+    def fake_call(client, system, user, max_tokens=6000):
+        calls.append(user)
+        return "```html\n<html><body>x</body></html>\n```"
+
+    def fake_render(html="", output="", **kw):
+        os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
+        with open(output, "wb") as f:
+            f.write(b"\x89PNG")
+        return f"已渲染 HTML 为 {output}"
+
+    scores = [2, 8]
+
+    def fake_vision(path, question=""):
+        s = scores.pop(0) if scores else 8
+        return '{"score": %d, "issues": [], "verdict": "%s"}' % (s, "ok" if s >= 7 else "revise")
+
+    monkeypatch.setattr(tg, "get_active_client", lambda: _fake_client())
+    monkeypatch.setattr(tg, "_call", fake_call)
+    monkeypatch.setattr(tg._dc, "html_render", fake_render)
+    monkeypatch.setattr(tg._dc, "image_understand", fake_vision)
+
+    out = os.path.join(str(permissions.WORKSPACE_DIR), "strategy_switch.png")
+    r = tg.image_codegen(brief="像素头像", kind="pixel", output=out, max_rounds=3)
+    assert "已用代码生成图像" in r, r
+    assert len(calls) >= 2
+    # 第 2 轮必须是「换方案」重写提示，而不是在原方案上微调
+    assert "上一版失败" in calls[1]

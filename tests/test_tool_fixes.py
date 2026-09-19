@@ -56,6 +56,18 @@ def test_detect_utf32_before_utf16(tmp_path):
     assert enc == "utf-32"
 
 
+def test_detect_encoding_when_multibyte_split_at_prefix_boundary(tmp_path):
+    """回归：编码探测只读前 8192 字节；若第 8192 字节正好切开一个 UTF-8 汉字
+    （中=3 字节），严格 decode 会因「结尾不完整」失败 → 误判 latin-1 → 中文乱码。
+    修复后应仍判为 utf-8。"""
+    from agent_tools import tool_files as tf
+    p = tmp_path / "split.txt"
+    # 8190 个 ASCII + 1 个三字节汉字：前 8192 字节只含该汉字的 2/3 字节
+    p.write_bytes(b"a" * 8190 + "中".encode("utf-8"))
+    enc, fb = tf._detect_text_encoding(str(p))
+    assert enc == "utf-8" and fb is False
+
+
 def test_ffmpeg_hw_report_shape():
     import deepseek_client as dc
     rep = dc.ffmpeg_hw_report()

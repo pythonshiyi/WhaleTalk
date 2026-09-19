@@ -31,7 +31,16 @@ _KIND_HINTS = {
     "illustration": "整体插画：明确的构图（前景主体 / 中景 / 背景层次）、统一光源与有限色板、可辨识的主体轮廓与材质暗示。",
     "icon": "图标：极简几何、单一视觉隐喻、居中对齐、留白充足、在给定画布内清晰可辨（可加柔和底或描边）。",
     "infographic": "信息图：标题区 + 数据 / 要点分区 + 图形化编码（条形 / 环形 / 图标），信息层级清晰、网格对齐。",
-    "pixel": "像素风：低分辨率网格化造型（用 SVG 小矩形拼像素）、有限色板、硬边无抗锯齿、轮廓可读。",
+    "pixel": (
+        "像素风：低分辨率网格化造型、有限色板、硬边无抗锯齿、轮廓可读。"
+        "【实现方式——关键】低密度小图（≤ 32×32 格）可手写少量方块；只要网格更密，"
+        "严禁逐个手写 <rect> / 像素块（输出长度有限，会被逼成大色块或渐变冒充像素），"
+        "必须用 <script> + <canvas> 逐像素程序化绘制（createImageData + putImageData），"
+        "或用 for 循环批量生成像素块。【结构】人物/头像必须左右镜像对称（只定义左半，"
+        "右半用 x' = W-1-x），先声明主体几何分区（脸型椭圆、五官中心的归一化坐标与尺寸）"
+        "再逐像素着色，禁止无坐标声明地即兴摆放五官。【色板】主体 16-24 档色阶，"
+        "全图总色数控制在 32-64 档。"
+    ),
     "ui": "UI 界面（线框或高保真）：规范栅格、组件（导航 / 卡片 / 按钮 / 输入框）、层级与间距一致、真实文案占位。",
     "diagram": "示意图 / 流程图：节点与有向连线，标签清晰、尽量不交叉、留白合理。",
     "poster": "海报：强对比版面，主标题 / 副标题 / 视觉主体分区，网格与对齐讲究，情绪化色板。",
@@ -57,8 +66,10 @@ def _author_prompt(brief, kind, width, height, background):
         "你是资深视觉设计师兼前端工程师。请只用一份**自包含** HTML 精确画出下面的画面。\n"
         "硬性要求：\n"
         f"- 画布正好 {width}×{height}px：html,body{{margin:0;padding:0;width:{width}px;height:{height}px;overflow:hidden}}。\n"
-        "- 不使用任何外部资源 / 网络字体 / 外链图片；只用系统字体（如 \"Microsoft YaHei\", \"Segoe UI\", sans-serif），"
-        "一切用 CSS / 内联 SVG 绘制。\n"
+        "- 不使用任何外部资源 / 网络字体 / 外链图片；只用系统字体（如 \"Microsoft YaHei\", \"Segoe UI\", sans-serif）。\n"
+        "- 绘制方式：内联 SVG 或 <canvas> + 内联 <script>（JS）均可。当图形含大量重复元素或高密度网格"
+        "（像素画、点阵图、程序化纹理、元素密集的数据图）时，**必须**用 <script> + canvas 程序化绘制"
+        "（循环 / createImageData），**严禁逐个手写 <rect> 或像素块**——手写会因输出长度上限被迫退化成大色块。\n"
         "- 画面要铺满画布、构图完整，不要出现空白占位或「示例」字样。\n"
         "- 结构清晰：先定构图与色板，再画主体，最后处理细节与光影。\n"
         f"- 类型要求：{hint}{bg}\n"
@@ -68,10 +79,12 @@ def _author_prompt(brief, kind, width, height, background):
 
 
 def _revise_prompt(html, brief, kind, critique):
+    hint = _KIND_HINTS.get(kind, _KIND_HINTS["illustration"])
     return (
         "这是你上一版 HTML 渲染出的图，视觉审查意见如下（JSON）：\n"
         f"{critique}\n\n"
-        f"目标：{brief}（类型：{kind}）。请**针对性**修正问题（保持可渲染、画布尺寸不变），"
+        f"目标：{brief}（类型：{kind}）。请**针对性**修正问题（保持可渲染、画布尺寸不变）。\n"
+        f"仍须满足类型要求：{hint}\n"
         "只输出一份完整的 ```html 代码块，不要解释。\n"
         "上一版源码：\n```html\n"
         f"{html}\n```"
@@ -79,12 +92,21 @@ def _revise_prompt(html, brief, kind, critique):
 
 
 def _critique_prompt(brief, kind):
+    extra = ""
+    if kind == "pixel":
+        extra = (
+            "\n【像素画专项检查——任一项不合格则 score 不得超过 4】\n"
+            "① 画面横向像素格数是否与要求密度一致（数一下最窄同色段）\n"
+            "② 全图颜色数是否在 32-64 档（过多=不是像素画；过少=平涂）\n"
+            "③ 是否存在 >8×8 格的单色大块平涂\n"
+            "④ 人物/头像是否左右镜像对称、五官比例是否正确\n"
+        )
     return (
         "你是严格的视觉审查员。对照目标画面审查这张图，只输出 JSON（不要多余文字）：\n"
         '{"score": 0-10, "issues": ["具体问题"], "verdict": "ok" 或 "revise"}\n'
         "评分维度：① 主体/构图是否正确清晰 ② 配色是否协调 ③ 细节与完成度 ④ 是否符合该类型风格。\n"
         "score>=7 且无致命问题才可 verdict=ok，否则 revise。\n"
-        f"目标画面：{brief}（类型：{kind}）"
+        f"目标画面：{brief}（类型：{kind}）{extra}"
     )
 
 
@@ -112,7 +134,7 @@ def _call(client, system, user, max_tokens=6000):
         "type": "function",
         "function": {
             "name": "image_codegen",
-            "description": "代码生图：用自包含 HTML/CSS/SVG 确定性生成结构化图像（插画/图标/信息图/像素风/UI线框/示意图/海报/标志），自动渲染成 PNG 并让多模态模型自评、按意见改源码迭代（≤N 轮），同时产出 PNG 与可再编辑源码；写实照片/复杂质感请改用 image_generate",
+            "description": "代码生图：用自包含 HTML/CSS/SVG/Canvas（可内联 JS 程序化绘制）确定性生成结构化图像（插画/图标/信息图/像素风/UI线框/示意图/海报/标志），自动渲染成 PNG 并让多模态模型自评、按意见改源码迭代（≤N 轮，低分会换方案重写），同时产出 PNG 与可再编辑源码；写实照片/复杂质感请改用 image_generate",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -172,6 +194,7 @@ def image_codegen(brief="", kind="illustration", width=1024, height=1024,
 
     # 首轮：读现有源码 或 让模型写
     html = ""
+    force_rewrite = False  # 低分 / 旧方案不可达时：下一轮「换方案」而非原地改细节
     if str(refine_source or "").strip():
         sp = permissions.resolve(refine_source)
         if not sp or not os.path.isfile(sp):
@@ -184,8 +207,16 @@ def image_codegen(brief="", kind="illustration", width=1024, height=1024,
                 html = f.read(2_000_000)
         except OSError as e:
             return f"错误：读取 refine_source 失败：{e}"
+        # 旧方案体检：像素风若靠「手写大量 <rect>」实现，高密度下数学上不可达
+        # （输出长度有限，会被逼成大色块/渐变）。放弃续用，改为按新约束重写。
+        if kind == "pixel" and html:
+            n_rect = len(re.findall(r"<rect\b", html))
+            has_prog = bool(re.search(r"createImageData|putImageData|<canvas", html, re.I))
+            if n_rect >= 64 and not has_prog:
+                html = ""
+                force_rewrite = True
 
-    system = "你是资深视觉设计师兼前端工程师，擅长用纯 CSS/SVG 精确作画。"
+    system = "你是资深视觉设计师兼前端工程师，擅长用 HTML/CSS/SVG/Canvas（含内联 JS 程序化绘制）精确作画。"
     score = None
     issues = []
     verdict = ""
@@ -195,10 +226,18 @@ def image_codegen(brief="", kind="illustration", width=1024, height=1024,
     for rnd in range(rounds):
         rounds_used = rnd + 1
         try:
-            if rnd == 0 and html:
-                pass  # 用已有源码
-            elif rnd == 0:
-                html = _extract_html(_call(client, system, _author_prompt(brief, kind, w, h, background)))
+            if rnd == 0 and html and not force_rewrite:
+                pass  # 用已有源码（refine_source）
+            elif rnd == 0 or force_rewrite:
+                prompt = _author_prompt(brief, kind, w, h, background)
+                if force_rewrite:
+                    prompt += (
+                        "\n\n【上一版失败，请彻底更换实现方案】上一版画面失真（大色块平涂 / 渐变冒充像素 / "
+                        "结构崩坏 / 密度不达标）。**不要沿用上一版的结构或绘制手法**，严格按上面的类型要求"
+                        "与实现方式重新实现。"
+                    )
+                html = _extract_html(_call(client, system, prompt))
+                force_rewrite = False
             else:
                 html = _extract_html(_call(client, system, _revise_prompt(html, brief, kind, critique_text)))
         except Exception as e:  # noqa: BLE001
@@ -231,6 +270,9 @@ def image_codegen(brief="", kind="illustration", width=1024, height=1024,
             verdict = str(obj.get("verdict") or "").strip().lower()
         if verdict == "ok":
             break
+        # 低分（<=4）→ 下一轮换方案重写，而不是在错误路线上磨细节
+        if score is not None and score <= 4 and rnd + 1 < rounds:
+            force_rewrite = True
 
     try:
         _atomic_write(src_path, html)

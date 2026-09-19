@@ -63,6 +63,23 @@ from deepseek_client import (
 )
 
 
+def _prefix_strict_ok(raw, enc):
+    """字节前缀能否按 enc「严格」解码（容忍结尾被截断的多字节序列）。
+
+    编码探测只取文件前 8192 字节；若第 8192 字节正好切在某个多字节字符中间
+    （UTF-8 汉字 3 字节、GB18030 也有多字节序列），严格的 `raw.decode(enc)`
+    会因「结尾不完整」报错，进而误判为 latin-1 → 中文全部乱码
+    （实测 codegen_pixel_v1.html：UTF-8 文件被判成 latin-1）。
+    用增量解码器 final=False：不完整的尾部被缓冲（不算错），真正非法字节仍报错。
+    """
+    import codecs
+    try:
+        codecs.getincrementaldecoder(enc)("strict").decode(raw, final=False)
+        return True
+    except (UnicodeDecodeError, LookupError):
+        return False
+
+
 def _detect_text_encoding(path):
     """文本编码探测：BOM 优先 -> UTF-8 严格校验 -> GB18030（中文 Windows 最常见）
     -> BIG5 -> latin-1 兜底（单字节永不失败）。返回 (encoding, is_fallback)，
@@ -81,18 +98,12 @@ def _detect_text_encoding(path):
         return "utf-32", False
     if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
         return "utf-16", False
-    try:
-        raw.decode("utf-8")
+    if _prefix_strict_ok(raw, "utf-8"):
         return "utf-8", False
-    except UnicodeDecodeError:
-        pass
     # GB18030 是 GBK 超集，覆盖中文 Windows 绝大多数文本；BIG5 覆盖繁体
     for enc in ("gb18030", "big5"):
-        try:
-            raw.decode(enc)
+        if _prefix_strict_ok(raw, enc):
             return enc, True
-        except UnicodeDecodeError:
-            continue
     return "latin-1", True
 
 

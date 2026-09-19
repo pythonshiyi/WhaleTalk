@@ -4940,6 +4940,13 @@ class DeepSeekClient:
 
                 # 停止/中断防护：用户已停止或 tool_calls 不完整（缺 id/name，流被中断）
                 # 时不执行任何工具；移除半截 tool_calls，避免历史残留「悬空 tool_call」导致下次 400
+                if finish_reason == "length" and on_truncated:
+                    # 有工具调用但输出被 max_tokens 截断：参数很可能是不完整的 JSON
+                    # （表现为「工具参数解析失败」）。明确告知，避免模型误以为只是格式写错。
+                    on_truncated(
+                        "工具调用参数可能因输出上限（max_tokens）被截断——"
+                        "请拆分内容分次写入，或改用 write_file 分块写大文件"
+                    )
                 if (stop_event and stop_event.is_set()) or any(
                     not (tc.get("id") and tc.get("name")) for tc in tool_calls
                 ):
