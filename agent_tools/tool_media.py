@@ -29,6 +29,32 @@ from shared import OCR_IMAGE_PS, clamp_int
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
 
+def _decode_ps_output(raw):
+    """Windows PowerShell 重定向输出的多编码回退解码。
+
+    Windows PowerShell 5.1 重定向 stdout 时按控制台代码页（中文=GBK）输出，
+    硬按 UTF-8 解码会把中文全变成 U+FFFD。"""
+    if not raw:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    import locale
+    cands = ["utf-8"]
+    try:
+        _pref = locale.getpreferredencoding(False)
+        if _pref:
+            cands.append(_pref)
+    except Exception:
+        pass
+    cands += ["gbk", "latin-1"]
+    for enc in cands:
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", "replace")
+
+
 @tool(
         {
             "type": "function",
@@ -184,10 +210,9 @@ def ocr_image(path):
                 f.write(script)
             proc = subprocess.run(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps_path],
-                capture_output=True, text=True, timeout=60,
-                encoding="utf-8", errors="replace",
+                capture_output=True, timeout=60,
             )
-            out = (proc.stdout or "").strip()
+            out = _decode_ps_output(proc.stdout or b"").strip()
             return out or "未能识别出文字"
         finally:
             try:

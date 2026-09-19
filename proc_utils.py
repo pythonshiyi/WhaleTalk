@@ -24,8 +24,23 @@ def kill_tree(proc, wait_seconds=3):
                 ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                 capture_output=True, timeout=max(2, int(wait_seconds)),
             )
-        else:
-            proc.kill()
+        elif proc.poll() is None:
+            # POSIX：优先用 psutil 递归杀子进程（proc.kill() 只杀直接子进程，孙进程残留）。
+            # 不用 killpg：子进程未 setsid 时其进程组可能等于本进程组，会误杀自身。
+            try:
+                import psutil
+                parent = psutil.Process(proc.pid)
+                for c in parent.children(recursive=True):
+                    try:
+                        c.kill()
+                    except Exception:
+                        pass
+                try:
+                    parent.kill()
+                except Exception:
+                    pass
+            except Exception:
+                proc.kill()
     except Exception:
         try:
             proc.kill()

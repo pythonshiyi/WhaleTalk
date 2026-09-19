@@ -68,6 +68,29 @@ def _proc_tree_rss_mb(pid):
     return total / (1024.0 * 1024.0)
 
 
+def _decode_output(raw):
+    """子进程字节输出多编码回退解码：UTF-8 → 系统首选编码 → GBK → latin-1。"""
+    if not raw:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    import locale
+    cands = ["utf-8"]
+    try:
+        pref = locale.getpreferredencoding(False)
+        if pref:
+            cands.append(pref)
+    except Exception:
+        pass
+    cands += ["gbk", "latin-1"]
+    for enc in cands:
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", "replace")
+
+
 def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
     """A6: 公共进程执行辅助——spool 输出防刷屏 OOM、超时 kill 进程树、截断读取。
 
@@ -80,9 +103,9 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
     """
     import tempfile
 
-    # 强制子进程以 UTF-8 编码 stdout/stderr：Windows 下子进程默认按 GBK/cp936 输出，
-    # 而父进程这里用 encoding="utf-8" 解码 → 中文乱码 / UnicodeEncodeError（根因：只修了
-    # "怎么解"、没修"怎么编"）。注入 PYTHONIOENCODING 让子进程"怎么编"也用 UTF-8。
+    # 强制 Python 子进程以 UTF-8 输出（PYTHONIOENCODING）；但 cmd/ipconfig/winget 等
+    # 系统程序仍按控制台代码页（中文=GBK）输出，故父进程以**字节**捕获后多编码回退解码，
+    # 避免「按 UTF-8 硬解」把中文变成 U+FFFD。
     env = None
     try:
         env = dict(os.environ)
@@ -91,16 +114,11 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
     except Exception:
         env = None
 
-    with tempfile.SpooledTemporaryFile(
-        max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
-    ) as out:
+    with tempfile.SpooledTemporaryFile(max_size=1 << 20, mode="w+b") as out:
         proc = subprocess.Popen(
             argv,
             stdout=out,
             stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             cwd=cwd,
             shell=shell,
             env=env,
@@ -143,12 +161,14 @@ def _run_capture(argv, timeout, max_output, cwd=None, shell=False, memory_mb=0):
             raise MemoryLimitError(memory_mb, round(peak["mb"]))
         out.seek(0)
         if max_output and max_output > 0:  # max_output<=0 表示不限输出
-            data = out.read(max_output)
+            raw = out.read(max_output)
             out.seek(0, os.SEEK_END)
             if out.tell() > max_output:
-                data += "\n[输出已截断]"
+                data = _decode_output(raw) + "\n[输出已截断]"
+            else:
+                data = _decode_output(raw)
         else:
-            data = out.read()
+            data = _decode_output(out.read())
     return proc.returncode, data
 
 
@@ -201,9 +221,13 @@ def run_python(code):
                 f"可调大 WHALETALK_RUN_PY_TIMEOUT（设 0 = 不限）；长任务也可用 start_process 后台"
                 f"（list_processes 查进度 / stop_process 停止）。"
             )
+        permissions.audit("run_python", "python <script>", f"{len(text)} 字符, rc={rc}")
+        if rc not in (0, None):
+            body = out_data.strip() or "（无输出）"
+            return (f"错误：脚本以退出码 {rc} 结束（执行失败，非正常完成）\n{body}\n"
+                    f"[工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}]")
         if not out_data.strip():
             return f"执行成功（无输出），工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}"
-        permissions.audit("run_python", "python <script>", f"{len(text)} 字符, rc={rc}")
         return out_data + f"\n[工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}]"
     except Exception as e:
         return f"错误：{e}"
@@ -251,6 +275,9 @@ def run_command(command):
         except TimeoutError:
             return f"错误：命令超时（>{timeout} 秒）"
         permissions.audit("run_command", cmd[:200], f"rc={rc}")
+        if rc not in (0, None):
+            body = out_data.strip() or "（无输出）"
+            return f"错误：命令以退出码 {rc} 结束（执行失败）\n{body}"
         if not out_data.strip():
             return f"执行成功（无输出），退出码 {rc}"
         return f"退出码 {rc}\n{out_data}"
@@ -356,16 +383,16 @@ def run_tests(path=None, framework="auto"):
                 _glob.glob(os.path.join(base, "**", "*_test.py"), recursive=True)[:20]
         if not found:
             return "错误：允许目录内未找到测试文件（test_*.py / *_test.py）"
-        target = found[0]
+        # 交给测试框架递归发现整个目录（旧实现只取 found[0] → 只跑第一个文件，假通过）
+        target = base
     fw = str(framework or "auto").lower()
     if fw == "unittest":
-        cmd = [sys.executable, "-m", "unittest", "discover", "-v"]
         if target and os.path.isfile(target):
             cmd = [sys.executable, "-m", "unittest", "-v", str(target)]
+        else:
+            cmd = [sys.executable, "-m", "unittest", "discover", "-v", "-s", str(target)]
     elif fw == "pytest":
-        cmd = [sys.executable, "-m", "pytest", "-q"]
-        if target:
-            cmd.append(str(target))
+        cmd = [sys.executable, "-m", "pytest", "-q"] + ([str(target)] if target else [])
     else:  # auto：优先 pytest（函数测试与 unittest 类都能跑）；pytest 缺失时回退 unittest discover
         try:
             import pytest  # noqa: F401
@@ -373,19 +400,19 @@ def run_tests(path=None, framework="auto"):
         except ImportError:
             _has_pytest = False
         if _has_pytest:
-            cmd = [sys.executable, "-m", "pytest", "-q"]
-            if target:
-                cmd.append(str(target))
+            cmd = [sys.executable, "-m", "pytest", "-q"] + ([str(target)] if target else [])
+        elif target and os.path.isfile(target):
+            cmd = [sys.executable, "-m", "unittest", "-v", str(target)]
         else:
-            cmd = [sys.executable, "-m", "unittest", "discover", "-v"]
-            if target:
-                cmd.append(str(target))
+            cmd = [sys.executable, "-m", "unittest", "discover", "-v", "-s", str(target)]
     try:
         # A6: 统一走 _run_capture（spool 限流防 OOM、超时 kill 进程树、截断读取）
         rc, out_data = _run_capture(
             cmd, 180, 12000,
             cwd=os.path.dirname(target) if os.path.isfile(target) else target,
         )
+        if rc not in (0, None):
+            return f"错误：测试未通过（退出码 {rc}）\n{out_data}"
         return f"退出码 {rc}\n{out_data}"
     except TimeoutError:
         return "错误：测试执行超时（180 秒）"
@@ -430,30 +457,43 @@ def verify_project(path=None):
 
     lines = [f"一键验证：{base}", ""]
     steps = 0
+    failed = []
 
     if _glob.glob(os.path.join(base, "**", "*.py"), recursive=True):
         steps += 1
+        lint_out = run_lint(base)
+        if lint_out.startswith("错误") or "发现问题" in lint_out:
+            failed.append("静态检查")
         lines.append(f"[{steps}] 静态检查（ruff）：")
-        lines.append("  " + run_lint(base).replace("\n", "\n  "))
+        lines.append("  " + lint_out.replace("\n", "\n  "))
         lines.append("")
 
     tests = _glob.glob(os.path.join(base, "**", "test_*.py"), recursive=True) + \
             _glob.glob(os.path.join(base, "**", "*_test.py"), recursive=True)
     if tests:
         steps += 1
+        tests_out = run_tests(base)
+        if tests_out.startswith("错误"):
+            failed.append("测试")
         lines.append(f"[{steps}] 测试（pytest）：")
-        lines.append("  " + run_tests(base).replace("\n", "\n  "))
+        lines.append("  " + tests_out.replace("\n", "\n  "))
         lines.append("")
 
     if os.path.isfile(os.path.join(base, "package.json")):
         steps += 1
+        build_out = _verify_build(base)
+        if build_out.startswith("错误"):
+            failed.append("前端构建")
         lines.append(f"[{steps}] 前端构建（npm run build）：")
-        lines.append("  " + _verify_build(base).replace("\n", "\n  "))
+        lines.append("  " + build_out.replace("\n", "\n  "))
         lines.append("")
 
     if steps == 0:
         return "未发现可验证产物（无 .py 文件、无测试文件、无 package.json）"
-    lines.append(f"验证完成：共 {steps} 步")
+    if failed:
+        lines.append(f"错误：一键验证未通过（失败步骤：{'、'.join(failed)}），请修复后重试")
+        return "\n".join(lines)
+    lines.append(f"验证完成：共 {steps} 步，全部通过")
     return "\n".join(lines)
 
 
@@ -495,10 +535,22 @@ def project_scaffold(project_type, name=None, path=None):
     base = permissions.resolve(base) or base
 
     name = (name or "my_project").strip()
-    # S5 防路径穿越：name 是目录名，含路径分隔符或 .. 可把脚手架生成到 base 之外
-    if not name or name in (".", "..") or any(c in name for c in "/\\") or ".." in name.split("/") or ".." in name.split("\\"):
-        return "错误：非法项目名（不允许路径分隔符或 ..）：%s" % name[:80]
+    # S5 防路径穿越：name 是目录名，含分隔符/.. /盘符 可把脚手架生成到 base 之外
+    # （Windows `C:xxx` 在跨盘时会让 os.path.join 直接返回绝对路径）
+    if (not name or name in (".", "..") or ":" in name
+            or any(c in name for c in "/\\")
+            or ".." in name.split("/") or ".." in name.split("\\")):
+        return "错误：非法项目名（不允许路径分隔符、盘符或 ..）：%s" % name[:80]
     proj_dir = os.path.join(base, name)
+    # 边界断言：归一化后必须仍在 base 之下（双保险）
+    try:
+        _real_base = os.path.realpath(base)
+        _real_proj = os.path.realpath(proj_dir)
+        if os.path.commonpath([_real_proj, _real_base]) != _real_base:
+            return "错误：非法项目名（越出目标目录）：%s" % name[:80]
+        proj_dir = _real_proj
+    except (ValueError, OSError):
+        return "错误：项目路径无效"
     created = []
 
     def write(rel, content):

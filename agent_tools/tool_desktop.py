@@ -196,9 +196,17 @@ def rpa_type(text, interval=0.02):
         import pyautogui
         interval = max(0.0, min(0.2, float(interval or 0.02)))
         pyautogui.FAILSAFE = RPA_FAILSAFE
-        pyautogui.typewrite(str(text), interval=interval)
-        permissions.audit("rpa_type", "键盘输入", str(text)[:60])
-        return f"已输入 {len(str(text))} 个字符"
+        s = str(text)
+        if any(ord(c) > 127 for c in s):
+            # pyautogui.typewrite 只支持其键盘映射表内的键，中文等非 ASCII 会**静默无效**；
+            # 改走剪贴板 + Ctrl+V 输入 Unicode 文本。
+            _dc._win_clipboard_set(s)
+            pyautogui.hotkey("ctrl", "v")
+            permissions.audit("rpa_type", "剪贴板粘贴", s[:60])
+            return f"已通过剪贴板粘贴 {len(s)} 个字符（含非 ASCII，如中文）"
+        pyautogui.typewrite(s, interval=interval)
+        permissions.audit("rpa_type", "键盘输入", s[:60])
+        return f"已输入 {len(s)} 个字符"
     except Exception as e:
         return f"错误：RPA 输入失败: {e}"
 
@@ -232,6 +240,10 @@ def rpa_hotkey(keys):
         seq = [str(k).strip().lower() for k in str(keys).replace(" ", "").split("+") if str(k).strip()]
         if not seq:
             return "错误：keys 格式应为 ctrl+c 或 alt+tab"
+        _valid = set(getattr(pyautogui, "KEYBOARD_KEYS", []) or [])
+        _bad = [k for k in seq if _valid and k not in _valid]
+        if _bad:
+            return f"错误：未知按键 {_bad}（示例：ctrl+c / alt+tab / ctrl+shift+esc）"
         pyautogui.FAILSAFE = RPA_FAILSAFE
         pyautogui.hotkey(*seq)
         permissions.audit("rpa_hotkey", "+".join(seq), "组合键")
@@ -427,6 +439,18 @@ def screen_find_click(target, area="", button="left", dry_run=False, verify=True
         return f"错误：定位结果坐标不合法：{obj}"
     x = max(0, min(img_w - 1, (left + right) // 2))
     y = max(0, min(img_h - 1, (top + bottom) // 2))
+    # area 截图是裁剪后的子图，模型坐标是子图坐标系；点击需加回区域左上偏移，
+    # 否则指定区域时越点越偏（区域越小偏移越大）。
+    ax = ay = 0
+    if str(area or "").strip():
+        try:
+            _ap = [int(v.strip()) for v in str(area).split(",")]
+            if len(_ap) == 4:
+                ax, ay = _ap[0], _ap[1]
+        except (TypeError, ValueError):
+            ax = ay = 0
+    x += ax
+    y += ay
     label = str(obj.get("label", ""))[:40]
     preview = f"已定位目标「{t}」→ 元素 {label} 外接框 ({left},{top})-({right},{bottom})，中心 ({x},{y})"
     if dry_run:
@@ -497,6 +521,7 @@ def vision_loop(goal, steps="", max_iters=5, area=""):
     step_delay = 0.6
 
     log = []
+    achieved = False
     for i in range(1, max_iters + 1):
         path = _capture_screen_png(area)
         if not path:
@@ -524,6 +549,7 @@ def vision_loop(goal, steps="", max_iters=5, area=""):
             break
         status = str((obj or {}).get("status") or "")[:120]
         if action == "done":
+            achieved = True
             log.append(f"第{i}轮：达成。{status}")
             break
         target = str((obj or {}).get("target") or "").strip()
@@ -547,7 +573,9 @@ def vision_loop(goal, steps="", max_iters=5, area=""):
     else:
         log.append(f"已达最大轮数 {max_iters}，结束（可通过第二次调用继续）")
 
-    return "视觉闭环完成：\n" + "\n".join(log[-12:])
+    if achieved:
+        return "视觉闭环完成（已达成目标）：\n" + "\n".join(log[-12:])
+    return "未能达成视觉闭环目标（已停止，未确认达成，请检查或重试）：\n" + "\n".join(log[-12:])
 
 
 @tool(
@@ -723,7 +751,7 @@ def speech_to_text(path, model="base"):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "text": {"type": "string", "description": "要朗读的文本（≤8000 字）"},
+                        "text": {"type": "string", "description": "要朗读的文本（≤4000 字，超出部分不朗读）"},
                         "voice": {"type": "string", "description": "可选：音色名子串（如 Huihui / Xiaoxiao，留空=系统默认）"},
                         "rate": {"type": "integer", "description": "可选：语速 -10~10（默认 0）"},
                         "volume": {"type": "integer", "description": "可选：音量 0~100（默认 100）"},
@@ -745,12 +773,15 @@ def tts_speak(text, voice="", rate=0, volume=100, save_path=""):
     t = str(text or "").strip()
     if not t:
         return "错误：text 必填"
-    if len(t) > 8000:
-        t = t[:8000]
+    truncated = len(t) > 4000
+    if truncated:
+        t = t[:4000]  # 与 _speak_aloud 的实际上限对齐（此前声明 8000 但只读 4000）
     sid = _speak_aloud(t, rate=rate, volume=volume, voice=voice, label="工具朗读")
     if not sid:
         return "错误：本机没有可用的 TTS 引擎（需要 pywin32 的 SAPI），或系统无中文语音包"
     out = f"✅ 已开始后台朗读（会话 {sid}）。可用 tts_stop 停止；语速 {rate}，音量 {volume}。"
+    if truncated:
+        out += "\n（注意：文本超过 4000 字，仅朗读前 4000 字）"
     p = str(save_path or "").strip()
     if p:
         saved = tts_save(t[:4000], p, rate=rate)
@@ -1317,7 +1348,8 @@ def _mv_finish(src, output, audio="", bgm="", subtitle=""):
         nar_i = idx
         idx += 1
     if bg:
-        args += ["-i", bg]
+        # BGM 循环铺满整片，配合 -shortest 由视频长度决定成片时长（否则短 BGM 会截断视频）
+        args += ["-stream_loop", "-1", "-i", bg]
         bg_i = idx
         idx += 1
     if sub:
@@ -1325,11 +1357,12 @@ def _mv_finish(src, output, audio="", bgm="", subtitle=""):
     if nar and bg:
         args += ["-filter_complex",
                  f"[{nar_i}:a]volume=1.0[a1];[{bg_i}:a]volume=0.25[a2];"
-                 "[a1][a2]amix=inputs=2:duration=longest[aout]",
+                 "[a1][a2]amix=inputs=2:duration=longest,apad[aout]",
                  "-map", "0:v", "-map", "[aout]", "-c:a", "aac"]
     elif nar or bg:
         a_i = nar_i if nar else bg_i
-        args += ["-map", "0:v", "-map", f"{a_i}:a", "-c:a", "aac"]
+        # apad 铺满静音，配合 -shortest 由视频长度决定时长（短音频不再截断视频）
+        args += ["-map", "0:v", "-map", f"{a_i}:a", "-c:a", "aac", "-af", "apad"]
     else:
         args += ["-map", "0:v", "-an"]
     args += ["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
@@ -1639,10 +1672,12 @@ def media_ffmpeg(action="info", input="", output="", time="", width=0, format=""
         permissions.audit("media_ffmpeg_thumbnail", out, f"{size} 字节")
         return f"已截图保存至 {out}（{size / 1024:.0f} KB，时间点 {ts or '1s'}）"
     fmt = str(format or "").strip().lower().lstrip(".")
+    if not fmt and out:
+        fmt = os.path.splitext(out)[1].lower().lstrip(".")  # 未指定 format 时按输出扩展名推断
     if fmt not in MEDIA_FORMATS:
         return (
             f"错误：format 非法：{format or '（空）'}（支持 {'/'.join(sorted(MEDIA_FORMATS))}；"
-            "如未指定可按输出扩展名推断）"
+            "未指定时会按输出扩展名推断）"
         )
     if not out.lower().endswith(("." + fmt, ".jpg")):
         out += "." + fmt
@@ -1668,8 +1703,13 @@ def media_ffmpeg(action="info", input="", output="", time="", width=0, format=""
             args += ["-c:v", "libx264", "-preset", "veryfast"]
         args += [out]
     else:  # extract_audio
-        # 强制转码（copy 与目标容器可能不兼容；testsrc 无音频流时 mp3 也能正常产出空流）
-        acodec = "libmp3lame" if fmt == "mp3" else ("flac" if fmt == "flac" else "pcm_s16le" if fmt == "wav" else "libmp3lame")
+        # 按容器选兼容音频编码器（旧实现 ogg/mp4 等一律 libmp3lame → 容器不兼容、写不出文件）
+        _acodec = {
+            "mp3": "libmp3lame", "flac": "flac", "wav": "pcm_s16le",
+            "ogg": "libvorbis", "webm": "libopus", "mp4": "aac",
+            "mov": "aac", "mkv": "aac",
+        }
+        acodec = _acodec.get(fmt, "libmp3lame")
         args = ["-hide_banner", "-y", "-i", src, "-vn", "-acodec", acodec, out]
     code, text = _ffmpeg_run(args)
     if code is None:

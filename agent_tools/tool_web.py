@@ -348,15 +348,16 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
 
     merged, last_err = [], None
     for name, results, err in outcomes.values():
-        if err is not None or not results:
-            # 超时 vs 其他失败分档冷却：永久不可用的源别每 10 分钟重试一次拖慢搜索
-            reason = "timeout" if err is not None and "timeout" in type(err).__name__.lower() else "error"
+        if err is not None:
+            # 仅「抛错/超时」计为引擎失败；正常返回 0 条是有效结果，不能计入失败电路
+            # （否则冷门查询连做 3 次就会把全部引擎判为不可用、暂停 10 分钟）。
+            reason = "timeout" if "timeout" in type(err).__name__.lower() else "error"
             _search_report(name, False, reason=reason)
-            if err is not None:
-                last_err = err
+            last_err = err
             continue
         _search_report(name, True)
-        merged.extend(_search_safe(results))
+        if results:
+            merged.extend(_search_safe(results))
     merged = _search_dedup(merged)
     total_avail = len(merged)
     # site 硬过滤：搜索引擎可能忽略 site: 语法，聚合后按域名兜底保证生效
@@ -389,7 +390,11 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
     if offset and total_avail:
         return (f"错误：翻页超出范围——本次共搜到 {total_avail} 条去重结果，"
                 f"offset={offset} 已超出可用范围（可用 offset ≤ {max(0, total_avail - num)}）")
-    detail = f": {last_err}" if last_err is not None else ""
+    if last_err is None:
+        # 引擎都正常但确实没有命中：如实说明「无结果」，不是搜索失败
+        return (f"未找到与「{q}」相关的结果（已查询可用搜索源）。"
+                "可换用更通用的关键词，或改用 search_realtime 查询实时热点。")
+    detail = f": {last_err}"
     return f"错误：搜索失败（可用搜索源均不可用{detail}）"
 
 
@@ -1168,7 +1173,13 @@ def rss_fetch(action="list", url="", limit=10, since_hours=24):
 
     def _parse():
         try:
-            box["parsed"] = feedparser.parse(u, request_headers={"User-Agent": _SEARCH_UA})
+            # 走 _safe_stream 逐跳 SSRF 校验后抓取，再交给 feedparser 解析字节——
+            # 直接 feedparser.parse(url) 会让其内部 urllib 自动跟随 302（绕过硬底线）。
+            with _safe_stream("GET", u, timeout=(RSS_FETCH_TIMEOUT or None),
+                              headers={"User-Agent": _SEARCH_UA}) as resp:
+                resp.raise_for_status()
+                content = resp.read()
+            box["parsed"] = feedparser.parse(content)
         except Exception as e:
             box["err"] = e
 
@@ -1521,9 +1532,27 @@ def call_api(url, method="GET", params=None, json_body=None, data=None,
                 if truncated:
                     raw = raw[:CALL_API_MAX_BYTES]
         body = raw
-        text = body[:CALL_API_MAX_BYTES].decode("utf-8", errors="replace") if (
-            CALL_API_MAX_BYTES and CALL_API_MAX_BYTES > 0
-        ) else body.decode("utf-8", errors="replace")
+        # 按响应 charset 解码，未声明/失败时回退 utf-8→gb18030（GBK 接口不再乱码）
+        _charset = ""
+        try:
+            _cm = re.search(r"charset=([\w\-]+)", content_type or "", re.I)
+            if _cm:
+                _charset = _cm.group(1)
+        except Exception:
+            _charset = ""
+        _slice = body[:CALL_API_MAX_BYTES] if (CALL_API_MAX_BYTES and CALL_API_MAX_BYTES > 0) else body
+
+        def _decode_body(_b):
+            for _e in (_charset, "utf-8", "gb18030", "latin-1"):
+                if not _e:
+                    continue
+                try:
+                    return _b.decode(_e)
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            return _b.decode("utf-8", "replace")
+
+        text = _decode_body(_slice)
         # JSON 美化输出（若可解析），便于阅读
         try:
             if content_type.startswith("application/json"):

@@ -73,7 +73,11 @@ _MEM_SIM_MERGE = 0.85  # 近重复合并阈值（difflib 字符相似度）
 
 
 def _mem_entity_alias(e, known):
-    """实体别名归并：新实体与既有实体（相似度>=0.75 或包含关系）匹配时返回既有名。"""
+    """实体别名归并：仅「完全同名」或「足够长的近重复」才归并。
+
+    不做包含关系/短名模糊归并——否则「张三丰」会被并入「张三」、「项目A」并入
+    「项目」，污染知识图谱（短名相似度天然偏高：张三/张三丰 ≈ 0.8）。
+    """
     if not e or not known:
         return e
     for k in known:
@@ -81,10 +85,8 @@ def _mem_entity_alias(e, known):
             continue
         if e == k:
             return k
-        if _mem_similar(e, k) >= 0.75:
+        if len(e) >= 4 and len(k) >= 4 and _mem_similar(e, k) >= _MEM_SIM_MERGE:
             return k
-        if len(e) >= 2 and len(k) >= 2 and (e in k or k in e):
-            return k if len(k) <= len(e) * 2 else e
     return e
 
 
@@ -216,7 +218,13 @@ def self_profile(action="get", field=None, value=None):
                 return json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v
             lines = ["[核心自我状态]"]
             if data.get("identity"):
-                lines.append("身份：" + "、".join(f"{k}:{v}" for k, v in data["identity"].items()))
+                ident = data["identity"]
+                if isinstance(ident, dict):
+                    lines.append("身份：" + "、".join(f"{k}:{v}" for k, v in ident.items()))
+                else:
+                    # 兼容历史/工具写入的字符串身份（此前 update identity 会写字符串，
+                    # 导致 get 对 .items() 崩溃）
+                    lines.append(f"身份：{ident}")
             if data.get("focus"):
                 lines.append(f"当前焦点：{data['focus']}")
             if data.get("goals"):
@@ -238,6 +246,9 @@ def self_profile(action="get", field=None, value=None):
         if act == "update":
             if field not in ("identity", "focus"):
                 return "错误：update 仅支持 identity/focus；列表字段用 append"
+            if field == "identity" and isinstance(value, str):
+                # identity 需为字典（get 会按键展开）；字符串统一包装，避免类型错配
+                value = {"描述": value[:200]}
             data[field] = value
             data["updated_at"] = datetime.now().isoformat(timespec="seconds")
             if _save_self_profile(data):
@@ -718,15 +729,19 @@ def schedule_task(expr_type="cron", expr="", content="", action="message", name=
         return "错误：expr 必填（cron 表达式 / HH:MM / 分钟数）"
     if not _dc.SCHEDULES_FILE:
         return "错误：定时任务模块未初始化"
-    s = {"enabled": bool(enabled), "action": str(action or "message"), "last": "", "last_run": 0}
-    if expr_type == "time":
+    en = enabled if isinstance(enabled, bool) else str(enabled).strip().lower() not in ("false", "0", "no", "")
+    s = {"enabled": en, "action": str(action or "message"), "last": "", "last_run": 0}
+    et = str(expr_type or "cron").strip().lower() or "cron"
+    if et not in ("cron", "time", "every"):
+        return "错误：expr_type 仅支持 cron / time / every"
+    if et == "time":
         if not re.match(r"^\d{1,2}:\d{2}$", expr):
             return "错误：time 格式应为 HH:MM（如 09:00）"
         hh, _, mm = expr.partition(":")
         if not 0 <= int(hh) <= 23 or not 0 <= int(mm) <= 59:
             return "错误：time 时间非法（小时 0-23，分钟 0-59）"
         s["time"] = expr
-    elif expr_type == "every":
+    elif et == "every":
         try:
             n = int(expr)
         except (TypeError, ValueError):
@@ -760,7 +775,8 @@ def schedule_task(expr_type="cron", expr="", content="", action="message", name=
     with SCHEDULES_LOCK:
         schedules = _load_schedules_plain()
         schedules.append(s)
-        _save_schedules_plain(schedules)
+        if not _save_schedules_plain(schedules):
+            return "错误：定时任务保存失败（磁盘写入失败或锁超时），任务未创建"
     when = expr
     permissions.audit("schedule_task", s["id"], f"{expr_type}:{expr} -> {action}")
     return f"已创建定时任务（id={s['id']}）：{when} 执行「{s.get('text', '')[:60]}」"
@@ -841,7 +857,8 @@ def cancel_schedule(target=""):
                 kept.append(s)
         if removed is None:
             return f"错误：未找到定时任务：{t}（可用 list_schedules 查看）"
-        _save_schedules_plain(kept)
+        if not _save_schedules_plain(kept):
+            return "错误：定时任务保存失败（磁盘写入失败或锁超时），任务未取消"
     permissions.audit("cancel_schedule", t, "removed")
     return f"已取消定时任务：{removed.get('name') or t}（{removed.get('cron') or removed.get('every') or removed.get('time', '')}）"
 

@@ -136,7 +136,8 @@ def test_compose_wires_mv_compose(monkeypatch, tmp_path):
     monkeypatch.setattr(tm, "mv_compose", fake_compose)
     monkeypatch.setattr(tm, "_ff_media_duration", lambda p: 5.0)
     out_path = tmp_path / "out.mp4"
-    out = tm.mv_produce(action="compose", audio="a.wav", output=str(out_path))
+    # engine=external：本用例验证外部 MV 程序的 compose 接线（native 走自建引擎，另有覆盖）
+    out = tm.mv_produce(action="compose", audio="a.wav", output=str(out_path), engine="external")
     assert "PASS" in out and "终片存在且非空" in out
     assert captured["storyboard"] == _BUNDLE["storyboard"]
     assert captured["generate_images"] is False
@@ -146,7 +147,7 @@ def test_compose_missing_output_is_failure(monkeypatch, tmp_path):
     """终片未真实落盘时不得判 PASS（治假完成）。"""
     tm = _stub_upstream(monkeypatch, tmp_path)
     monkeypatch.setattr(tm, "mv_compose", lambda **kw: "成片已生成：X.mp4")  # 但没写文件
-    out = tm.mv_produce(action="compose", audio="a.wav", output=str(tmp_path / "none.mp4"))
+    out = tm.mv_produce(action="compose", audio="a.wav", output=str(tmp_path / "none.mp4"), engine="external")
     assert "错误：合成未产出成片" in out
 
 
@@ -154,7 +155,7 @@ def test_compose_falls_back_to_render_on_image_failure(monkeypatch, tmp_path):
     tm = _stub_upstream(monkeypatch, tmp_path)
     monkeypatch.setattr(tm, "mv_compose", lambda **kw: "错误：第 1 镜出图失败：404")
     monkeypatch.setattr(tm, "_mv_do_render", lambda *a, **k: "RENDER_FALLBACK_OK")
-    out = tm.mv_produce(action="compose", audio="a.wav", out=str(tmp_path), generate_images=True)
+    out = tm.mv_produce(action="compose", audio="a.wav", out=str(tmp_path), generate_images=True, engine="external")
     assert "回退" in out and "RENDER_FALLBACK_OK" in out
 
 

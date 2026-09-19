@@ -74,7 +74,9 @@ def read_csv(path, max_rows=100, delimiter=",", has_header=True):
             delim = "\t"
         text, used_enc = _csv_read_text(path)
         # 多读一行以准确判断是否被截断（旧实现用 >= limit，恰好 limit 行会误报截断）
-        rows = list(itertools.islice(_csv.reader(text.splitlines(), delimiter=delim), limit + 1))
+        # 用 StringIO 而非 splitlines()：引号内的换行是多行单元格的一部分，不能被拆掉
+        import io as _io
+        rows = list(itertools.islice(_csv.reader(_io.StringIO(text), delimiter=delim), limit + 1))
         if not rows:
             return "（空文件）"
         truncated = len(rows) > limit

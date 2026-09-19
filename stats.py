@@ -164,7 +164,15 @@ def estimate_cost(usage, model, day=None):
         + usage.get("cache_hit", 0) * price["cache_hit"]
         + usage.get("completion", 0) * price["completion"]
     ) / 1_000_000
-    if not is_peak_hour():
+    if usage.get("peak") is not None:
+        is_peak = bool(usage.get("peak"))
+    elif day and str(day) != date.today().isoformat():
+        # 历史回算：无用量发生时段的记录，按高峰价（不臆测折扣），避免「查看时刻
+        # 决定历史费用」（周末查看工作日高峰用量被错误打 5 折）。
+        is_peak = True
+    else:
+        is_peak = is_peak_hour()
+    if not is_peak:
         cost /= 2
     return cost
 

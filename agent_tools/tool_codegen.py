@@ -318,14 +318,21 @@ def _edit_bytes(image_bytes, prompt, size, mask_bytes=None):
 
 
 def _resolve_out(path, ext=".png", subdir="codegen"):
-    """输出路径解析 + 权限校验；未给则落到工作区子目录。返回 (path, err)。"""
+    """输出路径解析 + 权限校验；未给则落到工作区子目录。返回 (path, err)。
+
+    强制输出扩展名与目标格式一致（旧实现见 .png 就保留 → GIF 数据被写进 .png 文件）。
+    """
     p = str(path or "").strip()
     if p:
         out = permissions.resolve(p) or ""
         if not out:
             return "", "错误：输出路径无效"
-        if ext and not out.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
-            out += ext
+        if ext:
+            cur = os.path.splitext(out)[1].lower()
+            if not cur:
+                out += ext
+            elif cur != ext.lower():
+                out = os.path.splitext(out)[0] + ext
     else:
         base_dir = os.path.join(getattr(_dc, "WORKING_DIR", None) or permissions.WORKSPACE_DIR or os.getcwd(), subdir)
         out = os.path.join(base_dir, f"out_{time.strftime('%Y%m%d-%H%M%S')}{ext}")
@@ -356,6 +363,19 @@ def _pix_bytes(im):
     return b.getvalue()
 
 
+def _mask_png_bytes(m):
+    """把掩膜（L，非黑=重绘区）转成 OpenAI edits 需要的格式：
+    **重绘区 alpha=0（透明）**，其余 alpha=255。旧实现直接送 RGB→RGBA（alpha 全 255），
+    后端无法识别重绘范围，局部约束失效。"""
+    from PIL import Image as _I
+    mm = m.convert("L")
+    w, h = mm.size
+    alpha = mm.point(lambda v: 0 if v > 127 else 255)
+    rgba = _I.new("RGBA", (w, h), (0, 0, 0, 255))
+    rgba.putalpha(alpha)
+    return _pix_bytes(rgba)
+
+
 def _parse_hex(s, default=(0, 0, 0, 0)):
     m = re.match(r"^#?([0-9a-fA-F]{6})([0-9a-fA-F]{2})?$", str(s or "").strip())
     if not m:
@@ -379,9 +399,19 @@ def _fit(img, w, h):
 
 
 def _nearest_size(w, h):
-    allowed = (256, 512, 768, 1024, 1536, 2048)
-    near = lambda x: min(allowed, key=lambda a: abs(a - x))  # noqa: E731
-    return f"{near(w)}x{near(h)}"
+    """映射到 gpt-image-1 支持的尺寸（1024x1024 / 1536x1024 / 1024x1536）。
+
+    旧实现会产出 768x768 / 1536x1536 / 2048x2048 等后端非法尺寸 → /images 接口 400。
+    """
+    try:
+        w, h = int(w), int(h)
+    except (TypeError, ValueError):
+        return "1024x1024"
+    if w > h * 1.2:
+        return "1536x1024"
+    if h > w * 1.2:
+        return "1024x1536"
+    return "1024x1024"
 
 
 def _region_box(region, w, h):
@@ -395,33 +425,42 @@ def _region_box(region, w, h):
 
 
 def _frames_to_images(frames, cell, out_dir, subdir="frames"):
-    """frames 元素可为图片路径或内联 HTML 片段（以 < 开头）。返回 (PIL 列表, err)。"""
+    """frames 元素可为图片路径或内联 HTML 片段（以 < 开头）。返回 (PIL 列表, err)。
+
+    内联 HTML 渲染的中间帧写入**临时目录**并在结束时清理（旧实现写进工作区
+    codegen/frames/ 且从不删除，反复调用持续堆积）。
+    """
+    import shutil
+    import tempfile
+
     from PIL import Image
     imgs = []
-    for i, f in enumerate(frames or []):
-        s = str(f or "").strip()
-        if not s:
-            continue
-        if s.startswith("<"):
-            cw, ch = (cell or (512, 512))
-            d = os.path.join(out_dir, subdir)
-            try:
-                os.makedirs(d, exist_ok=True)
-            except OSError:
-                pass
-            tmp = os.path.join(d, f"frame_{i:03d}.png")
-            r = _dc.html_render(html=s, output=tmp, width=cw, height=ch, scale=1)
-            if isinstance(r, str) and r.startswith("错误"):
-                return [], r
-            imgs.append(Image.open(tmp).convert("RGBA"))
-        else:
-            im, e = _load_pil(s)
-            if e:
-                return [], e
-            imgs.append(im)
-    if not imgs:
-        return [], "错误：frames 为空"
-    return imgs, ""
+    tmpdir = None
+    try:
+        for i, f in enumerate(frames or []):
+            s = str(f or "").strip()
+            if not s:
+                continue
+            if s.startswith("<"):
+                cw, ch = (cell or (512, 512))
+                if tmpdir is None:
+                    tmpdir = tempfile.mkdtemp(prefix="wt_frames_")
+                tmp = os.path.join(tmpdir, f"frame_{i:03d}.png")
+                r = _dc.html_render(html=s, output=tmp, width=cw, height=ch, scale=1)
+                if isinstance(r, str) and r.startswith("错误"):
+                    return [], r
+                imgs.append(Image.open(tmp).convert("RGBA").copy())
+            else:
+                im, e = _load_pil(s)
+                if e:
+                    return [], e
+                imgs.append(im)
+        if not imgs:
+            return [], "错误：frames 为空"
+        return imgs, ""
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _save_gif(imgs, path, fps, loop, background=(0, 0, 0, 255)):
@@ -503,12 +542,12 @@ def image_inpaint(image="", prompt="", region="", mask="", output="", feather=12
     try:
         os.makedirs(os.path.dirname(mask_path) or ".", exist_ok=True)
         with open(mask_path, "wb") as mf:
-            mf.write(_pix_bytes(m.convert("RGBA")))
+            mf.write(_mask_png_bytes(m))
     except OSError:
         pass
 
     size = _nearest_size(w, h)
-    data, e = _edit_bytes(_pix_bytes(base_img), prompt, size, _pix_bytes(m.convert("RGB")))
+    data, e = _edit_bytes(_pix_bytes(base_img), prompt, size, _mask_png_bytes(m))
     mode = "edits"
     if e:
         # 兜底：按掩膜包围盒生成补丁，羽化合成

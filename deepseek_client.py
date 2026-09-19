@@ -766,7 +766,19 @@ def _load_webhooks():
         with open(WEBHOOK_CONFIG_FILE, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
-            return {k: _decrypt_secret(v) for k, v in data.items()}
+            out = {}
+            for k, v in data.items():
+                if isinstance(v, dict):
+                    # 字典形式的内层 url/secret 也要 DPAPI 解密（此前仅对顶层字符串解密，
+                    # 导致 dict 里的 secret 仍是 dpapi: 密文，HMAC 签名与接收方不一致）
+                    nv = dict(v)
+                    for kk in ("url", "secret"):
+                        if kk in nv:
+                            nv[kk] = _decrypt_secret(nv[kk])
+                    out[k] = nv
+                else:
+                    out[k] = _decrypt_secret(v)
+            return out
         return {}
     except Exception:
         logging.exception("读取 webhook 配置失败")
@@ -803,6 +815,7 @@ def send_webhook_notify(text, title="鲸语提醒", channel=""):
         return "错误：未配置 Webhook（数据目录 webhooks.json 为空）"
     candidates = ({str(channel).strip().lower(): cfgs.get(channel)} if cfgs.get(channel) else {}) if channel else cfgs
     sent = []
+    _fail = False
     for name, cfg in candidates.items():
         url, secret = _webhook_url_secret(cfg)
         if not url:
@@ -829,10 +842,30 @@ def send_webhook_notify(text, title="鲸语提醒", channel=""):
                 timeout=10,
             )
             ok = resp.status_code < 400
-            sent.append(f"{name}:{'✅' if ok else '❌' + str(resp.status_code)}")
+            detail = resp.status_code
+            # 钉钉/企微/ServerChan 业务错误常以 HTTP 200 + errcode/code 返回，需解析判定
+            try:
+                j = resp.json()
+                if isinstance(j, dict):
+                    for key in ("errcode", "code"):
+                        if key in j:
+                            if int(j.get(key) or -1) != 0:
+                                ok = False
+                                detail = j.get("errmsg") or j.get("message") or j.get(key)
+                            break
+            except Exception:
+                pass
+            if ok:
+                sent.append(f"{name}:✅")
+            else:
+                _fail = True
+                sent.append(f"{name}:❌ {detail}")
         except Exception as e:
+            _fail = True
             sent.append(f"{name}:❌ {e}")
-    return "；".join(sent) if sent else "错误：没有可用的 Webhook 通道"
+    if not sent:
+        return "错误：没有可用的 Webhook 通道"
+    return ("错误：" + "；".join(sent)) if _fail else "；".join(sent)
 
 
 def _webhook_payload(channel, title, text):
@@ -3094,25 +3127,47 @@ def _win_installed_apps():
 def _proc_capture(argv, timeout):
     """直接以 argv 执行子进程并收集输出（不经 shell），返回 (rc, 输出文本)。"""
     import tempfile
-    with tempfile.SpooledTemporaryFile(
-        max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace"
-    ) as out:
+    with tempfile.SpooledTemporaryFile(max_size=1 << 20, mode="w+b") as out:
         proc = subprocess.Popen(
             argv, stdout=out, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace",
             cwd=WORKING_DIR or permissions.WORKSPACE_DIR or None,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         try:
-            proc.wait(timeout=timeout)
+            # timeout<=0 = 不限（与全局 0=不限 契约一致；旧实现 wait(0) 会立即超时）
+            proc.wait(timeout=(timeout if timeout and timeout > 0 else None))
         except subprocess.TimeoutExpired:
             _kill_tree(proc)
             return proc.returncode or -1, f"[超时中止：>{timeout} 秒]"
         out.seek(0)
-        data = out.read(20000)
+        raw = out.read(20000)
         out.seek(0, os.SEEK_END)
-        if out.tell() > 20000:
-            data += "\n[输出已截断]"
-        return proc.returncode, data
+        truncated = out.tell() > 20000
+    data = _decode_proc_bytes(raw)
+    if truncated:
+        data += "\n[输出已截断]"
+    return proc.returncode, data
+
+
+def _decode_proc_bytes(raw):
+    """子进程字节输出多编码回退解码（cmd/winget 等按 GBK 输出，不能硬按 UTF-8）。"""
+    if not raw:
+        return ""
+    import locale
+    cands = ["utf-8"]
+    try:
+        _pref = locale.getpreferredencoding(False)
+        if _pref:
+            cands.append(_pref)
+    except Exception:
+        pass
+    cands += ["gbk", "latin-1"]
+    for enc in cands:
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", "replace")
 
 
 def _extract_json_obj(text, must_keys=("left",)):

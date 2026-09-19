@@ -62,6 +62,10 @@ def readonly_stmt(sql):
     upper = stmt.upper()
     if not upper.startswith(("SELECT", "SHOW", "DESC", "PRAGMA", "EXPLAIN")):
         return False
+    # EXPLAIN ANALYZE 在 MySQL 8.0.18+ / PG 会**真实执行**被分析的语句（含 DELETE/
+    # UPDATE/INSERT），绝不能当只读放行（否则只读工具可执行写操作）。
+    if upper.startswith("EXPLAIN") and re.search(r"\bANALYZE\b", upper):
+        return False
     # 分号隔离的附加语句（SELECT 1; DROP TABLE ...）：带内部分号的整句拒绝
     if ";" in stmt.rstrip(";"):
         return False
@@ -87,14 +91,15 @@ def force_limit(stmt, limit):
     s = str(stmt or "").strip().rstrip().rstrip(";").rstrip()
     if not s.upper().startswith("SELECT"):
         return s
-    # 剥除尾部注释后再追加，确保 LIMIT 是真正的语句成分
-    s = re.sub(r"\s+--[^\n]*$", "", s).rstrip()
-    s = re.sub(r"/\*.*?\*/\s*$", "", s, flags=re.S).rstrip()
-    core = re.sub(r"--[^\n]*", "", s)
+    # 判定已有 LIMIT 时先剥离字符串字面量与注释，避免把 'LIMIT' 字面量误当已有 LIMIT；
+    # 追加用**换行**，避免行注释 `-- ...` 把 LIMIT 吞掉（`SELECT * FROM t--c`）。
+    core = re.sub(r"'(?:''|[^'])*'", "''", s)
+    core = re.sub(r'"(?:""|[^"])*"', '""', core)
+    core = re.sub(r"--[^\n]*", "", core)
     core = re.sub(r"/\*.*?\*/", "", core, flags=re.S)
     if re.search(r"\bLIMIT\b", core, re.I):
         return s
-    return s + f" LIMIT {max(1, int(limit))}"
+    return s + f"\nLIMIT {max(1, int(limit))}"
 
 
 def db_preview_sql(stmt):
@@ -118,7 +123,7 @@ def table_to_md(rows, cell_max=TABLE_CELL_MAX):
     新增空行整行过滤：全空行（如 CSV 中间空行）不留 —— 与 docx/pptx 读取
     （先剔除空文本段落再转表）行为对齐，避免表格中出现空行噪声。
     """
-    rows = [[str(c).strip() for c in r] for r in rows]
+    rows = [[("" if c is None else str(c)).strip() for c in r] for r in rows]
     if cell_max and cell_max > 0:  # cell_max<=0 = 不截断
         rows = [[c[:cell_max] + ("…" if len(c) > cell_max else "") for c in r] for r in rows]
     rows = [[c.replace("|", "\\|") for c in r] for r in rows]

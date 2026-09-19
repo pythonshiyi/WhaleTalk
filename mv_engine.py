@@ -734,8 +734,15 @@ def _frame_image(Image, ImageDraw, ImageFilter, w, h, pal, i, total, sh=None,
     import random
     sh = sh or {}
     lyric = str(sh.get("lyric_ref") or "")
-    # 构图随歌词变化（同句稳定）：画面与内容相关，而非纯占位
-    rnd = random.Random((hash(lyric) & 0xFFFFFFFF) if lyric else (1000 + i))
+    # 构图随歌词变化（同句稳定）：画面与内容相关，而非纯占位。
+    # 用 md5 摘要播种而非 hash()——后者默认每进程加盐，同一歌词两次运行结果不同，
+    # 破坏「确定性帧/可复现」承诺。
+    if lyric:
+        import hashlib
+        seed = int(hashlib.md5(lyric.encode("utf-8", "replace")).hexdigest()[:8], 16)
+    else:
+        seed = 1000 + i
+    rnd = random.Random(seed)
     top, mid, base, accent = pal
     phase = i % 4                       # 分段调色：整体明暗/冷暖轻微起伏
     shift = (phase - 1.5) * 0.05

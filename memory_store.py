@@ -128,7 +128,9 @@ def _load_brain_memories():
     try:
         bk.load_manifest()
         return bk.load_memories()
-    except Exception:
+    except (Exception, SystemExit):
+        # brainkit.load_manifest 在 manifest 缺失时 raise SystemExit；不得让它穿透
+        # 请求线程（会变成无响应）。未初始化 → 返回空。
         return []
     finally:
         if switched and prev is not None:

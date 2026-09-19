@@ -353,7 +353,8 @@ def remember(text, *, origin="agent", type="", tags="", key=None,
         facts.append(entry)
         cap = _max_items()
         if cap and len(facts) > cap:
-            # 溢出优先丢最旧的已作废条目（active 一律保留）
+            # 溢出优先丢最旧的已作废条目；active **一律保留**（cap 是软上限，
+            # 不得为解决溢出而静默丢弃最旧的 active 记忆——那是数据丢失）。
             excess = len(facts) - cap
             keep, dropped = [], 0
             for f in facts:
@@ -361,7 +362,7 @@ def remember(text, *, origin="agent", type="", tags="", key=None,
                     dropped += 1
                     continue
                 keep.append(f)
-            facts = keep[-cap:]
+            facts = keep
         data["facts"] = facts
         if not _save(data):
             return {"ok": False, "action": "error", "message": "错误：记忆写入失败"}
@@ -385,13 +386,20 @@ def invalidate(match, reason="") -> Tuple[bool, str]:
         return False, f"未找到该记忆：{match}"
     with _lock:
         data = _load()
+        hit = False
         for raw in data.get("facts") or []:
-            if _make_id(raw.get("ts"), str(raw.get("value") or raw.get("text") or "")) == f["id"]:
+            # 优先按条目自身存储的 id 匹配：update_memory 会改 value/ts 但不改 id，
+            # 仅用 `_make_id(raw.ts, raw.value)` 反查会失配（作废/恢复静默失效）。
+            rid = str(raw.get("id") or "")
+            if (rid and rid == f["id"]) or _make_id(raw.get("ts"), str(raw.get("value") or raw.get("text") or "")) == f["id"]:
                 raw["status"] = "superseded"
                 raw["superseded_at"] = _now()
                 raw["reason"] = str(reason or "手动作废")[:120]
                 raw["id"] = f["id"]
+                hit = True
                 break
+        if not hit:
+            return False, f"作废失败：未匹配到该记忆（{match}）"
         if not _save(data):
             return False, "作废失败：写入错误"
     return True, f"已作废：{str(f.get('value'))[:60]}"
@@ -406,14 +414,19 @@ def restore(match) -> Tuple[bool, str]:
         return True, "该记忆已是生效状态"
     with _lock:
         data = _load()
+        hit = False
         for raw in data.get("facts") or []:
-            if _make_id(raw.get("ts"), str(raw.get("value") or raw.get("text") or "")) == f["id"]:
+            rid = str(raw.get("id") or "")
+            if (rid and rid == f["id"]) or _make_id(raw.get("ts"), str(raw.get("value") or raw.get("text") or "")) == f["id"]:
                 raw["status"] = "active"
                 raw["superseded_at"] = ""
                 raw["reason"] = ""
                 raw["superseded_by"] = ""
                 raw["id"] = f["id"]
+                hit = True
                 break
+        if not hit:
+            return False, f"恢复失败：未匹配到该记忆（{match}）"
         if not _save(data):
             return False, "恢复失败：写入错误"
     return True, f"已恢复：{str(f.get('value'))[:60]}"
@@ -443,6 +456,8 @@ def render_for_context(limit=6) -> Optional[str]:
 
 
 def reset():
-    """清空（仅测试用）。"""
+    """清空全部记忆（仅测试用）。"""
     with _lock:
-        pass
+        if not MEMORY_PATH:
+            return
+        _save({"enabled": True, "facts": []})

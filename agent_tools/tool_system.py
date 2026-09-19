@@ -598,6 +598,8 @@ def self_evolve(feature_name, files, project_dir=None):
     # 100% 恢复生产文件，不依赖 git 提交基线（无提交仓库也安全）。
     orig = {}
     for f in files[:20]:
+        if not isinstance(f, dict):
+            continue
         rel = str(f.get("path") or "").strip().replace("\\", "/")
         if not rel or ".." in rel.split("/"):
             continue
@@ -639,14 +641,16 @@ def self_evolve(feature_name, files, project_dir=None):
         except Exception as e:
             failed.append((rel, str(e)))
 
-    if not applied:
-        for rel, oc in orig.items():  # 恢复任何被部分应用的备份
+    if failed:
+        # 只要有文件未能应用，补丁即不完整——整体回滚，不得报告「进化完成」
+        # （旧实现仅在「全部失败」时回滚，部分失败被静默忽略，造成假成功）。
+        for rel, oc in orig.items():
             _evolve_restore_file(base, rel, oc)
         try:
             _git(["checkout", cur])
         except Exception:
             pass
-        return "错误：补丁全部失败：" + "；".join(f"{r}({why})" for r, why in failed)
+        return "错误：补丁未能全部应用，已回滚：" + "；".join(f"{r}({why})" for r, why in failed)
 
     # 验证链（四层串行闸）：语法编译 → lint → 导入冒烟 → 测试。
     # 任何一级失败立即回滚，杜绝「改完就以为成功」的瞎进化。
@@ -931,14 +935,16 @@ def notify_desktop(title="鲸语提醒", text="", fallback_sound=True, silent=Fa
         fd, ps_path = tempfile.mkstemp(suffix=".ps1")
         os.close(fd)
         try:
-            title_quoted = "'" + str(title).replace("'", "''") + "'"
-            body_quoted = "'" + body.replace("'", "''") + "'"
-            # 先替换标题为哨兵，再替换正文，最后回填标题：防止标题/正文互相包含对方占位符
+            # 模板已用单引号包裹占位符（CreateTextNode('@TITLE@')），此处只做单引号转义，
+            # 不能再包一层引号（否则变成 CreateTextNode(''x'') 非法 PowerShell）。
+            title_quoted = str(title).replace("'", "''")
+            body_quoted = body.replace("'", "''")
+            # 替换顺序：先 duration/silent，再标题哨兵，最后注入正文——正文放最后，避免其
+            # 内容里的 @DURATION@/@SILENT@/@TITLE@ 字面量被二次替换。
+            script = _NOTIFY_PS.replace("@DURATION@", dur).replace("@SILENT@", silent_flag)
             title_sentinel = "__WHALETALK_TITLE__"
-            script = _NOTIFY_PS.replace("@TITLE@", title_sentinel)
+            script = script.replace("@TITLE@", title_sentinel)
             script = script.replace("@BODY@", body_quoted)
-            script = script.replace("@DURATION@", dur)
-            script = script.replace("@SILENT@", silent_flag)
             script = script.replace(title_sentinel, title_quoted)
             with open(ps_path, "w", encoding="utf-8-sig") as f:
                 f.write(script)

@@ -8,8 +8,8 @@ import re
 from security import _safe_url
 
 BING_RESULT_RE = re.compile(
-    r'<li class="b_algo".*?<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a></h2>'
-    r"(.*?)(?=<li class=\"b_algo\"|</ol>)",
+    r'<li class="b_algo[^"]*".*?<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a></h2>'
+    r"(.*?)(?=<li class=\"b_algo[^\"]*\"|</ol>)",
     re.S,
 )
 DDG_RESULT_RE = re.compile(

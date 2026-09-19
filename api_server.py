@@ -2830,6 +2830,20 @@ def _auto_checkpoint(name):
         "chain": chain,
     }
     try:
+        # 已存在「手动断点」时不覆盖：自动断点只在没有手动断点（或现存为自动）时落盘，
+        # 否则用户手动保存的进度会被自动任务名/清空的 pending 顶掉。
+        try:
+            if os.path.exists(CHECKPOINT_PATH):
+                with open(CHECKPOINT_PATH, encoding="utf-8") as _f:
+                    _ex = json.load(_f)
+                if isinstance(_ex, dict) and not _ex.get("auto"):
+                    if st is not None:
+                        st.checkpoint = n
+                    else:
+                        _LAST_AUTO_CHECKPOINT = n
+                    return 0
+        except Exception:
+            pass
         os.makedirs(os.path.dirname(CHECKPOINT_PATH) or ".", exist_ok=True)
         tmp = CHECKPOINT_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -3909,38 +3923,52 @@ def _scheduler_loop():
                 if not s.get("enabled"):
                     continue
                 action = str(s.get("action") or "message")
+                # 稳定的任务键（优先 id；无 id 时用 时间表达式+名+内容，避免 id(s) 每轮变化）
+                task_key = str(s.get("id") or "|".join(str(s.get(k) or "") for k in ("cron", "every", "time", "name", "text")))
                 fired = False
+                pending_marker = None
                 if s.get("every"):
                     try:
                         every = max(1, int(s["every"]))
                     except (TypeError, ValueError):
                         continue
-                    key = ("every", str(s.get("name") or s.get("text") or id(s)))
+                    key = ("every", task_key)
                     if key not in last_checked_minute:
                         last_checked_minute[key] = int(now.timestamp())
-                    else:
-                        if int(now.timestamp()) - last_checked_minute[key] >= every * 60:
-                            fired = True
-                            last_checked_minute[key] = int(now.timestamp())
+                    elif int(now.timestamp()) - last_checked_minute[key] >= every * 60:
+                        fired = True
+                        pending_marker = ("every", key)
                 elif s.get("time"):
                     t = str(s["time"]).strip()
                     try:
                         if _dt.strptime(t, "%H:%M").strftime("%H:%M") == now.strftime("%H:%M") and s.get("last") != now.strftime("%Y-%m-%d"):
                             fired = True
-                            s["last"] = now.strftime("%Y-%m-%d")
+                            pending_marker = ("time", now.strftime("%Y-%m-%d"))
                     except Exception:
                         continue
                 elif s.get("cron"):
                     if shared.cron_match(s["cron"], now):
-                        key = ("cron", s["cron"])
+                        key = ("cron", task_key)
                         cur = now.strftime("%Y%m%d%H%M")
-                        # 同一分钟只触发一次；下一匹配分钟（或跨天后同分钟）再次触发
+                        # 同一任务同一分钟只触发一次（按任务 id，不用 cron 表达式——
+                        # 否则两条同表达式任务同分钟只跑一条）
                         if last_checked_minute.get(key) != cur:
-                            last_checked_minute[key] = cur
                             fired = True
+                            pending_marker = ("cron", key, cur)
                 if fired:
                     if s.get("off_peak") and shared.is_peak_hour(now):
+                        # 高峰不顺延去重标记：低谷时仍会触发（此前先置标记再 continue，
+                        # 导致 off_peak 任务在高峰被永久丢弃、从不顺延）
                         continue
+                    # 真正触发后才写入去重标记
+                    if pending_marker:
+                        kind = pending_marker[0]
+                        if kind == "every":
+                            last_checked_minute[pending_marker[1]] = int(now.timestamp())
+                        elif kind == "time":
+                            s["last"] = pending_marker[1]
+                        elif kind == "cron":
+                            last_checked_minute[pending_marker[1]] = pending_marker[2]
                     _dispatch_schedule(s, action)
                     s["last_run"] = int(now.timestamp())
                     stores.save_schedules(SCHEDULES_PATH, items)

@@ -159,6 +159,7 @@ def mv_compose(storyboard, output="", resolution="1920x1080", fps=30, duration=3
 
     mats, seg_durs, audio_parts, cues, log = [], [], [], [], []
     timeline = 0.0
+    n_shots = len(shots)
     for i, shot in enumerate(shots):
         if not isinstance(shot, dict):
             return f"错误：第 {i + 1} 个镜头应为对象（含 prompt/image/narration 等字段）"
@@ -197,8 +198,6 @@ def mv_compose(storyboard, output="", resolution="1920x1080", fps=30, duration=3
                     sd = max(sd, round(ad + 0.35, 3))
             else:
                 log.append(f"第 {i + 1} 镜配音跳过：{str(rr)[:80]}")
-        seg_durs.append(sd)
-
         # 3) 归一化音频（旁白 pad 到 sd；无旁白生成等长静音，保证音画严格对齐）
         norm = os.path.join(workdir, f"aud_{i:03d}.wav")
         okk, aerr = _mv_norm_audio(audio_file, sd, norm)
@@ -207,10 +206,16 @@ def mv_compose(storyboard, output="", resolution="1920x1080", fps=30, duration=3
         else:
             log.append(f"第 {i + 1} 镜音频归一化失败：{aerr}")
 
-        # 4) 字幕轨
+        # 4) 字幕轨 + 转场时序：转场使相邻镜重叠 trans 秒，本镜起点=上一镜终点-trans；
+        #    最后一镜补回累计重叠，保证成片总长≈各镜时长之和（否则 -shortest 会截断音轨/旁白）。
+        start = max(0.0, timeline - (trans if i > 0 else 0.0))
+        sd_eff = sd
+        if i == n_shots - 1 and trans > 0 and i > 0:
+            sd_eff = round(sd + trans * i, 3)
         if subtitle and sub_txt:
-            cues.append((timeline, timeline + sd, sub_txt))
-        timeline += sd
+            cues.append((start, start + sd_eff, sub_txt))
+        timeline = start + sd_eff
+        seg_durs.append(sd_eff)
 
     # 合并旁白（各段等长归一化后 concat -c copy，总长 = 视频总长）
     combined_audio = ""
@@ -533,6 +538,48 @@ def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
         return _mv_report("storyboard", ev, checks,
                           extra=["下一步：把该 storyboard 传给 mv_compose 出图合成。"])
 
+    if action == "compose":
+        # 用给定图片目录成片（不再落到 external 报「未找到 AI MV 程序」）
+        _d = permissions.resolve(images_dir) if str(images_dir or "").strip() else ""
+        _exts = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+        mates = []
+        if _d and os.path.isdir(_d):
+            mates = sorted(os.path.join(_d, f) for f in os.listdir(_d) if f.lower().endswith(_exts))
+        if not mates:
+            return "错误：compose 需要 images_dir，且目录内需有图片（png/jpg/jpeg/webp/bmp）"
+        srt_path = ""
+        if lines:
+            srt_dir = tempfile.mkdtemp(prefix="wt_mv_srt_")
+            srt_path = os.path.join(srt_dir, "lyrics.srt")
+            me.build_srt(lines, srt_path)
+        out_mp4 = str(output or "").strip()
+        if not out_mp4:
+            out_mp4 = os.path.join(permissions.WORKSPACE_DIR or os.path.dirname(audio_abs),
+                                   "video", f"mv_{datetime.now():%Y%m%d_%H%M%S}.mp4")
+        if not out_mp4.lower().endswith(".mp4"):
+            out_mp4 += ".mp4"
+        n = len(mates)
+        total = dur if dur > 0 else sum(s["duration"] for s in shots)
+        each = round(total / n, 3) if n else 3.0
+        _res, _note, err = _mv_compose(mates, out_mp4, durations=[each] * n,
+                                       resolution=str(resolution), fps=int(fps),
+                                       effect=str(effect or "kenburns"),
+                                       transition=float(transition or 0.0),
+                                       audio=audio_abs, subtitle=srt_path)
+        if err:
+            return f"错误：原生 compose 合成失败：{err}"
+        produced = os.path.isfile(out_mp4) and os.path.getsize(out_mp4) > 0
+        if not produced:
+            return f"错误：原生 compose 未产出成片（{out_mp4}）"
+        checks = [("成片存在且非空", produced, f"{os.path.getsize(out_mp4) / 1048576:.2f} MB"),
+                  ("图片数>0", n > 0, f"{n} 张")]
+        vd = _ff_media_duration(out_mp4)
+        if vd and dur:
+            checks.append(("成片时长≈音频", abs(vd - dur) <= 1.5, f"{vd:.2f}s / {dur:.2f}s"))
+        ev = {"引擎": "native（compose）", "成片": out_mp4, "BPM": analysis.get("bpm"),
+              "时长": f"{dur:.2f}s", "图片": n, "风格": _mv_palette(style)}
+        return _mv_report("compose", ev, checks)
+
     # render：PIL 确定性帧 + 原生歌词 SRT + ffmpeg 合成
     frames_dir = os.path.join(permissions.WORKSPACE_DIR or os.path.dirname(audio_abs),
                               "video", f"mvnative_{datetime.now():%Y%m%d_%H%M%S}")
@@ -654,7 +701,13 @@ def mv_produce(action="plan", audio="", lyrics="", style="citypop_night_v1", out
 
     # ── 原生引擎优先（自建、不依赖外部）──────────────────────────────
     native_eng = str(engine or "native").lower() != "external"
-    if native_eng and act in ("plan", "storyboard", "render") and _mv_native_available():
+    if native_eng and act == "styles":
+        # 原生风格包无需音频/外部程序，直接返回（旧实现落到 external 并因缺程序失败）
+        return ("[native 原生引擎] 可用风格包：\n"
+                "- citypop_night_v1（城市夜景/霓虹）\n"
+                "- qinghua（青花/国风）\n"
+                "（engine=native 无需任何外部 MV 程序）")
+    if native_eng and act in ("plan", "storyboard", "compose", "render") and _mv_native_available():
         audio_abs = _mv_resolve_audio(audio)
         if not audio_abs:
             return f"错误：音频文件不存在或未提供：{audio}"

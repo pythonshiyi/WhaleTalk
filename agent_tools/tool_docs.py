@@ -234,8 +234,10 @@ def read_excel(path, sheet=0, max_rows=100, has_header=True):
     try:
         wb = load_workbook(p, read_only=True, data_only=True)
         try:
-            if isinstance(sheet, int):
-                ws = wb.worksheets[min(sheet, len(wb.worksheets) - 1)] if wb.worksheets else wb.active
+            if isinstance(sheet, int) or (isinstance(sheet, str) and sheet.strip().isdigit()):
+                # 兼容 JSON 数字字符串序号（schema 声明为 string，'0'/'1' 此前会 KeyError）
+                idx = int(sheet)
+                ws = wb.worksheets[min(idx, len(wb.worksheets) - 1)] if wb.worksheets else wb.active
             else:
                 ws = wb[sheet]
         except KeyError:
@@ -356,18 +358,35 @@ def mobi_read(path, max_chars=20000):
         return p_or_err[1]
     p, limit = p_or_err
     try:
-        from mobi import Mobi
+        import mobi as _mobi
     except ImportError:
         return "错误：需要 mobi（pip install mobi）"
     try:
-        book = Mobi(p)
-        book.parse()
-        text = str(book) if hasattr(book, "__str__") else ""
-        if not text:
-            text = "\n\n".join(str(getattr(book, field, "")) for field in ("title", "author", "publisher", "description"))
+        text = ""
+        # 兼容不同 mobi 实现的 API：mobi.Mobi（iscc 版）/ mobi.extract（0.4.x，无 Mobi 类）
+        if hasattr(_mobi, "Mobi"):
+            book = _mobi.Mobi(p)
+            book.parse()
+            text = str(book) if hasattr(book, "__str__") else ""
+            if not text:
+                text = "\n\n".join(str(getattr(book, field, "")) for field in ("title", "author", "publisher", "description"))
+        elif hasattr(_mobi, "extract"):
+            res = _mobi.extract(p)
+            if isinstance(res, tuple) and len(res) >= 2:
+                try:
+                    with open(res[1], encoding="utf-8", errors="replace") as f:
+                        text = f.read()
+                except Exception:
+                    text = ""
+            elif isinstance(res, (bytes, bytearray)):
+                text = res.decode("utf-8", "replace")
+            elif isinstance(res, str):
+                text = res
+        else:
+            return "错误：当前 mobi 库无可用的解析接口，建议转 EPUB 后用 epub_read"
         if len(text) > limit:
             text = text[:limit] + f"\n[正文已截断前 {limit} 字符]"
-        return text or "（MOBI 解析无文本）"
+        return text or "（MOBI 解析无文本，可先转 EPUB 再读）"
     except Exception as e:
         return f"错误：读取 MOBI 失败: {e}"
 
@@ -2470,7 +2489,11 @@ def pptx_create(path, slides=None, outline="", theme="default", title="", cover_
             prs = Presentation(tpl)
         else:
             prs = Presentation()
-            prs.slide_width = prs.slide_width  # 保持默认 16:9（python-pptx 默认即 16:9）
+            # python-pptx 默认 4:3（10×7.5in），而本工具所有版式坐标按 16:9 设计——
+            # 必须显式设 13.333×7.5in，否则封面/右侧配图/表格越出画布被裁剪。
+            from pptx.util import Inches as _Inches
+            prs.slide_width = _Inches(13.333)
+            prs.slide_height = _Inches(7.5)
         # 标题页
         need_cover = bool(str(title or "").strip())
         if need_cover:
@@ -3608,7 +3631,9 @@ def _html_to_pngs(items, w, h, sc, full_page, base_dir=None):
                 except Exception:
                     browser = p.chromium.launch(args=["--no-sandbox"])
                 for hdoc, out_path, needs_ready in todo:
-                    pg = browser.new_page(viewport={"width": w * sc, "height": h * sc},
+                    # 视口用 CSS 尺寸 w/h，仅靠 device_scale_factor 超采样——
+                    # 视口也乘 sc 会让截图尺寸变成 w*sc*sc，且页面固定 w×h 时只覆盖左上 1/sc²。
+                    pg = browser.new_page(viewport={"width": w, "height": h},
                                           device_scale_factor=sc)
                     try:
                         tmp_files.append(_goto_html_doc(pg, hdoc, base_dir, expect_ready=needs_ready))
@@ -3649,7 +3674,7 @@ def _html_to_png(content, out_path, w, h, sc, full_page, base_dir=None, media=No
                     browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
                 except Exception:
                     browser = p.chromium.launch(args=["--no-sandbox"])
-                pg = browser.new_page(viewport={"width": int(w) * int(sc), "height": int(h) * int(sc)},
+                pg = browser.new_page(viewport={"width": int(w), "height": int(h)},
                                       device_scale_factor=int(sc))
                 tmp = _goto_html_doc(pg, html_doc, base_dir, media=media,
                                      wait_selector=wait_selector, expect_ready=needs_ready)
@@ -4317,10 +4342,29 @@ def pdf_toolkit(action, path="", output="", paths=None, pages="", text="", passw
             os.makedirs(os.path.dirname(op) or ".", exist_ok=True)
             return op
 
+        def _save(doc, op, src, **kw):
+            """保存 PDF：若输出==源文件（原地操作），先存临时文件再原子替换
+            （PyMuPDF 不支持对已打开文件原地 save，旧实现在缺 output 时必然失败）。"""
+            if os.path.abspath(op) == os.path.abspath(src):
+                import tempfile
+                fd, tmp = tempfile.mkstemp(dir=(os.path.dirname(op) or "."), suffix=".tmp.pdf")
+                os.close(fd)
+                try:
+                    doc.save(tmp, **kw)
+                    os.replace(tmp, op)
+                finally:
+                    if os.path.exists(tmp):
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
+            else:
+                doc.save(op, **kw)
+
         if act == "info":
-            doc = _open(path)
-            md = doc.metadata or {}
-            return f"页数：{doc.page_count}\n标题：{md.get('title') or '—'}\n作者：{md.get('author') or '—'}\n加密：{bool(doc.is_encrypted)}"
+            with _open(path) as doc:
+                md = doc.metadata or {}
+                return f"页数：{doc.page_count}\n标题：{md.get('title') or '—'}\n作者：{md.get('author') or '—'}\n加密：{bool(doc.is_encrypted)}"
         if act == "merge":
             if not isinstance(paths, list) or len(paths) < 2:
                 return "错误：merge 需要 paths（至少 2 个 PDF）"
@@ -4392,14 +4436,14 @@ def pdf_toolkit(action, path="", output="", paths=None, pages="", text="", passw
                     y = page.rect.height - 26 if position.startswith("bottom") else 20
                     page.insert_textbox(fitz.Rect(0, y, page.rect.width, y + 22), t,
                                         fontsize=float(fontsize), fontname=fname, color=col, align=1)
-            doc.save(op)
+            _save(doc, op, path)
             doc.close()
             permissions.audit("pdf_toolkit", op, act)
             return f"已{'添加水印' if act == 'watermark' else '添加页码'} → {op}"
         if act == "compress":
             doc = _open(path)
             op = _out(output) if str(output or "").strip() else permissions.resolve(path)
-            doc.save(op, garbage=4, deflate=True, clean=True)
+            _save(doc, op, path, garbage=4, deflate=True, clean=True)
             doc.close()
             return f"已压缩 → {op}（{os.path.getsize(op) / 1024:.0f} KB）"
         if act == "encrypt":
@@ -4407,8 +4451,8 @@ def pdf_toolkit(action, path="", output="", paths=None, pages="", text="", passw
                 return "错误：encrypt 需要 password"
             doc = _open(path)
             op = _out(output) if str(output or "").strip() else permissions.resolve(path)
-            doc.save(op, encryption=fitz.PDF_ENCRYPT_AES_256,
-                     owner_pw=str(owner_password or password), user_pw=str(password))
+            _save(doc, op, path, encryption=fitz.PDF_ENCRYPT_AES_256,
+                  owner_pw=str(owner_password or password), user_pw=str(password))
             doc.close()
             permissions.audit("pdf_toolkit", op, "encrypt")
             return f"已加密 → {op}"
@@ -4431,6 +4475,7 @@ def pdf_toolkit(action, path="", output="", paths=None, pages="", text="", passw
                     with open(fp, "wb") as f:
                         f.write(info["image"])
                     n += 1
+            doc.close()
             return f"已导出 {n} 张图片 → {outdir}"
         if act == "to_images":
             doc = _open(path)
@@ -4446,6 +4491,7 @@ def pdf_toolkit(action, path="", output="", paths=None, pages="", text="", passw
                 pix = page.get_pixmap(matrix=fitz.Matrix(z, z), alpha=False)
                 pix.save(os.path.join(outdir, f"p{i + 1:02d}.png"))
                 n += 1
+            doc.close()
             return f"已导出 {n} 页图片 → {outdir}"
         if act == "set_toc":
             if not isinstance(toc, list) or not toc:
@@ -4453,7 +4499,7 @@ def pdf_toolkit(action, path="", output="", paths=None, pages="", text="", passw
             doc = _open(path)
             op = _out(output) if str(output or "").strip() else permissions.resolve(path)
             doc.set_toc([[int(t[0]), str(t[1]), int(t[2])] for t in toc])
-            doc.save(op)
+            _save(doc, op, path)
             doc.close()
             return f"已写入目录书签（{len(toc)} 条）→ {op}"
         return f"错误：未知 action：{action}"

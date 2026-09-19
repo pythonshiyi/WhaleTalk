@@ -76,10 +76,11 @@ def _detect_text_encoding(path):
         return "utf-8", False
     if raw.startswith(b"\xef\xbb\xbf"):
         return "utf-8-sig", False
-    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return "utf-16", False
+    # 先判 UTF-32（其 BOM `xff\xfe\x00\x00` 也以 `\xff\xfe` 开头，会被 UTF-16 误判）
     if raw.startswith((b"\x00\x00\xfe\xff", b"\xff\xfe\x00\x00")):
         return "utf-32", False
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "utf-16", False
     try:
         raw.decode("utf-8")
         return "utf-8", False
@@ -93,6 +94,24 @@ def _detect_text_encoding(path):
         except UnicodeDecodeError:
             continue
     return "latin-1", True
+
+
+def _write_with_encoding(path, content, enc):
+    """按指定编码原子写（保留原文编码，避免把 GBK 文件改写成 UTF-8 损坏中文）。"""
+    import tempfile
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=enc, errors="replace", newline="") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 @tool(
@@ -260,7 +279,9 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
         # 读入上限：允许目录内也可能有 GB 级文件，全量读入内存会 OOM（<=0 = 不限，用户可配）
         if EDIT_FILE_MAX_SIZE and EDIT_FILE_MAX_SIZE > 0 and os.path.getsize(p) > EDIT_FILE_MAX_SIZE:
             return f"错误：文件超过 {EDIT_FILE_MAX_SIZE // 1024 // 1024}MB 上限，请改用其他方式处理"
-        with open(p, encoding="utf-8", errors="replace") as f:
+        # 按探测编码读取：GBK/GB18030 文件按 UTF-8 硬读会中文失配、写回即损坏
+        src_enc, _fb = _detect_text_encoding(p)
+        with open(p, encoding=src_enc, errors="replace") as f:
             content = f.read()
     except Exception as e:
         return f"错误：读取失败: {e}"
@@ -316,7 +337,11 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
     if n == 0:
         return "错误：无匹配内容，未做修改"
     try:
-        _atomic_write(p, content)
+        if src_enc in ("utf-8", "utf-8-sig"):
+            _atomic_write(p, content)
+        else:
+            # 保留原编码（GBK/GB18030 等）：否则中文会被写成 UTF-8/替换字符而损坏
+            _write_with_encoding(p, content, src_enc)
         if not os.path.exists(p):
             return f"错误：写入后核验失败，文件不存在：{p}"
         permissions.audit("edit_file", p, f"替换 {n} 处")
@@ -354,7 +379,8 @@ def list_dir(path):
     import itertools
 
     try:
-        entries = list(itertools.islice(os.scandir(p), 200))
+        with os.scandir(p) as _it:
+            entries = list(itertools.islice(_it, 200))
         entries.sort(key=lambda e: e.name)  # 保持确定性排序（只排前 200 条）
     except Exception as e:
         return f"错误：{e}"
@@ -379,15 +405,17 @@ def list_dir(path):
 
 
 def _search_index_file(full):
-    """读取文件前 N 字节/行进缓存（增量索引的"变化文件重建"单元）。超大文件返回 None 不索引。"""
+    """读取文件前 N 字节/行进缓存。超大文件登记 trunc 元数据（查询时实时补扫全文），
+    不再直接跳过——否则 >512KB 的文本文件永远搜不到。"""
     try:
         size = os.path.getsize(full)
         if size > _SEARCH_SKIP_BIG:
-            return None
+            return {"mtime": os.path.getmtime(full), "size": size, "lines": [], "trunc": True}
+        enc, _fb = _detect_text_encoding(full)
         lines = []
         total = 0
         truncated = False
-        with open(full, encoding="utf-8", errors="replace") as f:
+        with open(full, encoding=enc, errors="replace") as f:
             for ln in f:
                 total += len(ln.encode("utf-8", errors="replace"))
                 if total > _SEARCH_CACHE_BYTES or len(lines) >= _SEARCH_CACHE_LINES:
@@ -452,19 +480,18 @@ def _search_match_root(idx, root_walk, q, limit, hits):
     """在增量索引上匹配关键词。trunc 大文件缓存不完整，实时补扫全文（每文件至多 1 条命中）。"""
     for rel, meta in idx.items():
         lines = meta.get("lines") or []
-        if not lines:
-            continue
         if meta.get("trunc"):
             full = os.path.join(root_walk, *rel.split("/"))
             try:
-                with open(full, encoding="utf-8", errors="replace") as f:
+                enc, _fb = _detect_text_encoding(full)
+                with open(full, encoding=enc, errors="replace") as f:
                     for ln in f:
                         if q in ln.lower():
                             hits.append(f"{rel}: {ln.strip()[:150]}")
                             break
             except Exception:
                 continue
-        else:
+        elif lines:
             for ln in lines:
                 if q in ln.lower():
                     hits.append(f"{rel}: {ln.strip()[:150]}")
@@ -611,14 +638,20 @@ def delete_file(path, permanent=False):
                 os.remove(p)
             permissions.audit("delete_file", p, "permanent")
             return f"已物理删除：{p}"
-        if os.name == "nt" and _recycle_path(p):
-            permissions.audit("delete_file", p, "recycle")
-            return f"已移入回收站（可恢复）：{p}"
+        if os.name == "nt":
+            if _recycle_path(p):
+                permissions.audit("delete_file", p, "recycle")
+                return f"已移入回收站（可恢复）：{p}"
+            # 回收站不可用（网络盘/被占用等）：默认不静默物理删除——语义是「可恢复」，
+            # 需用户显式 permanent=True 才物理删除。
+            return ("错误：无法移入回收站（回收站不可用/网络盘/文件被占用）。"
+                    "如需物理删除请显式传 permanent=True")
+        # 非 Windows：无回收站实现，按物理删除处理
         if os.path.isdir(p):
             shutil.rmtree(p)
         else:
             os.remove(p)
-        permissions.audit("delete_file", p, "permanent(fallback)")
+        permissions.audit("delete_file", p, "permanent(non-windows)")
         return f"已删除：{p}"
     except Exception as e:
         return f"错误：删除失败: {e}"
@@ -779,6 +812,8 @@ def extract_archive(path, dest_dir):
                 if over_limit(total_size, EXTRACT_MAX_TOTAL_BYTES):
                     return "错误：压缩包总解压大小超过上限，已中止"
                 for m in members:
+                    if over_limit(m.size, EXTRACT_MAX_SINGLE_BYTES):
+                        return f"错误：压缩包单文件超过大小上限：{m.name}"
                     target = os.path.normpath(os.path.join(base, m.name))
                     if not (target == base or target.startswith(base + os.sep)):
                         return f"错误：压缩包含越界条目，已中止：{m.name}"
@@ -805,6 +840,20 @@ def extract_archive(path, dest_dir):
                 names = z.getnames()
                 if over_limit(len(names), EXTRACT_MAX_ENTRIES):
                     return f"错误：压缩包条目数超过上限（{EXTRACT_MAX_ENTRIES}），已中止"
+                # 解压大小护栏（py7zr 元数据尽力而为；缺失时至少拦住条目数）
+                try:
+                    _total = getattr(z.archiveinfo(), "uncompressed", None)
+                    if _total and over_limit(int(_total), EXTRACT_MAX_TOTAL_BYTES):
+                        return "错误：压缩包总解压大小超过上限，已中止"
+                except Exception:
+                    pass
+                try:
+                    for _fi in z.list():
+                        _sz = getattr(_fi, "uncompressed", None) or getattr(_fi, "size", None)
+                        if _sz and over_limit(int(_sz), EXTRACT_MAX_SINGLE_BYTES):
+                            return f"错误：压缩包单文件超过大小上限：{getattr(_fi, 'filename', '?')}"
+                except Exception:
+                    pass
                 for name in names:
                     target = os.path.normpath(os.path.join(base, name))
                     if not (target == base or target.startswith(base + os.sep)):
@@ -1240,7 +1289,8 @@ def find_images(dir, keyword="", ext=None, limit=30, recurse=True,
 
     def _walk(base):
         try:
-            entries = sorted(os.scandir(base), key=lambda e: e.name)
+            with os.scandir(base) as _it:
+                entries = sorted(_it, key=lambda e: e.name)
         except Exception:
             return
         for e in entries:
@@ -1374,11 +1424,19 @@ def asset_import(source, name="", category="", recursive=True):
         os.makedirs(lib, exist_ok=True)
     except Exception as e:
         return f"错误：素材库创建失败: {e}"
-    # 目标分类目录
+    # 目标分类目录（cat 必须留在素材库内；Windows 下 os.path.join 遇盘符绝对路径会重置）
     cat = str(category or "").strip().strip("/\\")
-    if cat and ".." in cat.replace("\\", "/").split("/"):
-        return "错误：category 非法（不得含 ..）"
+    if ":" in cat or ".." in cat.replace("\\", "/").split("/"):
+        return "错误：category 非法（不得含 .. 或盘符）"
     target_dir = os.path.join(lib, cat) if cat else lib
+    try:
+        _real_lib = os.path.realpath(lib)
+        _real_td = os.path.realpath(target_dir)
+        if os.path.commonpath([_real_td, _real_lib]) != _real_lib:
+            return "错误：category 非法（越出素材库）：%s" % cat[:80]
+        target_dir = _real_td
+    except (ValueError, OSError):
+        return "错误：分类目录无效"
     try:
         os.makedirs(target_dir, exist_ok=True)
     except Exception as e:
@@ -1412,10 +1470,8 @@ def asset_import(source, name="", category="", recursive=True):
                     os.makedirs(os.path.dirname(d), exist_ok=True)
                     shutil.copy2(s, d)
                     imported.append(d)
-                    if not recursive:
-                        break
-            if not recursive:
-                imported = imported[:1]
+                if not recursive:
+                    dirs[:] = []  # 非递归：只处理根层，不再下潜子目录
         lib_full, _ex, nf = _asset_lib_summary(lib)
         permissions.audit("asset_import", str(source), f"→{lib} {len(imported)} 文件")
         if len(imported) == 1:

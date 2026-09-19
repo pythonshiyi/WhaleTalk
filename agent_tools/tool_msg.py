@@ -151,8 +151,11 @@ def publish_draft(platform, title, content):
         safe_platform = re.sub(r'[\\/:*?"<>|]', "_", str(platform or "draft")).strip(" .")[:40] or "draft"
         safe = re.sub(r'[\\/:*?"<>|]', "_", str(title or "草稿"))[:40] or "草稿"
         path = os.path.join(drafts, f"{safe_platform}_{safe}_{ts}.md")
-        # 二次兜底：规范化后必须仍位于草稿箱内
-        if os.path.normpath(path) != path or not path.startswith(os.path.normpath(drafts) + os.sep):
+        # 二次兜底：绝对化+归一化后必须仍位于草稿箱内（正/反斜杠都能对上，
+        # 旧实现 normpath 比较在 drafts 用正斜杠时恒失败）
+        _dn = os.path.normcase(os.path.abspath(drafts))
+        _pn = os.path.normcase(os.path.abspath(path))
+        if not (_pn == _dn or _pn.startswith(_dn + os.sep)):
             return f"错误：非法路径被拦截：{path}"
         with open(path, "w", encoding="utf-8") as f:
             f.write(f"# {title}\n\n{content}")
@@ -229,20 +232,44 @@ def im_send(text, title="", channel=""):
     if not targets:
         return "错误：未配置可用的 IM 通道（telegram_bot_token/telegram_chat_id 或 wecom_webhook）"
     sent = []
+    any_fail = False
     for name, val in targets.items():
         try:
             if name == "telegram":
                 token, chat_id = val
                 url = f"https://api.telegram.org/bot{token}/sendMessage"
                 resp = _http_client().post(url, json={"chat_id": chat_id, "text": body[:4000]}, timeout=15)
+                ok = resp.status_code < 400
+                if not ok:
+                    any_fail = True
+                    sent.append(f"{name}:❌ {resp.status_code}")
+                else:
+                    sent.append(f"{name}:✅")
             else:
                 resp = _http_client().post(val[0], json={"msgtype": "text", "text": {"content": body[:4000]}}, timeout=15)
-            ok = resp.status_code < 400
-            sent.append(f"{name}:{'✅' if ok else '❌' + str(resp.status_code)}")
+                ok = resp.status_code < 400
+                detail = resp.status_code
+                # 钉钉/企业微信/ServerChan 的错误以 HTTP 200 + errcode/code 返回，
+                # 只看状态码会把失败当成功；解析 JSON 业务码判定。
+                try:
+                    j = resp.json()
+                    if isinstance(j, dict) and ("errcode" in j or "code" in j):
+                        code = j.get("errcode", j.get("code"))
+                        ok = ok and int(code or -1) == 0
+                        if not ok:
+                            detail = j.get("errmsg") or j.get("message") or code
+                except Exception:
+                    pass
+                if not ok:
+                    any_fail = True
+                    sent.append(f"{name}:❌ {detail}")
+                else:
+                    sent.append(f"{name}:✅")
         except Exception as e:
+            any_fail = True
             sent.append(f"{name}:❌ {e}")
-    permissions.audit("im_send", ",".join(sent), body[:80], result="ok")
-    return "；".join(sent)
+    permissions.audit("im_send", ",".join(sent), body[:80], result="error" if any_fail else "ok")
+    return ("错误：" + "；".join(sent)) if any_fail else "；".join(sent)
 
 
 @tool(
@@ -267,7 +294,6 @@ def im_send(text, title="", channel=""):
 )
 def telegram_poll_updates(timeout=15, limit=5):
     """接收 Telegram 消息（供 AI 定期检查或用户召唤）。返回最近消息；游标自动前移去重。"""
-    global _TELEGRAM_OFFSET
     cfg, err = _load_im_config()
     if not cfg:
         return err
@@ -280,11 +306,12 @@ def telegram_poll_updates(timeout=15, limit=5):
         limit = clamp_int(limit or 5, 5, lo=1, hi=20)
     except (TypeError, ValueError):
         timeout, limit = 15, 5
+    offset = int(getattr(_dc, "_TELEGRAM_OFFSET", 0) or 0)
     try:
         url = f"https://api.telegram.org/bot{token}/getUpdates"
         params = {"timeout": timeout, "limit": limit}
-        if _TELEGRAM_OFFSET:
-            params["offset"] = _TELEGRAM_OFFSET + 1
+        if offset:
+            params["offset"] = offset + 1
         resp = _http_client().post(url, json=params, timeout=timeout + 15)
         resp.raise_for_status()
         data = resp.json()
@@ -294,15 +321,24 @@ def telegram_poll_updates(timeout=15, limit=5):
     if not updates:
         return "（暂无新消息）"
     lines = []
+    max_id = offset
     for u in updates:
+        try:
+            uid = int(u.get("update_id") or 0)
+        except (TypeError, ValueError):
+            uid = 0
+        # 先对所有 update 推进游标（无论是否目标 chat），否则非目标 update 会被反复拉取，
+        # limit 被占满时可能挤掉目标 chat 的新消息。
+        if uid > max_id:
+            max_id = uid
         msg = u.get("message") or {}
         if chat_id and str(msg.get("chat", {}).get("id")) != chat_id:
             continue
         sender = (msg.get("from") or {}).get("username") or (msg.get("from") or {}).get("first_name") or "?"
         text = str(msg.get("text") or "[非文本消息]")[:500]
         lines.append(f"@{sender}: {text}")
-        if int(u.get("update_id") or 0) > _TELEGRAM_OFFSET:
-            _TELEGRAM_OFFSET = int(u["update_id"])
+    # 写回 dc 的模块级游标（`from deepseek_client import _TELEGRAM_OFFSET` 只会改本模块副本）
+    _dc._TELEGRAM_OFFSET = max_id
     if not lines:
         return "（暂无来自配置 chat_id 的新消息）"
     return "\n".join(lines)
