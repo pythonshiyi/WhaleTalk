@@ -30,6 +30,7 @@ OPTIONAL_DEPS = [
     ("extract_msg", "extract-msg", "Outlook .msg 邮件阅读", "pip install extract-msg"),
     ("py7zr", "py7zr", "7z 压缩包", "pip install py7zr"),
     ("rarfile", "rarfile", "RAR 压缩包（另需 unrar/unar）", "pip install rarfile"),
+    ("pyopencl", "pyopencl", "GPU 计算加速（渲染/逐帧合成；缺失自动回退 CPU）", "pip install pyopencl"),
 ]
 
 # ── 启动自检：自动安装清单（缺了影响基础体验，首启用清华源自动装）────

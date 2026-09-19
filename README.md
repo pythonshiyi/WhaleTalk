@@ -8,7 +8,7 @@
 
 > Windows 本地优先的 AI 桌面智能体 · 本地 API + React 界面 + 系统托盘常驻 · 只接入统一模型 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**
 
-**鲸语 WhaleTalk** 不止是聊天窗口：它能**看屏幕、听语音、动键鼠**，调用 **162 项 Agent 工具**完成真实任务，并把每次经验沉淀为长期记忆——越用越懂你。数据只在本机流转，浏览器即界面，开箱即用。
+**鲸语 WhaleTalk** 不止是聊天窗口：它能**看屏幕、听语音、动键鼠**，调用 **163 项 Agent 工具**完成真实任务，并把每次经验沉淀为长期记忆——越用越懂你。数据只在本机流转，浏览器即界面，开箱即用。
 
 > 🌐 官网：<https://whaletalk.top/>　·　📦 更新记录：[CHANGELOG.md](CHANGELOG.md)
 
@@ -46,11 +46,11 @@
 
 ---
 
-## ⚡ 能力总览（162 工具）
+## ⚡ 能力总览（163 工具）
 
-全部 162 项工具由 `@tool()` 装饰器统一声明（单一事实源），分为 11 个能力组。智能模式下不一次性注入全部 schema，而是常驻「能力地图」+ 关键词预激活 + `activate_tools` 按需点菜，兼顾成本与命中率。
+全部 163 项工具由 `@tool()` 装饰器统一声明（单一事实源），分为 11 个能力组。智能模式下不一次性注入全部 schema，而是常驻「能力地图」+ 关键词预激活 + `activate_tools` 按需点菜，兼顾成本与命中率。
 
-### Agent 工具链（162 项）
+### Agent 工具链（163 项）
 
 | 能力组 | 代表工具 |
 |---|---|
@@ -145,7 +145,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：162 工具（11 组）· 99 个 `/v1` 路由 · 后端 79 个 pytest 文件 / 813 用例 · 前端 14 个 node 套件。
+- **规模**：162 工具（11 组）· 99 个 `/v1` 路由 · 后端 79 个 pytest 文件 / 815 用例 · 前端 14 个 node 套件。
 
 ---
 
@@ -191,7 +191,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 安全模型为「**默认自由 + 用户黑名单 + 程序内置底线 + 硬限额**」四层：
 
-- **默认自由**：默认任务模式零审批、零白名单，AI 可调用全部 162 项工具；`run_python` / `run_command` 等同本机直接执行（无沙箱）。
+- **默认自由**：默认任务模式零审批、零白名单，AI 可调用全部 163 项工具；`run_python` / `run_command` 等同本机直接执行（无沙箱）。
 - **黑名单**：唯一限制来源——用户在权限页添加 shell 命令 / 文件路径 / 网络主机黑名单；`blocklist_enabled` 可一键全放行。
 - **程序内置底线（两条）**：
   1. **网络 SSRF 硬底线**——私网段 / 链路本地（含云元数据）/ 保留段一律拦截，域名先做 DNS 解析防重绑定；回环默认放行，可加严。
@@ -232,7 +232,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 **WhaleTalk v3.16.0** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
 
-- **Capabilities**: **162 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
+- **Capabilities**: **163 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
 - **Self-evolution**: proposal branches, failure-pattern lifecycle, success-pattern reuse — merging stays in your hands.
 - **Security**: default-open permission model, user blocklist as the only restriction source, plus an SSRF hard floor and a trust kernel that makes edits to authorization code declarable, visible, and reversible.
 - **Stack**: Python 3.9+ · React 19 (Vite 8) · local HTTP API (openai / httpx) · Windows 10/11.

@@ -1653,10 +1653,6 @@ def self_report(days=7, write=False):
                             "description": "可选：自动化流程 {流程名: {steps: [{text: 指令}]}}",
                             "additionalProperties": {"type": "object"},
                         },
-                        "scenario": {
-                            "type": "object",
-                            "description": "可选：一键场景配置 {name, thinking, system_prompt, enabled_tools}",
-                        },
                         "requires": {
                             "type": "array",
                             "description": "可选：依赖的 pip 包名列表",
@@ -1672,8 +1668,8 @@ def self_report(days=7, write=False):
     preactivate=(('创建插件', '加个插件', '写个技能', '做一个插件'),),
 )
 def create_plugin(name, description="", tools=None, skills=None, workflows=None,
-                  scenario=None, requires=None):
-    """AI 生成并安装插件：根据需求组合工具/技能/流程/场景，生成后立即生效。
+                  requires=None):
+    """AI 生成并安装插件：根据需求组合工具/技能/流程，生成后立即生效。
 
     内部走审批闸门（ACTION_TOOLS 注册）；安装后可在「工具 → 插件管理」停用/卸载。
     """
@@ -1690,10 +1686,8 @@ def create_plugin(name, description="", tools=None, skills=None, workflows=None,
         contents["skills"] = skills if isinstance(skills, list) else [skills]
     if workflows:
         contents["workflows"] = workflows
-    if scenario:
-        contents["scenario"] = scenario
     if not contents:
-        return "错误：插件需要至少一项能力（tools / skills / workflows / scenario）"
+        return "错误：插件需要至少一项能力（tools / skills / workflows）"
     plugin = {
         "format": plugins_mod.PLUGIN_FORMAT,
         "version": 1,
@@ -1722,8 +1716,6 @@ def create_plugin(name, description="", tools=None, skills=None, workflows=None,
         parts.append(f"技能 {'、'.join(added['skills'])}")
     if added.get("workflows"):
         parts.append(f"流程 {'、'.join(added['workflows'])}")
-    if scenario:
-        parts.append("场景配置（可在插件管理中应用）")
     miss = plugins_mod.missing_requires(plugin)
     note = f"\n⚠ 缺失依赖：{'、'.join(miss)}（pip install …，可在「依赖状态」查看）" if miss else ""
     return (
@@ -1733,4 +1725,123 @@ def create_plugin(name, description="", tools=None, skills=None, workflows=None,
     )
 
 
-__all__ = ['create_plugin', 'watch_files', 'recall_session', 'project_info', 'read_project_file', 'list_my_capabilities', 'create_evolution', 'self_evolve', 'verify_files', 'git_tool', 'notify_desktop', 'app_manage', 'usage_report', 'capability_heatmap', 'self_report']
+def _perf_snapshot(top=8):
+    """一次调用掌握 CPU/内存/GPU 利用率与占用最高的进程，用于诊断「为什么慢」。"""
+    import psutil
+
+    lines = []
+    try:
+        per = psutil.cpu_percent(interval=0.6, percpu=True)
+        lines.append(f"CPU 总体：{round(sum(per) / max(1, len(per)), 1)}%（{len(per)} 逻辑核）")
+    except Exception:
+        lines.append("CPU：读取失败")
+    try:
+        mem = psutil.virtual_memory()
+        lines.append(f"内存：已用 {mem.used / 1024 ** 3:.1f}GB / 共 {mem.total / 1024 ** 3:.1f}GB"
+                     f"（{mem.percent}%）")
+    except Exception:
+        pass
+    try:
+        import gpu_accel as _g
+        info = _g.device_info()
+        if info["available"]:
+            lines.append(f"GPU：{info['device']} 显存 {info['mem_gb']}GB（pyopencl 可用）")
+        else:
+            lines.append("GPU：未检测到可用 OpenCL 设备（pyopencl/驱动缺失）")
+    except Exception:
+        lines.append("GPU：加速层不可用")
+    try:
+        procs = []
+        for p in psutil.process_iter(["pid", "name", "cpu_percent", "memory_info"]):
+            try:
+                mi = p.info.get("memory_info")
+                procs.append((float(p.info.get("cpu_percent") or 0.0), int(p.info.get("pid") or 0),
+                              str(p.info.get("name") or "?"), int(mi.rss) if mi else 0))
+            except Exception:
+                continue
+        procs.sort(reverse=True)
+        lines.append(f"CPU 占用最高进程（前 {int(top)}）：")
+        for c, pid, nm, rss in procs[:max(1, int(top))]:
+            lines.append(f"  {nm} (pid {pid}) CPU {c:.0f}% · 内存 {rss / 1024 ** 2:.0f}MB")
+    except Exception:
+        pass
+    lines.append("判读：CPU 接近 100% 且 GPU 闲置 → 瓶颈是 CPU 逐帧合成/算子，"
+                 "改用 gpu_accel 的融合显存常驻 pass（hardware_accel(action='bench') 可实测哪条更快）。")
+    return "\n".join(lines)
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
+                "name": "hardware_accel",
+                "description": "硬件加速与性能诊断：probe=列出可用 GPU/OpenCL 设备与后端；bench=对关键算子做 GPU/CPU 实测 A/B（判断哪条通道更快，避免盲目上 GPU）；selftest=GPU 与 CPU 像素级一致性校验；perf=一次性抓取 CPU/内存/GPU 利用率与占用最高进程（诊断「为什么慢」）。批量渲染/逐帧合成前先 probe+bench，用融合显存常驻 pass 而非孤立算子",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["probe", "bench", "selftest", "perf"], "description": "动作（默认 probe）"},
+                        "size": {"type": "string", "description": "可选：bench 的测试分辨率 宽x高（默认 1920x1080）"},
+                        "top": {"type": "integer", "description": "可选：perf 返回的进程数（默认 8，1-30）"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    groups=['🔧 系统与基础'],
+    phrases='硬件加速探测与性能诊断',
+    preactivate=(('硬件', 'gpu', '显卡', '加速', '性能', 'benchmark', '显存', '利用率'),),
+)
+def hardware_accel(action="probe", size="", top=8):
+    """硬件加速探测 / 实测 A/B / 一致性自检 / 性能快照。"""
+    act = str(action or "probe").strip().lower()
+    try:
+        import gpu_accel as g
+    except Exception as e:
+        return f"错误：GPU 加速层不可用：{e}"
+    if act in ("probe", "info"):
+        info = g.device_info()
+        out = [f"硬件加速后端：{info['backend']}"]
+        if info["available"]:
+            out.append(f"首选设备：{info['device']}（{info['mem_gb']}GB，{info['platform']}）")
+        else:
+            out.append(info["note"])
+        for d in info["devices"]:
+            out.append(f"  · {d['device']}（{d['mem_gb']}GB）")
+        out.append("经验：孤立算子（单次模糊/resize）可能因传输开销反而更慢（实测 OpenCV UMat 亦更慢）；"
+                   "应把整条后处理 pass 融合、数据常驻显存（用 gpu_accel.bloom/grade/composite），"
+                   "先 hardware_accel(action='bench') 实测再定。")
+        return "\n".join(out)
+    if act == "selftest":
+        ok, detail = g.selftest()
+        return ("✅ GPU 与 CPU 像素级一致\n" if ok else "⚠ GPU 不可用或结果不一致\n") + detail
+    if act == "bench":
+        h, w = 1080, 1920
+        s = str(size or "").strip().lower()
+        if "x" in s:
+            try:
+                a, b = s.split("x")
+                h, w = int(a), int(b)
+            except Exception:
+                h, w = 1080, 1920
+        r = g.benchmark((h, w))
+        out = [f"实测 A/B（{h}x{w}x4 float32，设备 {r['device'] or 'CPU'}）："]
+        for name, v in r["ops"].items():
+            if "error" in v:
+                out.append(f"  {name}: 错误 {v['error']}")
+            elif "speedup" in v:
+                cpu = v.get("cpu_ms", v.get("cpu_cv2_ms", v.get("ms")))
+                out.append(f"  {name}: CPU {cpu}ms / GPU {v.get('gpu_ms')}ms → {v.get('speedup')}x")
+            else:
+                out.append(f"  {name}: {v}")
+        out.append("结论：bloom_fused（融合 pass）的加速比才是真实收益；孤立 blur<1x 属预期（传输主导）。")
+        return "\n".join(out)
+    if act in ("perf", "snapshot"):
+        try:
+            top = max(1, min(30, int(top or 8)))
+        except (TypeError, ValueError):
+            top = 8
+        return _perf_snapshot(top)
+    return "错误：action 仅支持 probe / bench / selftest / perf"
+
+
+__all__ = ['create_plugin', 'watch_files', 'recall_session', 'project_info', 'read_project_file', 'list_my_capabilities', 'create_evolution', 'self_evolve', 'verify_files', 'git_tool', 'notify_desktop', 'app_manage', 'usage_report', 'capability_heatmap', 'self_report', 'hardware_accel']

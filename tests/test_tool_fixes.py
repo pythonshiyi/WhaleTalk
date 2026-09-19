@@ -79,3 +79,28 @@ def test_lrc_parse_decimal_units():
     rows = me.parse_lrc("[00:26.6]hello\n[01:02.60]world")
     assert abs(rows[0]["start"] - 26.6) < 0.001
     assert abs(rows[1]["start"] - 62.6) < 0.001
+
+
+def test_gpu_accel_ops_shapes_and_gpu_selftest():
+    import numpy as np
+
+    import gpu_accel as g
+    a = np.random.default_rng(0).random((16, 24, 4), dtype=np.float32)
+    assert g.grade(a, 1.1, 1.05, 0.95, 1.1).shape == a.shape
+    assert g.gaussian_blur(a, 2.0).shape == a.shape
+    assert g.bloom(a, 0.7, 3.0, 0.5).shape == a.shape
+    assert g.composite(a, a[::-1], 0.4).shape == a.shape
+    assert g.resize(a, 8, 12).shape == (12, 8, 4)
+    info = g.device_info()
+    assert "backend" in info and "available" in info
+    if g.available():
+        ok, detail = g.selftest()
+        assert ok, detail
+
+
+def test_hardware_accel_tool_probe():
+    from agent_tools import tool_system as ts
+    out = ts.hardware_accel("probe")
+    assert "后端" in out
+    perf = ts.hardware_accel("perf", top=3)
+    assert "CPU" in perf and "内存" in perf

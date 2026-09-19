@@ -184,6 +184,7 @@ __all__ = [
     'list_my_capabilities',
     'capability_heatmap',
     'self_report',
+    'hardware_accel',
     'chart_render',
     'pdf_toolkit',
     'design_kit',

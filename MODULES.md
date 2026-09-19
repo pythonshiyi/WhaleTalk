@@ -2,7 +2,7 @@
 
 本文档描述鲸语 WhaleTalk 当前（v3.16.0，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
 
-> 规模口径（`tools/check_docs.py` 实测）：**162 个 Agent 工具**（11 组）· **99 /v1 端点** · 后端 79 个 pytest 文件 / 813 用例 · 前端 14 个 node 套件；源码约 6.2 万行（根目录 2.9 万 + `agent_tools/` 1.7 万 + `webui/src` 1.6 万）。
+> 规模口径（`tools/check_docs.py` 实测）：**163 个 Agent 工具**（11 组）· **99 /v1 端点** · 后端 79 个 pytest 文件 / 815 用例 · 前端 14 个 node 套件；源码约 6.2 万行（根目录 2.9 万 + `agent_tools/` 1.7 万 + `webui/src` 1.6 万）。
 
 ## 分层总览
 
@@ -13,7 +13,7 @@ web_app.py（唯一入口：浏览器 + 托盘 + 快捷方式 + 依赖自检）
 api_server.py（本地 HTTP API：REST + SSE，99 /v1 端点）
     │
     ▼
-deepseek_client.py（能力引擎：DeepSeekClient + 162 工具 + smart_tools）
+deepseek_client.py（能力引擎：DeepSeekClient + 163 工具 + smart_tools）
     │
     ├─ 基础设施：permissions / security / crypto / stores / stats / tokens / persistence
     │              ＋ trust_kernel（信任内核：自我修改的声明 / 核对 / 回滚）
@@ -68,7 +68,9 @@ deepseek_client.py（能力引擎：DeepSeekClient + 162 工具 + smart_tools）
 | `memory_facade.py`（443 行） | 记忆门面（P1-B）：`memory.json` 唯一写入门面，为长期记忆补 **origin（血缘）+ confidence + status + supersede 双向链接**。① 血缘：非 user 来源注入时加 `〔推断〕`/`〔来自外部内容〕`标注；② 作废：同 `key` 取代旧条目——**只认显式 key，绝不按相似度**；相似度仅用于冲突提示。旧数据读时补默认值、不改写文件 |
 | `insight.py`（356 行） | 自我洞察（纯函数 · 仅标准库）：`build_heatmap`（能力热力图：工具使用频率/任务链长度/失败率/技能结晶/预激活命中）· `build_self_report`（自我述职）· `render_report`（Markdown）。不依赖运行时，便于单测 |
 | `memory_store.py`（250 行） | 统一记忆读取层（memory.json / knowledge_index / 大脑目录），供工具与 API 复用 |
-| `mv_engine.py` | 自建 MV 引擎（不依赖任何外部程序）：`analyze`（BPM/节拍/能量）、`align_lyrics`（faster-whisper 词级 + 顺序短语映射的声学对轴）、`build_shots`（卡点分镜网格）、`render_frames`（确定性 PIL 帧）、`build_srt`、`verify_shots`；被 `agent_tools/tool_mv.py` 的 `mv_produce` 消费 |
+| `mv_engine.py` | 自建 MV 引擎（不依赖任何外部程序）：`analyze`（BPM/节拍/能量）、`align_lyrics`（faster-whisper 词级 + 顺序短语映射的声学对轴）、`build_shots`（卡点分镜网格）、`render_frames`（确定性 PIL 帧，支持多进程并行）、`build_srt`、`verify_shots`；被 `agent_tools/tool_mv.py` 的 `mv_produce` 消费 |
+| `gpu_accel.py` | GPU 加速层（可选 pyopencl，无 GPU 自动回退 CPU）：`device_info/selftest/benchmark`（实测 A/B，避免盲目上 GPU）、`grade/bloom/composite/gaussian_blur`（融合 pass + 显存常驻）；由 `hardware_accel` 工具暴露，供自研渲染管线调用（真实复盘：逐帧 NumPy/OpenCV CPU 合成打满 CPU 而 GPU 闲置，融合显存常驻 pass 实测约 4.5x） |
+| `deepseek_client._ffmpeg_*` | ffmpeg 硬件编码自动选择（AMD AMF→NVIDIA NVENC→Intel QSV，1 帧实测通过才用）+ MV 分段并行渲染 |
 | `genesis.py`（144 行） | 创世化初始：让 AI 完全自主设定自己的「前半生」，产出多版候选供选 |
 | `app_utils.py` | 布尔转换、空壳目录判断、清理、干净退出标记、隐私日志 |
 | `proc_utils.py` | 进程树终止（Windows taskkill /T，防孙进程残留） |
@@ -116,11 +118,11 @@ deepseek_client.py（能力引擎：DeepSeekClient + 162 工具 + smart_tools）
 
 | 模块 | 职责 |
 |---|---|
-| `agent_tools/`（13 模块 · 159 工具） | 运行时工具域模块包（P0-1 巨石拆分完成，主文件 13,115 → 5,100 行）：<br>`tool_docs.py`（📊 数据与文档 · 30：Excel/SQLite/MySQL/PostgreSQL/PDF/Word/PPT/EPUB/MOBI/旧 doc/msg/压缩包 + HTML→PNG/PPT/PDF + 图表/设计工具）<br>`tool_files.py`（📁 文件与进程 · 21：read/write/edit/list/search_local/find_images/asset_*/clipboard/delete/archive/snapshot/batch_rename/start|stop|list_processes/environment_info）<br>`tool_desktop.py`（🖱 桌面与视觉语音 · 18：rpa_*/screen_find_click/vision_loop/tts*/speech_to_text/voice_chat_loop/image_generate/qrcode/media_ffmpeg/team_run）<br>`tool_system.py`（🔧 系统与项目 · 15：watch_files/recall_session/project_*/create_evolution/self_evolve/verify_files/git/notify_desktop/app_manage/usage_report/capability_heatmap/self_report/create_plugin/list_my_capabilities）<br>`tool_brain.py`（🧠 记忆与知识 · 15：write/read/delete/update_memory/self_profile/query_memory_graph/knowledge_*/schedule_task/task_checkpoint/run_workflow/failure_memory）<br>`tool_code.py`（💻 编程与执行 · 15：run_python/run_command/run_lint/run_tests/verify_project/project_scaffold/dev_plan/get_status/project_map/find_symbol/code_lookup/write_code_project/pip_install/subagent_run/verify_output）<br>`tool_web.py`（🌐 浏览器与网页 · 14：fetch_url/download_file/search_web/search_github/search_realtime/browser_navigate/web_screenshot/net_diagnose/fetch_url_smart/rss_fetch/webdav/call_api/track_web/fetch_blocked〔实现名 `_run_fetch_blocked`〕）<br>`tool_media.py`（🎨 媒体与图像 · 10：image_process/ocr_image/image_understand/screen_capture/screen_see/chart_read/screenshot_to_html/debug_screenshot/scan_read/image_batch）<br>`tool_msg.py`（📧 邮件与消息 · 10：send_email/publish_draft/send_webhook/im_send/telegram_poll_updates/read_email/email_summary/agent_mail/run_wechat_writer/daily_brief）<br>`tool_codegen.py`（🎨 代码生图 · 6：image_codegen/image_inpaint/control_map/sprite_sheet/make_gif/image_hybrid）<br>`tool_basic.py`（🔧 2：get_date/get_weather）· `tool_data.py`（📊 2：read_csv/write_csv）· `tool_mv.py`（🎬 1：mv_compose）<br>另主模块经 `register_tool()` 注册 2 个特殊工具（`ask_user`/`request_permission`）→ **162 个 Agent 工具** |
+| `agent_tools/`（13 模块 · 160 工具） | 运行时工具域模块包（P0-1 巨石拆分完成，主文件 13,115 → 5,100 行）：<br>`tool_docs.py`（📊 数据与文档 · 30：Excel/SQLite/MySQL/PostgreSQL/PDF/Word/PPT/EPUB/MOBI/旧 doc/msg/压缩包 + HTML→PNG/PPT/PDF + 图表/设计工具）<br>`tool_files.py`（📁 文件与进程 · 21：read/write/edit/list/search_local/find_images/asset_*/clipboard/delete/archive/snapshot/batch_rename/start|stop|list_processes/environment_info）<br>`tool_desktop.py`（🖱 桌面与视觉语音 · 18：rpa_*/screen_find_click/vision_loop/tts*/speech_to_text/voice_chat_loop/image_generate/qrcode/media_ffmpeg/team_run）<br>`tool_system.py`（🔧 系统与项目 · 16：watch_files/recall_session/project_*/create_evolution/self_evolve/verify_files/git/notify_desktop/app_manage/usage_report/capability_heatmap/self_report/create_plugin/list_my_capabilities/hardware_accel）<br>`tool_brain.py`（🧠 记忆与知识 · 15：write/read/delete/update_memory/self_profile/query_memory_graph/knowledge_*/schedule_task/task_checkpoint/run_workflow/failure_memory）<br>`tool_code.py`（💻 编程与执行 · 15：run_python/run_command/run_lint/run_tests/verify_project/project_scaffold/dev_plan/get_status/project_map/find_symbol/code_lookup/write_code_project/pip_install/subagent_run/verify_output）<br>`tool_web.py`（🌐 浏览器与网页 · 14：fetch_url/download_file/search_web/search_github/search_realtime/browser_navigate/web_screenshot/net_diagnose/fetch_url_smart/rss_fetch/webdav/call_api/track_web/fetch_blocked〔实现名 `_run_fetch_blocked`〕）<br>`tool_media.py`（🎨 媒体与图像 · 10：image_process/ocr_image/image_understand/screen_capture/screen_see/chart_read/screenshot_to_html/debug_screenshot/scan_read/image_batch）<br>`tool_msg.py`（📧 邮件与消息 · 10：send_email/publish_draft/send_webhook/im_send/telegram_poll_updates/read_email/email_summary/agent_mail/run_wechat_writer/daily_brief）<br>`tool_codegen.py`（🎨 代码生图 · 6：image_codegen/image_inpaint/control_map/sprite_sheet/make_gif/image_hybrid）<br>`tool_basic.py`（🔧 2：get_date/get_weather）· `tool_data.py`（📊 2：read_csv/write_csv）· `tool_mv.py`（🎬 1：mv_compose）<br>另主模块经 `register_tool()` 注册 2 个特殊工具（`ask_user`/`request_permission`）→ **163 个 Agent 工具** |
 | `webui/` | React 前端（React 19 + Vite 8，无 UI 框架）：ChatPage/工作台/指令库/自主/大脑/插件/设置；`webui/dist` 由 api_server 同源服务。渲染链路（纯数据 AST）：`longTextUtil.js`（解除 `@long-text` 包装）→ `mdParser.js`（块级 AST，流式安全 `code-open`）→ `mdInline.js`（行内 tokens，独立 RegExp 防 lastIndex 破坏）→ `mdHighlight.js`（零依赖高亮）→ `mdMath.js`（LaTeX 子集）→ `components/Markdown.jsx`（消费 AST）。**长会话渲染**：`msgUpdates.js` 提供不可变更新，配合 `Message.jsx` 的 `React.memo` 实现每帧只重渲染最后一条 |
 | `wechat_writer/` | 公众号自动写作：sources（多信源采集）/ topic（选题去重）/ writer（三阶段写作）/ quality（质检重试）/ output（草稿箱+存档）/ history / llm / config |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性，`--strict` 可入 CI）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛对账）、`check_docs.py`（文档数字 vs 源码实测） |
-| `tests/` | 自举回归套件（79 个 pytest 文件 / 813 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
+| `tests/` | 自举回归套件（79 个 pytest 文件 / 815 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
 
 ### 辅助脚本
 

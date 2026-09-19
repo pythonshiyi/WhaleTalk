@@ -102,7 +102,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（162 �
 | `tool_docs.py` | 30 | 📊 数据与文档（Excel/SQLite/MySQL/PostgreSQL/PDF/Word/PPT/EPUB/MOBI/旧 doc/msg/压缩包 + HTML→PNG/PPT/PDF + 图表/设计工具） |
 | `tool_files.py` | 21 | 📁 文件与进程（read/write/edit/list/search_local/find_images/asset_*/clipboard/delete/archive/snapshot/batch_rename/start\|stop\|list_processes/environment_info） |
 | `tool_desktop.py` | 18 | 🖱 桌面视觉语音（rpa_*/screen_find_click/vision_loop/tts*/speech_to_text/voice_chat_loop/image_generate/qrcode/media_ffmpeg/team_run） |
-| `tool_system.py` | 15 | 🔧 系统与项目（watch_files/recall_session/project_*/create_evolution/self_evolve/verify_files/git/notify_desktop/app_manage/usage_report/capability_heatmap/self_report/create_plugin/list_my_capabilities） |
+| `tool_system.py` | 16 | 🔧 系统与项目（watch_files/recall_session/project_*/create_evolution/self_evolve/verify_files/git/notify_desktop/app_manage/usage_report/capability_heatmap/self_report/create_plugin/list_my_capabilities/hardware_accel） |
 | `tool_brain.py` | 15 | 🧠 记忆与知识（write/read/delete/update_memory/self_profile/query_memory_graph/knowledge_*/schedule_task/task_checkpoint/run_workflow/failure_memory） |
 | `tool_code.py` | 15 | 💻 编程与执行（run_python/run_command/run_lint/run_tests/verify_project/project_scaffold/dev_plan/get_status/project_map/find_symbol/code_lookup/write_code_project/pip_install/subagent_run/verify_output） |
 | `tool_web.py` | 14 | 🌐 浏览器与网页（fetch_url/download_file/search_web/search_github/search_realtime/browser_navigate/web_screenshot/net_diagnose/fetch_url_smart/rss_fetch/webdav/call_api/track_web/fetch_blocked） |

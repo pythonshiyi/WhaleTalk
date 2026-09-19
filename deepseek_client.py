@@ -3623,6 +3623,7 @@ _TOOL_ORDER = [
     'list_my_capabilities', 'capability_heatmap', 'self_report',
     'chart_render', 'pdf_toolkit', 'design_kit', 'image_codegen',
     'image_inpaint', 'control_map', 'sprite_sheet', 'make_gif', 'image_hybrid',
+    'hardware_accel',
 ]
 
 _GROUP_ORDER = [
@@ -3673,6 +3674,7 @@ _HINT_ORDER = [
     ('精灵表', '精灵图', '帧序列图', '拼帧', 'sprite sheet'),
     ('做个gif', '生成gif', '动图', '逐帧动画'),
     ('混合渲染', '代码加质感', 'img2img', '结构加细节'),
+    ('硬件', 'gpu', '显卡', '加速', '性能', 'benchmark', '显存', '利用率'),
 ]
 
 TOOLS = build_tool_list(_TOOL_ORDER)

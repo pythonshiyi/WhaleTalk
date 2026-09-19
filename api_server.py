@@ -416,6 +416,7 @@ _TOOL_DOMAIN = {
     "list_my_capabilities": "系统与基础",
     "capability_heatmap": "系统与基础", "self_report": "系统与基础",
     "environment_info": "系统与基础", "call_api": "系统与基础", "usage_report": "系统与基础",
+    "hardware_accel": "系统与基础",
     "secret_store": "系统与基础", "kv_store": "系统与基础",
     "watch_files": "系统与基础", "track_web": "系统与基础", "recall_session": "系统与基础",
     "read_file": "文件与目录", "write_file": "文件与目录", "edit_file": "文件与目录",
