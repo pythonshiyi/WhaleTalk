@@ -176,6 +176,22 @@ class GPUCanvas:
             np.broadcast_to(full, (self.h, self.w, 3)), np.float32)
         self._upload_host()
 
+    def mul_region(self, layer, x0, y0, mode="mul"):
+        """区域就地缩放/覆盖（纯 GPU）：buf[区域] *= layer（mode=mul）。"""
+        self._flush_host()
+        sub = layer[:, :, None] if layer.ndim == 2 else np.asarray(layer, np.float32)
+        sub = np.ascontiguousarray(sub, np.float32)
+        h, w = sub.shape[:2]
+        rw = min(w, self.w - x0)
+        rh = min(h, self.h - y0)
+        if rw <= 0 or rh <= 0:
+            return
+        b_lay = self.rt.up(sub[:rh, :rw].reshape(-1), "region_tmp2")
+        b = self.rt.buf(self._bname, self.n3 * 4)
+        self.rt.run("k_region_mode", rh * rw * 3, b, b_lay, b_lay, 0,
+                    x0, y0, rw, rh, self.w, 1 if mode == "mul" else 0)
+        self._mark_device_dirty()
+
     # ── 滚动纹理（雨幕等）──────────────────────────────────────────
     def _tex_buf(self, tex):
         """把静态纹理常驻 device（按对象身份缓存，保持引用防 GC）。"""

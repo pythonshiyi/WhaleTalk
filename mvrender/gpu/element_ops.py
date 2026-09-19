@@ -215,6 +215,41 @@ def gpu_walker(canvas, t, x, y_base, scale=1.0, going=1, umbrella=False, op=1.0,
                           * np.array((120, 150, 175), np.float32) * dust, x0, y0, "add")
 
 
+# ── 图层贴图：GPU 区域合成（消除整帧回读）────────────────────────
+def gpu_layer_alpha(canvas, lay, x, y, op=1.0, mask=None, mode="over"):
+    """等价 vis_core.layer_alpha，但走 GPU 区域合成（不触发画布整帧回读）。
+
+    【为什么重要】layer_alpha 是手机/窗/聊天界面等元素贴图的统一入口，全片调用
+    频繁。原实现对 GPUCanvas 走 `canvas.buf[...]` 切片改 —— 而 `.buf` 会触发
+    整帧（23.7MB）device→host 回读，每调用一次就搬一次，是 CPU/传输双热点。
+    这里改用 mul_region + add_region 两个区域 kernel，全程 device 内完成。
+    """
+    import vis_core as V
+    if not (hasattr(canvas, "mul_region") and hasattr(canvas, "add_region")):
+        return _ORIG["layer_alpha"](canvas, lay, x, y, op=op, mask=mask, mode=mode)
+    if lay.ndim == 2:
+        lay = np.repeat(lay[:, :, None], 3, axis=2)
+    r = V.clip_rect(x, y, lay.shape[1], lay.shape[0], W0=canvas.w, H0=canvas.h)
+    if r is None:
+        return None
+    x0, y0, x1, y1, ax, ay, cw, ch = r
+    sub = np.asarray(lay[ay:ay + ch, ax:ax + cw], np.float32)
+    a = float(op)
+    if mask is not None:
+        mm = mask[ay:ay + ch, ax:ax + cw]
+        a = a * (mm[:, :, None] if mm.ndim == 2 else mm)
+    if mode == "add":
+        canvas.add_region(sub * a, x0, y0, "add")
+    elif np.isscalar(a):
+        canvas.mul_region(np.full_like(sub, 1.0 - a), x0, y0, "mul")
+        canvas.add_region(sub * a, x0, y0, "add")
+    else:
+        om = np.repeat(1.0 - a, 3, axis=2) if a.ndim == 3 else (1.0 - a)
+        canvas.mul_region(np.ascontiguousarray(om, np.float32), x0, y0, "mul")
+        canvas.add_region(sub * a, x0, y0, "add")
+    return x0, y0, x1, y1
+
+
 # ── 路灯：局部绘制（灯杆 + 光锥 + 灯泡 + 发光）────────────────────
 def gpu_street_lamp(canvas, t, x, y_base, h, color=None, op=1.0, arm=1.0, seed=3,
                     cone=0.16, soft=14.0, ground=-1):
@@ -451,9 +486,14 @@ def install(enable=("glow_layer", "mist", "gblur", "rain", "walker")):
     _ORIG["glow_layer"] = V.glow_layer
     _ORIG["value_noise"] = V.value_noise
     _ORIG["gblur"] = cv2.GaussianBlur
+    _ORIG["layer_alpha"] = V.layer_alpha
 
     if "glow_layer" in enable:
         V.glow_layer = gpu_glow_layer
+    if "layer_alpha" in enable:
+        # 实验性：GPU 区域合成（避免整帧回读），但区域 kernel 开销实测略高于
+        # CPU 局部切片（+4%），默认不启用；仅在确认回读成为瓶颈时显式开启。
+        V.layer_alpha = gpu_layer_alpha
     try:
         import elements as E
         if "mist" in enable:
@@ -497,6 +537,8 @@ def uninstall():
     import vis_core as V
     if "glow_layer" in _ORIG:
         V.glow_layer = _ORIG["glow_layer"]
+    if "layer_alpha" in _ORIG:
+        V.layer_alpha = _ORIG["layer_alpha"]
     try:
         import elements as E
         if "mist" in _ORIG:
