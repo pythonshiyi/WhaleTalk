@@ -27,6 +27,7 @@ CPU 渲过的帧可被 GPU 复用，反之亦然（前提是像素一致，本�
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -180,10 +181,8 @@ class ShotCache:
             return hit
         for name in set(hit):
             for p in (self._path(name), self._meta_path(name)):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(p)
-                except OSError:
-                    pass
         return sorted(set(hit))
 
     def invalidate_all(self):

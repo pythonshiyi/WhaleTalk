@@ -250,31 +250,29 @@ class GPUCanvas:
         return b
 
     def add_region(self, layer, x0, y0, mode="add"):
-        """把**局部**图层（h,w[,3]）合成到画布的 (x0,y0) 区域。
+        """把**局部**图层（h,w[,3]）合成到画布的 (x0,y0) 区域（纯 GPU，不回读整帧）。
 
-        用于稀疏绘制：与 add() 的差别只在于不需要把整帧 layer 传进来，
-        避免「全帧 zeros + 全帧广播」。GPU 路径直接把区域上传后由 CPU 侧
-        切片合成（区域小，开销可忽略）——因为 GPU kernel 按全帧索引分发，
-        对局部区域用 CPU 切片反而更快且更简单。
+        用于稀疏绘制：只需上传局部小层（几百 KB），由 k_add_region 直接写入
+        画布对应区域——避免「先回读整帧 23.7MB → CPU 切片改 → 再传回」的隐性成本
+        （实测多次 add_region 交替 GPU 算子时，回读是稀疏化收益的主要漏损）。
         """
         self._flush_host()
-        h, w = layer.shape[:2]
-        buf = self.buf                                  # 懒回读一次
         sub = layer[:, :, None] if layer.ndim == 2 else layer
-        sh = min(h, self.h - y0)
-        sw = min(w, self.w - x0)
-        if sh <= 0 or sw <= 0:
+        sub = np.ascontiguousarray(sub, np.float32)
+        h, w = sub.shape[:2]
+        rw = min(w, self.w - x0)
+        rh = min(h, self.h - y0)
+        if rw <= 0 or rh <= 0:
             return
-        dst = buf[y0:y0 + sh, x0:x0 + sw]
-        src = sub[:sh, :sw] if sub.ndim == 3 else sub[:sh, :sw, None]
+        b_lay = self.rt.up(sub[:rh, :rw].reshape(-1), "region_tmp")
+        b = self.rt.buf(self._bname, self.n3 * 4)
         if mode == "add":
-            dst += src
-        elif mode == "mul":
-            dst *= src
+            self.rt.run("k_add_region", rh * rw * 3, b, b_lay,
+                        x0, y0, rw, rh, self.w)
         else:
-            dst *= (1.0 - src)
-        # buf 是常驻 host 镜像，切片写已生效；标记待提交
-        self._host_dirty = True
+            self.rt.run("k_region_mode", rh * rw * 3, b, b_lay, b_lay, 0,
+                        x0, y0, rw, rh, self.w, 1 if mode == "mul" else 0)
+        self._mark_device_dirty()
 
     def vignette(self, strength=0.34, power=1.9, ry=1.7):
         yy, xx = np.mgrid[0:self.h, 0:self.w].astype(np.float32)

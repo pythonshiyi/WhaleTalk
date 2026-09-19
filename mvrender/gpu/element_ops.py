@@ -132,8 +132,8 @@ def cpu_blur_downsample(layer, sigma, n=None):
 
 def gpu_blur_full(layer, sigma, n=None):
     """GPU 降采样版大核高斯（单/三通道）。"""
-    import pyopencl as cl
     import cv2
+    import pyopencl as cl
     h, w = layer.shape[:2]
     if sigma is None or float(sigma) < 8.0:
         return cv2.GaussianBlur(layer, (0, 0), float(sigma or 0))

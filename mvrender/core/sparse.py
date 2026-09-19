@@ -128,13 +128,44 @@ def add_poly_blurred(canvas, pts, blur=2.0, color=None, gain=1.0, mode="add",
 
 
 def add_circle_blurred(canvas, center, radius, blur=2.0, color=None, gain=1.0,
-                       mode="add", fill=True):
+                       mode="add", fill=True, aa=True):
     """圆（可选模糊）+ 染色 + 合成。"""
     cx, cy = center
     r = float(radius)
     box = (cx - r, cy - r, cx + r, cy + r)
+    flags = cv2.LINE_AA if aa else 8
 
     def _d(sub, ox, oy):
         cv2.circle(sub, (int(cx) - ox, int(cy) - oy), int(max(1, r)), 1.0,
-                   -1 if fill else 1, cv2.LINE_AA)
+                   -1 if fill else 1, flags)
+    return draw_sparse(canvas, box, _d, blur=blur, color=color, gain=gain, mode=mode)
+
+
+def add_fillpoly_blurred(canvas, pts, blur=2.0, color=None, gain=1.0, mode="add",
+                         aa=False):
+    """多边形填充（可选模糊）+ 染色 + 合成（替代 zeros+fillPoly+Blur+广播）。
+
+    aa 默认 False，与 `cv2.fillPoly(..., 1.0)` 的默认行为一致。
+    """
+    pts = np.asarray(pts, np.float32)
+    box = (pts[:, 0].min(), pts[:, 1].min(), pts[:, 0].max(), pts[:, 1].max())
+    flags = cv2.LINE_AA if aa else 4
+
+    def _d(sub, ox, oy):
+        q = np.round(pts - np.array([ox, oy], np.float32)).astype(np.int32).reshape(-1, 1, 2)
+        cv2.fillPoly(sub, [q], 1.0, flags)
+    return draw_sparse(canvas, box, _d, blur=blur, color=color, gain=gain, mode=mode)
+
+
+def add_ellipse_blurred(canvas, center, axes, blur=2.0, color=None, gain=1.0,
+                        mode="add", fill=True, aa=True):
+    """椭圆（可选模糊）+ 染色 + 合成。"""
+    cx, cy = center
+    ax, ay = axes
+    box = (cx - ax, cy - ay, cx + ax, cy + ay)
+    flags = cv2.LINE_AA if aa else 8
+
+    def _d(sub, ox, oy):
+        cv2.ellipse(sub, (int(cx) - ox, int(cy) - oy), (int(max(1, ax)), int(max(1, ay))),
+                    0, 0, 360, 1.0, -1 if fill else 1, flags)
     return draw_sparse(canvas, box, _d, blur=blur, color=color, gain=gain, mode=mode)

@@ -60,3 +60,6 @@ trust/
 # ===== 前端依赖 =====
 webui/node_modules/
 webapp_*.log
+
+# FastMV 镜头级渲染缓存（mvrender，可重建，不入库）
+.mvrender_cache/

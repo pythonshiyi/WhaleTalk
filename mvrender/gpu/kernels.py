@@ -449,6 +449,50 @@ __kernel void k_box_v(__global const float *src, __global float *dst,
     dst[pix] = (cnt > 0) ? acc / (float)cnt : src[pix];
 }
 
+/* ───────────────────── 稀疏区域合成 ───────────────────── */
+
+/* 把**局部**图层（rw×rh×3）合成到画布 (x0,y0) 区域：
+   buf[(y0+y)*cw + (x0+x)] op= layer[y*rw + x]
+
+   用途：稀疏绘制（mvrender.core.sparse）在 GPU 画布上的高效路径——只需上传
+   局部小层（几百 KB），不必回读/重传整帧 23.7MB。 */
+__kernel void k_add_region(__global float *buf,
+                           __global const float *layer,
+                           const int x0, const int y0,
+                           const int rw, const int rh, const int cw)
+{
+    const int i = get_global_id(0);
+    const int pix = i / 3;
+    const int c = i % 3;
+    const int x = pix % rw;
+    const int y = pix / rw;
+    const long di = ((long)(y0 + y) * cw + (x0 + x)) * 3 + c;
+    buf[di] += layer[i];
+}
+
+/* 区域覆盖 / 相乘（mode: 0=over, 1=mul） */
+__kernel void k_region_mode(__global float *buf,
+                            __global const float *layer,
+                            __global const float *alpha,
+                            const int has_alpha,
+                            const int x0, const int y0,
+                            const int rw, const int rh, const int cw,
+                            const int mode)  /* 0=over 1=mul */
+{
+    const int i = get_global_id(0);
+    const int pix = i / 3;
+    const int c = i % 3;
+    const int x = pix % rw;
+    const int y = pix / rw;
+    const long di = ((long)(y0 + y) * cw + (x0 + x)) * 3 + c;
+    const float a = has_alpha ? alpha[pix] : 1.0f;
+    if (mode == 1) {
+        buf[di] *= layer[i] * a;
+    } else {
+        buf[di] = buf[di] * (1.0f - a) + layer[i] * a;
+    }
+}
+
 /* ───────────────────── 元素层重算子 ───────────────────── */
 
 /* 升采样（双线性）+ 乘标量 gain：融合 glow_layer 的 `resize(LINEAR) → *gain`。

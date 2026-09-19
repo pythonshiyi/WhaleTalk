@@ -7,7 +7,7 @@ A. **画布不回读**：raw_shot 全程留在 device，warp 直接读 device �
 B. **相机 warp 上 GPU**：k_warp3（实测 5.2ms → 0.34ms，15.2x）。
 C. **后处理融合**：post + to_uint8 合成单 kernel（原 139ms → 常驻 0.21ms）。
 
-词层仍是 CPU 稀疏绘制（文字 mask），再上传一个稀疏 overlay 由 GPU 合成 —— 
+词层仍是 CPU 稀疏绘制（文字 mask），再上传一个稀疏 overlay 由 GPU 合成 ——
 这是「绘制稀疏、合成密集」的正确分工，避免为文字写复杂 kernel。
 """
 from __future__ import annotations

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..gpu import ops
 from .transition import apply_transition, trans_mask
 
 

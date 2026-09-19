@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import subprocess
@@ -73,6 +74,7 @@ def build_renderers(root, use_gpu=True, accelerate=True):
         except Exception as e:  # noqa: BLE001
             print("元素层 GPU 接管不可用，退回 CPU：", e)
     import engine as G
+
     from .core.renderer import Renderer as CpuRenderer
     from .core.renderer_gpu import GpuRenderer
     tl, bt = G.load_data()
@@ -192,10 +194,8 @@ def cmd_worker(root, a, b, out):
     except BrokenPipeError:
         print("pipe broken", flush=True)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             proc.stdin.close()
-        except Exception:
-            pass
         proc.wait()
     print(f"worker done {a}-{b} rc={proc.returncode} {time.time()-t0:.1f}s", flush=True)
 
