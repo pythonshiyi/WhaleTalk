@@ -2,6 +2,66 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.4（2026-09-20）—— 🧠 上下文压缩重做：结构化摘要 + 最近原文 + 长结果外置 + 滚动更新
+
+**版本号 3.16.3 → 3.16.4。** 把「超限硬截断」升级为可续接长任务的真正压缩。
+
+### 旧做法的问题
+
+- `_compress_messages` 只生成一段 400 字泛摘要，且**没有任务状态结构**；摘要失败即硬裁剪。
+- 前端 `trimHistory` 在 200k 字符就先把历史砍掉，导致后端压缩阈值（默认 500k 字符）**永远触发不到**——真正生效的是前端的粗暴截断。
+- 摘要每轮从头重算，且不保留「不可丢失的原始指令」。
+
+### 新压缩（四件套齐备）
+
+- **① 结构化摘要**（`_SUMMARY_PROMPT` 重写）：固定输出「任务目标 / 硬性约束 / 当前进度 / 关键线索 / 待办事项 / 不可丢失的原文 / 关键事实」七节；关键路径、命令、产物名原样保留，长工具结果只留结论与产物路径。
+- **② 最近原文保留**：最后 `min_kept_turns` 轮（默认 8）**原文不动**，只压缩更早轮次。
+- **③ 长结果外置 + 引用**：被压缩内容写 `data/archives/`，结构化摘要里附**归档绝对路径**（「需要细节时可 read_file」）——只丢过程细节，不丢可回查的原始信息。
+- **④ 滚动更新**：摘要按会话持久化到 `data/summaries/<sid>.json`，下轮以「已有摘要 + 新脱离上下文的轮次」**增量归并**；无新增被移除轮次时直接复用，不重复调 LLM。
+
+### 永不丢任务指令
+
+- 首条 user 消息在摘要之外**再钉一条 `[原始任务·不可裁剪]` 原文**（≤4000 字），摘要生成失败也保留。
+- 压缩后二次校验改为「保留全部前置 system（基础提示词 / 原始任务 / 摘要），只丢最老的非 system」；终极兜底同样带原始任务。
+
+### 让后端真正接管压缩
+
+- 对话请求体上限从 1MB 放宽到 **16MB**（仅 `/v1/chat*`，其余接口仍守 1MB），`MAX_MESSAGES` 200 → **4000**；前端 `trimHistory` 预算放宽到 3000 条 / 600k 字符（只作 HTTP 兜底），使完整历史能到达后端、由摘要压缩治理，而非前端硬砍。
+- `_compress_messages` 新增 `session_id` / `pure_chat` 参数；流式作业传 `job.sid`、非流式传 `body.session_id`，实现按会话滚动摘要。
+
+### 对话模式同样覆盖（本次一并处理）
+
+- **摘要按模式分流**：对话模式（`pure_chat=True`）用 `_DIALOG_SUMMARY_PROMPT`（主题与背景 / 已确认事实与结论 / 用户偏好与要求 / 未决问题与待答 / 不可丢失的原文 / 关键事实），不套「任务 / 待办」框架；任务模式仍用任务状态提示词。
+- **对话模式不携带工具链**：消息链构造抽到纯模块 `webui/src/chatChain.js`，`buildHistory(msgs, chatMode)` 在 `dialog` 下只回传 user/assistant 正文、剔除历史 `tool_calls`/tool 结果（纯工具轮整条跳过）——避免「请求未带 tools 参数却出现 tool 消息」的接口 400，并省去无关 token；任务模式完整回传。`trimHistory`/压缩在两种模式下走同一套逻辑。
+
+### 验证
+
+`pytest` **829 passed · 1 skipped**（新增 `tests/test_context_compression.py` 5 项：结构化摘要/归档/锚点、滚动复用不再调 LLM、增量归并带「已有摘要」、摘要失败仍保留原始任务、对话模式用对话纪要提示词）· webui `npm run test` 全绿（新增 `tests/chatChain.test.mjs` 6 项；`trimHistory` 用例更新：原始任务锚点；附件门禁改查 `chatChain.js`）· `vite build` / `tsc` 通过。
+
+---
+
+## v3.16.3（2026-09-20）—— 🧷 任务模式长历史完整性：中断后续聊不再「失忆 / 跳任务」
+
+**版本号 3.16.2 → 3.16.3。** 修复「任务模式中断会话后再输入，AI 拿不到历史、要重新全览」的根因（实测记录：一路做《三更帖》第三首，用户说「全片推进」后模型失忆、翻到残留的《旧城慢》第二首计划，跳错任务）。
+
+### 根因链（三处叠加）
+
+- **① 历史被 `slice(-80)` 从中间腰斩**（`webui/src/components/ChatPage.jsx`）：前端把一轮内全部工具调用放进同一条 assistant，`buildMessageChain` 展开后单回合可达 90+ 条；`slice(-80)` 丢掉回合开头的 user 指令，只剩一串无归属的 `tool` 消息。后端 `DeepSeekClient._sanitize_messages` 判定悬空 tool 一律丢弃 → 请求里**只剩「全片推进」四个字**，模型彻底失忆。
+- **② 落盘把 `tool_calls` 截到 16 条**（`api_server.py` `_save_session`）：却保留全部 tool 结果，17+ 条变孤儿；`_load_session_messages` 又把 `tool_calls` 截到 64、超 2000 条时**取头部**（丢掉最近进度）。
+- **③ 工具卡片只按名字配对**（`webui/src/msgUpdates.js` `findLastToolCard`）：连续同名工具（如两次 `read_file`）的结果会串到相邻卡片（导出 md 里调用/结果错位即由此）。
+
+### 修复
+
+- 新增 `trimHistory`：按**回合边界**（user）截断，绝不切断 assistant/tool 对；**无条件保留最后一个完整回合**（含本轮指令与全部工具链）；在 `maxMessages=400` / `maxChars=200000` 预算内尽量多纳入更早的完整回合。发送与落盘统一走它，替换全部 `slice(-80)`。
+- `_save_session` / `_load_session_messages` 不再截断 `tool_calls`；加载超 2000 条改为取**尾部**（最近进度）。
+- 工具事件（`tool_start` / `tool` / `tool_duration`）全程携带 `tool_call_id`：`deepseek_client` 新增 `_emit_tool_cb` 兼容旧签名并下发 id，`api_server` SSE 透传，前端 `findToolCard` 按 id 精确回填；`pickSession` 的孤儿 tool 兜底改为归属「前面最近的 assistant」，不再错挂到会话最后一条（跨任务串味）。
+
+### 验证
+
+`pytest` **824 passed · 1 skipped**（新增 `tests/test_history_integrity.py` 3 项：30 条 tool_calls 不截断、超 2000 条取尾部、回调 id 透传与旧签名降级）· webui `npm run test` 全绿（`msgUpdates.test.mjs` 新增 `findToolCard` 2 项 + `trimHistory` 5 项）· `vite build` / `tsc` 通过。
+
+---
+
 ## v3.16.2（2026-09-19）—— 🖌 像素通道结构性修复 + read_file 编码探测边界 bug
 
 **版本号 3.16.1 → 3.16.2。**

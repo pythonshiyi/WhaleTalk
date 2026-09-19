@@ -1,6 +1,6 @@
 import React from "react";
 import Message from "./Message.jsx";
-import { findLastToolCard, makePatchLast } from "../msgUpdates.js";
+import { findToolCard, makePatchLast, trimHistory } from "../msgUpdates.js";
 import Composer from "./Composer.jsx";
 import SessionList from "./SessionList.jsx";
 import ContextPanel from "./ContextPanel.jsx";
@@ -12,6 +12,7 @@ import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
+import { buildHistory, withAttachRefs } from "../chatChain.js";
 import { speakText, getVoiceConfig, onSpeechState, stopSpeak, resumeSpeak } from "../ttsUtil.js";
 import { nowClock } from "../timeFmt.js";
 import formatToolResult from "../formatToolResult.js";
@@ -138,54 +139,6 @@ function SpeakingPill() {
       {label}
     </div>
   );
-}
-
-// 非图片附件：以「路径清单」追加进送给模型的正文——图片走 images 视觉链路，
-// 其余文件（pdf/docx/csv…）让 AI 按路径用工具读取。展示层只用 msg.text，不显示这段。
-function fileRefsBlock(files) {
-  if (!files || !files.length) return "";
-  const lines = files
-    .filter((f) => f && f.path)
-    .map((f) => `- ${f.name || ""} → ${f.path}`);
-  return lines.length ? `\n\n[本次附件]\n${lines.join("\n")}` : "";
-}
-function withAttachRefs(text, files) {
-  return `${text || ""}${fileRefsBlock(files)}`;
-}
-
-// ── 多轮消息链构造（官方规范）────────────────────────
-// tools 模式下必须完整回传：assistant(reasoning_content + tool_calls) → tool 结果
-function buildMessageChain(msgs) {
-  const out = [];
-  for (const m of msgs) {
-    if (m.role === "user") {
-      const um = { role: "user", content: withAttachRefs(unwrapLongText(m.text || ""), m.files) };
-      if (m.images && m.images.length) um.images = m.images;
-      out.push(um);
-    } else if (m.role === "assistant") {
-      const am = { role: "assistant", content: unwrapLongText(m.text || "") };
-      if (m.think) am.reasoning_content = m.think;
-      if (m.tools && m.tools.length) {
-        am.tool_calls = m.tools.map((t, i) => ({
-          id: `call_${i}`,
-          type: "function",
-          function: { name: t.tool, arguments: JSON.stringify(t.args || {}) },
-        }));
-        out.push(am);
-        m.tools.forEach((t, i) => {
-          out.push({
-            role: "tool",
-            tool_call_id: `call_${i}`,
-            name: t.tool,
-            content: String(t.result || "").slice(0, 4000),
-          });
-        });
-      } else {
-        out.push(am);
-      }
-    }
-  }
-  return out;
 }
 
 // ── 真实后端流式对话 ────────────────────────────────
@@ -323,9 +276,12 @@ function useBackendChat({
       try {
         // 续写：从原始消息（msgsRef 镜像）重建到 continueIdx 为止——historyRef 里可能
         // 是已构建的链，再 buildMessageChain 一次会把 assistant 变空、tool 消息丢光。
-        const history = isContinue
-          ? buildMessageChain((msgsRef.current || []).slice(0, continueIdx + 1))
-          : (historyRef.current || []).slice(-80);
+        // 截断统一走 trimHistory（按回合边界、保底保留最后一个回合）——旧的
+        // `slice(-80)` 会把工具密集的一轮从中间腰斩，导致模型彻底失忆。
+        const rawHistory = isContinue
+          ? buildHistory((msgsRef.current || []).slice(0, continueIdx + 1), chatMode)
+          : (historyRef.current || []);
+        const history = trimHistory(rawHistory);
         // 纯图片（无文字）时给一句占位，避免部分网关拒绝空 content
         const userContent = withAttachRefs(userText, files) || (images.length ? "[图片]" : "");
         // 费用确认闸：本次请求是否已带用户确认；读取后立即复位（只作用于这一次发送）
@@ -365,30 +321,32 @@ function useBackendChat({
               feedAuto();
               scheduleBatch({ text: t, gen: "⏳ 等待模型响应…" });
             },
-            onToolStart: ({ name, args }) => {
+            onToolStart: ({ name, args, id }) => {
               if (!alive || stopRef.current) return;
               let parsed = args;
               try {
                 parsed = typeof args === "string" && args ? JSON.parse(args) : args;
               } catch (e) { silentWarn(e, "ChatPage"); }
+              // 记录后端 tool_call_id：同轮并发调用同名工具时，结果/耗时按 id 精确回填
+              const card = { tool: name, args: parsed, status: "running", ...(id ? { id } : {}) };
               if (isContinue) {
-                updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, tools: [...(x.tools || []), { tool: name, args: parsed, status: "running" }] } : x)));
+                updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, tools: [...(x.tools || []), card] } : x)));
               } else {
-                patchLast((x) => ({ ...x, tools: [...(x.tools || []), { tool: name, args: parsed, status: "running" }] }));
+                patchLast((x) => ({ ...x, tools: [...(x.tools || []), card] }));
               }
               setGenState({ on: true, text: "⚙ 正在执行「" + name + "」…" });
             },
-            onTool: ({ name, result }) => {
+            onTool: ({ name, result, id }) => {
               if (!alive || stopRef.current) return;
-              // 工具完成：把「最后一张 running 卡片」替换为 done。
+              // 工具完成：按 tool_call_id 精确配对，退化到「最后一张同名 running 卡片」。
               // 注意必须替换对象而非改 card.status——card 是 state 内 tools 数组里
               // 的共享对象，原地改会污染旧快照（isContinue 分支此前即如此）。
               const finishTools = (tools) => {
                 const out = [...(tools || [])];
                 const res = formatToolResult(result).slice(0, 8000);
-                const idx = findLastToolCard(out, name, "running");
+                const idx = findToolCard(out, { id, name, status: "running" });
                 if (idx >= 0) out[idx] = { ...out[idx], status: "done", result: res };
-                else out.push({ tool: name, result: res, status: "done" });
+                else out.push({ tool: name, result: res, status: "done", ...(id ? { id } : {}) });
                 return out;
               };
               if (isContinue) {
@@ -397,13 +355,13 @@ function useBackendChat({
                 patchLast((x) => ({ ...x, tools: finishTools(x.tools) }));
               }
             },
-            onToolDuration: ({ name, duration }) => {
+            onToolDuration: ({ name, duration, id }) => {
               if (!alive || stopRef.current) return;
               // 补写耗时：同样替换对象，不原地改卡片（非续写分支此前甚至不触发更新，
               // 耗时只能等下一次重渲染才出现——现改为立即不可变落地）
               const withDuration = (tools) => {
                 const out = [...(tools || [])];
-                const idx = findLastToolCard(out, name, "done");
+                const idx = findToolCard(out, { id, name, status: "done" });
                 if (idx >= 0) out[idx] = { ...out[idx], duration };
                 return out;
               };
@@ -595,72 +553,77 @@ function useDataSources() {
           // 保证每轮 assistant 拿到的是自己那一轮的工具结果
           let searchFrom = 0;
           const usedToolIdx = new Set();
-          const mapped = d.messages
-            .map((m) => {
-              if (m.role === "user") {
-                return {
-                  role: "user",
-                  text: m.content,
-                  ...(m.images && m.images.length ? { images: m.images } : {}),
-                  ...(m.files && m.files.length ? { files: m.files } : {}),
-                };
-              }
-              // tool 结果消息：已按顺序归并进 assistant 的工具卡片，不单独渲染
-              if (m.role === "tool" || m.role === "system") {
-                return null;
-              }
-              const tools = (m.tool_calls || []).map((tc) => {
-                let args = {};
-                try {
-                  args = JSON.parse(tc.function?.arguments || "{}");
-                } catch (e) { silentWarn(e, "ChatPage"); }
-                let hit = -1;
-                for (let i = searchFrom; i < d.messages.length; i++) {
-                  const mm = d.messages[i];
-                  if (mm.role === "tool" && mm.tool_call_id === tc.id) {
-                    hit = i;
-                    break;
-                  }
-                }
-                if (hit >= 0) {
-                  searchFrom = hit + 1;
-                  usedToolIdx.add(hit);
-                }
-                return {
-                  tool: tc.function?.name || "?",
-                  args,
-                  status: "done",
-                  result: hit >= 0 ? String(d.messages[hit].content || "").slice(0, 500) : "",
-                  duration: "—",
-                };
-              });
-              return {
-                role: "assistant",
-                think: m.reasoning_content || "",
-                tools,
+          const mapped = [];
+          const asstByOrig = new Map();   // 原始下标 → 映射后的 assistant 对象（孤儿归属用）
+          d.messages.forEach((m, origIdx) => {
+            if (m.role === "tool" || m.role === "system") return;
+            if (m.role === "user") {
+              mapped.push({
+                role: "user",
                 text: m.content,
-                streaming: false,
-                // 历史会话回显：单条用量/速率
-                usage: m.usage,
-                metrics: m.metrics,
-              };
-            })
-            .filter(Boolean);
-          // 兜底：历史上后端曾把 tool_calls 截到 16 条，孤儿 tool 消息挂到最后一个 assistant
-          const lastAsst = [...mapped].reverse().find((x) => x.role === "assistant");
-          if (lastAsst) {
-            d.messages.forEach((mm, i) => {
-              if (mm.role === "tool" && !usedToolIdx.has(i)) {
-                lastAsst.tools.push({
-                  tool: mm.name || mm.tool_call_id || "tool",
-                  args: {},
-                  status: "done",
-                  result: String(mm.content || "").slice(0, 500),
-                  duration: "—",
-                });
+                ...(m.images && m.images.length ? { images: m.images } : {}),
+                ...(m.files && m.files.length ? { files: m.files } : {}),
+              });
+              return;
+            }
+            const tools = (m.tool_calls || []).map((tc) => {
+              let args = {};
+              try {
+                args = JSON.parse(tc.function?.arguments || "{}");
+              } catch (e) { silentWarn(e, "ChatPage"); }
+              let hit = -1;
+              for (let i = searchFrom; i < d.messages.length; i++) {
+                const mm = d.messages[i];
+                if (mm.role === "tool" && mm.tool_call_id === tc.id) {
+                  hit = i;
+                  break;
+                }
               }
+              if (hit >= 0) {
+                searchFrom = hit + 1;
+                usedToolIdx.add(hit);
+              }
+              return {
+                tool: tc.function?.name || "?",
+                args,
+                status: "done",
+                result: hit >= 0 ? String(d.messages[hit].content || "").slice(0, 500) : "",
+                duration: "—",
+                ...(tc.id ? { id: tc.id } : {}),
+              };
             });
-          }
+            const obj = {
+              role: "assistant",
+              think: m.reasoning_content || "",
+              tools,
+              text: m.content,
+              streaming: false,
+              // 历史会话回显：单条用量/速率
+              usage: m.usage,
+              metrics: m.metrics,
+            };
+            asstByOrig.set(origIdx, obj);
+            mapped.push(obj);
+          });
+          // 兜底：历史后端曾把 tool_calls 截断（截到 16 条），孤儿 tool 消息按
+          // 「前面最近的一条 assistant」归属——绝不能挂到整个会话的最后一条 assistant，
+          // 否则会把上一轮的工具结果错记到下一轮（跨任务串味）。
+          let curAsst = null;
+          d.messages.forEach((mm, i) => {
+            if (mm.role === "assistant") {
+              curAsst = asstByOrig.get(i) || curAsst;
+              return;
+            }
+            if (mm.role === "tool" && !usedToolIdx.has(i) && curAsst) {
+              curAsst.tools.push({
+                tool: mm.name || mm.tool_call_id || "tool",
+                args: {},
+                status: "done",
+                result: String(mm.content || "").slice(0, 500),
+                duration: "—",
+              });
+            }
+          });
           return { messages: mapped, usage: d.usage_total, stars: d.stars, pinned: d.pinned, tags: d.tags };
         }
       } catch (e) { silentWarn(e, "ChatPage"); }
@@ -1124,9 +1087,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         });
         if (sid) {
           setActiveId(sid);
-          historyRef.current = buildMessageChain(
-            msgsRef.current.length ? msgsRef.current : [userText, msg]
-          ).slice(-80);
+          historyRef.current = trimHistory(buildHistory(
+            msgsRef.current.length ? msgsRef.current : [userText, msg], chatMode
+          ));
           refreshSessions();
         }
       } catch (e) { silentWarn(e, "ChatPage"); }
@@ -1178,7 +1141,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       files = editedAtt.files || [];
     }
     pendingRef.current = { text, images, files };
-    historyRef.current = buildMessageChain(base.filter((m) => !m.streaming));
+    historyRef.current = buildHistory(base.filter((m) => !m.streaming), chatMode);
     // 新一轮生成：分配新的 stream_id（后端据此新建独立作业）
     streamIdRef.current = newStreamId();
     // 连续对话：保留已有消息（useBackendChat 在 base 上追加本轮 user+assistant），
@@ -1347,7 +1310,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     if (busy) return;
     starsRef.current = new Set();
     pinsRef.current = new Set();
-    historyRef.current = buildMessageChain(msgs.slice(0, idx + 1));
+    historyRef.current = buildHistory(msgs.slice(0, idx + 1), chatMode);
     setActiveId(null);
     setMsgs(msgs.slice(0, idx + 1));
     setBackendNote("分支会话：已从此处创建新会话");
@@ -1427,7 +1390,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     const base = msgs.slice(0, lastUser);
     starsRef.current = new Set();
     pinsRef.current = new Set();
-    historyRef.current = buildMessageChain(base);
+    historyRef.current = buildHistory(base, chatMode);
     setActiveId(null);
     setMsgs(base);
     pendingRef.current = { text, images: msgs[lastUser].images || [], files: msgs[lastUser].files || [] };
@@ -1455,7 +1418,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     const base = cur.slice(0, lastUser);
     starsRef.current = new Set();
     pinsRef.current = new Set();
-    historyRef.current = buildMessageChain(base);
+    historyRef.current = buildHistory(base, chatMode);
     setMsgs(base);
     pendingRef.current = { text, images: cur[lastUser].images || [], files: cur[lastUser].files || [] };
     // 后端旧作业已结束，必须换新 stream_id 新建作业，否则会被当作订阅已完成作业。

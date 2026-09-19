@@ -141,7 +141,7 @@ def _stub_pipeline(monkeypatch):
     monkeypatch.setattr(api_server._Handler, "_quiet_mode", lambda self, body, cfg: False)
     monkeypatch.setattr(api_server._Handler, "_inject_system_messages",
                         lambda self, m, cfg, pure, quiet: (m, ""))
-    monkeypatch.setattr(api_server, "_compress_messages", lambda m, cfg, client: (m, None))
+    monkeypatch.setattr(api_server, "_compress_messages", lambda m, cfg, client, *a, **k: (m, None))
     monkeypatch.setattr(api_server, "_record_usage", lambda *a, **k: None)
     monkeypatch.setattr(api_server, "_tool_bookkeeping", lambda *a, **k: None)
     monkeypatch.setattr(api_server, "_record_tasklog", lambda *a, **k: None)

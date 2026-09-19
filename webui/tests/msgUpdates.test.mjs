@@ -5,7 +5,7 @@
 // 重渲染。现统一走 msgUpdates.js 的不可变更新。
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { findLastToolCard, makePatchLast } from "../src/msgUpdates.js";
+import { findLastToolCard, findToolCard, makePatchLast, trimHistory } from "../src/msgUpdates.js";
 
 // 最小 updateMsgs 替身：同步执行变换并记录，模拟 ChatPage 的 setMsgs + 实时镜像
 function makeUpdateMsgs() {
@@ -109,5 +109,86 @@ describe("findLastToolCard 工具卡片定位", () => {
     assert.equal(findLastToolCard(undefined, "x", "running"), -1);
     assert.equal(findLastToolCard([], "x", "running"), -1);
     assert.equal(findLastToolCard([null, {}], "x", "running"), -1);
+  });
+});
+
+describe("findToolCard 按 tool_call_id 精确配对", () => {
+  it("优先按 id 命中（同名并发不再串卡片）", () => {
+    const tools = [
+      { id: "call_a", tool: "read_file", status: "running" },
+      { id: "call_b", tool: "read_file", status: "running" },
+    ];
+    assert.equal(findToolCard(tools, { id: "call_a", name: "read_file", status: "running" }), 0);
+    assert.equal(findToolCard(tools, { id: "call_b", name: "read_file", status: "running" }), 1);
+  });
+
+  it("无 id 或缺配时退化为名字+状态", () => {
+    const tools = [{ tool: "read_file", status: "running" }];
+    assert.equal(findToolCard(tools, { name: "read_file", status: "running" }), 0);
+    assert.equal(findToolCard(tools, { id: "nope", name: "read_file", status: "running" }), 0);
+    assert.equal(findToolCard(tools, { id: "nope", name: "write_file", status: "running" }), -1);
+  });
+});
+
+describe("trimHistory 回合边界裁剪（防长任务失忆）", () => {
+  // 构造一轮工具密集的回合：1 user + 1 assistant(tool_calls) + 89 tool
+  function heavyTurn(tag, toolCount) {
+    const tcs = [];
+    const tools = [];
+    for (let i = 0; i < toolCount; i++) {
+      tcs.push({ id: `call_${i}`, type: "function", function: { name: "read_file", arguments: "{}" } });
+      tools.push({ role: "tool", tool_call_id: `call_${i}`, name: "read_file", content: `${tag}-${i}` });
+    }
+    return [
+      { role: "user", content: `任务${tag}` },
+      { role: "assistant", content: "", tool_calls: tcs },
+      ...tools,
+    ];
+  }
+
+  it("单回合超过条数上限时仍完整保留（不腰斩）", () => {
+    const chain = heavyTurn("A", 89);
+    const out = trimHistory(chain, { maxMessages: 80, maxChars: 1e9 });
+    assert.equal(out.length, 91, "整轮（含 user 指令）必须完整保留");
+    assert.equal(out[0].role, "user");
+    assert.equal(out[0].content, "任务A");
+    assert.equal(out[out.length - 1].role, "tool");
+  });
+
+  it("绝不从 tool/assistant 片段中间开头，且保留原始任务锚点", () => {
+    const old = heavyTurn("OLD", 10);
+    const cur = heavyTurn("CUR", 10);
+    const out = trimHistory([...old, ...cur], { maxMessages: 12, maxChars: 1e9 });
+    // 首条是补回的原始任务锚点，其后是完整回合（都以 user 开头）
+    assert.equal(out[0].role, "user");
+    assert.equal(out[0].content, "任务OLD", "原始任务应作为锚点保留");
+    assert.equal(out[1].role, "user", "窗口必须以 user 回合起点开头");
+    assert.equal(out[1].content, "任务CUR");
+    assert.equal(out.length, 13);
+  });
+
+  it("预算充足时纳入更早的完整回合", () => {
+    const old = heavyTurn("OLD", 2);
+    const cur = heavyTurn("CUR", 2);
+    const out = trimHistory([...old, ...cur], { maxMessages: 100, maxChars: 1e9 });
+    assert.equal(out.length, 8);
+    assert.equal(out[0].content, "任务OLD");
+  });
+
+  it("字符预算超限时同样按回合边界回退，并保留原始任务锚点", () => {
+    const old = heavyTurn("OLD", 5);
+    const cur = heavyTurn("CUR", 5);
+    const out = trimHistory([...old, ...cur], { maxMessages: 10000, maxChars: 20 });
+    assert.equal(out[0].role, "user");
+    assert.equal(out[0].content, "任务OLD", "原始任务锚点");
+    assert.equal(out[1].role, "user");
+    assert.equal(out[1].content, "任务CUR");
+  });
+
+  it("最后一个回合超预算也保底保留（宁可超也丢不得指令）", () => {
+    const chain = heavyTurn("BIG", 50).map((m) => ({ ...m, content: "x".repeat(100) }));
+    const out = trimHistory(chain, { maxMessages: 1, maxChars: 1 });
+    assert.equal(out[0].role, "user");
+    assert.ok(out.length > 1);
   });
 });

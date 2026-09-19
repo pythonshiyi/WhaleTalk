@@ -35,11 +35,13 @@ describe("对话附件链路（粘贴 / 拖拽）", () => {
 
   it("ChatPage 处理全局粘贴 + 拖拽，附件进入消息链且随会话落盘", () => {
     const jsx = read("components/ChatPage.jsx");
+    const chain = read("chatChain.js");  // 消息链构造已抽到纯模块（便于单测）
     assert.ok(jsx.includes("onPaste={onPasteFiles}"), "chat-main 未绑定粘贴处理");
     assert.ok(jsx.includes("addEventListener(\"drop\""), "缺少全局拖拽处理");
     assert.ok(jsx.includes("drop-overlay"), "缺少拖拽高亮遮罩");
-    assert.ok(jsx.includes("fileRefsBlock"), "非图片附件未生成给模型的路径清单");
-    assert.ok(jsx.includes("withAttachRefs"), "消息链未拼接附件引用");
+    assert.ok(chain.includes("fileRefsBlock"), "非图片附件未生成给模型的路径清单");
+    assert.ok(chain.includes("withAttachRefs"), "消息链未拼接附件引用");
+    assert.ok(jsx.includes("chatChain.js"), "ChatPage 未接入消息链构造模块");
     assert.ok(jsx.includes("files"), "pendingRef/会话保存未携带 files");
   });
 

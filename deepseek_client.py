@@ -4322,6 +4322,25 @@ def _apply_plan_edits(tool_calls, edits, work_msg=None):
     return tool_calls
 
 
+def _emit_tool_cb(cb, *args):
+    """调用工具回调，末尾携带 tool_call_id；旧签名（少一个参数）自动降级重试。
+
+    新增 tool_call_id 是为了让前端把「同名工具的并发调用」按 id 精确配对——
+    只按名字配对时 read_file 等连续同名调用会把结果串到相邻卡片。旧回调只声明
+    到 duration/result，首次调用会在参数绑定阶段抛 TypeError（无副作用），
+    去掉末尾 id 重试即可，保证向后兼容。
+    """
+    if cb is None:
+        return
+    try:
+        cb(*args)
+    except TypeError:
+        if len(args) > 1:
+            cb(*args[:-1])
+        else:
+            raise
+
+
 class DeepSeekClient:
     def __init__(self, api_key, base_url=DEFAULT_BASE_URL, model=DEFAULT_MODEL, timeout=0.0,
                  gateway_session=None):
@@ -5093,7 +5112,7 @@ class DeepSeekClient:
                         pass
                     if on_tool_start is not None:
                         try:
-                            on_tool_start(name, raw_args)
+                            _emit_tool_cb(on_tool_start, name, raw_args, tc.get("id"))
                         except Exception:
                             pass
                     fn = TOOL_CALL_MAP.get(name)
@@ -5235,9 +5254,9 @@ class DeepSeekClient:
                                     )
                                 exec_results[tcid] = (name, args, result, duration)
                                 if on_tool:
-                                    on_tool(name, args, result)
+                                    _emit_tool_cb(on_tool, name, args, result, tcid)
                                 if on_tool_duration:
-                                    on_tool_duration(name, duration)
+                                    _emit_tool_cb(on_tool_duration, name, duration, tcid)
                             pending = set()  # 已决定后台跑：剩余工具不标超时
                             break  # 仍未完成的工具后台继续跑（自带超时兜底）
                         done, pending = wait(
@@ -5257,9 +5276,9 @@ class DeepSeekClient:
                             exec_results[tcid] = (name, args, result, duration)
                             # 完成即回调 UI：快的工具不再被慢的拖到最后一齐出现
                             if on_tool:
-                                on_tool(name, args, result)
+                                _emit_tool_cb(on_tool, name, args, result, tcid)
                             if on_tool_duration:
-                                on_tool_duration(name, duration)
+                                _emit_tool_cb(on_tool_duration, name, duration, tcid)
                 # 总超时兜底：仍未完成的工具标记超时，不再等待（聊天继续）
                 if pending:
                     for f in list(pending):
@@ -5267,7 +5286,7 @@ class DeepSeekClient:
                         nm = next((t["name"] for k2, t in futs.items() if futs[k2] is f), "?")
                         exec_results[tcid] = (nm, {}, f"工具执行超时（超过 {_TOOL_TOTAL_TIMEOUT // 60} 分钟），已放弃等待", None)
                         if on_tool:
-                            on_tool(nm, {}, exec_results[tcid][2])
+                            _emit_tool_cb(on_tool, nm, {}, exec_results[tcid][2], tcid)
                     pending = set()
                 for tc in serial_tools:
                     if stop_event and stop_event.is_set():
@@ -5278,9 +5297,9 @@ class DeepSeekClient:
                     name, args, result, duration = execute_tool(tc)
                     exec_results[tc["id"]] = (name, args, result, duration)
                     if on_tool:
-                        on_tool(name, args, result)
+                        _emit_tool_cb(on_tool, name, args, result, tc["id"])
                     if on_tool_duration:
-                        on_tool_duration(name, duration)
+                        _emit_tool_cb(on_tool_duration, name, duration, tc["id"])
                 # 按原始 tool_calls 顺序追加历史（保证历史消息顺序稳定）；
                 # 已完成的上面已回调 UI，这里只为停止时未执行的补回调
                 for tc in tool_calls:
@@ -5289,7 +5308,7 @@ class DeepSeekClient:
                         entry = (tc["name"], {}, _interrupted_result(tc["name"]), None)
                         exec_results[tc["id"]] = entry
                         if on_tool:
-                            on_tool(entry[0], entry[1], entry[2])
+                            _emit_tool_cb(on_tool, entry[0], entry[1], entry[2], tc["id"])
                     name, args, result, duration = entry
                     # 进上下文的工具结果截断：fetch_url 500KB/read_file 100KB 原样
                     # 重传给模型会白白消耗数万 token（费用 + 延迟 + 逼近 1M 上限）。
