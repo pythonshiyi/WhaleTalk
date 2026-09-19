@@ -169,8 +169,15 @@ function useBackendChat({
     const userText = pendingRef.current.text;
     const images = pendingRef.current.images || [];
     const files = pendingRef.current.files || [];
-    const isContinue = continueRef && continueRef.current && continueRef.current.active;
-    const continueIdx = isContinue ? continueRef.current.idx : -1;
+    // 一次性消费续写意图：effect 启动即取走并清零，杜绝任何遗留标记泄漏到下一次发送。
+    // 再对目标 idx 做有效性校验——标记与目标消息不匹配时一律按正常发送处理（宁可不续写，
+    // 也绝不把用户的正常消息吞成续写：那会表现为「输入什么都不显示、AI 收不到」）。
+    const _cont = (continueRef && continueRef.current) || { active: false, idx: -1 };
+    continueRef.current = { active: false, idx: -1 };
+    const _carr = msgsRef.current || [];
+    const isContinue = !!(_cont.active && Number.isInteger(_cont.idx) && _cont.idx >= 0
+      && _carr[_cont.idx] && _carr[_cont.idx].role === "assistant");
+    const continueIdx = isContinue ? _cont.idx : -1;
     // 本轮生成的稳定标识（effect 重跑复用同一个，避免重复开新作业）
     if (!streamIdRef.current) streamIdRef.current = newStreamId();
     const streamId = streamIdRef.current;

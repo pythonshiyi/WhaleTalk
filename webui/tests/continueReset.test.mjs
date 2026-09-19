@@ -44,4 +44,10 @@ describe("continueRef 复位点", () => {
     assert.ok(n >= 6, `复位点过少（${n}），可能被误删`);
     assert.ok(jsx.includes("AbortError") && windowFrom("AbortError", 300).includes(RESET), "AbortError 路径未复位");
   });
+
+  it("effect 启动即一次性消费续写意图（读后清零）", () => {
+    const w = windowFrom("const _cont =", 400);
+    assert.ok(w.includes("continueRef.current = { active: false, idx: -1 }"), "effect 未一次性消费续写标记");
+    assert.ok(w.includes("Number.isInteger(_cont.idx)"), "缺少目标 idx 有效性校验");
+  });
 });
