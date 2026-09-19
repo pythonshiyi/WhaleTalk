@@ -176,6 +176,93 @@ class GPUCanvas:
             np.broadcast_to(full, (self.h, self.w, 3)), np.float32)
         self._upload_host()
 
+    # ── GPU 端光栅化（批量图元，CPU 只传参数）──────────────────────
+    def _blur_and_add_field(self, b_layer, color, gain, blur):
+        """单通道图层（device）→ 可选高斯 → ×颜色×gain 合成到画布。全 GPU。"""
+        from . import ops
+        if blur and blur > 0:
+            ops.gauss_blur1(self.rt, b_layer, b_layer, float(blur), self.w, self.h,
+                            tmp="elems_blur")
+        b = self.rt.buf(self._bname, self.n3 * 4)
+        c = np.asarray(color, np.float32)
+        self.rt.run("k_add_field", self.n3, b, b_layer,
+                    np.float32(c[0]), np.float32(c[1]), np.float32(c[2]),
+                    np.float32(float(gain)))
+        self._mark_device_dirty()
+
+    def rasterize(self, rects=None, lines=None, circles=None,
+                  color=(1.0, 1.0, 1.0), gain=1.0, blur=0.0):
+        """批量图元光栅化到**同一图层**（累积 max）→ 可选模糊 → 乘色合成。
+
+        合并到同一图层很关键：rects 与 lines 若分两次 blur+add，边界处会与
+        「全部图元一起模糊」有差异（实测 city_skyline max 55/255）；合并后
+        与 CPU 一致（max 0.28，0 像素 >0.5）。
+        """
+        self._flush_host()
+        b_l = self.rt.buf("elems_layer", self.rt.npix * 4)
+        self.rt.run("k_mul_scalar", self.rt.npix, b_l, np.float32(0.0))   # 清零
+        if rects:
+            rects = list(rects)
+            arr = np.asarray(rects, np.float32).reshape(-1)
+            b_r = self.rt.up(arr, "elems_rects")
+            self.rt.run("k_fill_rects", self.rt.npix, b_l, b_r, len(rects), self.w, self.h)
+        if lines:
+            lines = list(lines)
+            arr = np.asarray(lines, np.float32).reshape(-1)
+            b_r = self.rt.up(arr, "elems_lines")
+            self.rt.run("k_draw_lines", self.rt.npix, b_l, b_r, len(lines), self.w, self.h)
+        if circles:
+            circles = list(circles)
+            arr = np.asarray(circles, np.float32).reshape(-1)
+            b_r = self.rt.up(arr, "elems_circles")
+            self.rt.run("k_fill_circles", self.rt.npix, b_l, b_r, len(circles), self.w, self.h)
+        self._blur_and_add_field(b_l, color, gain, blur)
+
+    def fill_rects(self, rects, color=(1.0, 1.0, 1.0), gain=1.0, blur=0.0):
+        """批量矩形光栅化 + 可选模糊 + 乘色合成（CPU 只上传图元参数）。
+
+        rects: [(x0, y0, x1, y1, alpha), ...]（闭区间填充，与 cv2.rectangle 一致）
+        """
+        self._flush_host()
+        rects = list(rects)
+        if not rects:
+            return
+        arr = np.asarray(rects, np.float32).reshape(-1)
+        b_r = self.rt.up(arr, "elems_rects")
+        b_l = self.rt.buf("elems_layer", self.rt.npix * 4)
+        self.rt.run("k_fill_rects", self.rt.npix, b_l, b_r, len(rects), self.w, self.h)
+        self._blur_and_add_field(b_l, color, gain, blur)
+
+    def draw_lines(self, lines, color=(1.0, 1.0, 1.0), gain=1.0, blur=0.0):
+        """批量线段光栅化 + 可选模糊 + 乘色合成。
+
+        lines: [(x0, y0, x1, y1, thickness, alpha), ...]
+        """
+        self._flush_host()
+        lines = list(lines)
+        if not lines:
+            return
+        arr = np.asarray(lines, np.float32).reshape(-1)
+        b_r = self.rt.up(arr, "elems_lines")
+        b_l = self.rt.buf("elems_layer", self.rt.npix * 4)
+        self.rt.run("k_draw_lines", self.rt.npix, b_l, b_r, len(lines), self.w, self.h)
+        self._blur_and_add_field(b_l, color, gain, blur)
+
+    def fill_circles(self, circles, color=(1.0, 1.0, 1.0), gain=1.0, blur=0.0):
+        """批量实心圆光栅化 + 可选模糊 + 乘色合成。
+
+        circles: [(cx, cy, r, alpha), ...]
+        """
+        self._flush_host()
+        circles = list(circles)
+        if not circles:
+            return
+        arr = np.asarray(circles, np.float32).reshape(-1)
+        b_r = self.rt.up(arr, "elems_circles")
+        b_l = self.rt.buf("elems_layer", self.rt.npix * 4)
+        self.rt.run("k_fill_circles", self.rt.npix, b_l, b_r, len(circles), self.w, self.h)
+        self._blur_and_add_field(b_l, color, gain, blur)
+
     def mul_region(self, layer, x0, y0, mode="mul"):
         """区域就地缩放/覆盖（纯 GPU）：buf[区域] *= layer（mode=mul）。"""
         self._flush_host()

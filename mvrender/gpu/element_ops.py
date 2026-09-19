@@ -347,20 +347,32 @@ def gpu_city_skyline(canvas, t, horizon=0.55, seed=4, op=0.95, color=(62, 42, 26
     hh = box_y1 - box_y0
     if hh <= 0:
         return
-    col = np.array(color, np.float32)
-    # 楼（含坡顶）
-    lay = np.zeros((hh, W), np.float32)
-    for (x, bw, bh, old, top, ant) in blds:
-        cv2.rectangle(lay, (x, top - box_y0), (x + bw, base - box_y0), 1.0, -1)
-        if old:
-            ry = top - int(bh * 0.26) - box_y0
-            cv2.line(lay, (x - 8, top - box_y0), (x + bw // 2, ry), 1.0, 6, cv2.LINE_AA)
-            cv2.line(lay, (x + bw + 8, top - box_y0), (x + bw // 2, ry), 1.0, 6, cv2.LINE_AA)
-        elif ant:
-            cv2.line(lay, (x + bw // 2, top - box_y0),
-                     (x + bw // 2, top - int(bh * 0.10) - box_y0), 1.0, 4, cv2.LINE_AA)
-    lay = cv2.GaussianBlur(lay, (0, 0), 0.7)
-    canvas.add_region(lay[:, :, None] * col * op, 0, box_y0, "add")
+    # 楼主体 + 坡顶/天线：**GPU 端光栅化**（CPU 只上传图元参数，不再 zeros+广播+上传）
+    if hasattr(canvas, "fill_rects"):
+        rects = [(x, top, x + bw, base, 1.0) for (x, bw, bh, old, top, ant) in blds]
+        lines = []
+        for (x, bw, bh, old, top, ant) in blds:
+            if old:
+                ry = top - int(bh * 0.26)
+                lines.append((x - 8, top, x + bw // 2, ry, 6, 1.0))
+                lines.append((x + bw + 8, top, x + bw // 2, ry, 6, 1.0))
+            elif ant:
+                lines.append((x + bw // 2, top, x + bw // 2, top - int(bh * 0.10), 4, 1.0))
+        canvas.rasterize(rects=rects, lines=lines, color=color, gain=op, blur=0.7)
+    else:
+        col = np.array(color, np.float32)
+        lay = np.zeros((hh, W), np.float32)
+        for (x, bw, bh, old, top, ant) in blds:
+            cv2.rectangle(lay, (x, top - box_y0), (x + bw, base - box_y0), 1.0, -1)
+            if old:
+                ry = top - int(bh * 0.26) - box_y0
+                cv2.line(lay, (x - 8, top - box_y0), (x + bw // 2, ry), 1.0, 6, cv2.LINE_AA)
+                cv2.line(lay, (x + bw + 8, top - box_y0), (x + bw // 2, ry), 1.0, 6, cv2.LINE_AA)
+            elif ant:
+                cv2.line(lay, (x + bw // 2, top - box_y0),
+                         (x + bw // 2, top - int(bh * 0.10) - box_y0), 1.0, 4, cv2.LINE_AA)
+        lay = cv2.GaussianBlur(lay, (0, 0), 0.7)
+        canvas.add_region(lay[:, :, None] * col * op, 0, box_y0, "add")
     # 窗灯
     if window_op > 0:
         wtex = E._win_tex(seed + 3)
@@ -469,7 +481,7 @@ def patched_gaussian_blur(src, ksize, sigmaX, dst=None, sigmaY=0,
 
 
 # ── 安装 / 卸载 ──────────────────────────────────────────────────
-def install(enable=("glow_layer", "mist", "gblur", "rain", "walker")):
+def install(enable=("glow_layer", "mist", "gblur", "rain", "walker", "city_skyline")):
     """接管元素层重算子；enable 可指定子集（便于逐项验证与回退）。
 
     enable:

@@ -449,6 +449,90 @@ __kernel void k_box_v(__global const float *src, __global float *dst,
     dst[pix] = (cnt > 0) ? acc / (float)cnt : src[pix];
 }
 
+/* ───────────────────── GPU 端光栅化（批量图元）───────────────────── */
+
+/* 批量矩形填充：layer(HxW 单通道) = max(命中矩形的 alpha)。
+   rects 为扁平 [x0,y0,x1,y1,a]*n（已钳到画布）。
+   用途：把「CPU zeros + 循环 cv2.rectangle + 全帧广播 + 上传」整条链搬到 GPU ——
+   只需上传几百字节的图元参数，GPU 光栅化 + 后续 blur/kernel 合成全在显存。 */
+__kernel void k_fill_rects(__global float *layer,
+                           __global const float *rects,
+                           const int n, const int w, const int h)
+{
+    const int pix = get_global_id(0);
+    const int x = pix % w;
+    const int y = pix / w;
+    float v = 0.0f;
+    for (int i = 0; i < n; i++) {
+        const int x0 = (int)rects[i * 5 + 0];
+        const int y0 = (int)rects[i * 5 + 1];
+        const int x1 = (int)rects[i * 5 + 2];
+        const int y1 = (int)rects[i * 5 + 3];
+        /* cv2.rectangle(...,-1) 是**闭区间**填充（含两端点），保持一致 */
+        if (x >= x0 && x <= x1 && y >= y0 && y <= y1) {
+            const float a = rects[i * 5 + 4];
+            v = fmax(v, a);
+        }
+    }
+    layer[pix] = fmax(layer[pix], v);
+}
+
+/* 批量线段（简单 DDA，无抗锯齿）：lines = [x0,y0,x1,y1,thick,a]*n */
+__kernel void k_draw_lines(__global float *layer,
+                           __global const float *lines,
+                           const int n, const int w, const int h)
+{
+    const int pix = get_global_id(0);
+    const int px = pix % w;
+    const int py = pix / w;
+    float v = 0.0f;
+    for (int i = 0; i < n; i++) {
+        const float ax = lines[i * 6 + 0], ay = lines[i * 6 + 1];
+        const float bx = lines[i * 6 + 2], by = lines[i * 6 + 3];
+        const float th = lines[i * 6 + 4];
+        const float a = lines[i * 6 + 5];
+        const float dx = bx - ax, dy = by - ay;
+        const float len2 = dx * dx + dy * dy + 1e-6f;
+        float t = ((float)px - ax) * dx + ((float)py - ay) * dy;
+        t = t / len2;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        const float qx = ax + t * dx - (float)px;
+        const float qy = ay + t * dy - (float)py;
+        const float d = sqrt(qx * qx + qy * qy);
+        /* SDF 抗锯齿（1px 过渡），逼近 cv2.LINE_AA —— 硬边 DDA 与 AA 在斜线边缘
+           有 ~55/255 的可辨差异（实测），加 AA 后收敛到边缘级。 */
+        const float aa = clampf(th * 0.5f + 0.5f - d, 0.0f, 1.0f);
+        if (aa > 0.0f) {
+            v = fmax(v, a * aa);
+        }
+    }
+    layer[pix] = fmax(layer[pix], v);
+}
+
+/* 批量实心圆：circles = [cx,cy,r,a]*n */
+__kernel void k_fill_circles(__global float *layer,
+                             __global const float *circles,
+                             const int n, const int w, const int h)
+{
+    const int pix = get_global_id(0);
+    const int px = pix % w;
+    const int py = pix / w;
+    float v = 0.0f;
+    for (int i = 0; i < n; i++) {
+        const float cx = circles[i * 4 + 0], cy = circles[i * 4 + 1];
+        const float r = circles[i * 4 + 2], a = circles[i * 4 + 3];
+        const float dx = (float)px - cx, dy = (float)py - cy;
+        const float d = sqrt(dx * dx + dy * dy);
+        /* SDF 抗锯齿（1px 过渡），逼近 cv2.circle(...,LINE_AA) */
+        const float aa = clampf(r + 0.5f - d, 0.0f, 1.0f);
+        if (aa > 0.0f) {
+            v = fmax(v, a * aa);
+        }
+    }
+    layer[pix] = fmax(layer[pix], v);
+}
+
 /* ───────────────────── 稀疏区域合成 ───────────────────── */
 
 /* 把**局部**图层（rw×rh×3）合成到画布 (x0,y0) 区域：
