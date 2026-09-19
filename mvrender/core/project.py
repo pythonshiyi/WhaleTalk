@@ -41,11 +41,33 @@ class Ctx:
         self.harm_t, self.harm_v = hc[:, 0], np.clip(hc[:, 1], 0, 1.5)
         vc = np.array(bt["vocal_curve"], np.float32)
         self.vocal_t, self.vocal_v = vc[:, 0], np.clip(vc[:, 1], 0, 1.5)
-        self.lines = tl["lines"]
+        # 歌词行兼容：本仓库各曲的 timeline.json 字段名不同 ——
+        # 三更帖用 `who`（"男"/"女"/"合"），釉下青/旧城慢无 `who`。
+        # 早前 `ctx.line_at` 只存在于各曲 engine.Ctx，mvrender.Ctx 漏了它，
+        # 导致 post() 在读段落色调时崩溃。这里一并补齐默认值：
+        #   who 缺失 → "合"；sec 缺失 → ""。
+        self.lines = []
+        for _ln in tl.get("lines", tl.get("lyrics", [])) or []:
+            d = dict(_ln)
+            d.setdefault("who", "合")
+            d.setdefault("sec", "")
+            self.lines.append(d)
         self.seg = {}
         for ln in self.lines:
             s = self.seg.setdefault(ln["sec"], [ln["t0"], ln["t1"]])
             s[1] = max(s[1], ln["t1"])
+
+    def line_at(self, t, lead=1.2, tail=1.6):
+        """当前歌词行（含前后余量）；无则 None。
+
+        【踩坑】此前 mvrender.Ctx 漏实现 line_at，但 renderer.post / lyrics 都直接
+        调用它 → AttributeError: 'Ctx' object has no attribute 'line_at'。
+        各曲 engine.Ctx 里有这个方法（签名也含 lead/tail），此处按同签名补齐。
+        """
+        for ln in self.lines:
+            if ln["t0"] - lead <= t <= ln["t1"] + tail:
+                return ln
+        return None
 
     def energy(self, t):
         return float(np.interp(t, self.rms_t, self.rms_v))
@@ -79,12 +101,6 @@ class Ctx:
     def is_strong(self, t):
         b, dt, s = self.beat_info(t)
         return s > 0.28
-
-    def line_at(self, t, lead=1.2, tail=1.6):
-        for ln in self.lines:
-            if ln["t0"] - lead <= t <= ln["t1"] + tail:
-                return ln
-        return None
 
     def who_at(self, t):
         ln = self.line_at(t)

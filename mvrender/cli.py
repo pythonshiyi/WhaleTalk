@@ -78,19 +78,49 @@ def build_renderers(root, use_gpu=True, accelerate=True):
     from .core.renderer import Renderer as CpuRenderer
     from .core.renderer_gpu import GpuRenderer
     tl, bt = G.load_data()
-    ctx = G.Ctx(tl, bt)
+    # 用 mvrender 自己的 Ctx，而不是宿主工程的 G.Ctx：
+    # 宿主 G.Ctx 的构造函数把分辨率硬编码（三更帖 engine 里 W,H=1080,1920 写死），
+    # 且各曲实现细节不同（旧城慢无 who 字段）。mvrender.Ctx 已做字段兼容，
+    # 并对 line_at 等接口做了兜底。
+    from .core.project import Ctx as MvCtx
+    w, h = (tl.get("resolution") or [1080, 1920])[:2]
+    w, h = int(w), int(h)
+    ctx = MvCtx(tl, bt, w=w, h=h)
     defs = SH.build_shots(tl)
-    from .core.project import Shot as MvShot
+    from .core.project import Shot as MvShot  # noqa: E402
     shots = []
     for d in defs:
-        t0, t1, name, fn, cam, tin, tout, tik, tok, day = d[:10]
-        deps = d[10] if len(d) > 10 else infer_deps(name, getattr(fn, "__name__", ""))
-        # 用 mvrender 的 Shot（契约与 engine.Shot 一致，另带 deps 供细粒度失效）
+        if isinstance(d, MvShot):
+            shots.append(d)
+            continue
+        if hasattr(d, "fn") and hasattr(d, "t0"):
+            # 宿主工程的 engine.Shot（旧契约）：直接搬字段，避免按位置解包
+            shots.append(MvShot(d.t0, d.t1, d.name, d.fn, cam=d.cam,
+                                tin=d.tin, tout=d.tout,
+                                tin_kind=d.tin_kind, tout_kind=d.tout_kind,
+                                day=d.day,
+                                deps=getattr(d, "deps", None) or infer_deps(
+                                    d.name, getattr(d.fn, "__name__", ""))))
+            continue
+        # 元组定义：兼容 9 元（旧：无 day）与 10/11 元（新：带 day / deps）
+        # 【踩坑】旧工程釉下青/旧城慢是 9 元组（无 day 位），硬按 d[:10] 解包会
+        # ValueError: not enough values to unpack (expected 10, got 9)。
+        vals = list(d) + [None] * (11 - len(d))
+        t0, t1, name, fn, cam, tin, tout, tik, tok, day = vals[:10]
+        deps = vals[10] if len(d) > 10 else None
+        if deps is None:
+            deps = infer_deps(name, getattr(fn, "__name__", ""))
         shots.append(MvShot(t0, t1, name, fn, cam=cam, tin=tin, tout=tout,
-                            tin_kind=tik, tout_kind=tok, day=day, deps=deps))
-    lyr_c = G.LyricRenderer(tl["lines"])
-    lyr_g = G.LyricRenderer(tl["lines"])
-    w, h = tl["resolution"]
+                            tin_kind=tik, tout_kind=tok,
+                            day=bool(day) if day is not None else False, deps=deps))
+    # 歌词渲染器：优先用 mvrender 自带实现（尺寸参数化、支持任意分辨率），
+    # 宿主工程的 G.LyricRenderer 是 1080x1920 写死的旧版：
+    #   · 其 render() 未必接受 day= 关键字 → TypeError（釉下青实测）
+    #   · 硬编码尺寸会在非 1080x1920 工程上错位
+    from .core.lyrics import LyricRenderer as MvLyrics
+    _lines = ctx.lines
+    lyr_c = MvLyrics(_lines, w=w, h=h)
+    lyr_g = MvLyrics(_lines, w=w, h=h)
     cpu = CpuRenderer(shots, ctx, lyr_c, w=w, h=h, use_gpu=False)
     gpu = GpuRenderer(shots, ctx, lyr_g, w=w, h=h) if use_gpu else None
     return tl, ctx, shots, cpu, gpu

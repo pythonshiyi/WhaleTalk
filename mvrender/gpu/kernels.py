@@ -470,6 +470,32 @@ __kernel void k_add_region(__global float *buf,
     buf[di] += layer[i];
 }
 
+/* 滚动纹理合成：buf += tex[(y+yoff)%h, (x+xoff)%w] * color * gain
+
+   用于雨幕等「静态纹理 + 每帧循环位移」的层：原实现每帧
+   np.roll(tex)（全帧 8.3MB 拷贝）+ `tex[:,:,None]*tint*w`（全帧广播）
+   + 全帧上传，三层即 ~75MB/帧。改为纹理一次常驻显存、每帧只跑一个 kernel。 */
+__kernel void k_rain(__global float *buf,
+                     __global const float *tex,
+                     const int w, const int h,
+                     const int yoff, const int xoff,
+                     const float cb, const float cg, const float cr)
+{
+    const int i = get_global_id(0);
+    const int pix = i / 3;
+    const int c = i % 3;
+    const int x = pix % w;
+    const int y = pix / w;
+    /* 与 numpy 一致：np.roll(tex, off)[y] = tex[(y - off) % n] */
+    int sy = y - yoff;
+    sy = sy % h; if (sy < 0) sy += h;
+    int sx = x - xoff;
+    sx = sx % w; if (sx < 0) sx += w;
+    const float t = tex[sy * w + sx];
+    const float col = (c == 0) ? cb : ((c == 1) ? cg : cr);
+    buf[i] += t * col;
+}
+
 /* 区域覆盖 / 相乘（mode: 0=over, 1=mul） */
 __kernel void k_region_mode(__global float *buf,
                             __global const float *layer,

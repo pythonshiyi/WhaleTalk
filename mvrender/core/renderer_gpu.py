@@ -172,11 +172,15 @@ class GpuRenderer(Renderer):
         return self.finalize(b_lyr, t, s.day)
 
     def _lyrics_to_device(self, b_img, t, s):
-        """歌词层：读 device 图像 → CPU 稀疏绘制 → 叠加后回传 device。
+        """歌词层（**区域化**）：只回读/计算/写回字幕带，全程不碰整帧。
 
-        与 CPU 主循环同序（post → lyrics → tonemap）。为省一次全帧搬运，
-        这里对整帧做一次 device→host→叠加→host→device；相较旧实现每算子都
-        回读，仍是「一帧两次搬运」的常量开销。
+        实测依据：`dark` 恒在 y≈1207–1585、`overlay` 恒在 y≈1341–1473，
+        **带外恰好为 0**（band_a 带外被 clip、layer/gl 只写字形区）。
+        故区域化是数学等价（非近似）。相较整帧实现省掉：
+          · 计算：全帧 zeros/乘加/高斯/膨胀 → 仅 21% 面积
+          · 传输：2×24.9MB → 2×~5.3MB（band 410 行）
+        写回用区域 kernel（k_region_mode / k_add_region），避开 OpenCL 的
+        buffer 字节偏移对齐限制（非对齐 dst_offset 会 INVALID_VALUE，实测）。
         """
         if self.lyrics is None:
             return b_img
@@ -184,22 +188,28 @@ class GpuRenderer(Renderer):
         if ln is None:
             return b_img
         import pyopencl as cl
-        # 只搬运字幕带（dark/overlay 的有效行区间），而不是整帧：
-        # 歌词永远落在 y_base=1436 附近 ±~260（字高 88 + 字带半径 190），
-        # 占全帧约 27%。区域搬运把两次 23.7MB 全帧拷贝降到 ~6MB。
-        # 整帧搬运：OpenCL 的 buffer 偏移写入要求对齐（非对齐 dst_offset 会
-        # INVALID_VALUE，实测），逐行区域搬运需要 padding 到设备对齐，
-        # 收益（~27% 拷贝量）不足以抵消复杂度与风险，故保持整帧。
-        img_f = np.empty((self.h, self.w, 3), np.float32)
-        cl.enqueue_copy(self.rt.q, img_f, b_img)
+        y0, y1 = self.lyrics.band()
+        rows = y1 - y0
+        if rows <= 0:
+            return b_img
+        band = np.empty((rows, self.w, 3), np.float32)
+        cl.enqueue_copy(self.rt.q, band, b_img, src_offset=y0 * self.w * 3 * 4)
         self.rt.finish()
-        _, ov = self.lyrics.render(img_f, t, self.ctx,
-                                   sec=(ln["sec"] if ln else None), day=s.day)
-        dark = getattr(self.lyrics, "last_dark", None)
+        ov, dark = self.lyrics.render_band(t, self.ctx, y0, y1,
+                                           sec=ln["sec"], day=s.day)
+        if dark is None and not ov.any():
+            return b_img
+        b = b_img
         if dark is not None:
-            img_f = img_f * (1.0 - dark)[:, :, None]
-        img_f = img_f + ov
-        return self.rt.up(np.ascontiguousarray(img_f).reshape(-1), "rr_lyr")
+            m3 = np.repeat((1.0 - dark)[:, :, None], 3, axis=2)
+            b_m = self.rt.up(np.ascontiguousarray(m3, np.float32).reshape(-1), "lyr_mul")
+            self.rt.run("k_region_mode", rows * self.w * 3, b, b_m, b_m, 0,
+                        0, y0, self.w, rows, self.w, 1)      # mode=1 → buf *= layer
+        if ov.any():
+            b_o = self.rt.up(np.ascontiguousarray(ov, np.float32).reshape(-1), "lyr_ov")
+            self.rt.run("k_add_region", rows * self.w * 3, b, b_o,
+                        0, y0, self.w, rows, self.w)
+        return b_img
 
     # 覆盖基类 render（返回 float，供一致性对比用）──────────────────
     def render(self, t):

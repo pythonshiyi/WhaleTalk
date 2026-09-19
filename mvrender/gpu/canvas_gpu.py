@@ -176,8 +176,43 @@ class GPUCanvas:
             np.broadcast_to(full, (self.h, self.w, 3)), np.float32)
         self._upload_host()
 
+    # ── 滚动纹理（雨幕等）──────────────────────────────────────────
+    def _tex_buf(self, tex):
+        """把静态纹理常驻 device（按对象身份缓存，保持引用防 GC）。"""
+        cache = getattr(self, "_tex_cache", None)
+        if cache is None:
+            cache = {}
+            self._tex_cache = cache
+            self._tex_ref = []
+        key = id(tex)
+        hit = cache.get(key)
+        if hit is not None and hit[0] is tex:
+            return hit[1]
+        if len(cache) > 32:
+            cache.clear()
+            self._tex_ref.clear()
+        b = self.rt.up(np.ascontiguousarray(tex, np.float32).reshape(-1),
+                       f"tex_{key % 100000}")
+        cache[key] = (tex, b)
+        self._tex_ref.append(tex)
+        return b
+
+    def add_rolled(self, tex, yoff, xoff, color, gain=1.0):
+        """buf += tex 循环位移(yoff,xoff) × color × gain（纹理常驻，纯 GPU）。"""
+        self._flush_host()
+        b_tex = self._tex_buf(tex)
+        b = self.rt.buf(self._bname, self.n3 * 4)
+        c = np.asarray(color, np.float32) * float(gain)
+        self.rt.run("k_rain", self.n3, b, b_tex, self.w, self.h,
+                    int(yoff), int(xoff), float(c[0]), float(c[1]), float(c[2]))
+        self._mark_device_dirty()
+
     # ── 合成算子（GPU 路径）────────────────────────────────────────
     def add(self, layer, mask=None):
+        # 【实测结论】不做「自动非零行检测来裁剪上传」：检测代价 5.4ms/层
+        # （reshape(h,-1).any(1)），而元素层每镜 20+ 次 add，全片反而从 19.0s
+        # 恶化到 34.3s。稀疏化交由调用方显式使用 core.sparse（它知道真实 bbox），
+        # 或走 add_region。
         self._flush_host()
         b = self.rt.buf(self._bname, self.n3 * 4)
         b_lay = self.rt.up(np.ascontiguousarray(layer, np.float32).reshape(-1), "lay_tmp")

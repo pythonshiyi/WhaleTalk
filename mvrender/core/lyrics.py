@@ -45,13 +45,30 @@ class LyricRenderer:
                                                font_path=FONT_SONG, xy=(4, 0), tracking=0)
         return self.cache[key]
 
-    def render(self, img, t, ctx, sec=None, day=False):
-        W, H = self.w, self.h
-        overlay = np.zeros((H, W, 3), np.float32)
+    Y_BASE = 1436
+
+    def band(self, pad=0):
+        """字幕带行区间 [y0, y1)。
+
+        关键事实（实测验证）：`dark` 恒在 y≈1207–1585、`overlay` 恒在 y≈1341–1473，
+        **带外恰好为 0**（band_a 在带外被 clip 到 0、layer/gl 只写字形区域）。
+        因此「只在条带内计算」是**数学等价**而非近似。默认 ±240/±170 已覆盖
+        dark 带半径 190 与字高 ~88 及位移，余量充足。
+        """
+        return max(0, self.Y_BASE - 240 - pad), min(self.h, self.Y_BASE + 170 + pad)
+
+    def render_band(self, t, ctx, y0, y1, sec=None, day=False):
+        """只在 [y0,y1) 条带内计算歌词层，返回 (overlay_band, dark_band|None)。
+
+        相比全帧版省掉：全帧 zeros/layer/gl 分配、全帧乘加、全帧高斯与膨胀。
+        """
+        W = self.w
+        hb = y1 - y0
+        overlay = np.zeros((hb, W, 3), np.float32)
         active = ctx.line_at(t)
         self.last_dark = None
-        if active is None:
-            return img, overlay
+        if active is None or hb <= 0:
+            return overlay, None
         text = active["text"]
         t0, t1 = active["t0"], active["t1"]
         lay_key = ("lay", text)
@@ -59,10 +76,10 @@ class LyricRenderer:
             self.cache[lay_key] = self._layout(text, 52, 8, W - 120)
         size, ws, total = self.cache[lay_key]
         x0 = (W - total) / 2
-        y_base = 1436
+        y_base = self.Y_BASE
         span = max(0.6, (t1 - t0) * 0.42)
-        layer = np.zeros((H, W), np.float32)
-        gl = np.zeros((H, W), np.float32)
+        layer = np.zeros((hb, W), np.float32)
+        gl = np.zeros((hb, W), np.float32)
         x = x0
         for i, ch in enumerate(text):
             if ch == " ":
@@ -79,10 +96,19 @@ class LyricRenderer:
                 wch = int(min(ws[i] + 10, 120))
                 sub = mask[:int(size * 1.7), :wch] * a
                 xi, yi = int(x) + 2, y_base + dy - int(size * 1.15)
-                x1, y1 = min(W, xi + sub.shape[1]), min(H, yi + sub.shape[0])
-                if x1 > xi and y1 > yi:
-                    layer[yi:y1, xi:x1] = np.maximum(layer[yi:y1, xi:x1], sub[:y1 - yi, :x1 - xi])
-                    gl[yi:y1, xi:x1] = np.maximum(gl[yi:y1, xi:x1], sub[:y1 - yi, :x1 - xi] * 0.7)
+                lx1 = min(W, xi + sub.shape[1])
+                ly1 = min(self.h, yi + sub.shape[0])
+                # 裁剪到 band（band 内即全部有效内容）
+                bx0, by0 = xi, max(yi, y0)
+                bx1, by1 = lx1, min(ly1, y1)
+                if bx1 > bx0 and by1 > by0:
+                    sx = bx0 - xi
+                    sy = by0 - yi
+                    piece = sub[sy:sy + (by1 - by0), sx:sx + (bx1 - bx0)]
+                    ry0 = by0 - y0
+                    ry1 = by1 - y0
+                    layer[ry0:ry1, bx0:bx1] = np.maximum(layer[ry0:ry1, bx0:bx1], piece)
+                    gl[ry0:ry1, bx0:bx1] = np.maximum(gl[ry0:ry1, bx0:bx1], piece * 0.7)
             x += ws[i] + 8
         if day:
             base_col = np.array((70, 62, 54), np.float32)
@@ -93,13 +119,12 @@ class LyricRenderer:
         else:
             base_col = np.array((245, 250, 255), np.float32)
             halo = np.array(self.night_glow, np.float32)
-        if "band_a" not in self.cache:
-            self.cache["band_a"] = (np.clip(
-                1 - np.abs(np.arange(H) - (y_base - 40)) / 190.0, 0, 1) ** 1.2 * 0.32)[:, None]
+        band_a = (np.clip(
+            1 - np.abs(np.arange(y0, y1) - (y_base - 40)) / 190.0, 0, 1) ** 1.2 * 0.32)[:, None]
         k7 = self.cache.setdefault("k7", np.ones((7, 7), np.uint8))
         dark = cv2.dilate(layer, k7) - layer
         dark *= 0.72
-        dark = dark + self.cache["band_a"]
+        dark = dark + band_a
         np.clip(dark, 0, 0.92, out=dark)
         overlay += layer[:, :, None] * base_col * 0.98
         g = cv2.GaussianBlur(gl, (0, 0), 9)
@@ -107,4 +132,22 @@ class LyricRenderer:
         p = ctx.pulse(t)
         overlay *= (1.0 + 0.10 * p)
         self.last_dark = dark
-        return img, overlay
+        return overlay, dark
+
+    def render(self, img, t, ctx, sec=None, day=False):
+        """CPU 路径：内部按条带计算，组装成全帧 overlay/dark（带外为 0）。
+
+        与旧全帧实现在带内逐像素一致、带外同为 0，故整体等价。
+        """
+        H, W = self.h, self.w
+        y0, y1 = self.band()
+        ov_b, dark_b = self.render_band(t, ctx, y0, y1, sec=sec, day=day)
+        full_ov = np.zeros((H, W, 3), np.float32)
+        full_ov[y0:y1] = ov_b
+        if dark_b is None:
+            self.last_dark = None
+        else:
+            full_dark = np.zeros((H, W), np.float32)
+            full_dark[y0:y1] = dark_b
+            self.last_dark = full_dark
+        return img, full_ov
