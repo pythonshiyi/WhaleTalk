@@ -504,9 +504,11 @@ def embed_message_images(messages, model, _log=None, detail="auto"):
 THINKING_MODES = {
     "none": "禁用思考 (none)",
     "low": "低思考 (low)",
-    "medium": "中等思考 (medium)",
+    # 官方 effort 映射：medium/xhigh 实际都落到 high（见 EFFORT_BY_THINKING）——
+    # 档位名如实标注映射结果，避免「中等/高/极高」三个不同文案对应同一效果造成误解。
+    "medium": "中等思考 (medium → high)",
     "high": "高思考 (high)",
-    "xhigh": "极高思考 (xhigh)",
+    "xhigh": "极高思考 (xhigh → high)",
     "max": "最大思考 (max)",
     "auto": "智能路由 (auto)",
 }
@@ -701,6 +703,19 @@ def _wrap_external(text, source=""):
         f"{EXTERNAL_CONTENT_END}\n"
         f"{EXTERNAL_CONTENT_NOTE}"
     )
+
+
+# 返回「外部不可信内容」的工具：其结果入上下文时统一补 `_wrap_external` 分隔与
+# 反注入声明（此前只有 fetch_url/fetch_blocked 自觉包裹，搜索/RSS/邮件等裸灌）。
+# 不含已自行包裹的 fetch_url / fetch_url_smart / fetch_blocked，避免双重标记。
+_EXTERNAL_SOURCE_TOOLS = {
+    "search_web", "search_realtime", "search_github", "rss_fetch",
+    "read_email", "email_summary", "agent_mail", "daily_brief",
+    "browser_navigate", "web_screenshot",
+    "knowledge_search", "pdf_extract", "pdf_toolkit", "docx_read",
+    "read_excel", "read_csv", "epub_read", "mobi_read", "msg_read",
+    "chart_read", "ocr_image", "image_understand",
+}
 
 
 def _fetch_url_raw(url):
@@ -1190,10 +1205,11 @@ def _mem_score(query_tokens, idf, text):
     return 0.55 * cosine + 0.45 * recall
 
 
-def _brain_sync_memory(text, key, type, entities, relations):
+def _brain_sync_memory(text, key, type, entities, relations, origin=""):
     """记忆同步进鲸语大脑（memories/memory.jsonl）；大脑未初始化时静默跳过。
 
     写入为「同文本去重 + 原子追加」，brain 侧由 brainkit 保证 id 级一致性。
+    origin 一并携带，供大脑注入时标注血缘（否则网页提炼内容会以无标注事实注入）。
     """
     try:
         import brainkit as bk
@@ -1205,6 +1221,7 @@ def _brain_sync_memory(text, key, type, entities, relations):
             entities=[e for e in (entities or []) if isinstance(e, str)],
             relations=[r for r in (relations or []) if isinstance(r, dict)],
             source="对话",
+            origin=str(origin or "")[:20],
         )
     except Exception as e:
         import degrade
@@ -1453,7 +1470,8 @@ def _search_report(name, ok, reason=""):
                                _SEARCH_HEALTH_FAIL_LIMIT, reason or "其他", cooldown // 60)
 
 
-# 无限制模式（v3.9+）：call_api 不设主机白名单、不拦内网/回环，任何地址均可访问。
+# call_api 不再额外维护主机白名单（历史遗留兼容）；实际访问仍受 security._safe_url
+# 的 SSRF 硬底线约束：回环默认放行，私网/链路本地/保留段默认拦截。
 CALL_API_ALLOWED_HOSTS = []
 
 
@@ -3500,7 +3518,7 @@ _HINT_ORDER = [
     ('控制图', '提取线稿', '边缘图', '线稿图', 'controlnet'),
     ('精灵表', '精灵图', '帧序列图', '拼帧', 'sprite sheet'),
     ('做个gif', '生成gif', '动图', '逐帧动画'),
-    ('混合渲染', '代码加质感', '图生图', 'img2img', '结构加细节'),
+    ('混合渲染', '代码加质感', 'img2img', '结构加细节'),
 ]
 
 TOOLS = build_tool_list(_TOOL_ORDER)
@@ -3508,6 +3526,14 @@ TOOL_CALL_MAP = build_call_map()
 TOOL_GROUPS = build_groups(_GROUP_ORDER, _TOOL_ORDER)
 _TOOL_ACTION_PHRASES = build_phrases()
 _PREACTIVATE_HINTS = build_preactivate(_HINT_ORDER, _TOOL_ORDER)
+
+# 过宽泛词：单独命中不足以代表意图（「写」「文件」「打开」在任意领域对话里都可能
+# 出现），需与同组其它关键词共现才预激活，否则会把一批 schema 常驻注入、稀释
+# 「精简索引」的省 token 设计。可由 activate_tools 按需点菜兜底。
+_WEAK_PREACTIVATE = frozenset({
+    '写', '生成', '文件', '打开', '修改', '创建', '保存', '删除', '更新', '搜索', '最新', '记录',
+})
+
 
 def _env_int(name, default):
     """循环/上限的用户配置：WHALETALK_<NAME>；0/负 = 不限（由用途解释）。"""
@@ -3563,6 +3589,7 @@ WEB_SEARCH_HINT = (
     "【联网搜索已开启】你具备实时联网能力：当问题涉及实时信息（今天/近期的天气、新闻、"
     "股票行情、最新文献、网页内容，或需要核实的事实性断言）时，先调用 search_web 工具搜索"
     "最新信息，再结合搜索结果回答；若一次搜索信息不足可多次搜索（换关键词/翻页）。"
+    "查询技术社区实时热点/榜单时用 search_realtime。"
     "普通闲聊、无需外部信息的问答直接回答即可，不要为每个问题都搜索。"
     "搜索可能失败或返回无关结果，此时如实说明，不要编造搜索不到的内容。"
 )
@@ -3624,9 +3651,9 @@ def _finalize_activate_tool():
     出现「我没有写文件工具，改不了 identity.json」这类错误自述。
     """
     ACTIVATE_TOOL["function"]["description"] = (
-        "加载你拥有但尚未加载的能力定义。你共拥有 %d 项能力，"
+        "加载你拥有但尚未加载的能力定义。你共有 %d 项内置能力（另有插件/自定义工具），"
         "当前工具列表只是已加载的部分，未列出的能力同样归你所有。"
-        "传工具名激活单个工具，或传组名一次激活整组。组名：%s。"
+        "传工具名激活单个工具，或传组名一次激活整组（组名可带或不带 emoji）。组名：%s。"
         "不要因为列表里看不到就声称自己没有某项能力或做不到（例如修改文件），先激活再执行。"
         % (len(TOOLS), _GROUP_NAMES_TEXT)
     )
@@ -3745,9 +3772,14 @@ def _preactivate_from_messages(messages, activated, window=_PREACTIVATE_WINDOW):
         if not text.strip():
             continue
         for kws, tools in _PREACTIVATE_HINTS:
-            if any(kw in text for kw in kws):
-                activated.update(tools)
-                _record_hint_hit(kws[0])
+            matched = [kw for kw in kws if kw in text]
+            if not matched:
+                continue
+            # 仅命中的都是过宽泛词 → 不预激活（避免任意对话常驻一批 schema）
+            if all(kw in _WEAK_PREACTIVATE for kw in matched):
+                continue
+            activated.update(tools)
+            _record_hint_hit(kws[0])
         scanned += 1
         if scanned >= window:
             break
@@ -4411,14 +4443,14 @@ class DeepSeekClient:
             index_msg = {
                 "role": "system",
                 "content": (
-                    "你是一个拥有 100+ 项专业能力的桌面 AI 智能体，能力地图如下（你确实拥有这些能力，"
+                    f"你是一个拥有 {len(all_tools)} 项专业能力的桌面 AI 智能体，能力地图如下（你确实拥有这些能力，"
                     "不要拒绝用户请求）。工具列表只显示已加载的定义，未列出的能力同样归你所有；"
                     "能力定义未加载时，先调用 activate_tools 激活再使用，"
                     "不要声称自己没有某项能力或做不到。\n\n"
                     "视觉自检准则：执行截图/浏览器/RPA 操作、或生成图片/图表后，"
                     "用 screen_see / image_understand 查看结果并自查是否达到目标；未达标则继续修正"
                     "（点击/输入/重新生成），完成后才向用户汇报。\n\n"
-                    + build_tool_index()
+                    + build_tool_index(all_tools)
                 ),
             }
         if pure_chat:
@@ -5045,6 +5077,9 @@ class DeepSeekClient:
                     text = str(result)
                     if _RESULT_INTO_CONTEXT_MAX and _RESULT_INTO_CONTEXT_MAX > 0 and len(text) > _RESULT_INTO_CONTEXT_MAX:
                         text = _persist_long_result(name, text)
+                    # 外部来源工具结果统一加分隔与反注入声明（防搜索/RSS/邮件内容被当指令）
+                    if name in _EXTERNAL_SOURCE_TOOLS:
+                        text = _wrap_external(text, name)
                     # 视觉自审（config vision_self_review 开启且为视觉模型）：工具产出图片时，
                     # 自动调用视觉模型审图，把审阅意见附在结果里，模型据此迭代（B 自我审图闭环）。
                     if (

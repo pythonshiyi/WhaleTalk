@@ -414,7 +414,7 @@ def read_email(limit=10, since_days=3):
             "type": "function",
             "function": {
                 "name": "email_summary",
-                "description": "读取近期邮件并整理为清单，供 AI 生成新邮件摘要（IMAP 配置同 read_email）",
+                "description": "读取近期邮件并返回原始清单＋汇总任务提示（IMAP 配置同 read_email）。返回值是让你据此生成摘要的**任务输入**，不是已完成的摘要——请自行概括后回复用户，勿直接转述返回的机器文案",
                 "parameters": {
                     "type": "object",
                     "properties": {

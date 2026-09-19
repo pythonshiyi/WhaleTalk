@@ -52,7 +52,7 @@ from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
             "type": "function",
             "function": {
                 "name": "rpa_screen_size",
-                "description": "获取当前屏幕分辨率（桌面 RPA 坐标用，需 pyautogui）",
+                "description": "获取当前屏幕分辨率（桌面 RPA 坐标用；依赖 pyautogui，缺失时返回安装指引）",
                 "parameters": {"type": "object", "properties": {}, "required": []},
             },
         },
@@ -1692,7 +1692,7 @@ def media_ffmpeg(action="info", input="", output="", time="", width=0, format=""
                     "properties": {
                         "goal": {"type": "string", "description": "总目标（一句话说清要交付什么）"},
                         "roles": {"type": "array", "items": {"type": "string"}, "description": "可选：团队成员角色名列表（默认 [研究员,工程师,评审]；自定义角色名会按名字推断专长，最多 5 个）"},
-                        "steps": {"type": "integer", "description": "可选：限制最大步数（默认协调者自行拆解，最多 6 步）"},
+                        "steps": {"type": "integer", "description": "可选：限制最大步数（0-8）。不填则由协调者自行拆解（默认约 6 步）"},
                     },
                     "required": ["goal"],
                 },

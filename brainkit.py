@@ -902,19 +902,22 @@ def save_memories(items: list) -> None:
 
 
 def remember_structured(text, type="", importance=3, tags=None, entities=None, relations=None, source="手动",
-                        sensitivity="public"):
+                        sensitivity="public", origin=""):
     """写入一条结构化记忆到 memory.jsonl（同文本去重）。返回条目 dict 或 None。
 
     写入用「读-查重-原子追加」：单条新增是 O(1) append，不再整文件重写，
     规避记忆量大后的写放大；进程内加锁，跨进程由单行 append 的原子性兜底。
 
     L8 敏感度分级：sensitivity ∈ public/private/secret，供 share-export 等脱敏用。
+    origin：记忆血缘（user/agent/web/system），供注入时标注来源、打断「外部内容→
+    自动提炼→当用户前提」的链；空串表示未标注（旧数据）。
     """
     text = str(text or "").strip()
     if not text:
         return None
     if str(sensitivity or "") not in ("public", "private", "secret"):
         sensitivity = "public"
+    origin = str(origin or "").strip()[:20]
     vid = _mem_id()  # F2 版本链祖先：一次记忆的多个 supersede 版本共享
     entry = {
         "id": _mem_id(), "ts": now_iso(), "type": str(type or "")[:20],
@@ -927,6 +930,8 @@ def remember_structured(text, type="", importance=3, tags=None, entities=None, r
         "sensitivity": sensitivity, "hit_count": 0, "last_hit": "",
         "supersedes": "", "version_id": vid,
     }
+    if origin:
+        entry["origin"] = origin
     with _MEM_LOCK:
         # 跨进程防重：CLI 与常驻 API(harvest 后台线程)不同进程并发写时，
         # 仅进程内锁无法互斥去重 → 用 .lock 文件跨进程串行（拿不到则退化为进程内）。

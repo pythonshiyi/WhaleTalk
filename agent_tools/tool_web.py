@@ -419,11 +419,11 @@ def _gh_rate_hint(resp):
             "type": "function",
             "function": {
                 "name": "search_github",
-                "description": "搜索 GitHub 开源仓库（按 Star 排序）。支持 GitHub 原生搜索语法：org:（组织）、topic:、language:、stars:、in:readme 等，例如 org:deepseek-ai 精确查官方组织。注意：未认证搜索 API 限流 10 次/分钟，额度告急时结果会附带预警",
+                "description": "搜索 GitHub 开源仓库（按 Star 排序）。支持 GitHub 原生搜索语法（写在 query 字符串里）：org:（组织）、topic:、stars:、in:readme 等，例如 query 传 \"org:deepseek-ai\"。另有独立参数 language 限定语言。注意：未认证搜索 API 限流 10 次/分钟，额度告急时结果会附带预警",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "搜索关键词（支持 org:/topic:/language:/stars: 等原生语法）"},
+                        "query": {"type": "string", "description": "搜索关键词；org:/topic:/stars:/in:readme 等原生语法需写在此字符串内（language 另有独立参数）"},
                         "num": {"type": "integer", "description": "可选：返回条数（1-20，默认 5）"},
                         "language": {"type": "string", "description": "可选：限定编程语言（如 python、javascript）"},
                     },
@@ -704,7 +704,7 @@ def search_realtime(query="", num=5, source="hn"):
 )
 @_browser_thread
 def browser_navigate(url="", action="open", selector="", text="", handle=""):
-    """浏览器可视操作（Playwright 可选依赖，未安装时返回安装提示）。
+    """浏览器可视操作（依赖 playwright，复用共享浏览器；缺失时返回安装指引）。
 
     多窗口/多标签模型：所有页签（含 window.open 弹窗）在同一共享上下文内，
     tabs 可枚举全部句柄；switch_tab/close_tab 用 #编号 或 URL/标题关键字定位。
@@ -1428,7 +1428,7 @@ def webdav(action="list", remote_path="/", local_path=""):
             "type": "function",
             "function": {
                 "name": "call_api",
-                "description": "通用 HTTP API 调用（万能接口）：GET/POST/PUT/DELETE/PATCH，支持查询参数/JSON/表单/请求头。任意 http(s) 地址（含内网/回环本地服务），响应 ≤500KB，超时 ≤180s",
+                "description": "通用 HTTP API 调用（万能接口）：GET/POST/PUT/DELETE/PATCH，支持查询参数/JSON/表单/请求头。公网与回环地址（localhost/127.0.0.1）可用；私网/链路本地/保留段默认被 SSRF 硬底线拦截（确需访问可在权限页 network 配置放行）。响应 ≤500KB，超时 ≤180s",
                 "parameters": {
                     "type": "object",
                     "properties": {

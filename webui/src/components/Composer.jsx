@@ -87,13 +87,14 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     const ta = taRef.current;
     const sel = ta ? String(text).slice(ta.selectionStart || 0, ta.selectionEnd || 0) : "";
     const seed = sel || (replaceAll ? "" : String(text || "").trim());
-    let t = String(p.text || "")
-      .replace(/\{\{TEXT\}\}/g, seed)
-      .replace(/\{\{DATE\}\}/g, todayStr());
+    // 先解析 {ASK:} 再插入用户文本（且用函数替换器避免 $& 等替换模式展开）：
+    // 否则选中文本里若含 "{ASK:...}" 会被误当指令弹窗、文本含 "$&" 会被错误展开。
+    let t = String(p.text || "").replace(/\{\{DATE\}\}/g, () => todayStr());
     for (const a of t.match(/\{ASK:([^}]+)\}/g) || []) {
       const ans = await promptDialog(a.slice(5, -1), "");
-      t = t.replace(a, ans || "");
+      t = t.replace(a, () => ans || "");
     }
+    t = t.replace(/\{\{TEXT\}\}/g, () => seed);
     setSlashOpen(false);
     setPromptOpen(false);
     setSlashQuery("");

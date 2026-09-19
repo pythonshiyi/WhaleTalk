@@ -10,7 +10,6 @@
     "tools": [...],                  # 自定义 HTTP 工具（user_tools.json 格式）
     "skills": [...],                 # 技能/提示词模板（prompts.json 格式）
     "workflows": {...},              # 流程（workflows.json 格式）
-    "scenario": {...},               # 可选：一键场景（name/thinking/system_prompt/enabled_tools）
     "app": {...},                    # v2：应用型插件（本地 Python 应用，/触发词 调用）
     "files": {...}                   # v2：应用型插件的自带代码（{相对路径: 源码}，安装到 plugins/<slug>/）
   }
@@ -102,8 +101,8 @@ def validate_plugin(data):
     contents = data.get("contents") or {}
     if not isinstance(contents, dict):
         return False, "contents 必须是对象"
-    if not any(k in contents for k in ("tools", "skills", "workflows", "scenario", "app")):
-        return False, "插件未包含任何能力（tools / skills / workflows / scenario / app）"
+    if not any(k in contents for k in ("tools", "skills", "workflows", "app")):
+        return False, "插件未包含任何能力（tools / skills / workflows / app）"
     for t in contents.get("tools") or []:
         fn = t.get("function") if isinstance(t, dict) else None
         if not isinstance(fn, dict) or not fn.get("name") or not fn.get("endpoint"):

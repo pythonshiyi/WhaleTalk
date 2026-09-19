@@ -609,7 +609,7 @@ def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, time
             "type": "function",
             "function": {
                 "name": "mv_produce",
-                "description": "音乐 MV 能力：输入音频（可选歌词），可完成 音频分析(BPM/节拍/段落) · 歌词声学对轴 · 卡点分镜 · 画面生成/合成。action=plan(分析+分镜+对齐证据) / storyboard(可喂 mv_compose 的分镜包) / compose(分镜→mv_compose 出图合成) / render(直接出片) / styles(列风格包)。engine=native(默认，鲸语自建引擎，零外部依赖) 或 external(可选同机外部 AI MV 程序，自动探测/可设 mv_home)。可调 style/resolution/fps/effect/transition/offline/whisper_model；render 可 images_dir 供图或 generate_images 出图。已知事实：外部出图后端曾 404；本机可确定性帧渲染兜底。返回含**实测自检**（产物是否落盘、时长是否一致、镜头是否覆盖全曲、歌词是否落片内）——据此判断，按实际情况决定怎么组合实现。",
+                "description": "音乐 MV 能力：输入音频（可选歌词），可完成 音频分析(BPM/节拍/段落) · 歌词声学对轴 · 卡点分镜 · 画面生成/合成。action=plan(分析+分镜+对齐证据) / storyboard(可喂 mv_compose 的分镜包) / compose(分镜→mv_compose 出图合成) / render(直接出片) / styles(列风格包)。engine=native(默认，鲸语自建引擎，零外部依赖) 或 external(可选同机外部 AI MV 程序，自动探测/可设 mv_home)。可调 style/resolution/fps/effect/transition/offline/whisper_model；render 可 images_dir 供图或 generate_images 出图。返回含**实测自检**字段（产物是否落盘、时长是否一致、镜头是否覆盖全曲、歌词是否落片内）——请据此判断是否达成，未达成时如实说明、不要声称完成。",
                 "parameters": {
                     "type": "object",
                     "properties": {

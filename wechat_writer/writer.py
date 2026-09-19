@@ -24,6 +24,7 @@ def _material_block(items, related=None):
     """组装素材文本（仅可引用这些事实）。
 
     已抓取全文的素材附加"全文节选"（深度写作：LLM 可引用正文细节而非只有标题摘要）。
+    外裹 `wrap_untrusted` 防注入标记——素材来自外部网页，不可当指令执行。
     """
     rel = set(related or [])
     lines = []
@@ -34,19 +35,20 @@ def _material_block(items, related=None):
         if it.fetched and it.full_text:
             head += f"\n全文节选：{it.full_text[:1500]}"
         lines.append(head)
-    return "\n\n".join(lines[:8])
+    body = "\n\n".join(lines[:8])
+    return llm_mod.wrap_untrusted(body) if body else ""
 
 
-def build_outline(topic, items, style, llm_chat=None):
+def build_outline(topic, items, style, llm_chat=None, domain="AI"):
     """阶段 1：结构化大纲（标题×3 + 导语要点 + 小节标题×N + 结语要点）。"""
     llm_chat = llm_chat or llm_mod.chat
     material = _material_block(items, topic.related if not topic.fallback else None)
     if not material:
         material = _material_block(items)
     prompt = (
-        f"你是资深 AI 领域公众号主笔。请为以下选题写一份写作大纲。\n\n"
+        f"你是资深{domain}领域公众号主笔。请为以下选题写一份写作大纲。\n\n"
         f"选题：{topic.name}\n切入点：{topic.angle or '（默认角度）'}\n\n"
-        f"可用素材（仅可引用这些事实，不得虚构）：\n{material}\n\n"
+        f"可用素材（仅可引用这些事实，不得引用素材之外的链接/数字/人名）：\n{material}\n\n"
         f"要求：\n1. 输出 3 个候选标题（一个悬念型、一个数字型、一个价值型）\n"
         f"2. 导语要点（2-3 句抓住读者）\n"
         f"3. {style['sections']} 个小节标题（每个配 1 句内容要点）\n"
@@ -55,13 +57,10 @@ def build_outline(topic, items, style, llm_chat=None):
         '{"titles": ["t1","t2","t3"], "lead": "...", "sections": [{"h": "...", "k": "..."}], "conclusion": "..."}'
     )
     text = llm_chat([{"role": "user", "content": prompt}], max_tokens=2500, temperature=0.7)
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        raise ValueError(f"大纲输出不含 JSON：{text[:200]}")
-    return json.loads(m.group(0))
+    return llm_mod.extract_json(text, expect="object")
 
 
-def write_body(topic, items, style, outline, llm_chat=None):
+def write_body(topic, items, style, outline, llm_chat=None, domain="AI"):
     """阶段 2：按大纲生成正文（一次生成全篇）。"""
     llm_chat = llm_chat or llm_mod.chat
     material = _material_block(items, topic.related if not topic.fallback else None)
@@ -69,17 +68,18 @@ def write_body(topic, items, style, outline, llm_chat=None):
         material = _material_block(items)
     sections_txt = "\n".join(f"## {s.get('h')}\n（要点：{s.get('k')}）" for s in outline.get("sections", []))
     prompt = (
-        f"你是资深 AI 领域公众号主笔。请围绕主题「{topic.name}」写一篇公众号文章。\n\n"
-        f"素材（仅可引用这些事实，不得编造数据/人名/公司名）：\n{material}\n\n"
+        f"你是资深{domain}领域公众号主笔。请围绕主题「{topic.name}」写一篇公众号文章。\n\n"
+        f"素材（仅可引用这些事实，不得编造数据/人名/公司名，也不得引用素材之外的链接）：\n{material}\n\n"
         f"大纲：\n标题候选：{' / '.join(outline.get('titles', []))}\n"
         f"导语：{outline.get('lead', '')}\n{sections_txt}\n结语：{outline.get('conclusion', '')}\n\n"
         f"写作要求：\n"
-        f"1. 采用第 1 个候选标题（标题单独一行 ## 开头）\n"
+        f"1. 采用第 1 个候选标题（标题单独一行 # 开头）\n"
         f"2. 正文 {style['sections']} 个小节，每节 300-500 字，用 ## 小节标题\n"
         "3. 短段落（每段 2-4 句），口语化，善用设问\n"
         "4. 开篇导语 2 句内抓住读者；结语给出观点或展望\n"
-        "5. 文末列出「参考资料」来源（素材的链接与来源名）\n"
-        f"6. 全文 {style['min_chars']}-{style['max_chars']} 字，面向{STYLE_MAP.get(style['audience'], style['audience'])}，风格：{style['tone']}\n"
+        "5. 文末列出「参考资料」来源（仅限上方素材的链接与来源名）\n"
+        "6. 转述素材观点，不得整段照抄原文\n"
+        f"7. 全文 {style['min_chars']}-{style['max_chars']} 字，面向{STYLE_MAP.get(style['audience'], style['audience'])}，风格：{style['tone']}\n"
         "输出 Markdown。"
     )
     return llm_chat([{"role": "user", "content": prompt}], max_tokens=8000, temperature=0.7)
@@ -101,11 +101,11 @@ def polish(article_text, style, llm_chat=None):
     return llm_chat([{"role": "user", "content": prompt}], max_tokens=8000, temperature=0.5)
 
 
-def write_article(topic, items, style, llm_chat=None):
+def write_article(topic, items, style, llm_chat=None, domain="AI"):
     """三阶段主流程：大纲 → 正文 → 润色。失败抛出（调用方降级）。"""
     llm_chat = llm_chat or llm_mod.chat
-    outline = build_outline(topic, items, style, llm_chat)
-    body = write_body(topic, items, style, outline, llm_chat)
+    outline = build_outline(topic, items, style, llm_chat, domain=domain)
+    body = write_body(topic, items, style, outline, llm_chat, domain=domain)
     polished = polish(body, style, llm_chat)
     titles = outline.get("titles") or []
     first_line = next((ln for ln in polished.splitlines() if ln.strip().startswith("#")), "")
@@ -121,7 +121,10 @@ def rewrite_fix(article, reasons, style, llm_chat=None):
     prompt = (
         "请根据以下质检意见修改文章草稿：\n"
         f"问题：{'；'.join(reasons)}\n"
-        "要求：修正上述问题，保留标题与事实，输出完整修订后的 Markdown。\n\n"
+        "硬性约束（修改时不得违反）：保留标题；保留文末「参考资料」小节；"
+        "不得编造数据/人名/公司名，不得新增素材之外的来源或链接；"
+        "转述而非照抄原文。\n"
+        "输出完整修订后的 Markdown。\n\n"
         "---- 原文 ----\n"
         f"{article.title}\n\n{article.content}"
     )

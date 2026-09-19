@@ -647,7 +647,7 @@ def _cell_size(frame_size, imgs):
                 "type": "object",
                 "properties": {
                     "frames": {"type": "array", "items": {"type": "string"}, "description": "帧列表：每项为图片路径，或以 < 开头的内联 HTML 片段（自动渲染成帧）"},
-                    "output": {"type": "string", "description": "输出 PNG 绝对路径（默认工作区 codegen/）"},
+                    "output": {"type": "string", "description": "可选：输出 PNG 绝对路径；不填则自动写入工作区 codegen/"},
                     "layout": {"type": "string", "enum": ["grid", "strip"], "description": "grid 网格（默认）/ strip 横向长条"},
                     "columns": {"type": "integer", "description": "可选：网格列数（默认取平方根向上取整）"},
                     "frame_size": {"type": "string", "description": "可选：单元格尺寸 WxH（默认取各帧最大尺寸）"},
@@ -656,7 +656,7 @@ def _cell_size(frame_size, imgs):
                     "fps": {"type": "integer", "description": "可选：GIF 帧率（默认 8）"},
                     "loop": {"type": "integer", "description": "可选：GIF 循环次数，0=无限（默认 0）"},
                 },
-                "required": ["frames", "output"],
+                "required": ["frames"],
             },
         },
     },
@@ -717,13 +717,13 @@ def sprite_sheet(frames=None, output="", layout="grid", columns=0, frame_size=""
                 "type": "object",
                 "properties": {
                     "frames": {"type": "array", "items": {"type": "string"}, "description": "帧列表：图片路径或内联 HTML 片段"},
-                    "output": {"type": "string", "description": "输出 GIF 绝对路径（默认工作区 codegen/）"},
+                    "output": {"type": "string", "description": "可选：输出 GIF 绝对路径；不填则自动写入工作区 codegen/"},
                     "fps": {"type": "integer", "description": "可选：帧率（默认 8，1-60）"},
                     "loop": {"type": "integer", "description": "可选：循环次数，0=无限（默认 0）"},
                     "frame_size": {"type": "string", "description": "可选：统一帧尺寸 WxH（默认取各帧最大尺寸）"},
                     "background": {"type": "string", "description": "可选：不透明底色 #RRGGBB（默认黑；GIF 无 alpha）"},
                 },
-                "required": ["frames", "output"],
+                "required": ["frames"],
             },
         },
     },
@@ -787,7 +787,7 @@ def make_gif(frames=None, output="", fps=8, loop=0, frame_size="", background="#
     },
     groups=['🎨 媒体与图像'],
     phrases='混合渲染（结构+质感）',
-    preactivate=(('混合渲染', '代码加质感', '图生图', 'img2img', '结构加细节'),),
+    preactivate=(('混合渲染', '代码加质感', 'img2img', '结构加细节'),),
 )
 def image_hybrid(brief="", base="", kind="illustration", width=1024, height=1024,
                  output="", strength=0.5, background=""):

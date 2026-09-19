@@ -794,7 +794,7 @@ def verify_files(paths):
             "type": "function",
             "function": {
                 "name": "git",
-                "description": "本地 Git 版本管理：init/status/add/commit/diff/log/checkout/branch。开发项目时 init 建仓、改一段 commit 一段、改坏用 checkout 回滚",
+                "description": "本地 Git 版本管理：init/status/add/commit/diff/log/checkout/branch。开发项目时 init 建仓、改一段 commit 一段、改坏用 checkout 回滚。checkout 的 target：传文件路径＝回滚该文件、传分支名＝切换分支（按路径是否存在自动判定）；不提供 reset --hard 等破坏性命令",
                 "parameters": {
                     "type": "object",
                     "properties": {

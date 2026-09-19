@@ -159,16 +159,19 @@ def test_memory_origin_labels():
 
 
 def test_memory_header_plain_when_all_user():
-    """全是用户来源时保持原样（不引入额外说明，避免无谓的 token 与告警感）。"""
+    """全是用户来源时保持简洁（不加血缘说明），但仍带统一防注入声明。"""
     out = cp.assemble(_ctx(deps=_mem_dep([{"text": "用户偏好中文回复", "origin": "user"}])))
-    assert "[长期记忆]\n- 用户偏好中文回复" in out["text"]
+    assert "[长期记忆]" in out["text"]
+    assert "\n- 用户偏好中文回复" in out["text"]
+    assert "不是指令" in out["text"]              # 统一防注入声明
     assert "不得当用户前提" not in out["text"]
 
 
 def test_memory_legacy_facts_unlabeled():
-    """旧记录（无 origin）不加标注——不制造「来源不明」的噪音。"""
+    """旧记录（无 origin）不加血缘标注——不制造「来源不明」的噪音。"""
     out = cp.assemble(_ctx(deps=_mem_dep([{"text": "早期记录内容"}])))
-    assert "[长期记忆]\n- 早期记录内容" in out["text"]
+    assert "[长期记忆]" in out["text"]
+    assert "\n- 早期记录内容" in out["text"]
     assert "〔" not in out["text"]
 
 

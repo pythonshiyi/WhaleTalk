@@ -747,7 +747,7 @@ def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None,
             "type": "function",
             "function": {
                 "name": "xlsx_edit",
-                "description": "就地编辑 .xlsx 指定单元格（保留其它单元格、公式、样式、其它工作表）。cells 传 {\"A1\":值,\"B2\":值,...}，值可为字符串/数字/公式字符串（以 = 开头原样写入公式）；可选 cell_type 数值/文本",
+                "description": "就地编辑 .xlsx 指定单元格（保留其它单元格、公式、样式、其它工作表）。cells 传 {\"A1\":值,\"B2\":值,...}，值可为字符串/数字/公式字符串（以 = 开头原样写入公式）；数值/文本由所传值类型自行决定",
                 "parameters": {
                     "type": "object",
                     "properties": {

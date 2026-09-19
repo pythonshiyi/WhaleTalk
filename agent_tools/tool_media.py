@@ -151,7 +151,7 @@ def image_process(path, output, ops=""):
             "type": "function",
             "function": {
                 "name": "ocr_image",
-                "description": "从图片文件提取文字（Windows OCR，适合截图/扫描件，需系统安装中文语言包）",
+                "description": "从图片文件提取文字（Windows OCR，适合截图/扫描件；依赖系统已安装的 OCR 语言包，缺失时识别范围受限）",
                 "parameters": {
                     "type": "object",
                     "properties": {"path": {"type": "string", "description": "图片文件绝对路径"}},

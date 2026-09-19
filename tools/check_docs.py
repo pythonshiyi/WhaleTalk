@@ -187,6 +187,62 @@ STALE_TEXT = [
 ]
 
 
+def check_prompt_consistency():
+    """提示词一致性门禁：上下文规模、内置指令库条数、能力总数硬编码、引用的工具名。
+
+    这些数字/名称散落在 prompt 文本里，此前完全在门禁之外，随时可漂移。
+    返回问题条数。
+    """
+    problems = 0
+    cfg_src = CFG.read_text(encoding="utf-8")
+    dsc_src = DEEPSEEK.read_text(encoding="utf-8")
+
+    # 1) DEFAULT_SYSTEM_PROMPT 声明的上下文规模 vs MODELS.max_context_tokens
+    m_ctx = re.search(r"长达\s*(\d+)\s*万\s*Token", cfg_src)
+    m_tok = re.search(r"\"max_context_tokens\"\s*:\s*([0-9_]+)", dsc_src)
+    if m_ctx and m_tok:
+        declared = int(m_ctx.group(1))
+        actual = int(m_tok.group(1).replace("_", "")) // 10000
+        if declared != actual:
+            problems += 1
+            print(f"[不一致] DEFAULT_SYSTEM_PROMPT 声明 {declared} 万 Token，"
+                  f"MODELS.max_context_tokens 实测 {actual} 万")
+
+    # 2) 能力总数不得在提示词里写死（应动态取自注册表）
+    if re.search(r"拥有\s*\d+\s*\+?\s*项专业能力", dsc_src):
+        problems += 1
+        print("[过期表述] deepseek_client 提示词仍写死能力总数（应动态取自 all_tools）")
+
+    # 3) 内置指令库条数 vs 文档声明「内置指令库（N 条模板）」
+    try:
+        tree = ast.parse(cfg_src)
+        bp = _top_assign(tree, "BUILTIN_PROMPTS")
+        n_bp = len(bp.elts) if isinstance(bp, ast.List) else None
+    except Exception:
+        n_bp = None
+    if n_bp is not None:
+        for path in (README, MODULES):
+            text = path.read_text(encoding="utf-8")
+            for m in re.finditer(r"内置指令库（(\d+)\s*条模板）", text):
+                if int(m.group(1)) != n_bp:
+                    problems += 1
+                    print(f"[不一致] {path.name} 声明内置指令库 {m.group(1)} 条，实测 {n_bp} 条")
+
+    # 4) TASK_QUALITY_GUIDE 引用的 snake_case 工具名必须真实存在
+    order = _top_assign(ast.parse(dsc_src), "_TOOL_ORDER")
+    tool_names = {e.value for e in order.elts} if isinstance(order, ast.List) else set()
+    m_guide = re.search(r"TASK_QUALITY_GUIDE\s*=\s*\((.*?)\n\)", cfg_src, re.S)
+    if m_guide and tool_names:
+        refs = set(re.findall(r"\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b", m_guide.group(1)))
+        # 排除路径/文件名类标识（非工具名）
+        refs -= {"api_server", "sample_plugins", "data_dir"}
+        unknown = sorted(r for r in refs if r not in tool_names)
+        if unknown:
+            problems += 1
+            print(f"[不一致] TASK_QUALITY_GUIDE 引用了未注册工具/标识：{unknown}")
+    return problems
+
+
 def _write_preserving_eol(path, text):
     """写回文本，并**保留原文件的行尾风格**。
 
@@ -254,6 +310,9 @@ def main(argv=None):
         if frag in text:
             problems += 1
             print(f"[过期表述] {path.name} 仍含「{frag}」：{why}")
+
+    # ── 提示词一致性（上下文规模 / 指令库条数 / 写死的能力数 / 引用工具名）──
+    problems += check_prompt_consistency()
 
     # ── SECURITY 支持版本表与单一版本源对齐 ──
     # 表行形如 "| 3.9.x（main 分支） | ✅ 积极维护 |"：主版本号从源码 VERSION 推导。

@@ -164,7 +164,7 @@ def write_memory(text, tags="", type="", entities="", relations="",
         return res.get("message") or "错误：记忆写入失败"
     if res.get("action") == "duplicate":
         return "该内容已存在，未重复写入"
-    _brain_sync_memory(text, key, str(type or "").strip(), ent, rels)
+    _brain_sync_memory(text, key, str(type or "").strip(), ent, rels, origin=origin)
     total = len(_mf.all_facts())
     extra = ("；" + res["message"]) if res.get("message") else ""
     return f"已写入记忆（当前共 {total} 条）{extra}"

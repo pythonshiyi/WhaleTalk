@@ -27,7 +27,11 @@ def save_article(article, config, drafts_dir=None, archive_dir=None, data_dir=No
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     platform = str(config["output"].get("platform") or _PLATFORM)
     title = str(article.title or article.topic or "未命名").strip()
-    content = f"# {title}\n\n{article.content}"
+    # AI 辅助写作声明（config.output.ai_disclosure，此前是死配置从未落地）
+    disclosure = ""
+    if config["output"].get("ai_disclosure"):
+        disclosure = "\n\n---\n\n> 本文由 AI 辅助写作。"
+    content = f"# {title}\n\n{article.content}{disclosure}"
 
     if dry_run:
         return out
@@ -61,7 +65,7 @@ def save_article(article, config, drafts_dir=None, archive_dir=None, data_dir=No
             f"- 平台：{platform}\n\n---\n\n"
         )
         with open(archive_path, "w", encoding="utf-8") as f:
-            f.write(head + article.content)
+            f.write(head + article.content + disclosure)
         out["archive_path"] = archive_path
     except Exception:
         logger.exception("本地存档写入失败")
@@ -72,7 +76,7 @@ def save_article(article, config, drafts_dir=None, archive_dir=None, data_dir=No
             if html_path:
                 html_path = os.path.splitext(html_path)[0] + ".html"
                 with open(html_path, "w", encoding="utf-8") as f:
-                    f.write(_to_html(title, article.content))
+                    f.write(_to_html(title, article.content + disclosure))
                 out["html_path"] = html_path
         except Exception:
             logger.exception("HTML 输出失败")

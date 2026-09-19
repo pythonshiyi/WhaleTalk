@@ -270,7 +270,8 @@ def test_smart_hint_reports_live_total():
 def test_activate_tool_description_backfills_new_total():
     """activate_tools 描述里的总数/组名是回填的，新增工具后必须同步。"""
     desc = dc.ACTIVATE_TOOL["function"]["description"]
-    assert "%d 项能力" % len(dc.TOOLS) in desc
+    assert "%d 项内置能力" % len(dc.TOOLS) in desc
+    assert "组名可带或不带 emoji" in desc
     for cat, _ in dc.TOOL_GROUPS:
         bare = cat.split(" ", 1)[-1] if " " in cat else cat
         assert bare in desc

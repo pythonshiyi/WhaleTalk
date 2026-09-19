@@ -47,24 +47,22 @@ class Topic:
         return f"Topic({self.name!r})"
 
 
-def _llm_pick_candidates(items, history_topics, llm_chat):
+def _llm_pick_candidates(items, history_topics, llm_chat, domain="AI"):
     """让 LLM 从素材清单提炼 3-5 个候选主题（含切入点与关联素材编号）。"""
-    lines = [f"{i}. {it.display(200)}" for i, it in enumerate(items)]
-    material = "\n".join(lines[:40])
+    # 编号从 1 起（与 prompt 示例 [1, 3] 一致，避免解析错位一位）
+    lines = [f"{i + 1}. {it.display(200)}" for i, it in enumerate(items)]
+    material = llm_mod.wrap_untrusted("\n".join(lines[:40]))
     prompt = (
-        f"你是 AI 领域公众号主编。以下是今日采集的资讯清单（编号对应素材）：\n{material}\n\n"
+        f"你是 {domain} 领域公众号主编。以下是今日采集的资讯清单（编号对应素材）：\n{material}\n\n"
         "请提炼 3-5 个适合写公众号文章的选题。要求：\n"
-        "1. 每个选题给：name（一句话主题）、angle（独特切入点）、related（关联素材编号数组，1-3 个）、why（为什么值得写，一句话）\n"
+        "1. 每个选题给：name（一句话主题）、angle（独特切入点）、related（关联素材编号数组，1-3 个，编号从 1 起）、why（为什么值得写，一句话）\n"
         "2. 选题要有新闻性/时效性，避免泛泛而谈\n"
         f"3. 历史已写主题（避免重复）：{history_topics[-14:] or '（无）'}\n"
         "严格输出 JSON 数组，如："
         '[{"name": "...", "angle": "...", "related": [1, 3], "why": "..."}]'
     )
     text = llm_chat([{"role": "user", "content": prompt}], max_tokens=2500, temperature=0.6)
-    m = re.search(r"\[.*\]", text, re.S)
-    if not m:
-        raise ValueError(f"选题输出不含 JSON 数组：{text[:200]}")
-    data = json.loads(m.group(0))
+    data = llm_mod.extract_json(text, expect="array")
     out = []
     for d in data if isinstance(data, list) else []:
         if not isinstance(d, dict):
@@ -72,7 +70,8 @@ def _llm_pick_candidates(items, history_topics, llm_chat):
         name = str(d.get("name") or "").strip()
         if not name:
             continue
-        rel = [int(x) for x in (d.get("related") or []) if str(x).isdigit()]
+        # related 为 1 基编号 → 转 0 基下标
+        rel = [int(x) - 1 for x in (d.get("related") or []) if str(x).isdigit() and int(x) >= 1]
         out.append(Topic(name, str(d.get("angle") or ""), rel))
     return out[:5]
 
@@ -112,7 +111,7 @@ def _score_topic(topic, items, history_topics):
     return score
 
 
-def pick_topic(items, history_topics, llm_chat=None):
+def pick_topic(items, history_topics, llm_chat=None, domain="AI"):
     """选题主流程：LLM 候选 → 双通道去重 → 评分选优 → 全被剔除时降级盘点型。
 
     llm_chat：可注入的 LLM chat 函数（默认 llm.chat）；测试时可 mock。
@@ -122,7 +121,7 @@ def pick_topic(items, history_topics, llm_chat=None):
     if not items:
         return Topic("今日 AI 资讯盘点", "综合梳理当日要点", [], fallback=True)
     try:
-        candidates = _llm_pick_candidates(items, history_topics, llm_chat)
+        candidates = _llm_pick_candidates(items, history_topics, llm_chat, domain=domain)
     except Exception:
         logger.exception("选题提炼失败，降级为盘点型")
         candidates = []

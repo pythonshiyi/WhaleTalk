@@ -48,7 +48,7 @@ def run_once(dry_run=False, topic_override="", config_path=None, use_blocked=Fal
     drafts_dir/archive_dir：指定草稿箱与存档目录（鲸语工具调用时指向工作区，
     用户从产物面板/草稿箱即可看到，无需到代码目录翻找）。
     """
-    cfg = cfg_mod.load_config(config_path)
+    cfg = cfg_mod.load_config(config_path or CONFIG_PATH)
     errors = []
     try:
         logger.info("=== WeChat Writer 开始（dry_run=%s）===", dry_run)
@@ -67,11 +67,13 @@ def run_once(dry_run=False, topic_override="", config_path=None, use_blocked=Fal
         if topic_override:
             topic = topic_mod.Topic(str(topic_override).strip(), "（用户指定主题）")
         else:
-            topic = topic_mod.pick_topic(items, hist_topics)
+            topic = topic_mod.pick_topic(items, hist_topics,
+                                         domain=str(cfg.get("topic_domain") or "AI"))
         logger.info("选题：%s（降级=%s）", topic.name, topic.fallback)
 
         # 3 写作（大纲 → 正文 → 润色）
-        article = w_mod.write_article(topic, items, cfg["style"])
+        article = w_mod.write_article(topic, items, cfg["style"],
+                                      domain=str(cfg.get("topic_domain") or "AI"))
         logger.info("初稿完成：%s（%d 字）", article.title, q_mod._count_chars(article.content))
 
         # 4 质检 + 重试

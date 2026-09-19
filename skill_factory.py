@@ -24,11 +24,21 @@ _PATH_RULES = (
     (re.compile(r"(?<![:/\w])/(?:[\w.\-]+/)+[\w.\-]*"), "<路径>"),
 )
 
+# 密钥/令牌脱敏：技能模板会被复用并展示给模型，绝不能把历史参数里的凭据固化进去。
+_SECRET_RULES = (
+    (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-]{8,}"), r"\1<密钥>"),
+    (re.compile(r"(?i)\b(?:sk|ghp|gho|ghs|xox[baprs])-?[A-Za-z0-9._\-]{12,}"), "<密钥>"),
+    (re.compile(r"(?i)\b(api[_-]?key|access[_-]?token|token|password|passwd|secret|authorization)\b\s*[:=]\s*[\"']?[^\s\"',}&]{6,}"), r"\1=<密钥>"),
+    (re.compile(r"\b[A-Fa-f0-9]{32,}\b"), "<令牌>"),
+)
+
 
 def mask_paths(text):
-    """脱敏：把绝对路径替换为占位符（技能模板会被复用，不该烧进本机路径）。"""
+    """脱敏：把绝对路径与密钥/令牌替换为占位符（技能模板会被复用，不该烧进本机路径与凭据）。"""
     out = str(text or "")
     for rx, repl in _PATH_RULES:
+        out = rx.sub(repl, out)
+    for rx, repl in _SECRET_RULES:
         out = rx.sub(repl, out)
     return out
 
