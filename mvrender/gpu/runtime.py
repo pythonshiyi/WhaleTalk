@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover
 
 _KERNEL_NAMES = (
     "k_add", "k_add_mask", "k_blend_scalar", "k_blend_mask",
-    "k_mul_scalar", "k_mul_mask", "k_canvas_out", "k_post_tonemap",
+    "k_mul_scalar", "k_mul_mask", "k_canvas_out", "k_post_tonemap", "k_post_float",
     "k_transition", "k_radial_glow", "k_glow_mask", "k_glow_premul",
     "k_gauss_h", "k_gauss_v", "k_gauss3_h", "k_gauss3_v",
     "k_warp3", "k_resize1", "k_resize3", "k_layer_over",

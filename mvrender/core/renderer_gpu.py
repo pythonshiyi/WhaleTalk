@@ -117,26 +117,12 @@ class GpuRenderer(Renderer):
         整段偏差（实测桥段镜头 MAE 107）。
         """
         gain, flash, cmul = self._post_params(t, day)
-        # 复用 post_tonemap 的数学但输出 float：先乘 vig*gain，再加 flash，再乘通道因子
+        # 全 GPU：k_post_float（vig 常驻，无任何全帧搬运）
         b = self.rt.buf("rr_post_f", self.rt.n3 * 4)
-        rt = self.rt
-        # 用 k_scale1 无法表达逐像素 vig；这里走 CPU 侧仅一次搬运（post 本身极轻）
-        import pyopencl as cl
-        import numpy as np
-        img = np.empty((self.h, self.w, 3), np.float32)
-        cl.enqueue_copy(rt.q, img, b_img)
-        rt.finish()
-        from .renderer import _vigbase
-        vb = _vigbase(self.cache, self.w, self.h)
-        if day:
-            vbd = np.clip(vb + 0.22, 0.35, 1.0)
-            img = img * (vbd * gain)[:, :, None] + flash
-        else:
-            img = img * (vb * gain)[:, :, None] + flash
-            img[:, :, 0] *= cmul[0]
-            img[:, :, 1] *= cmul[1]
-            img[:, :, 2] *= cmul[2]
-        return rt.up(np.ascontiguousarray(img).reshape(-1), "rr_post_f2")
+        self.rt.run("k_post_float", self.rt.n3, b_img, self._vig_buf(day), b,
+                    np.float32(gain), np.float32(flash),
+                    np.float32(cmul[0]), np.float32(cmul[1]), np.float32(cmul[2]))
+        return b
 
     def finalize(self, b_img, t, day):
         """tonemap：post 已完成的 float buffer → u8（只回读一次）。"""
@@ -198,6 +184,12 @@ class GpuRenderer(Renderer):
         if ln is None:
             return b_img
         import pyopencl as cl
+        # 只搬运字幕带（dark/overlay 的有效行区间），而不是整帧：
+        # 歌词永远落在 y_base=1436 附近 ±~260（字高 88 + 字带半径 190），
+        # 占全帧约 27%。区域搬运把两次 23.7MB 全帧拷贝降到 ~6MB。
+        # 整帧搬运：OpenCL 的 buffer 偏移写入要求对齐（非对齐 dst_offset 会
+        # INVALID_VALUE，实测），逐行区域搬运需要 padding 到设备对齐，
+        # 收益（~27% 拷贝量）不足以抵消复杂度与风险，故保持整帧。
         img_f = np.empty((self.h, self.w, 3), np.float32)
         cl.enqueue_copy(self.rt.q, img_f, b_img)
         self.rt.finish()

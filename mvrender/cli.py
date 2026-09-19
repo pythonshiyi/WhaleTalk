@@ -6,6 +6,12 @@
     python -m mvrender.cli timing <root> [n]
     python -m mvrender.cli preview <root> <outdir> <t> [...]
     python -m mvrender.cli worker <root> <a> <b> <out.mp4>
+
+镜头级增量缓存（迭代速度核心）：
+    python -m mvrender.cli cache <root> status
+    python -m mvrender.cli cache <root> render <shot> [end_shot]
+    python -m mvrender.cli cache <root> invalidate <shot[.dep]>
+    python -m mvrender.cli cache <root> clear
 """
 from __future__ import annotations
 
@@ -29,6 +35,30 @@ def load_project(root):
     return root, scripts, mod
 
 
+# 镜头依赖标签（引擎侧推断，不改创意代码）：
+# 用于 `cache invalidate "A8.rain"` 这类细粒度失效——只重渲引用该元素的镜头。
+# 键为镜头名前缀或函数名片段，值为该镜头依赖的元素标签。
+SHOT_DEPS_HINTS = {
+    "rain": ("a1", "rain_window", "p1", "window_rain", "f2"),
+    "lamps": ("street_lamp", "c1_online", "c2_unfinished", "c5", "c6", "d1"),
+    "moon": ("b3", "moon", "c4"),
+    "stars": ("b4", "stars"),
+    "phone": ("phone", "a2", "b2", "p3", "chat_screen"),
+    "leaf": ("leaf", "d3", "spring"),
+    "mist": ("mist",),
+}
+
+
+def infer_deps(shot_name, fn_name):
+    """按镜头名 / 函数名推断依赖标签（供细粒度失效）。"""
+    hay = f"{shot_name}|{fn_name}".lower()
+    deps = []
+    for tag, keys in SHOT_DEPS_HINTS.items():
+        if any(k.lower() in hay for k in keys):
+            deps.append(tag)
+    return tuple(deps)
+
+
 def build_renderers(root, use_gpu=True, accelerate=True):
     """构建 CPU/GPU 渲染器。
 
@@ -48,12 +78,14 @@ def build_renderers(root, use_gpu=True, accelerate=True):
     tl, bt = G.load_data()
     ctx = G.Ctx(tl, bt)
     defs = SH.build_shots(tl)
+    from .core.project import Shot as MvShot
     shots = []
     for d in defs:
         t0, t1, name, fn, cam, tin, tout, tik, tok, day = d[:10]
-        deps = d[10] if len(d) > 10 else None
-        shots.append(G.Shot(t0, t1, name, fn, cam=cam, tin=tin, tout=tout,
-                            tin_kind=tik, tout_kind=tok, day=day))
+        deps = d[10] if len(d) > 10 else infer_deps(name, getattr(fn, "__name__", ""))
+        # 用 mvrender 的 Shot（契约与 engine.Shot 一致，另带 deps 供细粒度失效）
+        shots.append(MvShot(t0, t1, name, fn, cam=cam, tin=tin, tout=tout,
+                            tin_kind=tik, tout_kind=tok, day=day, deps=deps))
     lyr_c = G.LyricRenderer(tl["lines"])
     lyr_g = G.LyricRenderer(tl["lines"])
     w, h = tl["resolution"]
@@ -106,6 +138,38 @@ def cmd_preview(root, outdir, times):
         print(f"{t:7.2f}s -> {os.path.basename(p)}  {time.time()-t0:.3f}s  mean {img.mean():.1f}")
 
 
+def cmd_cache(root, action, arg=None, arg2=None):
+    """镜头级缓存操作：status / render <shot> [end] / invalidate <key> / clear"""
+    from .core.shotcache import ShotCache
+    tl, ctx, shots, cpu, gpu = build_renderers(root)
+    fps, res = int(tl["fps"]), tuple(tl["resolution"])
+    cache = ShotCache(root)
+    if action == "status":
+        st = cache.status()
+        print(f"缓存：{st['shots']} 个镜头 · {st['bytes'] / 1048576:.1f} MB")
+        for s in shots:
+            print(f"  {'✓' if cache.has(s, fps, res) else '·'} {s.name}")
+        return
+    if action == "clear":
+        cache.invalidate_all()
+        print("已清空缓存")
+        return
+    if action == "invalidate":
+        hit = cache.invalidate(arg or "", shots)
+        print("已失效：", hit or "（无匹配）")
+        return
+    if action == "render":
+        if not arg:
+            print("用法：cache render <shot> [end_shot]")
+            return
+        t0 = time.time()
+        out = cache.render_range(gpu, arg, arg2, fps, res)
+        hit = sum(1 for _f, c in out.values() if c)
+        print(f"渲染 {len(out)} 镜（缓存命中 {hit}）· {time.time() - t0:.1f}s")
+        return
+    print(__doc__)
+
+
 def cmd_worker(root, a, b, out):
     tl, ctx, shots, cpu, gpu = build_renderers(root)
     fps = int(tl["fps"])
@@ -155,6 +219,10 @@ def main(argv=None):
         cmd_preview(root, argv[2], [float(x) for x in argv[3:]])
     elif m == "worker":
         cmd_worker(root, argv[2], argv[3], argv[4])
+    elif m == "cache":
+        cmd_cache(root, argv[2] if len(argv) > 2 else "status",
+                  argv[3] if len(argv) > 3 else None,
+                  argv[4] if len(argv) > 4 else None)
     else:
         print(__doc__)
     return 0

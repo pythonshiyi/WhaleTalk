@@ -119,6 +119,25 @@ __kernel void k_post_tonemap(__global const float *img,
     out[i] = lut8(lut, v);
 }
 
+/* post 前置（输出 float，不做 tonemap）：img*vig*gain → +flash → 通道乘子
+
+   为何单独一个 kernel：CPU 主循环顺序是 `post → 歌词 → to_uint8`，歌词必须
+   作用在 post 后的 float 域。若把 post 与 tonemap 融成一个 kernel，就没法在
+   中间插入歌词层；若整段 post 走 CPU，则每帧多两次全帧（±23.7MB）搬运。 */
+__kernel void k_post_float(__global const float *img,
+                           __global const float *vig,
+                           __global float *out,
+                           const float gain, const float flash,
+                           const float cmul_b, const float cmul_g, const float cmul_r)
+{
+    const int i = get_global_id(0);
+    const int pix = i / 3;
+    const int c = i % 3;
+    float v = img[i] * vig[pix] * gain + flash;
+    v *= (c == 0) ? cmul_b : ((c == 1) ? cmul_g : cmul_r);
+    out[i] = v;
+}
+
 /* 转场合成：old*(1-m) + new*m (+ring*glow) */
 __kernel void k_transition(__global const float *oldp,
                            __global const float *newp,
