@@ -61,7 +61,7 @@ def _llm_pick_candidates(items, history_topics, llm_chat, domain="AI"):
         "严格输出 JSON 数组，如："
         '[{"name": "...", "angle": "...", "related": [1, 3], "why": "..."}]'
     )
-    text = llm_chat([{"role": "user", "content": prompt}], max_tokens=2500, temperature=0.6)
+    text = llm_chat([{"role": "user", "content": prompt}], temperature=0.6)
     data = llm_mod.extract_json(text, expect="array")
     out = []
     for d in data if isinstance(data, list) else []:
@@ -86,7 +86,7 @@ def _llm_judge_duplicate(candidate, history_topics, llm_chat):
     )
     try:
         data = llm_mod.chat_json(
-            [{"role": "user", "content": prompt}], max_tokens=500, temperature=0.1
+            [{"role": "user", "content": prompt}], temperature=0.1
         )
         return bool(data.get("duplicate"))
     except Exception:

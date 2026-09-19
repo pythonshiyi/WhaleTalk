@@ -56,7 +56,7 @@ def build_outline(topic, items, style, llm_chat=None, domain="AI"):
         "严格输出 JSON："
         '{"titles": ["t1","t2","t3"], "lead": "...", "sections": [{"h": "...", "k": "..."}], "conclusion": "..."}'
     )
-    text = llm_chat([{"role": "user", "content": prompt}], max_tokens=2500, temperature=0.7)
+    text = llm_chat([{"role": "user", "content": prompt}], temperature=0.7)
     return llm_mod.extract_json(text, expect="object")
 
 
@@ -82,7 +82,7 @@ def write_body(topic, items, style, outline, llm_chat=None, domain="AI"):
         f"7. 全文 {style['min_chars']}-{style['max_chars']} 字，面向{STYLE_MAP.get(style['audience'], style['audience'])}，风格：{style['tone']}\n"
         "输出 Markdown。"
     )
-    return llm_chat([{"role": "user", "content": prompt}], max_tokens=8000, temperature=0.7)
+    return llm_chat([{"role": "user", "content": prompt}], temperature=0.7)
 
 
 def polish(article_text, style, llm_chat=None):
@@ -98,7 +98,7 @@ def polish(article_text, style, llm_chat=None):
         "---- 文章 ----\n"
         f"{article_text}"
     )
-    return llm_chat([{"role": "user", "content": prompt}], max_tokens=8000, temperature=0.5)
+    return llm_chat([{"role": "user", "content": prompt}], temperature=0.5)
 
 
 def write_article(topic, items, style, llm_chat=None, domain="AI"):
@@ -128,6 +128,6 @@ def rewrite_fix(article, reasons, style, llm_chat=None):
         "---- 原文 ----\n"
         f"{article.title}\n\n{article.content}"
     )
-    fixed = llm_chat([{"role": "user", "content": prompt}], max_tokens=8000, temperature=0.5)
+    fixed = llm_chat([{"role": "user", "content": prompt}], temperature=0.5)
     return Article(topic=article.topic, title=article.title, content=fixed,
                    outline=article.outline, candidates=article.candidates)

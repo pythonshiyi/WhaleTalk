@@ -981,6 +981,51 @@ def get_active_client():
     return c
 
 
+def get_output_budget(default=16384):
+    """统一输出预算：唯一来源 = 设置里的 max_tokens。
+
+    所有「直接调用模型产出内容」的路径（工具/子代理/内部流程）都应使用本函数，
+    禁止各自写死 max_tokens 小上限：思考模型下推理会吃满小上限 → content 为空
+    或被截断 → 上层反复试错，反而更费 token。返回 >0 的整数；读不到配置退回 default。
+    """
+    try:
+        import config_utils
+        v = int(config_utils.load_config().get("max_tokens") or 0)
+        if v > 0:
+            return v
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        d = int(default)
+        return d if d > 0 else 16384
+    except (TypeError, ValueError):
+        return 16384
+
+
+def get_thinking_extra(default="none"):
+    """按设置里的思考档构造直调模型的 extra_body（思考开关 + effort）。
+
+    跟随用户配置：none→关闭思考；low/medium/high/xhigh/max→开启并透传 effort。
+    直调模型的能力（tool_codegen/tool_code/tool_media 等）统一走本函数，
+    避免各自硬编码 disabled/enabled 而与设置脱节。
+    """
+    mode = default
+    try:
+        import config_utils
+        mode = str(config_utils.load_config().get("thinking") or default)
+    except Exception:  # noqa: BLE001
+        pass
+    if mode not in THINKING_MODES:
+        mode = default
+    if mode not in ("", "none"):
+        extra = {"thinking": {"type": "enabled"}}
+        effort = EFFORT_BY_THINKING.get(mode)
+        if effort and effort != "none":
+            extra["reasoning_effort"] = effort
+        return extra
+    return {"thinking": {"type": "disabled"}}
+
+
 def _parse_code_files(text):
     """从子代理输出解析「@@FILE: 路径 + ```代码块```」，返回 [(相对路径, 内容)]。"""
     files = []
@@ -4414,7 +4459,7 @@ class DeepSeekClient:
         messages,
         scenario="通用",
         thinking="high",
-        max_tokens=16384,
+        max_tokens=None,
         seed=None,
         tools_enabled=False,
         enabled_tools=None,
@@ -4452,6 +4497,16 @@ class DeepSeekClient:
     ):
         cfg = SCENARIOS.get(scenario, SCENARIOS["通用"])
         thinking_key = thinking if thinking in THINKING_MODES else "high"
+        # 输出预算唯一来源：设置里的 max_tokens（调用方显式传值才覆盖，例如
+        # OpenAI 兼容端点的外部请求参数/测试）。不传即用配置值，避免各处写死小上限
+        # 在思考模型下被推理吃满导致空输出/截断 → 反复重试反而更费 token。
+        if max_tokens is None:
+            max_tokens = get_output_budget()
+        else:
+            try:
+                max_tokens = int(max_tokens)
+            except (TypeError, ValueError):
+                max_tokens = get_output_budget()
         # strict 工具 schema（strict:true）是 DeepSeek 官方 Beta 特性；第三方
         # OpenAI 兼容网关多数不接受，非官方端点一律关闭，避免 400。
         if strict_tools and not self.is_official:
@@ -4521,9 +4576,11 @@ class DeepSeekClient:
         # 网关不认该字段并直接 400 —— 与其它官方专属字段一致，仅官方端点下发。
         if self.is_official:
             kwargs["stream_options"] = {"include_usage": True}
-        # DeepSeek 官方专属：thinking 开关（extra_body）。第三方 OpenAI 兼容网关
-        # 不认该字段，硬发可能 400 —— 仅官方端点下发。
-        if self.is_official:
+        # thinking 开关（extra_body）：官方端点必发。第三方 OpenAI 兼容网关多数不认
+        # 该字段，但部分网关（如 opencode）默认推理开启且支持该开关——关闭思考时也
+        # 给非官方端点下发，让「设置里的思考档」真正生效（省下无谓推理 token）；
+        # 不支持的网关由 _create_with_retry 捕获 400 后自动去掉该字段重试，不会硬失败。
+        if self.is_official or thinking_key == "none":
             kwargs["extra_body"] = {
                 "thinking": {"type": "enabled" if thinking_key != "none" else "disabled"}
             }
@@ -5301,9 +5358,15 @@ class DeepSeekClient:
                 last_error = e
                 logger.warning("网络错误，第 %s 次重试", i)
             except APIError as e:
-                if getattr(e, "status_code", None) in (500, 503):
+                status = getattr(e, "status_code", None)
+                if status == 400 and kwargs.get("extra_body"):
+                    # 端点不认 thinking 等 extra_body 字段：去掉后重试一次（降级不硬失败）。
+                    logger.warning("端点拒绝 extra_body（%s），已去掉该字段重试", e)
+                    kwargs = {k: v for k, v in kwargs.items() if k != "extra_body"}
                     last_error = e
-                    logger.warning("服务端错误 %s，第 %s 次重试", getattr(e, "status_code", None), i)
+                elif status in (500, 503):
+                    last_error = e
+                    logger.warning("服务端错误 %s，第 %s 次重试", status, i)
                 else:
                     raise
             if i < attempts:
@@ -5437,7 +5500,7 @@ class DeepSeekClient:
         except Exception as e:
             return f"错误：调用自定义工具失败: {e}"
 
-    def fim_complete(self, prompt, suffix="", max_tokens=2048):
+    def fim_complete(self, prompt, suffix="", max_tokens=None):
         """FIM 补全（Beta）：提供前缀与可选后缀，模型补全中间内容。
 
         需要 Beta 端点（https://api.deepseek.com/beta），最大补全长度 4K。
@@ -5448,6 +5511,14 @@ class DeepSeekClient:
                 "FIM 代码补全仅支持 DeepSeek 官方端点（当前为自定义/第三方网关）——"
                 "请改用对话续写（「继续」按钮）。"
             )
+        # 输出预算统一取设置里的 max_tokens，但 FIM 接口硬上限为 4K，故取二者较小。
+        if max_tokens is None:
+            max_tokens = min(get_output_budget(), 4096)
+        else:
+            try:
+                max_tokens = min(int(max_tokens), 4096)
+            except (TypeError, ValueError):
+                max_tokens = min(get_output_budget(), 4096)
         base = self.base_url.rstrip("/")
         if not base.endswith("/beta"):
             base += "/beta"

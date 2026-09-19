@@ -749,10 +749,10 @@ def daily_brief(topic="", max_items=8):
         resp = client.client.chat.completions.create(
             model=client.model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2048,
+            max_tokens=_dc.get_output_budget(2048),
             stream=False,
             timeout=120.0,
-            extra_body={"thinking": {"type": "disabled"}},
+            extra_body=_dc.get_thinking_extra(),
         )
         brief = (resp.choices[0].message.content or "").strip()
     except Exception as e:

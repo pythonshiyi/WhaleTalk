@@ -126,3 +126,56 @@ def test_render_failure_saves_source(monkeypatch):
     r = tg.image_codegen(brief="画个测试图", output=out, max_rounds=2)
     assert r.startswith("错误")
     assert os.path.exists(os.path.splitext(out)[0] + ".html")
+
+
+def _capturing_client(content="", reasoning=""):
+    """假 client：记录 create() 的 kwargs，便于断言思考开关与 max_tokens。"""
+    seen = {}
+
+    class _Msg:
+        def __init__(self):
+            self.content = content
+            self.reasoning_content = reasoning
+
+    class _Choice:
+        message = _Msg()
+
+    class _Resp:
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **kw):
+            seen.update(kw)
+            return _Resp()
+
+    class _ChatNS:
+        completions = _Completions()
+
+    class _OpenAI:
+        chat = _ChatNS()
+
+    class _Client:
+        model = "test-model"
+        client = _OpenAI()
+
+    return _Client(), seen
+
+
+def test_call_disables_thinking_and_budgets_output():
+    """回归：思考模型默认开推理，_call 必须显式关思考并给足输出预算。
+
+    否则推理吃满 max_tokens → content 为空 → image_codegen 误报
+    「模型未返回可用 HTML 源码」（线上 404/4 连败的真实根因）。
+    """
+    client, seen = _capturing_client(content="```html\n<html>ok</html>\n```")
+    out = tg._call(client, "s", "u")
+    assert out.startswith("```html")
+    assert seen["extra_body"]["thinking"]["type"] == "disabled"
+    assert int(seen["max_tokens"]) >= 6000
+
+
+def test_call_falls_back_to_reasoning_content():
+    """思考模型忽略禁用参数时：content 为空须回退 reasoning_content，不返回空串。"""
+    client, _ = _capturing_client(reasoning="```html\n<html>from-reasoning</html>\n```")
+    out = tg._call(client, "s", "u")
+    assert "from-reasoning" in out

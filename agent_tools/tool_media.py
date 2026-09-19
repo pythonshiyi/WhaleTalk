@@ -15,13 +15,14 @@ from datetime import datetime
 
 import permissions
 from deepseek_client import (
-    EFFORT_BY_THINKING,
     IMAGE_EXTENSIONS,
     VISION_MODEL,
     _capture_screen_png,
     _detect_image_mime,
     _safe_stream,
     get_active_client,
+    get_output_budget,
+    get_thinking_extra,
     is_vision_model,
 )
 from security import _safe_url
@@ -310,24 +311,8 @@ def image_understand(path, question=""):
         if not is_vision_model(model):
             model = VISION_MODEL
             switched = True
-        # 跟随前端「思考档」开关（config.thinking，与主对话 chat() 一致）：
-        #   none → 关思考；low/medium/high/xhigh/max → 开思考 + 对应 effort。
-        # 不能写死 disabled：该模型默认开启思考，复杂截图时思考会吃满
-        # max_tokens 导致 content 为空 → 工具误报「模型未返回内容」→ AI
-        # 误判"不支持看图"；但也不应无视用户配置强制关思考。
-        try:
-            import config_utils
-            _cfg = config_utils.load_config()
-            _thinking = str(_cfg.get("thinking") or "none")
-            _max_tokens = int(_cfg.get("max_tokens") or 16384)
-        except Exception:
-            _thinking, _max_tokens = "none", 16384
-        _extra = {"thinking": {"type": "disabled"}}
-        if _thinking != "none":
-            _effort = EFFORT_BY_THINKING.get(_thinking)
-            _extra = {"thinking": {"type": "enabled"}}
-            if _effort and _effort != "none":
-                _extra["reasoning_effort"] = _effort
+        # 输出预算与思考开关统一走 deepseek_client 公共 helper（跟随设置里的
+        # max_tokens / thinking 档）；不再在本处自维护一份逻辑。
         resp = client.client.chat.completions.create(
             model=model,
             messages=[
@@ -339,10 +324,10 @@ def image_understand(path, question=""):
                     ],
                 }
             ],
-            max_tokens=_max_tokens,
+            max_tokens=get_output_budget(16384),
             stream=False,
             timeout=120.0,
-            extra_body=_extra,
+            extra_body=get_thinking_extra(),
         )
         out = (resp.choices[0].message.content or "").strip()
         if not out:

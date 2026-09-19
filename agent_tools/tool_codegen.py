@@ -89,14 +89,22 @@ def _critique_prompt(brief, kind):
 
 
 def _call(client, system, user, max_tokens=6000):
+    # 输出预算唯一来源：设置里的 max_tokens；思考开关跟随设置里的思考档。
+    # 不这样做会在思考模型下被推理吃满小上限 → content 为空 → 误报
+    # 「模型未返回可用 HTML 源码」。统一走 deepseek_client 的公共 helper。
     resp = client.client.chat.completions.create(
         model=client.model,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        max_tokens=int(max_tokens),
+        max_tokens=int(_dc.get_output_budget(max_tokens)),
         stream=False,
         timeout=120.0,
+        extra_body=_dc.get_thinking_extra(),
     )
-    return (resp.choices[0].message.content or "").strip()
+    msg = resp.choices[0].message
+    out = (msg.content or "").strip()
+    if not out:  # 思考模型忽略禁用参数时：回退 reasoning_content，避免空返回
+        out = (getattr(msg, "reasoning_content", None) or "").strip()
+    return out
 
 
 @tool(

@@ -1221,10 +1221,10 @@ def subagent_run(tasks, parallel=2, context="", mode="text", output_dir=None):
                         {"role": "system", "content": base},
                         {"role": "user", "content": str(task)},
                     ],
-                    max_tokens=4096 if is_code else 2048,
+                    max_tokens=_dc.get_output_budget(4096 if is_code else 2048),
                     stream=False,
                     timeout=180.0 if is_code else 120.0,
-                    extra_body={"thinking": {"type": "disabled"}},
+                    extra_body=_dc.get_thinking_extra(),
                 )
                 results[i] = (resp.choices[0].message.content or "").strip() or "（子代理无输出）"
                 return

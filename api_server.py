@@ -3481,7 +3481,6 @@ def _compress_messages(messages, cfg, client, max_rounds=6):
         summary_client.chat(
             summary_messages,
             thinking="none",
-            max_tokens=1024,
             tools_enabled=False,
             on_content=lambda t: summary_parts.append(t),
         )
@@ -5539,7 +5538,6 @@ def _studio_generate(body):
         [{"role": "user", "content": _PLUGIN_GEN_PROMPT + "\n\n" + user_req}],
         scenario="通用",
         thinking="none",
-        max_tokens=4096,
         tools_enabled=False,
         json_output=True,
         on_content=lambda t: parts.append(t),
@@ -5560,7 +5558,7 @@ def _studio_generate(body):
         parts2 = []
         client.chat(
             [{"role": "user", "content": _PLUGIN_GEN_PROMPT + "\n\n" + user_req + "\n\n上次校验失败：" + err + "\n请修正后重新输出完整 JSON。"}],
-            scenario="通用", thinking="none", max_tokens=4096, tools_enabled=False, json_output=True,
+            scenario="通用", thinking="none", tools_enabled=False, json_output=True,
             on_content=lambda t: parts2.append(t),
         )
         text2 = "".join(parts2).strip()
@@ -6067,7 +6065,7 @@ def _chat_harvest(reply: str, user_text: str, cfg: dict, messages=None):
                 "严格输出 JSON 数组，每项一个字符串，例如：[\"用户偏好中文回复\"]。\n"
                 f"用户：{str(user_text)[:500]}\nAI：{str(reply)[:500]}"
             )
-            out = c.chat([{"role": "user", "content": prompt}], max_tokens=200, thinking="low")
+            out = c.chat([{"role": "user", "content": prompt}], thinking="low")
             items = []
             try:
                 import json as _json
@@ -7353,9 +7351,9 @@ class _Handler(BaseHTTPRequestHandler):
             effort = str(body.get("reasoning_effort") or "")
             thinking = effort if effort in ("none", "low", "medium", "high", "max") else "none"
             try:
-                max_tokens = int(body.get("max_tokens") or body.get("max_completion_tokens") or 4096)
+                max_tokens = int(body.get("max_tokens") or body.get("max_completion_tokens") or 0) or dc.get_output_budget()
             except (TypeError, ValueError):
-                max_tokens = 4096
+                max_tokens = dc.get_output_budget()
             temp = body.get("temperature")
             content, usage = [], []
             client.chat(
@@ -7564,7 +7562,7 @@ class _Handler(BaseHTTPRequestHandler):
             result = client.fim_complete(
                 str(body.get("prompt") or ""),
                 suffix=str(body.get("suffix") or ""),
-                max_tokens=int(body.get("max_tokens") or 2048),
+                max_tokens=int(body.get("max_tokens") or 0) or None,
             )
             self._json(200, {"result": str(result)})
         except Exception as e:

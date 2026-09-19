@@ -2,6 +2,31 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.1（2026-09-19）—— 🧮 输出预算统一：唯一的预算就是设置里的 max_tokens
+
+**版本号 3.16.0 → 3.16.1。** 修复「像素画笔」`image_codegen` 连续失败的根因，并把同类隐患在全程序一次收口。
+
+### 根因（image_codegen 不可用）
+
+- `image_codegen` 经 `tool_codegen._call()` 直调模型，**未下发 thinking 开关**且写死 `max_tokens=6000`。
+- 当前网关的 `deepseek-v4.1-flash` **默认开启推理**：推理把 6000 全部吃满 → `finish_reason=length`、`content=""` → 误报「模型未返回可用 HTML 源码」（线上连续 4 次失败）。
+- 其它直调路径（tool_code / tool_media / tool_msg / tool_desktop）都带了 `thinking: disabled`，只有它漏了。
+
+### 修复与优化（全程序）
+
+- **统一输出预算** `deepseek_client.get_output_budget()`：所有 LLM 调用的输出上限唯一来源 = 设置里的 `max_tokens`；移除各处的硬编码小上限（6000 / 4096 / 2500 / 800 / 200 …）。显式传入的值（OpenAI 兼容端点外部参数、测试）仍优先。
+- **统一思考开关** `deepseek_client.get_thinking_extra()`：直调模型的工具一律跟随设置里的思考档（none→关闭；其余→开启 + effort）。
+- **主对话也真正跟随思考档**：非官方网关此前不下发 thinking，导致设为 none 仍默认推理；现对 `none` 也尝试下发 `extra_body.thinking=disabled`，端点不支持时由 `_create_with_retry` 捕获 400 自动去掉该字段重试（不硬失败）。实测该网关 `reasoning_len=0`，省下无谓推理 token。
+- `chat()` / `fim_complete()` 的默认 `max_tokens` 改为配置值（FIM 受接口 4K 硬上限约束，取二者较小）。
+- 渲染通道失败提示可执行化：浏览器内核缺失/与 Playwright 版本不匹配时，明确提示 `playwright install chromium`（或安装系统 Edge），不再只报「通道不可用」。
+- 覆盖范围：`tool_codegen` / `tool_code` / `tool_media` / `tool_msg` / `tool_desktop` / `api_server`（上下文摘要 · 插件生成 · 自动记忆 · OpenAI 兼容端点 · FIM）/ `brain_api` / `wechat_writer`（写作 · 选题 · 查重；并新增 `max_tokens`、`thinking` 配置读取）。
+
+### 验证
+
+`pytest` **817 项**（813 passed · 4 skipped；新增 2 项回归：`_call` 必须关闭思考并给足预算、content 为空回退 `reasoning_content`）· `check_docs` 全绿。
+
+---
+
 ## v3.16.0（2026-09-17）—— 🎞 图像流水线补全：局部重绘 · 控制图 · 精灵表 · 确定性 GIF · 混合渲染
 
 **版本号 3.15.0 → 3.16.0。** 工具 156 → 161，把「生图 → 可控编辑 → 多帧动画 → 结构 + 质感」这条链路补齐。

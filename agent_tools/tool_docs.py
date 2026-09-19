@@ -3387,6 +3387,7 @@ class _RenderChannel:
         self._ready = threading.Event()
         self._start_lock = threading.Lock()
         self._ok = False
+        self._launch_error = None
 
     @classmethod
     def instance(cls):
@@ -3408,13 +3409,18 @@ class _RenderChannel:
             from playwright.sync_api import sync_playwright
             pw = sync_playwright().start()
             args = self._launch_args()
+            last_exc = None
             for kw in ({"channel": "msedge", "args": args}, {"args": args}):
                 try:
                     browser = pw.chromium.launch(**kw)
                     break
-                except Exception:
+                except Exception as e:  # noqa: BLE001
+                    last_exc = e
                     browser = None
-        except Exception:
+            if browser is None and last_exc is not None:
+                self._launch_error = str(last_exc)
+        except Exception as e:  # noqa: BLE001
+            self._launch_error = str(e)
             browser = None
         if browser is None:
             self._ok = False
@@ -3467,6 +3473,14 @@ class _RenderChannel:
         if box["error"] is not None:
             raise box["error"]
         return box["result"]
+
+    def error_hint(self):
+        """浏览器不可用时的可执行提示（含底层启动错误，区分包缺失/内核缺失）。"""
+        msg = str(self._launch_error or "")
+        if "Executable doesn't exist" in msg or "playwright install" in msg:
+            return ("浏览器内核缺失或与 Playwright 版本不匹配，请运行 "
+                    "`playwright install chromium` 安装内核（或安装系统 Microsoft Edge）")
+        return "需已装 playwright，系统有 Edge 最佳"
 
     def close(self):
         try:
@@ -3766,7 +3780,7 @@ def _html_to_pngs(items, w, h, sc, full_page, base_dir=None):
             return True
 
         if _render_channel().run(_do, timeout=300) is not True:
-            return "批量 HTML 渲染失败：浏览器通道不可用（需已装 playwright，系统有 Edge 最佳）"
+            return f"批量 HTML 渲染失败：浏览器通道不可用（{_render_channel().error_hint()}）"
         return None
     except Exception as e:
         return f"批量 HTML 渲染失败: {e}（需已装 playwright，系统有 Edge 最佳）"
@@ -3800,7 +3814,7 @@ def _html_to_png(content, out_path, w, h, sc, full_page, base_dir=None, media=No
             return True
 
         if _render_channel().run(_do, timeout=300) is not True:
-            return "HTML 渲染失败：浏览器通道不可用（需已装 playwright；系统有 Edge 最佳）"
+            return f"HTML 渲染失败：浏览器通道不可用（{_render_channel().error_hint()}）"
         return None
     except Exception as e:
         return f"HTML 渲染失败: {e}（需已装 playwright，可用 pip_install playwright；系统有 Edge 最佳）"

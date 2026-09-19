@@ -905,10 +905,10 @@ def voice_chat_loop(rounds=3, model="base", max_seconds=15, speak=True, rate=0):
                         {"role": "system", "content": "你是语音助手鲸语，用最短的话把事情说明白。"},
                         {"role": "user", "content": prompt},
                     ],
-                    max_tokens=1024,
+                    max_tokens=_dc.get_output_budget(1024),
                     stream=False,
                     timeout=120.0,
-                    extra_body={"thinking": {"type": "disabled"}},
+                    extra_body=_dc.get_thinking_extra(),
                 )
                 reply = (resp.choices[0].message.content or "").strip() or "（我在想……没想出说什么）"
             except Exception as e:
@@ -1811,10 +1811,10 @@ def team_run(goal, roles=("研究员", "工程师", "评审"), steps=0):
                         {"role": "system", "content": system},
                         {"role": "user", "content": user},
                     ],
-                    max_tokens=tokens,
+                    max_tokens=_dc.get_output_budget(tokens),
                     stream=False,
                     timeout=180.0,
-                    extra_body={"thinking": {"type": "disabled"}},
+                    extra_body=_dc.get_thinking_extra(),
                 )
                 return (resp.choices[0].message.content or "").strip()
             except Exception:

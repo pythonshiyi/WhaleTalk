@@ -76,7 +76,7 @@ def _decrypt(token):
 
 
 def load_api_config(config_path=None):
-    """返回 {"api_key", "base_url", "model"}。未配置时返回 api_key 空串（调用方报错）。
+    """返回 {"api_key", "base_url", "model", "max_tokens", "thinking"}。未配置时返回 api_key 空串（调用方报错）。
 
     读取链（P1 去重，与主程序配置读取对齐）：
       1) 应用内统一通道：优先复用 config_utils.load_config——默认值合并、字段钳制、
@@ -87,6 +87,14 @@ def load_api_config(config_path=None):
       3) 环境变量兜底：DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_MODEL。
     """
     path = config_path or _find_whaletalk_config()
+
+    def _budget(c):
+        try:
+            v = int(c.get("max_tokens") or 0)
+            return v if v > 0 else 16384
+        except (TypeError, ValueError):
+            return 16384
+
     # 1) 应用内统一通道
     try:
         import config_utils
@@ -97,6 +105,8 @@ def load_api_config(config_path=None):
                 "api_key": api_key,
                 "base_url": str(full.get("base_url") or "https://api.deepseek.com").strip(),
                 "model": str(full.get("model") or _FALLBACK_MODEL).strip(),
+                "max_tokens": _budget(full),
+                "thinking": str(full.get("thinking") or "none"),
             }
     except Exception:
         logger.exception("经 config_utils 读取鲸语配置失败，回退直读文件")
@@ -112,6 +122,8 @@ def load_api_config(config_path=None):
                 "api_key": _decrypt(api_key),
                 "base_url": base_url,
                 "model": model or _FALLBACK_MODEL,
+                "max_tokens": _budget(cfg),
+                "thinking": str(cfg.get("thinking") or "none"),
             }
         except Exception:
             logger.exception("读取鲸语配置失败，回退环境变量")
@@ -120,28 +132,35 @@ def load_api_config(config_path=None):
         "api_key": os.environ.get("DEEPSEEK_API_KEY", "").strip(),
         "base_url": os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip(),
         "model": os.environ.get("DEEPSEEK_MODEL", _FALLBACK_MODEL).strip(),
+        "max_tokens": 16384,
+        "thinking": "none",
     }
 
 
-def chat(messages, max_tokens=4000, temperature=0.7, config_path=None, timeout=120.0):
+def chat(messages, max_tokens=None, temperature=0.7, config_path=None, timeout=120.0):
     """调用 DeepSeek chat completions（非流式），失败重试 2 次指数退避。
 
-    思考模型适配：请求显式禁用思考模式（写作/选题场景直接输出内容，
-    避免响应 content 为空而推理在 reasoning_content）；响应解析仍回退
-    reasoning_content 兜底（部分模型忽略禁用参数时）。
+    输出预算与思考开关跟随鲸语设置（config.json 的 max_tokens / thinking）：
+    不再写死小 max_tokens（思考模型下会被推理吃满 → content 为空 → 上层反复重试
+    反而更费 token）；兼容旧端点——400 时自动去掉 thinking 参数重试。
     返回纯文本；全部失败抛 RuntimeError（由调用方降级处理）。
     """
     cfg = load_api_config(config_path)
     if not cfg["api_key"]:
         raise RuntimeError("未配置 DeepSeek API Key（可在鲸语设置中填写，或设置环境变量 DEEPSEEK_API_KEY）")
     url = cfg["base_url"].rstrip("/") + "/chat/completions"
+    if max_tokens is None:
+        max_tokens = int(cfg.get("max_tokens") or 16384)
+    thinking_mode = str(cfg.get("thinking") or "none")
     payload = {
         "model": cfg["model"],
         "messages": messages,
-        "max_tokens": max_tokens,
+        "max_tokens": int(max_tokens),
         "temperature": temperature,
         "stream": False,
-        "thinking": {"type": "disabled"},  # 写作场景：不进入思考模式（content 直出）
+        # 跟随设置里的思考档：none 关闭思考（写作/选题场景内容直出）；
+        # 其余档位开启思考（配合设置里的 max_tokens 预算，不会用完导致空输出）。
+        "thinking": {"type": "disabled" if thinking_mode in ("", "none") else "enabled"},
     }
     import httpx
 
@@ -180,7 +199,7 @@ def chat(messages, max_tokens=4000, temperature=0.7, config_path=None, timeout=1
     raise RuntimeError(f"LLM 调用失败，已重试 3 次：{last_err}")
 
 
-def chat_json(messages, max_tokens=2000, temperature=0.4, config_path=None):
+def chat_json(messages, max_tokens=None, temperature=0.4, config_path=None):
     """调用 LLM 并要求输出 JSON 对象（提取 json 块，解析失败抛错）。"""
     text = chat(messages, max_tokens=max_tokens, temperature=temperature, config_path=config_path)
     data = extract_json(text, expect="object")

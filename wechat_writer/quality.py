@@ -46,7 +46,7 @@ def _llm_judge_duplicate(title, history_titles, llm_chat=None):
                     ),
                 }
             ],
-            max_tokens=300, temperature=0.1,
+            temperature=0.1,
         )
         return bool(data.get("duplicate"))
     except Exception:

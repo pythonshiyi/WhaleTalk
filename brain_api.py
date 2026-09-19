@@ -151,7 +151,7 @@ def consolidate_with_llm():
                 c = dc.get_active_client()
                 if c is None:
                     continue
-                out = c.chat([{"role": "user", "content": prompt}], max_tokens=160, thinking="low")
+                out = c.chat([{"role": "user", "content": prompt}], thinking="low")
                 out = str(out or "").strip()
                 summary = ""
                 try:
@@ -345,7 +345,7 @@ def refresh_self_model():
         c = dc.get_active_client()
         if c is None:
             return False
-        out = c.chat([{"role": "user", "content": prompt}], max_tokens=400, thinking="low", json_output=True)
+        out = c.chat([{"role": "user", "content": prompt}], thinking="low", json_output=True)
         import json as _json
         data = _json.loads(out) if isinstance(out, str) else out
         sm = {
@@ -366,7 +366,7 @@ def refresh_self_model():
         return False
 
 
-def _genesis_model_call(prompt, max_tokens=900):
+def _genesis_model_call(prompt, max_tokens=None):
     """创世化初始：调当前配置模型自主生成一版前史。返回 (text, err)。
     未配 key/余额不足/网络失败等返回 err 供上层精确提示，不再误导为"未配 Key"。"""
     import config_utils
@@ -384,7 +384,7 @@ def _genesis_model_call(prompt, max_tokens=900):
         client.chat(
             [{"role": "user", "content": prompt}],
             scenario=cfg.get("scenario") or "通用",
-            thinking="none", max_tokens=int(max_tokens or 900),
+            thinking="none", max_tokens=max_tokens,
             tools_enabled=False,
             on_content=lambda c: acc.append(c) if c else None)
         txt = "".join(acc).strip()
