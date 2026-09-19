@@ -2991,6 +2991,105 @@ def _ffmpeg_run(args, timeout=MEDIA_TIMEOUT):
     return proc.returncode, (out or "") + (err or "")
 
 
+# ── ffmpeg 硬件编码（GPU）自动选择 ─────────────────────────────────────────
+# 目标：视频编码（渲染合成里最吃 CPU 的一步）优先交给 GPU（AMD AMF / NVIDIA
+# NVENC / Intel QSV），把 CPU 让给 Python 帧渲染与滤镜。开关：
+#   WHALETALK_FFMPEG_HW = auto(默认) / off / cpu / amd / nvidia / intel
+# 关键：编码器「编进 ffmpeg」≠「本机有对应显卡」——必须做一次 1 帧实测（smoke）
+# 才启用，避免在有 AMF 编码器但无 AMD 卡的机器上输出失败。
+_FFMPEG_HW_LOCK = threading.Lock()
+_FFMPEG_HW = {"done": False, "h264": "", "hevc": ""}
+
+
+def _ffmpeg_hw_probe():
+    """探测并缓存本机可用的 GPU 视频编码器（含 1 帧实测）。返回 {"h264","hevc"}。"""
+    with _FFMPEG_HW_LOCK:
+        if _FFMPEG_HW["done"]:
+            return _FFMPEG_HW
+        pref = os.environ.get("WHALETALK_FFMPEG_HW", "auto").strip().lower()
+        fam = {
+            "amd": ("h264_amf", "hevc_amf"),
+            "nvidia": ("h264_nvenc", "hevc_nvenc"),
+            "intel": ("h264_qsv", "hevc_qsv"),
+        }
+        order = []
+        if pref in fam:
+            order = [fam[pref]]
+        elif pref in ("off", "cpu"):
+            order = []
+        else:  # auto：AMD → NVIDIA → Intel，首个实测通过者胜
+            order = [fam["amd"], fam["nvidia"], fam["intel"]]
+
+        chosen = ("", "")
+        if order:
+            try:
+                code, text = _ffmpeg_run(["-hide_banner", "-encoders"], timeout=20)
+                enc_txt = text or "" if code == 0 else ""
+            except Exception:
+                enc_txt = ""
+            for h264, hevc in order:
+                if h264 in enc_txt and _ffmpeg_hw_smoke(h264):
+                    chosen = (h264, hevc if hevc in enc_txt else h264)
+                    break
+        _FFMPEG_HW.update({"done": True, "h264": chosen[0], "hevc": chosen[1]})
+        return _FFMPEG_HW
+
+
+def _ffmpeg_hw_smoke(encoder):
+    """真的编码 1 帧验证该 GPU 编码器可用（编进 ffmpeg 不代表本机有对应显卡）。"""
+    try:
+        code, _ = _ffmpeg_run([
+            "-hide_banner", "-v", "error",
+            "-f", "lavfi", "-i", "testsrc=size=256x256:rate=1:duration=0.5",
+            "-frames:v", "1", "-c:v", encoder, "-f", "null", "-",
+        ], timeout=20)
+        return code == 0
+    except Exception:
+        return False
+
+
+def _ffmpeg_video_encode_args(codec="h264", bitrate="8M", maxrate="12M", bufsize="16M",
+                              crf=20, preset="veryfast", quality="quality"):
+    """视频编码参数：优先 GPU，失败回退 libx264/libx265（参数与旧实现等价）。
+
+    codec: h264 / hevc；其它（vp9 等）由调用方自行处理。
+    """
+    hw = _ffmpeg_hw_probe()
+    if codec == "hevc" and hw.get("hevc"):
+        enc = hw["hevc"]
+        if enc.endswith("_amf"):
+            return ["-c:v", enc, "-quality", quality, "-rc", "vbr_peak",
+                    "-b:v", bitrate, "-maxrate", maxrate, "-bufsize", bufsize, "-pix_fmt", "yuv420p"]
+        if enc.endswith("_nvenc"):
+            return ["-c:v", enc, "-preset", "p4", "-rc", "vbr",
+                    "-b:v", bitrate, "-maxrate", maxrate, "-bufsize", bufsize, "-pix_fmt", "yuv420p"]
+    if codec == "h264" and hw.get("h264"):
+        enc = hw["h264"]
+        if enc.endswith("_amf"):
+            return ["-c:v", enc, "-quality", quality, "-rc", "vbr_peak",
+                    "-b:v", bitrate, "-maxrate", maxrate, "-bufsize", bufsize, "-pix_fmt", "yuv420p"]
+        if enc.endswith("_nvenc"):
+            return ["-c:v", enc, "-preset", "p4", "-rc", "vbr",
+                    "-b:v", bitrate, "-maxrate", maxrate, "-bufsize", bufsize, "-pix_fmt", "yuv420p"]
+        if enc.endswith("_qsv"):
+            return ["-c:v", enc, "-global_quality", str(crf), "-pix_fmt", "nv12"]
+    if codec == "hevc":
+        return ["-c:v", "libx265", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
+
+
+def ffmpeg_hw_report():
+    """当前硬件加速状态（供 /v1/status 或工具展示）。"""
+    hw = _ffmpeg_hw_probe()
+    pref = os.environ.get("WHALETALK_FFMPEG_HW", "auto").strip().lower() or "auto"
+    return {
+        "preference": pref,
+        "h264": hw.get("h264") or "libx264(CPU)",
+        "hevc": hw.get("hevc") or "libx265(CPU)",
+        "hardware": bool(hw.get("h264")),
+    }
+
+
 # ============================================================================
 # WebDAV 云盘同步（httpx 原生 PROPFIND/GET/PUT/DELETE；凭据可 DPAPI 加密）
 # ============================================================================

@@ -97,10 +97,11 @@ def watch_files(path, pattern="", max_items=50):
     added = sorted(k for k in snap if k not in prev)
     removed = sorted(k for k in prev if k not in snap)
     modified = sorted(k for k in snap if k in prev and snap[k] != prev[k])
-    if pattern:  # pattern 统一作用于三类变化（含删除，否则删除列表泄漏范围外文件）
-        added = [k for k in added if fnmatch.fnmatch(k, pattern)]
-        removed = [k for k in removed if fnmatch.fnmatch(k, pattern)]
-        modified = [k for k in modified if fnmatch.fnmatch(k, pattern)]
+    if pattern:  # pattern 统一作用于三类变化，且与快照口径一致（都按 basename 匹配，
+                 # 否则 sub/a.md 在快照里命中、在变化过滤里失配 → 变化被丢弃）
+        added = [k for k in added if fnmatch.fnmatch(os.path.basename(k), pattern)]
+        removed = [k for k in removed if fnmatch.fnmatch(os.path.basename(k), pattern)]
+        modified = [k for k in modified if fnmatch.fnmatch(os.path.basename(k), pattern)]
     state.setdefault("files", {})[p] = snap
     _save_watch_state(state)
     if not (added or removed or modified):
@@ -499,8 +500,8 @@ def create_evolution(name, files):
                 fh.write(content)
             written.append(rel)
             contents[rel] = content
-            if rel == "EVOLUTION.md":
-                has_md = True
+            if rel == "EVOLUTION.md" and str(content or "").strip():
+                has_md = True  # 空内容不算「已有入口页」，否则会留下空壳索引页
         except Exception as e:
             return f"错误：写入 {rel} 失败: {e}"
     # 入口页必须有实质内容：缺失则生成；给了但留占位符则补一节自动摘要
@@ -770,8 +771,8 @@ def verify_files(paths):
                 lines.append(f"❌ 越界路径被拒绝 {p}")
                 missing += 1
                 continue
-            if os.path.exists(full):
-                p = full
+            # 统一用工作区内的绝对路径判定；不存在时不得回落进程 CWD（否则同名文件误报存在）
+            p = full
         elif os.path.isabs(p):
             # 绝对路径同样走权限判定：防探测磁盘任意文件的存在性与大小
             ok_abs, _ = permissions.check_filesystem(p, write=False)
@@ -833,8 +834,9 @@ def git_tool(action, path=None, message=None, target=None, files=None):
     """
     import subprocess
 
+    a = (action or "").strip().lower()
     base = path or _dc.WORKING_DIR or permissions.WORKSPACE_DIR or os.getcwd()
-    write_op = action in ("init", "add", "commit", "checkout", "branch")
+    write_op = a in ("init", "add", "commit", "checkout", "branch")
     ok, reason = permissions.check_filesystem(base, write=write_op)
     if not ok:
         return reason

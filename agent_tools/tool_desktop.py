@@ -25,6 +25,7 @@ from deepseek_client import (
     _capture_screen_png,
     _extract_json_obj,
     _ffmpeg_run,
+    _ffmpeg_video_encode_args,
     _http_client,
     _mic_record_once,
     _parse_scroll,
@@ -1365,8 +1366,7 @@ def _mv_finish(src, output, audio="", bgm="", subtitle=""):
         args += ["-map", "0:v", "-map", f"{a_i}:a", "-c:a", "aac", "-af", "apad"]
     else:
         args += ["-map", "0:v", "-an"]
-    args += ["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-             "-crf", "20", "-shortest", output]
+    args += _ffmpeg_video_encode_args("h264") + ["-shortest", output]
     code, text = _ffmpeg_run(args)
     if code != 0:
         return "", "", f"成片编码失败：{(text or '')[-400:]}"
@@ -1417,10 +1417,13 @@ def _mv_compose(items, output, durations=None, duration=3.0, effect="kenburns",
         os.makedirs(workdir, exist_ok=True)
     except Exception as e:
         return "", "", f"工作目录创建失败: {e}"
-    segs, seg_durs = [], []
-    for i, src in enumerate(resolved):
+    segs = [os.path.join(workdir, f"seg_{i:03d}.mp4") for i in range(len(resolved))]
+    seg_durs = [0.0] * len(resolved)
+    seg_errs = [None] * len(resolved)
+
+    def _render_seg(i, src, seg):
+        """渲染/转码单个素材段（独立 ffmpeg 进程，可并行）。返回 (i, 时长|None, 错误|None)。"""
         is_img = src.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
-        seg = os.path.join(workdir, f"seg_{i:03d}.mp4")
         if is_img:
             d = duration
             if durations and i < len(durations):
@@ -1442,31 +1445,58 @@ def _mv_compose(items, output, durations=None, duration=3.0, effect="kenburns",
                        f":d={frames}:s={W}x{H}:fps={fps}")
             code, text = _ffmpeg_run([
                 "-hide_banner", "-y", "-loop", "1", "-i", src, "-t", f"{d:.3f}",
-                "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
-                "-pix_fmt", "yuv420p", "-r", str(fps), "-an", seg])
+                "-vf", vf, *_ffmpeg_video_encode_args("h264"),
+                "-r", str(fps), "-an", seg])
             if code != 0:
-                return "", "", f"第 {i + 1} 个素材渲染失败：{(text or '')[-300:]}"
-            seg_durs.append(d)
-        else:
-            d = 0.0
-            if durations and i < len(durations):
-                try:
-                    d = max(0.0, float(durations[i] or 0))
-                except (TypeError, ValueError):
-                    d = 0.0
-            vf = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-                  f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")
-            args = ["-hide_banner", "-y", "-i", src]
-            if d > 0:
-                args += ["-t", f"{d:.3f}"]
-            args += ["-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
-                     "-pix_fmt", "yuv420p", "-r", str(fps), "-an", seg]
-            code, text = _ffmpeg_run(args)
-            if code != 0:
-                return "", "", f"第 {i + 1} 个素材转码失败：{(text or '')[-300:]}"
-            dd = d or _ff_media_duration(seg) or 0.0
-            seg_durs.append(max(0.2, float(dd)))
-        segs.append(seg)
+                return i, None, f"第 {i + 1} 个素材渲染失败：{(text or '')[-300:]}"
+            return i, d, None
+        d = 0.0
+        if durations and i < len(durations):
+            try:
+                d = max(0.0, float(durations[i] or 0))
+            except (TypeError, ValueError):
+                d = 0.0
+        vf = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+              f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")
+        args = ["-hide_banner", "-y", "-i", src]
+        if d > 0:
+            args += ["-t", f"{d:.3f}"]
+        args += ["-vf", vf, *_ffmpeg_video_encode_args("h264"),
+                 "-r", str(fps), "-an", seg]
+        code, text = _ffmpeg_run(args)
+        if code != 0:
+            return i, None, f"第 {i + 1} 个素材转码失败：{(text or '')[-300:]}"
+        dd = d or _ff_media_duration(seg) or 0.0
+        return i, max(0.2, float(dd)), None
+
+    # 并行渲染各段（独立 ffmpeg 进程，吃满多核；WHALETALK_MV_RENDER_WORKERS 可配，0=自动）
+    try:
+        _workers = clamp_int(os.environ.get("WHALETALK_MV_RENDER_WORKERS", 0), 0, lo=0, hi=16)
+    except (TypeError, ValueError):
+        _workers = 0
+    if _workers <= 0:
+        _workers = min(6, max(1, (os.cpu_count() or 4) - 2))
+    _workers = max(1, min(_workers, len(resolved)))
+    if _workers > 1 and len(resolved) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=_workers, thread_name_prefix="mvseg") as _ex:
+            for i, dur_i, err_i in _ex.map(
+                    lambda p: _render_seg(*p),
+                    [(i, resolved[i], segs[i]) for i in range(len(resolved))]):
+                if err_i:
+                    seg_errs[i] = err_i
+                elif dur_i is not None:
+                    seg_durs[i] = dur_i
+    else:
+        for i in range(len(resolved)):
+            _i, dur_i, err_i = _render_seg(i, resolved[i], segs[i])
+            if err_i:
+                seg_errs[i] = err_i
+            elif dur_i is not None:
+                seg_durs[i] = dur_i
+    for e in seg_errs:
+        if e:
+            return "", "", e
     silent = os.path.join(workdir, "silent.mp4")
     if trans > 0 and len(segs) > 1:
         args = []
@@ -1482,7 +1512,7 @@ def _mv_compose(items, output, durations=None, duration=3.0, effect="kenburns",
                       f"offset={offset:.3f}{outl}")
             prev = outl
         args += ["-filter_complex", ";".join(fc), "-map", prev,
-                 "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                 *_ffmpeg_video_encode_args("h264"),
                  "-r", str(fps), silent]
         code, text = _ffmpeg_run(args)
         if code != 0:
@@ -1556,7 +1586,8 @@ def media_ffmpeg(action="info", input="", output="", time="", width=0, format=""
         if isinstance(raw, str):
             import shlex
             try:
-                raw = shlex.split(raw)
+                # Windows 路径含反斜杠：posix 模式会吞掉，改用 posix=False
+                raw = shlex.split(raw, posix=(os.name != "nt"))
             except ValueError as e:
                 return f"错误：args 解析失败: {e}"
         if not isinstance(raw, (list, tuple)) or not raw:
@@ -1699,6 +1730,9 @@ def media_ffmpeg(action="info", input="", output="", time="", width=0, format=""
         elif fmt == "webm":
             # webm 容器只收 vp8/vp9/av1 与 opus/vorbis：给 h264/aac 源直接 remux 会失败
             args += ["-c:v", "libvpx-vp9", "-b:v", "1M", "-c:a", "libopus"]
+        elif fmt in ("mp4", "mkv", "avi", "mov"):
+            # 视频容器：优先 GPU 编码（AMF/NVENC/QSV），无 GPU 自动回退 libx264
+            args += _ffmpeg_video_encode_args("h264")
         elif w:
             args += ["-c:v", "libx264", "-preset", "veryfast"]
         args += [out]

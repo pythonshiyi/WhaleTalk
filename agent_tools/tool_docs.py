@@ -5,12 +5,15 @@
 仅剩余辅助函数仍依赖主文件加载顺序契约（在 `from agent_tools import *` 前已定义）。
 """
 
+import atexit
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 import permissions
@@ -2004,10 +2007,14 @@ def docx_edit(path, action="", find="", replace="", anchor="", text=""):
                     break
             if target is None:
                 return f"未找到锚点段落（含「{anchor}」）"
-            # python-docx 无 insert_after；用 XML 在 target 之后插入克隆样式的段落
+            # python-docx 无 insert_after；用 XML 在 target 之后插入**克隆了段落属性**的段落
+            import copy as _copy
             from docx.oxml.ns import qn as _qn2
             from docx.text.paragraph import Paragraph as _Para2
             new_el = target._p.makeelement(_qn2("w:p"), {})
+            _tgt_pPr = target._p.find(_qn2("w:pPr"))
+            if _tgt_pPr is not None:
+                new_el.append(_copy.deepcopy(_tgt_pPr))  # 继承样式/对齐/缩进
             target._p.addnext(new_el)
             new_para = _Para2(new_el, doc)
             _md_inline_to_runs(new_para, str(text))
@@ -3364,6 +3371,124 @@ def _html_render_lock():
     return _HTML_RENDER_LOCK
 
 
+# ── 可复用渲染通道：常驻浏览器 + 专属线程（渲染提速关键）────────────────────
+# 为什么用专属线程：Playwright 同步 API **线程亲和**（跨线程用同一 Playwright 对象
+# 会报错），而工具在可变线程池里执行。把浏览器固定在一个自有线程、用队列串行处理
+# 渲染请求：既复用了浏览器（省去每次 ~0.5-1s 启动），又天然线程安全。
+# GPU：默认让 Chromium 走 D3D11/ANGLE 用独显（headless 默认常退化为 SwiftShader 纯
+# CPU），WHALETALK_HTML_GPU=0 可关闭。
+class _RenderChannel:
+    _instance = None
+    _instance_lock = threading.Lock()
+
+    def __init__(self):
+        self._q = queue.Queue()
+        self._thread = None
+        self._ready = threading.Event()
+        self._start_lock = threading.Lock()
+        self._ok = False
+
+    @classmethod
+    def instance(cls):
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = cls()
+            return cls._instance
+
+    @staticmethod
+    def _launch_args():
+        if str(os.environ.get("WHALETALK_HTML_GPU", "1")).strip().lower() in ("0", "false", "no", "off"):
+            return ["--no-sandbox", "--disable-gpu"]
+        return ["--no-sandbox", "--enable-gpu", "--ignore-gpu-blocklist",
+                "--use-angle=d3d11", "--enable-unsafe-swiftshader"]
+
+    def _worker(self):
+        pw = browser = None
+        try:
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            args = self._launch_args()
+            for kw in ({"channel": "msedge", "args": args}, {"args": args}):
+                try:
+                    browser = pw.chromium.launch(**kw)
+                    break
+                except Exception:
+                    browser = None
+        except Exception:
+            browser = None
+        if browser is None:
+            self._ok = False
+            self._ready.set()
+            while True:  # 排空队列，避免调用方永久等待
+                job = self._q.get()
+                if job is None:
+                    break
+                _fn, box = job
+                box["error"] = RuntimeError("无法启动浏览器（Playwright / 系统 Edge 缺失？）")
+                box["done"].set()
+            return
+        self._ok = True
+        self._ready.set()
+        while True:
+            job = self._q.get()
+            if job is None:
+                break
+            fn, box = job
+            try:
+                box["result"] = fn(browser)
+            except Exception as e:
+                box["error"] = e
+            finally:
+                box["done"].set()
+        for obj, meth in ((browser, "close"), (pw, "stop")):
+            try:
+                if obj is not None:
+                    getattr(obj, meth)()
+            except Exception:
+                pass
+
+    def _ensure(self):
+        with self._start_lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._ready.clear()
+                self._thread = threading.Thread(target=self._worker, name="wt-render", daemon=True)
+                self._thread.start()
+            self._ready.wait(30)
+
+    def run(self, fn, timeout=300):
+        """在渲染线程里执行 fn(browser)；浏览器不可用时返回 None。"""
+        self._ensure()
+        if not self._ok:
+            return None
+        box = {"done": threading.Event(), "result": None, "error": None}
+        self._q.put((fn, box))
+        if not box["done"].wait(timeout):
+            raise TimeoutError("渲染通道超时")
+        if box["error"] is not None:
+            raise box["error"]
+        return box["result"]
+
+    def close(self):
+        try:
+            self._q.put(None)
+        except Exception:
+            pass
+
+
+_RENDER_CHANNEL = None
+
+
+def _render_channel():
+    global _RENDER_CHANNEL
+    if _RENDER_CHANNEL is None:
+        _RENDER_CHANNEL = _RenderChannel.instance()
+        try:
+            atexit.register(_RENDER_CHANNEL.close)
+        except Exception:
+            pass
+    return _RENDER_CHANNEL
+
+
 # 本地图片内联 + 临时文件渲染：修复「data: URI 无 base URL → 本地相对图片加载失败」与
 # 「大内容 data: URI 触发 ERR_ABORTED」两类问题（此前 html_render/html_to_pdf/html_to_ppt 共用该缺陷）。
 _INLINE_IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
@@ -3609,10 +3734,8 @@ def _goto_html_doc(pg, html_doc, base_dir=None, media=None, wait_selector=None,
 
 
 def _html_to_pngs(items, w, h, sc, full_page, base_dir=None):
-    """批量渲染 HTML→PNG（共享一个浏览器上下文，避免每页起停浏览器，显著提速）。
-    items: [(html, out_path), ...]。成功返回 None，失败返回错误串。"""
+    """批量渲染 HTML→PNG（复用常驻浏览器通道，避免每页起停浏览器）。"""
     try:
-        from playwright.sync_api import sync_playwright
         todo = []
         for html_s, out_path in items:
             hdoc, needs_ready = _prepare_render_doc(html_s, base_dir)
@@ -3622,71 +3745,62 @@ def _html_to_pngs(items, w, h, sc, full_page, base_dir=None):
         if not todo:
             return "无有效 HTML 内容"
         w, h, sc = int(w), int(h), clamp_int(sc or 1, 1, lo=1, hi=3)
-        with _html_render_lock(), sync_playwright() as p:
-            browser = None
-            tmp_files = []
-            try:
+
+        def _do(browser):
+            for hdoc, out_path, needs_ready in todo:
+                # 视口用 CSS 尺寸 w/h，仅靠 device_scale_factor 超采样。
+                pg = browser.new_page(viewport={"width": w, "height": h},
+                                      device_scale_factor=sc)
+                tmp = None
                 try:
-                    browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
-                except Exception:
-                    browser = p.chromium.launch(args=["--no-sandbox"])
-                for hdoc, out_path, needs_ready in todo:
-                    # 视口用 CSS 尺寸 w/h，仅靠 device_scale_factor 超采样——
-                    # 视口也乘 sc 会让截图尺寸变成 w*sc*sc，且页面固定 w×h 时只覆盖左上 1/sc²。
-                    pg = browser.new_page(viewport={"width": w, "height": h},
-                                          device_scale_factor=sc)
+                    tmp = _goto_html_doc(pg, hdoc, base_dir, expect_ready=needs_ready)
+                    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+                    pg.screenshot(path=out_path, full_page=bool(full_page))
+                finally:
                     try:
-                        tmp_files.append(_goto_html_doc(pg, hdoc, base_dir, expect_ready=needs_ready))
-                        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-                        pg.screenshot(path=out_path, full_page=bool(full_page))
-                    finally:
-                        try:
-                            pg.close()
-                        except Exception:
-                            pass
-            finally:
-                if browser is not None:
-                    try:
-                        browser.close()
+                        pg.close()
                     except Exception:
                         pass
-                for t in tmp_files:
-                    _safe_rm_temp(t)
+                    if tmp:
+                        _safe_rm_temp(tmp)
+            return True
+
+        if _render_channel().run(_do, timeout=300) is not True:
+            return "批量 HTML 渲染失败：浏览器通道不可用（需已装 playwright，系统有 Edge 最佳）"
         return None
     except Exception as e:
         return f"批量 HTML 渲染失败: {e}（需已装 playwright，系统有 Edge 最佳）"
 
 
 def _html_to_png(content, out_path, w, h, sc, full_page, base_dir=None, media=None, wait_selector=None):
-    """渲染 HTML 字符串到 PNG（共用内核，html_render/html_to_ppt 复用）。
-    自动补全 HTML、内联本地图片、写临时文件以 file:// 打开、等字体就绪、优先系统 Edge channel。
+    """渲染 HTML 字符串到 PNG（共用常驻浏览器通道）。
+    自动补全 HTML、内联本地图片、写临时文件以 file:// 打开、等字体就绪、优先系统 Edge。
     成功返回 None，失败返回错误串。"""
     try:
         html_doc, needs_ready = _prepare_render_doc(content, base_dir)
         if not html_doc:
             return "HTML 内容为空"
-        from playwright.sync_api import sync_playwright
-        with _html_render_lock(), sync_playwright() as p:
-            browser = None
+
+        def _do(browser):
+            pg = browser.new_page(viewport={"width": int(w), "height": int(h)},
+                                  device_scale_factor=int(sc))
             tmp = None
             try:
-                try:
-                    browser = p.chromium.launch(channel="msedge", args=["--no-sandbox"])
-                except Exception:
-                    browser = p.chromium.launch(args=["--no-sandbox"])
-                pg = browser.new_page(viewport={"width": int(w), "height": int(h)},
-                                      device_scale_factor=int(sc))
                 tmp = _goto_html_doc(pg, html_doc, base_dir, media=media,
                                      wait_selector=wait_selector, expect_ready=needs_ready)
                 os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
                 pg.screenshot(path=out_path, full_page=bool(full_page))
             finally:
-                if browser is not None:
-                    try:
-                        browser.close()
-                    except Exception:
-                        pass
-                _safe_rm_temp(tmp)
+                try:
+                    pg.close()
+                except Exception:
+                    pass
+                if tmp:
+                    _safe_rm_temp(tmp)
+            return True
+
+        if _render_channel().run(_do, timeout=300) is not True:
+            return "HTML 渲染失败：浏览器通道不可用（需已装 playwright；系统有 Edge 最佳）"
         return None
     except Exception as e:
         return f"HTML 渲染失败: {e}（需已装 playwright，可用 pip_install playwright；系统有 Edge 最佳）"
@@ -4007,7 +4121,7 @@ def html_to_pdf(html="", source_path="", output="", size="A4", margin="1cm", lan
             "type": "function",
             "function": {
                 "name": "ppt_layout_check",
-                "description": "PPT 版面几何自检：逐页报越界/元素重叠/贴边并给坐标，供修正；视觉观感另用 html_render 渲染 + image_understand 评估",
+                "description": "PPT 版面几何自检：逐页报越界/元素重叠并给坐标，供修正；视觉观感另用 html_render 渲染 + image_understand 评估",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -4070,21 +4184,27 @@ def ppt_layout_check(path, margin=0.05):
                 # 越界
                 if -m > L or -m > T or SW + m < R or SH + m < B:
                     issues.append(f"⚠ 越界 {tag}: L{L:.2f} T{T:.2f} R{R:.2f} B{B:.2f} (>画布{SW:.2f}x{SH:.2f})")
-                # 贴边(设计性贴边不算，仅当侵入过多)
-                if R > SW - 0.05 and SW + m >= R:
-                    pass
                 boxes.append((L, T, R, B, tag))
-            # 两两重叠（正文文本框与其它大元素，略去文字含空）
+            # 两两重叠（整页背景/大面积底板与文字的有意叠放、完全包含的层叠设计不算问题）
+            _slide_area = max(1e-6, SW * SH)
             for i in range(len(boxes)):
                 for j in range(i + 1, len(boxes)):
                     a, b = boxes[i], boxes[j]
+                    area_a = (a[2] - a[0]) * (a[3] - a[1])
+                    area_b = (b[2] - b[0]) * (b[3] - b[1])
+                    if max(area_a, area_b) >= 0.6 * _slide_area:
+                        continue  # 背景/底板：与内容是重叠设计，非缺陷
+                    contains = ((a[0] <= b[0] and a[1] <= b[1] and a[2] >= b[2] and a[3] >= b[3])
+                                or (b[0] <= a[0] and b[1] <= a[1] and b[2] >= a[2] and b[3] >= a[3]))
+                    if contains:
+                        continue  # 一方完全包含另一方：层叠设计
                     ox = min(a[2], b[2]) - max(a[0], b[0])
                     oy = min(a[3], b[3]) - max(a[1], b[1])
                     if ox > 0.08 and oy > 0.08:
                         # 计算重叠面积占比（相对较小者）
                         inter = ox * oy
-                        area_b = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
-                        if area_b > 0 and inter / area_b > 0.2:
+                        smaller = min(area_a, area_b)
+                        if smaller > 0 and inter / smaller > 0.2:
                             issues.append(f"⚠ 重叠 {a[4]} 与 {b[4]}（交叠 {ox:.2f}x{oy:.2f} in）")
             if issues:
                 issues_total += len(issues)
@@ -4373,7 +4493,8 @@ def pdf_toolkit(action, path="", output="", paths=None, pages="", text="", passw
             op = _out(output)
             merged = fitz.open()
             for p in paths:
-                merged.insert_pdf(_open(p))
+                with _open(p) as _src:  # 源文档用完即关，避免句柄泄漏
+                    merged.insert_pdf(_src)
             merged.save(op)
             merged.close()
             permissions.audit("pdf_toolkit", op, "merge")
@@ -4411,6 +4532,7 @@ def pdf_toolkit(action, path="", output="", paths=None, pages="", text="", passw
                     nd.save(fp)
                     nd.close()
                     made += 1
+            doc.close()
             permissions.audit("pdf_toolkit", outdir, f"split {made}")
             return f"已拆分 {made} 个文件 → {outdir}"
         if act in ("watermark", "page_numbers"):

@@ -179,9 +179,11 @@ def read_file(path, start_line=None, max_lines=None):
             prefix = f"[按行读取 {path} 第 {start}-{start + len(lines) - 1} 行]\n"
             return prefix + body + enc_note
         _cap = READ_FILE_MAX_BYTES if (READ_FILE_MAX_BYTES and READ_FILE_MAX_BYTES > 0) else None
-        with open(path, encoding=enc, errors="replace") as f:
-            content = f.read(_cap) if _cap else f.read()
-        if _cap and len(content) >= _cap:
+        # 按**字节**读取并按字节截断：文本 read() 的 cap 是字符数，CJK 可读入远超声明上限
+        with open(path, "rb") as f:
+            raw = f.read(_cap) if _cap else f.read()
+        content = raw.decode(enc, "replace")
+        if _cap and len(raw) >= _cap:
             content += f"\n[文件较大，已截断前 {_cap} 字节]"
         return content + enc_note
     except Exception as e:
@@ -1236,10 +1238,21 @@ def environment_info():
         try:
             usage = shutil.disk_usage(permissions.WORKSPACE_DIR)
             lines.append(
-                f"工作区磁盘: 剩余 {usage.free / 1024 ** 3:.1f}GB / 总 {usage.total / 1024 ** 3:.1f}GB"
+                f"工作区磁盘: 剩余 {usage.free / 1024 ** 3:.1f}GB / 共 {usage.total / 1024 ** 3:.1f}GB"
             )
         except Exception:
             pass
+    # 硬件加速状态（渲染/编码走 GPU 时便于模型判断为何快慢）
+    try:
+        hw = _dc.ffmpeg_hw_report()
+        lines.append(f"视频编码: {hw.get('h264')}（偏好 {hw.get('preference')}，"
+                     f"{'GPU 加速' if hw.get('hardware') else 'CPU'}）")
+    except Exception:
+        pass
+    try:
+        lines.append(f"CPU 逻辑核数: {os.cpu_count()}")
+    except Exception:
+        pass
     return "\n".join(lines)
 
 

@@ -96,6 +96,12 @@ def image_process(path, output, ops=""):
         return "错误：需要 Pillow（pip install pillow）"
     try:
         img = Image.open(p)
+        # 按 EXIF 方向自动旋正（手机竖拍图不处理会横/倒）
+        try:
+            from PIL import ImageOps as _ImageOps
+            img = _ImageOps.exif_transpose(img)
+        except Exception:
+            pass
         # 防 decompression bomb：先检查像素尺寸，拒绝超大图再进入解码/处理
         try:
             if img.width * img.height > 100_000_000:

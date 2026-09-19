@@ -18,9 +18,25 @@
 """
 from __future__ import annotations
 
+import atexit
 import math
 import os
 import re
+
+# 进程内临时文件登记 + 退出清理（如音频解码中间 wav），避免 %TEMP% 持续堆积
+_TEMP_FILES = set()
+
+
+def _cleanup_temp_files():
+    for p in list(_TEMP_FILES):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    _TEMP_FILES.clear()
+
+
+atexit.register(_cleanup_temp_files)
 
 _SECTION_ORDER = ("intro", "verse", "prechorus", "chorus", "bridge", "outro")
 _SECTION_WORDS = set(_SECTION_ORDER) | {
@@ -67,7 +83,8 @@ def parse_lrc(text: str):
         if not m:
             continue
         mm, ss, frac, body = m.group(1), m.group(2), m.group(3) or "0", m.group(4).strip()
-        t = int(mm) * 60 + int(ss) + (int(frac) / (1000.0 if len(frac) == 3 else 100.0))
+        # 小数位按位数解释：.6=0.6s / .60=0.60s / .600=0.600s（旧实现单位数误按 /100）
+        t = int(mm) * 60 + int(ss) + (int(frac) / (10.0 ** len(frac)))
         if body:
             rows.append((t, body))
     rows.sort(key=lambda x: x[0])
@@ -115,6 +132,7 @@ def _ffmpeg_decode_wav(audio, sr):
     import tempfile
     fd, out = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
+    _TEMP_FILES.add(out)
     try:
         subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(audio),
                         "-ac", "1", "-ar", str(sr), out], capture_output=True, timeout=300,

@@ -585,10 +585,11 @@ def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
                               "video", f"mvnative_{datetime.now():%Y%m%d_%H%M%S}")
     _stem = os.path.splitext(os.path.basename(audio_abs))[0]
     _title = re.sub(r"^\d+_[0-9a-fA-F]+_", "", _stem) or _stem
+    # 分辨率解析与 _mv_compose 口径一致（x/×/* 且不区分大小写），避免非法值抛异常或倒挂
+    _rm = re.match(r"^(\d{2,5})\s*[x×*]\s*(\d{2,5})$", str(resolution or "").strip().lower())
+    _rw, _rh = (int(_rm.group(1)), int(_rm.group(2))) if _rm else (1080, 1920)
     frames = me.render_frames(shots, frames_dir, palette=_mv_palette(style),
-                              w=int(resolution.split("x")[0]) if "x" in str(resolution) else 1080,
-                              h=int(resolution.split("x")[1]) if "x" in str(resolution) else 1920,
-                              title=_title)
+                              w=_rw, h=_rh, title=_title)
     if not frames:
         return "错误：原生帧渲染失败（PIL 缺失？）"
     srt_path = os.path.join(frames_dir, "lyrics.srt")
@@ -597,6 +598,8 @@ def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
     out_mp4 = str(output or "").strip()
     if not out_mp4:
         out_mp4 = os.path.join(os.path.dirname(frames_dir), f"mv_{datetime.now():%Y%m%d_%H%M%S}.mp4")
+    if not out_mp4.lower().endswith(".mp4"):
+        out_mp4 += ".mp4"  # 无扩展名会让 ffmpeg 无法推断容器而失败
     mates = [f["path"] for f in frames]
     durs = [s["duration"] for s in shots]
     # transition 默认 0（硬切）：交叉转场按重叠缩短总长，会破坏「成片时长=歌曲时长」；可显式传入

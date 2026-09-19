@@ -54,3 +54,28 @@ def test_detect_utf32_before_utf16(tmp_path):
     p.write_bytes("hello".encode("utf-32"))
     enc, _fb = tf._detect_text_encoding(str(p))
     assert enc == "utf-32"
+
+
+def test_ffmpeg_hw_report_shape():
+    import deepseek_client as dc
+    rep = dc.ffmpeg_hw_report()
+    assert set(("preference", "h264", "hevc", "hardware")) <= set(rep)
+    assert isinstance(rep["hardware"], bool)
+
+
+def test_ffmpeg_video_encode_args_cpu_fallback(monkeypatch):
+    import deepseek_client as dc
+    monkeypatch.setenv("WHALETALK_FFMPEG_HW", "off")
+    monkeypatch.setitem(dc._FFMPEG_HW, "done", False)
+    monkeypatch.setitem(dc._FFMPEG_HW, "h264", "")
+    try:
+        assert dc._ffmpeg_video_encode_args("h264")[:2] == ["-c:v", "libx264"]
+    finally:
+        dc._FFMPEG_HW["done"] = False
+
+
+def test_lrc_parse_decimal_units():
+    import mv_engine as me
+    rows = me.parse_lrc("[00:26.6]hello\n[01:02.60]world")
+    assert abs(rows[0]["start"] - 26.6) < 0.001
+    assert abs(rows[1]["start"] - 62.6) < 0.001
