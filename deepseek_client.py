@@ -857,11 +857,20 @@ def _load_im_config():
 
 # ===== 多模态（A3）：语音合成 / 图像处理 / 文件 OCR =====
 
-_CLIENT_HOLDER = {"client": None}  # main 在 ensure_client 时注入
+_CLIENT_HOLDER = {"client": None}  # 兼容兜底（Tool 直调/无 TLS 上下文的线程）
+# 线程私有「当前会话客户端」：并发作业（不同 Profile/网关/Key）各自注入，工具在
+# 作业线程/执行线程内取到的是本作业的客户端，而非被其它会话覆盖的全局单例。
+_CLIENT_TLS = threading.local()
 
 
 def set_active_client(client):
+    _CLIENT_TLS.client = client
     _CLIENT_HOLDER["client"] = client
+
+
+def _bind_thread_client(client):
+    """仅绑定当前线程的会话客户端（不写全局）——工具执行线程用，避免并发作业互相覆盖。"""
+    _CLIENT_TLS.client = client
 
 
 def _close_client(c):
@@ -886,6 +895,9 @@ def get_active_client():
     「没有可用客户端」。懒构建兜底后这些工具开箱即用（无需先完成一次对话）；
     配置变更后指纹不符自动重建，不会用到过期密钥/网关。
     """
+    c = getattr(_CLIENT_TLS, "client", None)
+    if c is not None:
+        return c
     c = _CLIENT_HOLDER.get("client")
     if c is not None:
         return c
@@ -3519,6 +3531,16 @@ _STOP_TOOL_GRACE_S = 1.5
 _TOOL_TOTAL_TIMEOUT = 300
 
 
+def _interrupted_result(name):
+    """停止时未取得结果的已提交工具：不得写成「未完成」诱导模型重试。
+
+    副作用工具（发信/写文件/启进程）此时可能已经生效，历史里必须提示「可能已产生
+    副作用、先核实再决定」，否则模型下一轮以相同参数重试会造成重复执行。
+    """
+    return (f"工具「{name}」在用户停止前已提交执行，未能取得结果；它可能已产生副作用"
+            "（如写文件/发信/起进程）。请勿直接以相同参数重复调用，先核实实际状态后再决定。")
+
+
 class _StopRequested(Exception):
     """请求已停止（内部信号）：调用链内部转成干净 return，不向 UI 抛异常。"""
 
@@ -4028,12 +4050,13 @@ def _strictify_tools(tools):
     return out
 
 
-def _apply_plan_edits(tool_calls, edits):
-    """③b 计划编辑：把用户改过的步骤参数写回本轮 tool_calls。
+def _apply_plan_edits(tool_calls, edits, work_msg=None):
+    """③b 计划编辑：把用户改过的步骤参数写回本轮 tool_calls（并同步历史 transcript）。
 
     edits 形如 [{"id"?: str, "index"?: int, "args": str|obj}]；按 id 优先、否则按 index 定位。
     只改参数（args），不改工具名——工具名的改动会与已下发的 assistant.tool_calls 不一致，
-    可能触发网关校验错误。返回改动后的 tool_calls。
+    可能触发网关校验错误。work_msg 传入时为历史里的 assistant 消息：同步其
+    `tool_calls[].function.arguments`，否则模型在下一轮看到的仍是旧参数。返回改动后的 tool_calls。
     """
     import json as _json
     for pos, ed in enumerate(edits or []):
@@ -4055,7 +4078,14 @@ def _apply_plan_edits(tool_calls, edits):
         if target is None:
             continue
         new_args = ed["args"]
-        target["args"] = new_args if isinstance(new_args, str) else _json.dumps(new_args, ensure_ascii=False)
+        norm = new_args if isinstance(new_args, str) else _json.dumps(new_args, ensure_ascii=False)
+        target["args"] = norm
+        if work_msg is not None:
+            for atc in work_msg.get("tool_calls") or []:
+                if isinstance(atc, dict) and atc.get("id") == target.get("id"):
+                    fn = atc.get("function")
+                    if isinstance(fn, dict):
+                        fn["arguments"] = norm
     return tool_calls
 
 
@@ -4298,9 +4328,11 @@ class DeepSeekClient:
             "messages": work,
             "max_tokens": max_tokens,
             "stream": True,
-            # 流式必须显式请求 usage（否则部分端点不返回末尾 usage chunk）
-            "stream_options": {"include_usage": True},
         }
+        # 流式 usage：官方/兼容端点需要显式请求才会返回末尾 usage chunk；但少数第三方
+        # 网关不认该字段并直接 400 —— 与其它官方专属字段一致，仅官方端点下发。
+        if self.is_official:
+            kwargs["stream_options"] = {"include_usage": True}
         # DeepSeek 官方专属：thinking 开关（extra_body）。第三方 OpenAI 兼容网关
         # 不认该字段，硬发可能 400 —— 仅官方端点下发。
         if self.is_official:
@@ -4696,10 +4728,13 @@ class DeepSeekClient:
                             )
                         # 非点菜工具也一并执行；点菜轮若有内容则保留
                         rest = [tc for tc in tool_calls if tc.get("name") != "activate_tools"]
+                        # 只要发生过点菜，索引即完成使命：下一轮注入激活工具 schema。
+                        # 旧实现仅在「本轮没有其它工具」时推进——模型把 activate_tools 与
+                        # 真实工具放在同一轮时，能力地图会被反复注入（白烧 ~2k token/轮）。
+                        _index_shown = True
+                        if smart_round:
+                            smart_round = False
                         if not rest:
-                            _index_shown = True
-                            if smart_round:
-                                smart_round = False  # 下一轮注入激活工具完整 schema
                             continue
                         tool_calls = rest
                     else:
@@ -4739,7 +4774,10 @@ class DeepSeekClient:
                         continue
                     plan_rejections = 0  # 批准即清零：MAX_PLAN_REJECTIONS 约束的是「连续」拒绝
                     if plan_edits:
-                        _apply_plan_edits(tool_calls, plan_edits)
+                        _apply_plan_edits(
+                            tool_calls, plan_edits,
+                            work[-1] if work and isinstance(work[-1], dict) else None,
+                        )
 
                 # 计划确认期间用户可能已点停止：执行前再查一次
                 if stop_event and stop_event.is_set():
@@ -4795,6 +4833,12 @@ class DeepSeekClient:
                     """
                     name = tc["name"]
                     raw_args = tc["args"] or ""
+                    # 绑定本作业的客户端到当前执行线程：并发会话（不同 Profile/网关）
+                    # 下工具拿到的是本作业的 client，而非被其它会话覆盖的全局单例。
+                    try:
+                        _bind_thread_client(self)
+                    except Exception:
+                        pass
                     if on_tool_start is not None:
                         try:
                             on_tool_start(name, raw_args)
@@ -4974,6 +5018,11 @@ class DeepSeekClient:
                             on_tool(nm, {}, exec_results[tcid][2])
                     pending = set()
                 for tc in serial_tools:
+                    if stop_event and stop_event.is_set():
+                        # 停止后不再弹交互/执行串行工具：明确「未执行」（无副作用），
+                        # 避免模型重试；也避免停止后仍弹出 ask/审批框。
+                        exec_results[tc["id"]] = (tc["name"], {}, "工具未执行（已停止生成）", None)
+                        continue
                     name, args, result, duration = execute_tool(tc)
                     exec_results[tc["id"]] = (name, args, result, duration)
                     if on_tool:
@@ -4985,7 +5034,7 @@ class DeepSeekClient:
                 for tc in tool_calls:
                     entry = exec_results.get(tc["id"])
                     if entry is None:
-                        entry = (tc["name"], {}, "工具执行已被中断（停止生成），未完成", None)
+                        entry = (tc["name"], {}, _interrupted_result(tc["name"]), None)
                         exec_results[tc["id"]] = entry
                         if on_tool:
                             on_tool(entry[0], entry[1], entry[2])
