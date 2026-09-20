@@ -866,4 +866,208 @@ def mv_produce(action="plan", audio="", lyrics="", style="citypop_night_v1", out
                 os.remove(tmp_ly)
 
 
-__all__ = ['mv_compose', 'mv_produce']
+__all__ = ['mv_compose', 'mv_produce', 'lyric_align', 'mv_credits_card']
+
+
+# ============================================================================
+# 歌词真值对齐（补 mvrender 的空洞）
+#
+# 背景：mvrender 是成熟渲染底座，但「听不懂音频」——它的 timeline 契约
+# （{lines:[{text,t0,t1,who,sec}]}）需要外部提供已对齐的歌词。
+# 本工具就是这个缺口的实现，四条实测经验见 mvrender/core/align.py 顶部。
+# ============================================================================
+@tool(
+    {
+        "type": "function",
+        "function": {
+            "name": "lyric_align",
+            "description": "歌词真值对齐：把已知歌词文本对齐到音频的真实时间轴（ASR 强制对齐），产出 LRC/SRT 与 mvrender 契约的 timeline.json。关键：唱歌人声必须关 VAD（--no-vad），否则慢歌的持续人声会被当静音滤掉，导致大量行对不上",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "audio": {"type": "string", "description": "音频文件路径（wav/mp3/flac 均可）"},
+                    "lyrics": {"type": "string", "description": "歌词文本（含 [Verse] 等段落标记也行，会自动过滤）或歌词文件路径"},
+                    "out_dir": {"type": "string", "description": "可选：输出目录（默认与音频同目录）"},
+                    "model": {"type": "string", "description": "可选：ASR 模型（tiny/base/small/medium/large-v3，默认 medium）"},
+                    "language": {"type": "string", "description": "可选：语言代码（默认 zh）"},
+                    "no_vad": {"type": "boolean", "description": "可选：关闭 VAD（默认 true，强烈建议保持 true）"},
+                    "separate": {"type": "boolean", "description": "可选：先人声分离再对齐（更准但慢很多，默认 false）"},
+                    "segments_cache": {"type": "string", "description": "可选：复用 ASR 结果文件路径（免重跑 ASR）"},
+                    "timeout": {"type": "number", "description": "可选：ASR 超时秒数（默认 1800）"},
+                },
+                "required": ["audio", "lyrics"],
+            },
+        },
+    },
+    groups=['🎨 媒体与图像'],
+    phrases='歌词对轴（音频→时间轴）',
+    preactivate=(('歌词对齐', '对轴', '字幕时间轴', 'lrc', '歌词匹配', '歌词卡点'),),
+)
+def lyric_align(audio, lyrics, out_dir="", model="medium", language="zh",
+                no_vad=True, separate=False, segments_cache="", timeout=1800):
+    """把歌词对齐到音频真实时间轴，产出 LRC + mvrender 契约 timeline.json。
+
+    自检门禁（任一不过都会在返回里明确说明）：
+      · 对齐行数 / 总行数
+      · 时间轴单调无重叠
+      · 音频能量独立验证（每句区间内是否真有人声）
+    """
+    try:
+        from mvrender.core import align as _al
+    except Exception as e:
+        return f"错误：无法导入 mvrender.core.align（{type(e).__name__}: {e}）"
+
+    audio_p = os.path.abspath(str(audio or ""))
+    if not os.path.isfile(audio_p):
+        return f"错误：音频文件不存在：{audio_p}"
+
+    lyr = str(lyrics or "")
+    if os.path.isfile(lyr):                     # 传的是歌词文件路径
+        with open(lyr, encoding="utf-8", errors="ignore") as f:
+            lyr = f.read()
+    if not _al.parse_lyrics_text(lyr):
+        return "错误：歌词为空或全是段落标记"
+
+    if not _al.have_aligner():
+        return ("错误：未安装 lyric-align（对齐引擎）。安装：pip install lyric-align\n"
+                "提示：它专为 CJK / 歌唱人声设计，且不依赖 torch。")
+
+    od = os.path.abspath(out_dir or os.path.dirname(audio_p))
+    os.makedirs(od, exist_ok=True)
+    cache = str(segments_cache or "") or os.path.join(od, "asr_segments.json")
+
+    res = _al.align(audio_p, lyr, language=str(language or "zh"), model=str(model or "medium"),
+                    no_vad=bool(no_vad), separate=bool(separate),
+                    segments_cache=cache, timeout=float(timeout or 1800))
+
+    if not res["lines"]:
+        why = "；".join(res["warnings"]) or "未知原因"
+        return (f"错误：未对齐任何歌词行。{why}\n"
+                "优先排查：① 是否关闭 VAD（本工具默认已关）"
+                "② 模型是否太小（可换 medium/large-v3）③ 该音频是否确有人声")
+
+    # 段落标记 + 落盘
+    lines = _al.assign_sections(res["lines"])
+    base = os.path.splitext(os.path.basename(audio_p))[0]
+    tl_path = _al.write_timeline(lines, os.path.join(od, f"{base}_timeline.json"),
+                                 duration=0.0)
+    lrc_path = _al.write_lrc(lines, os.path.join(od, f"{base}.lrc"),
+                             meta={"ti": base, "by": "lyric-align"})
+
+    # 能量独立验证（分级判定：少量可疑属正常——渐弱收尾/气声段落本就能量低）
+    ver = _al.verify_against_audio(lines, audio_p)
+    n_ck = int(ver.get("checked") or 0)
+    n_sus = len(ver.get("suspect") or [])
+    sus_rate = (n_sus / n_ck) if n_ck else 0.0
+    voice_ok = bool(ver.get("ok")) or (n_ck > 0 and sus_rate <= 0.15)
+    voice_detail = (f"抽查 {n_ck} 句，可疑 {n_sus} 句（{sus_rate * 100:.0f}%）"
+                    + ("；可疑行多为渐弱收尾/气声段，属正常" if 0 < sus_rate <= 0.15 else "")
+                    + (f"；{ver.get('error')}" if ver.get("error") else ""))
+
+    rows = [(f"对齐 {res['matched']}/{res['total']} 行", res["matched"] > 0,
+             f"覆盖率 {res['matched'] / max(1, res['total']) * 100:.0f}%"),
+            ("时间轴单调", bool(res["monotonic"]),
+             "无重叠" if res["monotonic"] else "存在重叠，建议复核"),
+            ("人声验证", voice_ok, voice_detail)]
+    return _mv_report("lyric_align",
+                      {"时间轴": tl_path, "LRC": lrc_path, "ASR缓存": cache,
+                       "行数": res["matched"], "模型": str(model)},
+                      rows,
+                      extra=[f"未对齐提示：{w}" for w in res["warnings"]])
+
+
+# ============================================================================
+# 片头/片尾/角标字幕卡
+@tool(
+    {
+        "type": "function",
+        "function": {
+            "name": "mv_credits_card",
+            "description": "生成音乐 MV 的片头卡 / 片尾卡 / 左上角常驻角标（专辑名、歌名、演唱、制作人、出品与制作名单）。音乐 MV 的专业度底线——成片必须有作品信息字幕",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "out_dir": {"type": "string", "description": "输出目录（PNG 落盘位置）"},
+                    "album": {"type": "string", "description": "专辑名，如 《三更帖》"},
+                    "song": {"type": "string", "description": "歌名（片头用大字）"},
+                    "artist": {"type": "string", "description": "演唱，如 演唱：某某"},
+                    "producer": {"type": "string", "description": "制作人，如 制作人：某某"},
+                    "studio": {"type": "string", "description": "出品，如 出品：某某工作室"},
+                    "credits": {"type": "string", "description": "片尾制作名单，每行「角色|姓名」，如：作词|鲸语\\n作曲|鲸语"},
+                    "width": {"type": "number", "description": "可选：宽（默认 1080）"},
+                    "height": {"type": "number", "description": "可选：高（默认 1920）"},
+                    "title_dur": {"type": "number", "description": "可选：片头时长秒（默认 7）"},
+                    "end_dur": {"type": "number", "description": "可选：片尾时长秒（默认 9）"},
+                },
+                "required": ["out_dir"],
+            },
+        },
+    },
+    groups=['🎨 媒体与图像'],
+    phrases='片头片尾字幕卡',
+    preactivate=(('片头片尾', '制作人字幕', '片尾名单', '署名', '专辑信息', '角标'),),
+)
+def mv_credits_card(out_dir, album="", song="", artist="", producer="", studio="",
+                    credits="", width=1080, height=1920,
+                    title_dur=7.0, end_dur=9.0):
+    """渲染片头卡（中段）、片尾卡（中段）、角标三张 PNG，并做可读性自检。"""
+    try:
+        from mvrender.core import credits as _cr
+    except Exception as e:
+        return f"错误：无法导入 mvrender.core.credits（{type(e).__name__}: {e}）"
+    try:
+        from PIL import Image
+    except Exception as e:
+        return f"错误：需要 Pillow（{e}）"
+
+    od = os.path.abspath(str(out_dir or ""))
+    if not od:
+        return "错误：out_dir 必填"
+    os.makedirs(od, exist_ok=True)
+    w = clamp_int(width, 240, 4096, 1080)
+    h = clamp_int(height, 240, 4096, 1920)
+
+    pairs = []
+    for raw in str(credits or "").replace("\r", "\n").split("\n"):
+        raw = raw.strip()
+        if not raw:
+            continue
+        if "|" in raw:
+            role, name = raw.split("|", 1)
+        elif "：" in raw:
+            role, name = raw.split("：", 1)
+        else:
+            role, name = raw, ""
+        pairs.append((role.strip(), name.strip()))
+
+    info = _cr.CreditsInfo(album=str(album or ""), song=str(song or ""),
+                           artist=str(artist or ""), producer=str(producer or ""),
+                           studio=str(studio or ""), credits=pairs)
+
+    # 中间时刻取样（避开淡入淡出，保证可见性判断有效）
+    t_ti, t_en, t_tag = float(title_dur) * 0.45, float(end_dur) * 0.5, 1.0
+    jobs = [
+        ("片头卡.png", lambda: _cr.title_card(t_ti, w, h, info, dur=float(title_dur)),
+         t_ti, "title"),
+        ("片尾卡.png", lambda: _cr.end_card(t_en, w, h, info, dur=float(end_dur)),
+         t_en, "end"),
+        ("角标.png", lambda: _cr.corner_tag(t_tag, w, h,
+                                            f"{album} · {song}".strip(" ·")),
+         t_tag, "tag"),
+    ]
+    written, rows, warns = [], [], []
+    for fname, fn, t, kind in jobs:
+        path = os.path.join(od, fname)
+        Image.fromarray((fn() * 255).astype("uint8"), "RGB").save(path)
+        written.append(path)
+        chk = _cr.check_visible(fn, t, kind=kind)
+        rows.append((f"{kind} 可见", bool(chk.get("visible")),
+                     f"能量 {chk.get('energy')} / 阈值 {chk.get('threshold')}"))
+        if chk.get("error"):
+            warns.append(f"{fname}: {chk['error']}")
+
+    return _mv_report("mv_credits_card",
+                      {"输出目录": od, "文件": [os.path.basename(p) for p in written],
+                       "制作名单条数": len(pairs),
+                       "分辨率": f"{w}x{h}"},
+                      rows, extra=warns)

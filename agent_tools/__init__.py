@@ -153,6 +153,9 @@ __all__ = [
     'media_ffmpeg',
     'mv_compose',
     'mv_produce',
+    # MV 增强（mvrender 底座补齐）
+    'lyric_align',
+    'mv_credits_card',
     'team_run',
     'database_query_mysql',
     'database_query_postgres',

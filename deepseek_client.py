@@ -3669,6 +3669,8 @@ _TOOL_ORDER = [
     'chart_render', 'pdf_toolkit', 'design_kit', 'image_codegen',
     'image_inpaint', 'control_map', 'sprite_sheet', 'make_gif', 'image_hybrid',
     'hardware_accel',
+    # MV 增强（mvrender 底座补齐）：歌词真值对齐 + 片头片尾字幕卡
+    'lyric_align', 'mv_credits_card',
 ]
 
 _GROUP_ORDER = [
@@ -3720,6 +3722,8 @@ _HINT_ORDER = [
     ('做个gif', '生成gif', '动图', '逐帧动画'),
     ('混合渲染', '代码加质感', 'img2img', '结构加细节'),
     ('硬件', 'gpu', '显卡', '加速', '性能', 'benchmark', '显存', '利用率'),
+    ('歌词对齐', '对轴', '字幕时间轴', 'lrc', '歌词匹配', '歌词卡点'),
+    ('片头片尾', '制作人字幕', '片尾名单', '署名', '专辑信息', '角标'),
 ]
 
 TOOLS = build_tool_list(_TOOL_ORDER)
