@@ -6,6 +6,7 @@ import Composer from "./Composer.jsx";
 import SessionList from "./SessionList.jsx";
 import ContextPanel from "./ContextPanel.jsx";
 import StatusBar from "./StatusBar.jsx";
+import { Icon } from "./icons.jsx";
 import ConfirmGate from "./ConfirmGate.jsx";
 import AuxPanel from "./AuxPanel.jsx";
 import { BatchPanel, CmdPanel, TimelinePanel, FimPanel, VariantPanel, SearchPanel, StarPanel } from "./ChatPanels.jsx";
@@ -752,6 +753,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [variantPanel, setVariantPanel] = React.useState(false);
   const [timelinePanel, setTimelinePanel] = React.useState(false);
   const [cmdPanel, setCmdPanel] = React.useState(false);
+  const [moreOpen, setMoreOpen] = React.useState(false);
+  const moreRef = React.useRef(null);
   const [cmdQuery, setCmdQuery] = React.useState("");
   const [batchPanel, setBatchPanel] = React.useState(false);
   const [batchFiles, setBatchFiles] = React.useState("");
@@ -973,6 +976,22 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [active]);
+  // 顶栏「更多」菜单：点击外部 / Esc 关闭
+  React.useEffect(() => {
+    if (!moreOpen) return undefined;
+    const onDoc = (e) => {
+      if (moreRef.current && moreRef.current.contains(e.target)) return;
+      setMoreOpen(false);
+    };
+    const onKey = (e) => { if (e.key === "Escape") setMoreOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen]);
+
   const pendingRef = React.useRef({ text: "", images: [], files: [] });
   const historyRef = React.useRef([]);
   const stopSignalRef = React.useRef(null);
@@ -1794,104 +1813,123 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
               </svg>
             </button>
             <div className="chat-header-title">
-              <b>{activeId ? activeSession?.title || "历史会话" : "新会话"}</b>
+              <div className="cht-top">
+                <span
+                  className={`ch-live ${dataMode === "backend" ? "on" : "off"}`}
+                  role="img"
+                  aria-label={dataMode === "backend" ? "服务已连接" : "服务未连接"}
+                  title={dataMode === "backend" ? "服务已连接" : "服务未连接"}
+                />
+                <b>{activeId ? activeSession?.title || "历史会话" : "新会话"}</b>
+              </div>
               <span className="chat-header-sub">
                 {backendNote
                   ? backendNote
                   : activeId
                   ? `${activeSession?.model || ""} · ${activeSession?.time || ""}`
                   : isTask
-                  ? "🚀 任务模式：全部工具自动可用，目录内全自动"
-                  : "💬 对话模式：纯问答，不调用任何工具"}
+                  ? "任务模式：全部工具自动可用，目录内全自动"
+                  : "对话模式：纯问答，不调用任何工具"}
               </span>
             </div>
+
             <div className="chat-header-right">
-                          <button className="icon-btn" title="批量任务" aria-label="批量任务" onClick={() => setBatchPanel(true)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3M16 21h3a2 2 0 002-2v-3" />
-              </svg>
-            </button>
-            <button className="icon-btn" title="会话轨迹" aria-label="会话轨迹" onClick={() => setTimelinePanel(!timelinePanel)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M12 7v5l3 2" />
-              </svg>
-            </button>
-            <button className="icon-btn" title="回复变体" aria-label="回复变体" onClick={openVariants}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 6h16M4 12h16M4 18h7" />
-              </svg>
-            </button>
-            <button className="icon-btn" title="FIM 代码补全" aria-label="FIM 代码补全" onClick={() => setFimPanel(true)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-              </svg>
-            </button>
-            <button className="icon-btn" title="全局搜索" aria-label="全局搜索" onClick={() => setSearchPanel(!searchPanel)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4-4" />
-              </svg>
-            </button>
-            <button className="icon-btn" title="多选消息" aria-label="多选消息" onClick={toggleMulti} style={{ color: multiSel ? "var(--brand-strong)" : undefined }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
-                </svg>
-              </button>
-              <button className="icon-btn" title="收藏与固定" aria-label="收藏与固定" onClick={toggleStarPanel}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
-                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                </svg>
-              </button>
-              <div className="mode-switch" role="group" aria-label="工作模式">
+              {/* 主操作：模式切换 + 运行开关 */}
+              <div className="ch-actions">
+                <div className="mode-switch" role="group" aria-label="工作模式">
+                  <button
+                    className={`mode-btn ${!isTask ? "mode-on" : ""}`}
+                    aria-pressed={!isTask}
+                    onClick={() => isTask && switchMode("dialog")}
+                  >
+                    对话
+                  </button>
+                  <button
+                    className={`mode-btn ${isTask ? "mode-on" : ""}`}
+                    aria-pressed={isTask}
+                    onClick={() => !isTask && switchMode("task")}
+                  >
+                    任务
+                  </button>
+                </div>
+                {!isTask && (
+                  <button
+                    className={`web-switch ${webSearch ? "web-on" : ""}`}
+                    onClick={toggleWebSearch}
+                    title="对话模式联网搜索：开启后 AI 可实时搜索最新信息（天气/新闻/行情/网页），大幅减弱幻觉"
+                  >
+                    <span className={`web-dot ${webSearch ? "web-dot-on" : ""}`} />
+                    <span className="web-label">联网</span>
+                  </button>
+                )}
                 <button
-                  className={`mode-btn ${!isTask ? "mode-on" : ""}`}
-                  aria-pressed={!isTask}
-                  onClick={() => isTask && switchMode("dialog")}
+                  className={`web-switch ${quietMode ? "web-on" : ""}`}
+                  onClick={onToggleQuiet}
+                  title="纯净对话：开启后不注入长期记忆/核心自我/大脑，AI 以全新姿态应答，也不会自动写入记忆（设置 → 高级 可同步配置）"
                 >
-                  💬 对话模式
-                </button>
-                <button
-                  className={`mode-btn ${isTask ? "mode-on" : ""}`}
-                  aria-pressed={isTask}
-                  onClick={() => !isTask && switchMode("task")}
-                >
-                  🚀 任务模式
+                  <span className={`web-dot ${quietMode ? "web-dot-on" : ""}`} />
+                  <span className="web-label">纯净</span>
                 </button>
               </div>
-              {!isTask && (
-                <button
-                  className={`web-switch ${webSearch ? "web-on" : ""}`}
-                  onClick={toggleWebSearch}
-                  title="对话模式联网搜索：开启后 AI 可实时搜索最新信息（天气/新闻/行情/网页），大幅减弱幻觉"
-                >
-                  <span className={`web-dot ${webSearch ? "web-dot-on" : ""}`} />
-                  联网搜索
+
+              <span className="ch-sep" aria-hidden="true" />
+
+              {/* 高频面板 */}
+              <div className="ch-actions">
+                <button className="icon-btn" title="控制台（参数/文件/进程）" aria-label="控制台（参数/文件/进程）" onClick={() => setAuxOpen(!auxOpen)}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <path d="M3 9h18M3 15h18M9 3v18" />
+                  </svg>
                 </button>
-              )}
-              <button
-                className={`web-switch ${quietMode ? "web-on" : ""}`}
-                onClick={onToggleQuiet}
-                title="纯净对话：开启后不注入长期记忆/核心自我/大脑，AI 以全新姿态应答，也不会自动写入记忆（设置 → 高级 可同步配置）"
-              >
-                <span className={`web-dot ${quietMode ? "web-dot-on" : ""}`} />
-                纯净对话
-              </button>
-              <span className={`header-chip ${dataMode === "backend" ? "header-chip-brand" : ""}`}>
-                {dataMode === "backend" ? "已连接" : "未连接"}
-              </span>
-              <button className="icon-btn" title="控制台（参数/文件/进程）" aria-label="控制台（参数/文件/进程）" onClick={() => setAuxOpen(!auxOpen)}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M3 9h18M3 15h18M9 3v18" />
-                </svg>
-              </button>
-              <button className="icon-btn" title="上下文面板" aria-label="上下文面板" onClick={() => setCtxOpen(!ctxOpen)}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="4" width="18" height="16" rx="2" />
-                  <path d="M3 9h18M9 4v16" />
-                </svg>
-              </button>
+                <button className="icon-btn" title="上下文面板" aria-label="上下文面板" onClick={() => setCtxOpen(!ctxOpen)}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="4" width="18" height="16" rx="2" />
+                    <path d="M3 9h18M9 4v16" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* 低频工具溢出菜单 */}
+              <div className="ch-more" ref={moreRef}>
+                <button
+                  className={`icon-btn ${moreOpen ? "is-on" : ""}`}
+                  title="更多工具"
+                  aria-label="更多工具"
+                  aria-haspopup="menu"
+                  aria-expanded={moreOpen}
+                  onClick={() => setMoreOpen((v) => !v)}
+                >
+                  <Icon name="more" size={16} fill="currentColor" />
+                </button>
+                {moreOpen && (
+                  <div className="ch-menu" role="menu">
+                    <button role="menuitem" className="ch-menu-item" onClick={() => { setMoreOpen(false); setBatchPanel(true); }}>
+                      <Icon name="layers" size={15} /><span className="ch-menu-label">批量任务</span>
+                    </button>
+                    <button role="menuitem" className="ch-menu-item" onClick={() => { setMoreOpen(false); setTimelinePanel(!timelinePanel); }}>
+                      <Icon name="activity" size={15} /><span className="ch-menu-label">会话轨迹</span>
+                    </button>
+                    <button role="menuitem" className="ch-menu-item" onClick={() => { setMoreOpen(false); openVariants(); }}>
+                      <Icon name="git-branch" size={15} /><span className="ch-menu-label">回复变体</span>
+                    </button>
+                    <button role="menuitem" className="ch-menu-item" onClick={() => { setMoreOpen(false); setFimPanel(true); }}>
+                      <Icon name="code" size={15} /><span className="ch-menu-label">FIM 代码补全</span>
+                    </button>
+                    <button role="menuitem" className="ch-menu-item" onClick={() => { setMoreOpen(false); setSearchPanel(!searchPanel); }}>
+                      <Icon name="search" size={15} /><span className="ch-menu-label">全局搜索</span>
+                    </button>
+                    <button role="menuitem" className={`ch-menu-item ${multiSel ? "is-on" : ""}`} onClick={() => { setMoreOpen(false); toggleMulti(); }}>
+                      <Icon name="list" size={15} /><span className="ch-menu-label">多选消息</span>
+                      {multiSel && <Icon name="check" size={13} className="ch-menu-check" />}
+                    </button>
+                    <button role="menuitem" className={`ch-menu-item ${starPanel ? "is-on" : ""}`} onClick={() => { setMoreOpen(false); toggleStarPanel(); }}>
+                      <Icon name="star" size={15} /><span className="ch-menu-label">收藏与固定</span>
+                      {starPanel && <Icon name="check" size={13} className="ch-menu-check" />}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

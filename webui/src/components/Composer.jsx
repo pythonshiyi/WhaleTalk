@@ -35,9 +35,9 @@ const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|ico|avif|svg)$/i;
 
 export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask = true }, ref) {
   const [text, setText] = React.useState("");
-  const [slashOpen, setSlashOpen] = React.useState(false);
-  const [slashQuery, setSlashQuery] = React.useState("");  // 输入 /xxx 时的指令过滤词
-  const [promptOpen, setPromptOpen] = React.useState(false);
+  const [cmdOpen, setCmdOpen] = React.useState(false);   // 统一命令菜单（指令/命令/插件）
+  const [slashQuery, setSlashQuery] = React.useState("");  // 输入 /xxx 时的命令过滤词
+  const [focused, setFocused] = React.useState(false);
   const [dirOpen, setDirOpen] = React.useState(false);
   const [prompts, setPrompts] = React.useState([]);
   const [pluginTriggers, setPluginTriggers] = React.useState([]);
@@ -48,6 +48,8 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   const { toast } = React.useContext(ToastContext);
   const fileRef = React.useRef(null);
   const taRef = React.useRef(null);
+  const cmdEntryRef = React.useRef(null);
+  const dirBoxRef = React.useRef(null);
   const histRef = React.useRef([]);
   const histIdxRef = React.useRef(-1);
   const histDraftRef = React.useRef("");
@@ -67,6 +69,22 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   }, [busy]);
 
   React.useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+
+  // 命令 / 目录菜单：点击外部或 Esc 关闭（此前缺失，菜单会一直挂着）
+  React.useEffect(() => {
+    if (!cmdOpen && !dirOpen) return undefined;
+    const onDoc = (e) => {
+      if (cmdOpen && !(cmdEntryRef.current && cmdEntryRef.current.contains(e.target))) setCmdOpen(false);
+      if (dirOpen && !(dirBoxRef.current && dirBoxRef.current.contains(e.target))) setDirOpen(false);
+    };
+    const onKey = (e) => { if (e.key === "Escape") { setCmdOpen(false); setDirOpen(false); } };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [cmdOpen, dirOpen]);
 
   // 释放图片预览 blob URL（防长会话内存累积）：移除单条 / 发送后清空 / 组件卸载
   const revokeUrl = (a) => {
@@ -95,8 +113,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       t = t.replace(a, () => ans || "");
     }
     t = t.replace(/\{\{TEXT\}\}/g, () => seed);
-    setSlashOpen(false);
-    setPromptOpen(false);
+    setCmdOpen(false);
     setSlashQuery("");
     if (p.auto_send && String(t).trim()) {
       setText("");
@@ -136,22 +153,35 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       kind: "prompt", key: `p:${p.id}`,
       label: `${p.icon ? `${p.icon} ` : ""}${p.name}`,
       sub: p.shortcut || p.desc || String(p.text || "").slice(0, 22),
-      run: () => applyPrompt(p, true),
+      // 输入 /xxx 过滤时整段替换；点击按钮调用时保留已输入文本
+      run: () => applyPrompt(p, !!slashQuery),
     })),
     ...slashCmds.map((s) => ({
       kind: "cmd", key: `c:${s.cmd}`, label: s.cmd, sub: s.desc,
-      run: () => { setText(s.cmd === "/clear" ? "" : s.text); setSlashOpen(false); setSlashQuery(""); taRef.current?.focus(); },
+      run: () => { setText(s.cmd === "/clear" ? "" : s.text); setCmdOpen(false); setSlashQuery(""); taRef.current?.focus(); },
     })),
     ...pluginTriggers.map((s) => ({
       kind: "plugin", key: `g:${s}`, label: s, sub: "插件应用",
-      run: () => { setText(s + " "); setSlashOpen(false); taRef.current?.focus(); },
+      run: () => { setText(s + " "); setCmdOpen(false); taRef.current?.focus(); },
     })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ]), [slashPrompts, slashCmds, pluginTriggers, text]);
 
+  // 按类型分组渲染（键盘导航仍用扁平 slashItems 的全局下标）
+  const cmdGroups = React.useMemo(() => {
+    const labelByKind = { prompt: "指令", cmd: "命令", plugin: "插件" };
+    const groups = [];
+    slashItems.forEach((it, i) => {
+      let g = groups[groups.length - 1];
+      if (!g || g.kind !== it.kind) { g = { kind: it.kind, label: labelByKind[it.kind], items: [] }; groups.push(g); }
+      g.items.push({ it, i });
+    });
+    return groups;
+  }, [slashItems]);
+
   // 键盘导航：斜杠菜单高亮项（空菜单/查询变化时归零）
   const [slashIdx, setSlashIdx] = React.useState(0);
-  React.useEffect(() => { setSlashIdx(0); }, [slashQuery, slashOpen]);
+  React.useEffect(() => { setSlashIdx(0); }, [slashQuery, cmdOpen]);
 
   // ── 草稿持久化（对齐原程序：停止输入后保存，启动恢复）──
   React.useEffect(() => {
@@ -207,8 +237,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
   React.useImperativeHandle(ref, () => ({
     insertText: (t, focus = true) => {
       setText(t);
-      setSlashOpen(false);
-      setPromptOpen(false);
+      setCmdOpen(false);
       setDirOpen(false);
       if (focus) setTimeout(() => taRef.current?.focus(), 30);
     },
@@ -308,8 +337,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       return;
     }
     setText("");
-    setSlashOpen(false);
-    setPromptOpen(false);
+    setCmdOpen(false);
     // 历史记录（上限 200，去尾重复）
     const hist = histRef.current;
     if (v && hist[hist.length - 1] !== v) {
@@ -407,7 +435,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
 
   const onKey = (e) => {
     // 斜杠菜单开启时的键盘导航（↑↓ 选择 / Enter 确认），优先于「Enter 发送」
-    if (slashOpen && slashItems.length) {
+    if (cmdOpen && slashItems.length) {
       if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => Math.min(slashItems.length - 1, i + 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => Math.max(0, i - 1)); return; }
       if (e.key === "Enter" && !e.shiftKey) {
@@ -424,8 +452,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       submit();
     }
     if (e.key === "Escape") {
-      setSlashOpen(false);
-      setPromptOpen(false);
+      setCmdOpen(false);
       setDirOpen(false);
     }
     // B9 编辑器增强：Tab 缩进 / Shift+Tab 反缩进
@@ -525,14 +552,13 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
               e.target.value = "";
             }}
           />
-          <div className="dir-box">
-            <button className="cbtn" title="工作目录" aria-label="工作目录" aria-expanded={dirOpen} onClick={toggleDir}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-              </svg>
+          <span className="cbtn-sep" aria-hidden="true" />
+          <div className="dir-box" ref={dirBoxRef}>
+            <button className="cbtn" title="工作目录" aria-label="工作目录" aria-haspopup="menu" aria-expanded={dirOpen} onClick={toggleDir}>
+              <Icon name="folder" size={16} />
             </button>
             {dirOpen && (
-              <div className="dir-menu">
+              <div className="popmenu dir-menu" role="menu">
                 <div className="dir-current" title={dirs?.active_dir}>
                   <Icon name="folder" size={13} /> {dirs?.active_dir || "加载中…"}
                 </div>
@@ -549,52 +575,38 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
               </div>
             )}
           </div>
-          <div className="prompt-box">
-            <button className="cbtn" title="指令" aria-label="指令" aria-expanded={promptOpen} onClick={() => setPromptOpen(!promptOpen)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-              </svg>
+          <div className="cmd-entry" ref={cmdEntryRef}>
+            <button
+              className="cbtn"
+              title="命令（指令 / 斜杠 / 插件）"
+              aria-label="命令"
+              aria-haspopup="menu"
+              aria-expanded={cmdOpen}
+              onClick={() => { setCmdOpen((o) => !o); setSlashQuery(""); }}
+            >
+              <Icon name="command" size={16} />
             </button>
-            {promptOpen && (
-              <div className="slash-menu prompt-menu">
-                {usablePrompts.map((p) => (
-                  <div
-                    className="slash-item"
-                    key={p.id}
-                    title={p.desc || ""}
-                    onClick={() => applyPrompt(p)}
-                  >
-                    <b>{p.icon ? `${p.icon} ` : ""}{p.name}</b>
-                    <span>{p.desc || String(p.text || "").slice(0, 26)}</span>
-                  </div>
+            {cmdOpen && (
+              <div className="popmenu slash-menu" role="menu">
+                {cmdGroups.map((g) => (
+                  <React.Fragment key={g.kind}>
+                    <div className="slash-group-head">{g.label}</div>
+                    {g.items.map(({ it, i }) => (
+                      <div
+                        className={`slash-item ${i === slashIdx ? "slash-item-on" : ""}`}
+                        key={it.key}
+                        role="menuitem"
+                        onMouseEnter={() => setSlashIdx(i)}
+                        onClick={() => it.run()}
+                      >
+                        <span className="si-label">{it.label}</span>
+                        <span className="si-sub">{it.sub}</span>
+                      </div>
+                    ))}
+                  </React.Fragment>
                 ))}
-                {usablePrompts.length === 0 && (
-                  <div className="slash-item"><span>暂无指令（侧栏「指令库」可新建）</span></div>
-                )}
-              </div>
-            )}
-          </div>
-          <div className="slash-box">
-            <button className="cbtn" title="斜杠命令" aria-label="斜杠命令" aria-expanded={slashOpen} onClick={() => setSlashOpen(!slashOpen)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M4 9h16M4 15h16" />
-              </svg>
-            </button>
-            {slashOpen && (
-              <div className="slash-menu">
-                {slashItems.map((it, i) => (
-                  <div
-                    className={`slash-item ${i === slashIdx ? "slash-item-on" : ""}`}
-                    key={it.key}
-                    onMouseEnter={() => setSlashIdx(i)}
-                    onClick={() => it.run()}
-                  >
-                    <b>{it.label}</b>
-                    <span>{it.sub}</span>
-                  </div>
-                ))}
-                {slashItems.length === 0 && slashQuery && (
-                  <div className="slash-item"><span>无匹配指令</span></div>
+                {slashItems.length === 0 && (
+                  <div className="slash-empty">{slashQuery ? "无匹配命令" : "暂无指令（侧栏「指令库」可新建）"}</div>
                 )}
               </div>
             )}
@@ -608,18 +620,25 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
           onChange={(e) => {
             const v = e.target.value;
             setText(v);
-            // 输入 /xxx 自动唤起指令搜索（整行以 / 开头时）
+            // 输入 /xxx 自动唤起命令菜单（整行以 / 开头时）
             const m = /^\/(\S*)$/.exec(v);
             if (m) {
               setSlashQuery(m[1]);
-              setSlashOpen(true);
+              setCmdOpen(true);
             } else if (!v.startsWith("/")) {
               setSlashQuery("");
             }
           }}
           onKeyDown={onKey}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           rows={1}
         />
+        {tokens > 0 && !busy && (
+          <span className="composer-tok" title="估算 token 数（输入消耗参考）">
+            {tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : tokens} tok
+          </span>
+        )}
         {busy ? (
           <button className="send-btn send-stop" onClick={onStop} title="停止生成">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -634,22 +653,11 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
           </button>
         )}
       </div>
-      <div className="composer-hint">
-        <span>{tokens > 0 ? `约 ${tokens.toLocaleString()} token · ` : ""}Enter 发送 · Shift+Enter 换行 · Alt+↑↓ 历史</span>
-        <span className="composer-hint-right">
-          {isTask ? (
-            <>
-              <span className="mode-chip">🚀 任务模式</span>
-              <span className="mode-chip">🔧 工具自动可用</span>
-            </>
-          ) : (
-            <>
-              <span className="mode-chip">💬 对话模式</span>
-              <span className="mode-chip">纯问答 · 不调用工具</span>
-            </>
-          )}
-        </span>
-      </div>
+      {focused && !text.trim() && attachments.length === 0 && (
+        <div className="composer-hint">
+          <span>Enter 发送 · Shift+Enter 换行 · / 唤起命令 · Alt+↑↓ 历史</span>
+        </div>
+      )}
     </div>
   );
 });
