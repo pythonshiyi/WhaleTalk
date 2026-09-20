@@ -177,12 +177,17 @@ class GPUCanvas:
         self._upload_host()
 
     # ── GPU 端光栅化（批量图元，CPU 只传参数）──────────────────────
-    def _blur_and_add_field(self, b_layer, color, gain, blur):
-        """单通道图层（device）→ 可选高斯 → ×颜色×gain 合成到画布。全 GPU。"""
+    def _blur_and_add_field(self, b_layer, color, gain, blur, blur_n=None):
+        """单通道图层（device）→ 可选高斯 → ×颜色×gain 合成到画布。全 GPU。
+
+        blur_n 指定降采样倍率（用于对齐 vis_core.glow_layer 的 scale=6 语义：
+        glow_layer = resize(1/N) → blur(σ/N) → resize(N)，与 gauss_blur1_ds(n=N,
+        sigma) 完全对应）。
+        """
         from . import ops
         if blur and blur > 0:
-            ops.gauss_blur1(self.rt, b_layer, b_layer, float(blur), self.w, self.h,
-                            tmp="elems_blur")
+            ops.gauss_blur1_ds(self.rt, b_layer, b_layer, float(blur), self.w, self.h,
+                               n=blur_n)
         b = self.rt.buf(self._bname, self.n3 * 4)
         c = np.asarray(color, np.float32)
         self.rt.run("k_add_field", self.n3, b, b_layer,
@@ -190,33 +195,89 @@ class GPUCanvas:
                     np.float32(float(gain)))
         self._mark_device_dirty()
 
-    def rasterize(self, rects=None, lines=None, circles=None,
-                  color=(1.0, 1.0, 1.0), gain=1.0, blur=0.0):
+    MAXV = 8      # 多边形最大顶点数（street_lamp 光锥 4 点足够）
+
+    def rasterize(self, rects=None, lines=None, circles=None, polys=None,
+                  stroke_rects=None, round_rects=None,
+                  color=(1.0, 1.0, 1.0), gain=1.0, blur=0.0, blur_n=None):
         """批量图元光栅化到**同一图层**（累积 max）→ 可选模糊 → 乘色合成。
 
         合并到同一图层很关键：rects 与 lines 若分两次 blur+add，边界处会与
         「全部图元一起模糊」有差异（实测 city_skyline max 55/255）；合并后
         与 CPU 一致（max 0.28，0 像素 >0.5）。
+
+        图元格式：
+          rects        [(x0,y0,x1,y1,alpha), ...]          闭区间填充
+          lines        [(x0,y0,x1,y1,thick,alpha), ...]    圆头 SDF AA
+          circles      [(cx,cy,r,alpha), ...]              SDF AA
+          polys        [([(x,y),...], alpha), ...]         射线法填充
+          stroke_rects [(x0,y0,x1,y1,thick,alpha), ...]    矩形边框 SDF AA
+          round_rects  [(x0,y0,x1,y1,radius,alpha), ...]   圆角矩形 SDF AA
         """
         self._flush_host()
         b_l = self.rt.buf("elems_layer", self.rt.npix * 4)
         self.rt.run("k_mul_scalar", self.rt.npix, b_l, np.float32(0.0))   # 清零
         if rects:
             rects = list(rects)
-            arr = np.asarray(rects, np.float32).reshape(-1)
-            b_r = self.rt.up(arr, "elems_rects")
+            b_r = self.rt.up(np.asarray(rects, np.float32).reshape(-1), "elems_rects")
             self.rt.run("k_fill_rects", self.rt.npix, b_l, b_r, len(rects), self.w, self.h)
+        if round_rects:
+            round_rects = list(round_rects)
+            b_r = self.rt.up(np.asarray(round_rects, np.float32).reshape(-1), "elems_rrects")
+            self.rt.run("k_round_rects", self.rt.npix, b_l, b_r,
+                        len(round_rects), self.w, self.h)
+        if stroke_rects:
+            stroke_rects = list(stroke_rects)
+            b_r = self.rt.up(np.asarray(stroke_rects, np.float32).reshape(-1), "elems_srects")
+            self.rt.run("k_stroke_rects", self.rt.npix, b_l, b_r,
+                        len(stroke_rects), self.w, self.h)
         if lines:
             lines = list(lines)
-            arr = np.asarray(lines, np.float32).reshape(-1)
-            b_r = self.rt.up(arr, "elems_lines")
+            b_r = self.rt.up(np.asarray(lines, np.float32).reshape(-1), "elems_lines")
             self.rt.run("k_draw_lines", self.rt.npix, b_l, b_r, len(lines), self.w, self.h)
         if circles:
             circles = list(circles)
-            arr = np.asarray(circles, np.float32).reshape(-1)
-            b_r = self.rt.up(arr, "elems_circles")
+            b_r = self.rt.up(np.asarray(circles, np.float32).reshape(-1), "elems_circles")
             self.rt.run("k_fill_circles", self.rt.npix, b_l, b_r, len(circles), self.w, self.h)
-        self._blur_and_add_field(b_l, color, gain, blur)
+        if polys:
+            mv = self.MAXV
+            stride = 1 + 2 * mv + 1
+            arr = np.zeros((len(polys), stride), np.float32)
+            for i, pl in enumerate(polys):
+                pts, a = (pl[0], pl[1]) if isinstance(pl, tuple) else (pl, 1.0)
+                n = min(len(pts), mv)
+                arr[i, 0] = n
+                for j in range(n):
+                    arr[i, 1 + 2 * j] = pts[j][0]
+                    arr[i, 1 + 2 * j + 1] = pts[j][1]
+                arr[i, stride - 1] = a
+            b_r = self.rt.up(arr.reshape(-1), "elems_polys")
+            self.rt.run("k_fill_polys", self.rt.npix, b_l, b_r,
+                        len(polys), mv, self.w, self.h)
+        self._blur_and_add_field(b_l, color, gain, blur, blur_n)
+
+    def add_text_mask(self, mask, x0, y0, color=(1.0, 1.0, 1.0), gain=1.0):
+        """把 CPU 渲染的字形遮罩（单通道局部数组）乘色加到画布区域（GPU 合成）。
+
+        文字字形仍由 PIL 在 CPU 生成（量小、有缓存），但混合走 GPU 区域 kernel，
+        避免把整帧画布回读/重传。
+        """
+        self._flush_host()
+        m = np.ascontiguousarray(mask, np.float32)
+        if m.ndim == 3:
+            m = m[:, :, 0]
+        rh, rw = m.shape[:2]
+        rw = min(rw, self.w - x0)
+        rh = min(rh, self.h - y0)
+        if rw <= 0 or rh <= 0:
+            return
+        b_m = self.rt.up(m[:rh, :rw].reshape(-1), "txt_mask")
+        b = self.rt.buf(self._bname, self.n3 * 4)
+        c = np.asarray(color, np.float32)
+        self.rt.run("k_add_text_region", rh * rw * 3, b, b_m, x0, y0, rw, rh, self.w,
+                    np.float32(c[0]), np.float32(c[1]), np.float32(c[2]),
+                    np.float32(float(gain)))
+        self._mark_device_dirty()
 
     def fill_rects(self, rects, color=(1.0, 1.0, 1.0), gain=1.0, blur=0.0):
         """批量矩形光栅化 + 可选模糊 + 乘色合成（CPU 只上传图元参数）。
@@ -230,6 +291,9 @@ class GPUCanvas:
         arr = np.asarray(rects, np.float32).reshape(-1)
         b_r = self.rt.up(arr, "elems_rects")
         b_l = self.rt.buf("elems_layer", self.rt.npix * 4)
+        # 【必须清零】光栅化 kernel 是 fmax 累积（供 rasterize 合并多类图元），
+        # 单 API 若不清零会累积到缓冲池的残留数据（实测线段覆盖面积虚高 9 倍）。
+        self.rt.run("k_mul_scalar", self.rt.npix, b_l, np.float32(0.0))
         self.rt.run("k_fill_rects", self.rt.npix, b_l, b_r, len(rects), self.w, self.h)
         self._blur_and_add_field(b_l, color, gain, blur)
 
@@ -245,6 +309,7 @@ class GPUCanvas:
         arr = np.asarray(lines, np.float32).reshape(-1)
         b_r = self.rt.up(arr, "elems_lines")
         b_l = self.rt.buf("elems_layer", self.rt.npix * 4)
+        self.rt.run("k_mul_scalar", self.rt.npix, b_l, np.float32(0.0))   # 清零（见下）
         self.rt.run("k_draw_lines", self.rt.npix, b_l, b_r, len(lines), self.w, self.h)
         self._blur_and_add_field(b_l, color, gain, blur)
 
@@ -260,8 +325,41 @@ class GPUCanvas:
         arr = np.asarray(circles, np.float32).reshape(-1)
         b_r = self.rt.up(arr, "elems_circles")
         b_l = self.rt.buf("elems_layer", self.rt.npix * 4)
+        self.rt.run("k_mul_scalar", self.rt.npix, b_l, np.float32(0.0))   # 清零（见下）
         self.rt.run("k_fill_circles", self.rt.npix, b_l, b_r, len(circles), self.w, self.h)
         self._blur_and_add_field(b_l, color, gain, blur)
+
+    def over_region(self, layer, x0, y0, op=1.0, mask=None):
+        """局部图层 over 贴图：dst = dst*(1-a) + layer*a，a = op（可乘 mask）。
+
+        等价 vis_core.layer_alpha 的 over 模式，但走 GPU 区域 kernel（两步：
+        mul_region(1-a) + add_region(layer*a)），不触发画布整帧回读。
+        """
+        self._flush_host()
+        sub = layer[:, :, None] if layer.ndim == 2 else np.asarray(layer, np.float32)
+        sub = np.ascontiguousarray(sub, np.float32)
+        h, w = sub.shape[:2]
+        rw = min(w, self.w - x0)
+        rh = min(h, self.h - y0)
+        if rw <= 0 or rh <= 0:
+            return
+        sub = sub[:rh, :rw]
+        b = self.rt.buf(self._bname, self.n3 * 4)
+        b_lay = self.rt.up(sub.reshape(-1), "region_tmp3")
+        if mask is None:
+            # 单 kernel over（与 CPU layer_alpha 的 over 分支逐像素一致）
+            self.rt.run("k_region_over", rh * rw * 3, b, b_lay, np.float32(float(op)),
+                        x0, y0, rw, rh, self.w)
+        else:
+            # 带 mask：a 逐像素，走 over(mode=0) 的 alpha 版
+            mm = np.ascontiguousarray(mask[:rh, :rw], np.float32)
+            if mm.ndim == 3:
+                mm = mm[:, :, 0]
+            mm = mm * float(op)
+            b_m = self.rt.up(mm.reshape(-1), "region_tmp4")
+            self.rt.run("k_region_mode", rh * rw * 3, b, b_lay, b_m, 1,
+                        x0, y0, rw, rh, self.w, 0)
+        self._mark_device_dirty()
 
     def mul_region(self, layer, x0, y0, mode="mul"):
         """区域就地缩放/覆盖（纯 GPU）：buf[区域] *= layer（mode=mul）。"""

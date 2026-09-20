@@ -33,6 +33,17 @@ static inline float clampf(float v, float lo, float hi)
     return (v < lo) ? lo : ((v > hi) ? hi : v);
 }
 
+/* REFLECT_101 边界索引（循环反射），与 cv2 BORDER_DEFAULT 一致。
+   idx 映射：... 2 1 | 0 1 2 ... n-1 | n-2 n-3 ...（端点不重复）。 */
+static inline int reflect101(int idx, int n)
+{
+    if (n <= 1) return 0;
+    const int span = 2 * (n - 1);
+    int i = idx % span;
+    if (i < 0) i += span;
+    return (i < n) ? i : (span - i);
+}
+
 /* ───────────────────── 画布合成 ───────────────────── */
 
 /* buf += layer */
@@ -243,9 +254,10 @@ __kernel void k_gauss_h(__global const float *src,
     const int y = pix / w;
     float acc = 0.0f;
     for (int k = -rad; k <= rad; k++) {
-        int xx = x + k;
-        if (xx < 0) xx = 0;
-        if (xx >= w) xx = w - 1;
+        /* REFLECT_101（循环反射，与 cv2.GaussianBlur 默认 BORDER_DEFAULT 一致）。
+           大核（核长 > 图尺寸，如 glow 降采样后 σ=30 in 135px）时边界差异极大：
+           REPLICATE 会让均值整体偏移（实测 phone_body glow 全屏 MAE 1.14）。 */
+        int xx = reflect101(x + k, w);
         acc += src[y * w + xx] * kern[k + rad];
     }
     dst[pix] = acc;
@@ -262,9 +274,7 @@ __kernel void k_gauss_v(__global const float *src,
     const int y = pix / w;
     float acc = 0.0f;
     for (int k = -rad; k <= rad; k++) {
-        int yy = y + k;
-        if (yy < 0) yy = 0;
-        if (yy >= h) yy = h - 1;
+        int yy = reflect101(y + k, h);
         acc += src[yy * w + x] * kern[k + rad];
     }
     dst[pix] = acc;
@@ -283,9 +293,7 @@ __kernel void k_gauss3_h(__global const float *src,
     const int y = pix / w;
     float acc = 0.0f;
     for (int k = -rad; k <= rad; k++) {
-        int xx = x + k;
-        if (xx < 0) xx = 0;
-        if (xx >= w) xx = w - 1;
+        int xx = reflect101(x + k, w);
         acc += src[(y * w + xx) * 3 + c] * kern[k + rad];
     }
     dst[i] = acc;
@@ -303,9 +311,7 @@ __kernel void k_gauss3_v(__global const float *src,
     const int y = pix / w;
     float acc = 0.0f;
     for (int k = -rad; k <= rad; k++) {
-        int yy = y + k;
-        if (yy < 0) yy = 0;
-        if (yy >= h) yy = h - 1;
+        int yy = reflect101(y + k, h);
         acc += src[(yy * w + x) * 3 + c] * kern[k + rad];
     }
     dst[i] = acc;
@@ -483,8 +489,8 @@ __kernel void k_draw_lines(__global float *layer,
                            const int n, const int w, const int h)
 {
     const int pix = get_global_id(0);
-    const int px = pix % w;
-    const int py = pix / w;
+    const float px = (float)(pix % w);
+    const float py = (float)(pix / w);
     float v = 0.0f;
     for (int i = 0; i < n; i++) {
         const float ax = lines[i * 6 + 0], ay = lines[i * 6 + 1];
@@ -493,21 +499,134 @@ __kernel void k_draw_lines(__global float *layer,
         const float a = lines[i * 6 + 5];
         const float dx = bx - ax, dy = by - ay;
         const float len2 = dx * dx + dy * dy + 1e-6f;
-        float t = ((float)px - ax) * dx + ((float)py - ay) * dy;
-        t = t / len2;
-        if (t < 0.0f) t = 0.0f;
-        if (t > 1.0f) t = 1.0f;
-        const float qx = ax + t * dx - (float)px;
-        const float qy = ay + t * dy - (float)py;
-        const float d = sqrt(qx * qx + qy * qy);
-        /* SDF 抗锯齿（1px 过渡），逼近 cv2.LINE_AA —— 硬边 DDA 与 AA 在斜线边缘
-           有 ~55/255 的可辨差异（实测），加 AA 后收敛到边缘级。 */
-        const float aa = clampf(th * 0.5f + 0.5f - d, 0.0f, 1.0f);
-        if (aa > 0.0f) {
-            v = fmax(v, a * aa);
+        /* cv2.LINE_AA 的实际线宽 ≈ thickness + 2（两侧各扩展约 1px 的 AA），
+           实测 thickness=8 的覆盖是 600×10.2 而非 600×8。半径按此补偿。 */
+        const float r = th * 0.5f + 0.5f;
+        /* 2×2 超采样覆盖率：比线性 SDF 更接近 cv2 的真实覆盖。 */
+        float cov = 0.0f;
+        for (int oy = 0; oy < 2; oy++) {
+            for (int ox = 0; ox < 2; ox++) {
+                const float sx = px + 0.25f + 0.5f * (float)ox;
+                const float sy = py + 0.25f + 0.5f * (float)oy;
+                float t = ((sx - ax) * dx + (sy - ay) * dy) / len2;
+                t = clampf(t, 0.0f, 1.0f);
+                const float qx = ax + t * dx - sx;
+                const float qy = ay + t * dy - sy;
+                if (sqrt(qx * qx + qy * qy) <= r) cov += 0.25f;
+            }
+        }
+        if (cov > 0.0f) {
+            v = fmax(v, a * cov);
         }
     }
     layer[pix] = fmax(layer[pix], v);
+}
+
+/* 批量多边形填充（射线法）。
+   polys 每条占固定 stride = 1 + 2*maxv + 1： [n, x0,y0, x1,y1, ..., a]，
+   不足的顶点位补 0（n 决定实际顶点数）。无 AA（调用方通常还会 blur，AA 无意义）。 */
+__kernel void k_fill_polys(__global float *layer,
+                           __global const float *polys,
+                           const int m, const int maxv,
+                           const int w, const int h)
+{
+    const int pix = get_global_id(0);
+    const float px = (float)(pix % w);
+    const float py = (float)(pix / w);
+    const int stride = 1 + 2 * maxv + 1;
+    float v = layer[pix];
+    for (int i = 0; i < m; i++) {
+        const int off = i * stride;
+        const int n = (int)polys[off];
+        if (n < 3) continue;
+        /* alpha 固定在 stride 最后一格（与打包端一致，勿用 1+2n） */
+        const float a = polys[off + stride - 1];
+        int inside = 0;
+        for (int j = 0; j < n; j++) {
+            const int k2 = (j + 1 == n) ? 0 : (j + 1);
+            const float x1 = polys[off + 1 + 2 * j];
+            const float y1 = polys[off + 1 + 2 * j + 1];
+            const float x2 = polys[off + 1 + 2 * k2];
+            const float y2 = polys[off + 1 + 2 * k2 + 1];
+            if (((y1 > py) != (y2 > py)) &&
+                (px < (x2 - x1) * (py - y1) / (y2 - y1 + 1e-9f) + x1)) {
+                inside = !inside;
+            }
+        }
+        if (inside) v = fmax(v, a);
+    }
+    layer[pix] = v;
+}
+
+/* 批量矩形**边框**：rects = [x0,y0,x1,y1,thickness,a]*n（1px SDF 抗锯齿）。
+
+   语义与 cv2.rectangle(..., thickness, LINE_AA) 对齐：描边**居中于矩形边界线**，
+   即边框带为 |d_rect| ≈ th/2。d_rect 为标准矩形 SDF（内负外正）。
+   【踩坑】早期用「内距/外距取小」的写法在角点与边宽上都不等价，与 cv2 差 77/255。 */
+__kernel void k_stroke_rects(__global float *layer,
+                             __global const float *rects,
+                             const int n, const int w, const int h)
+{
+    const int pix = get_global_id(0);
+    const float px = (float)(pix % w) + 0.5f;
+    const float py = (float)(pix / w) + 0.5f;
+    float v = layer[pix];
+    for (int i = 0; i < n; i++) {
+        const float x0 = rects[i * 6 + 0], y0 = rects[i * 6 + 1];
+        const float x1 = rects[i * 6 + 2], y1 = rects[i * 6 + 3];
+        const float th = rects[i * 6 + 4], a = rects[i * 6 + 5];
+        const float dx = fabs(px - (x0 + x1) * 0.5f) - (x1 - x0) * 0.5f;
+        const float dy = fabs(py - (y0 + y1) * 0.5f) - (y1 - y0) * 0.5f;
+        const float ax = fmax(dx, 0.0f), ay = fmax(dy, 0.0f);
+        const float d_rect = sqrt(ax * ax + ay * ay) + fmin(fmax(dx, dy), 0.0f);
+        const float d = fabs(d_rect) - th * 0.5f;      /* 到边框中心线的距离 */
+        const float aa = clampf(0.5f - d, 0.0f, 1.0f);
+        if (aa > 0.0f) v = fmax(v, a * aa);
+    }
+    layer[pix] = v;
+}
+
+/* 批量圆角矩形填充：rounds = [x0,y0,x1,y1,radius,a]*n（1px SDF 抗锯齿） */
+__kernel void k_round_rects(__global float *layer,
+                            __global const float *rounds,
+                            const int n, const int w, const int h)
+{
+    const int pix = get_global_id(0);
+    const float px = (float)(pix % w) + 0.5f;
+    const float py = (float)(pix / w) + 0.5f;
+    float v = layer[pix];
+    for (int i = 0; i < n; i++) {
+        const float x0 = rounds[i * 6 + 0], y0 = rounds[i * 6 + 1];
+        const float x1 = rounds[i * 6 + 2], y1 = rounds[i * 6 + 3];
+        const float r = rounds[i * 6 + 4], a = rounds[i * 6 + 5];
+        const float dx = fabs(px - (x0 + x1) * 0.5f) - ((x1 - x0) * 0.5f - r);
+        const float dy = fabs(py - (y0 + y1) * 0.5f) - ((y1 - y0) * 0.5f - r);
+        const float ax = fmax(dx, 0.0f), ay = fmax(dy, 0.0f);
+        const float d = sqrt(ax * ax + ay * ay) + fmin(fmax(dx, dy), 0.0f) - r;
+        const float aa = clampf(0.5f - d, 0.0f, 1.0f);
+        if (aa > 0.0f) v = fmax(v, a * aa);
+    }
+    layer[pix] = v;
+}
+
+/* 文字遮罩区域合成：把 CPU 渲染的字形 mask（HxW，已裁剪到区域）乘色加到画布区域。
+   mask 为 (rh*rw) 单通道，buf 为画布 3 通道 */
+__kernel void k_add_text_region(__global float *buf,
+                                __global const float *mask,
+                                const int x0, const int y0,
+                                const int rw, const int rh, const int cw,
+                                const float cb, const float cg, const float cr,
+                                const float gain)
+{
+    const int i = get_global_id(0);
+    const int pix = i / 3;
+    const int c = i % 3;
+    const int x = pix % rw;
+    const int y = pix / rw;
+    const float m = mask[pix] * gain;
+    const float col = (c == 0) ? cb : ((c == 1) ? cg : cr);
+    const long di = ((long)(y0 + y) * cw + (x0 + x)) * 3 + c;
+    buf[di] += m * col;
 }
 
 /* 批量实心圆：circles = [cx,cy,r,a]*n */
@@ -578,6 +697,23 @@ __kernel void k_rain(__global float *buf,
     const float t = tex[sy * w + sx];
     const float col = (c == 0) ? cb : ((c == 1) ? cg : cr);
     buf[i] += t * col;
+}
+
+/* 区域 over 合成（标量 a）：buf[区域] = buf*(1-a) + layer*a
+   与 vis_core.layer_alpha 的 over 分支逐像素一致（单 kernel，避免两步分解
+   带来的浮点顺序差异 —— 实测两步版在整片累积出 MAE ~1.0）。 */
+__kernel void k_region_over(__global float *buf,
+                            __global const float *layer,
+                            const float a,
+                            const int x0, const int y0,
+                            const int rw, const int rh, const int cw)
+{
+    const int i = get_global_id(0);
+    const int pix = i / 3;
+    const int x = pix % rw;
+    const int y = pix / rw;
+    const long di = ((long)(y0 + y) * cw + (x0 + x)) * 3 + (i % 3);
+    buf[di] = buf[di] * (1.0f - a) + layer[i] * a;
 }
 
 /* 区域覆盖 / 相乘（mode: 0=over, 1=mul） */

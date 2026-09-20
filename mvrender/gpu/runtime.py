@@ -31,8 +31,9 @@ _KERNEL_NAMES = (
     "k_gauss_h", "k_gauss_v", "k_gauss3_h", "k_gauss3_v",
     "k_warp3", "k_resize1", "k_resize3", "k_layer_over",
     "k_scale1", "k_downsample1", "k_box_h", "k_box_v", "k_add_field", "k_mist",
-    "k_add_region", "k_region_mode", "k_rain",
+    "k_add_region", "k_region_mode", "k_region_over", "k_rain",
     "k_fill_rects", "k_draw_lines", "k_fill_circles",
+    "k_fill_polys", "k_stroke_rects", "k_round_rects", "k_add_text_region",
 )
 
 
