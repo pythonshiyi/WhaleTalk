@@ -35,6 +35,7 @@ from shared import (  # D4: 参数校验辅助
     RUN_PY_TIMEOUT,
     TOOL_RESULT_FAIL_PREFIXES,
     clamp_int,
+    find_code_placeholder,
 )
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
@@ -1061,6 +1062,21 @@ def write_code_project(project_dir, files):
     if len(files) > 50:
         return "错误：文件数超过 50 上限"
     base = permissions.resolve(project_dir)
+    # 省略占位预检：先在写盘前统一拦截，避免留下半成品工程
+    _phs = []
+    for f in files[:50]:
+        if not isinstance(f, dict):
+            continue
+        rel = str(f.get("path") or "").strip().replace("\\", "/")
+        hit = find_code_placeholder(rel, f.get("content") or "")
+        if hit:
+            _phs.append(f"{rel or '?'}：命中「{hit}」")
+    if _phs:
+        return (
+            "错误：检测到省略占位，write_code_project 要求给出完整内容（禁止 .../省略/其余不变）：\n"
+            + "\n".join("· " + x for x in _phs)
+            + "\n请补全后重写，或用 edit_file 做局部修改。"
+        )
     created = []
     failed = []
     total = 0

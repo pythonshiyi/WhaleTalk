@@ -271,6 +271,7 @@ def test_write_file_declares_kernel_change(sandbox):
     tfiles = _tools()
     tk_, root = sandbox
     target = _enable_extra(sandbox, root, "guard_x.py")
+    tfiles.read_file(str(target))  # 编码护栏：改已有文件前须先读取
     out = tfiles.write_file(str(target), "# v2 经工具层改写\n")
     assert "已写入" in out
     assert "已登记为信任内核声明改动" in out
@@ -284,6 +285,7 @@ def test_edit_file_declares_kernel_change(sandbox):
     tfiles = _tools()
     tk_, root = sandbox
     target = _enable_extra(sandbox, root, "guard_y.py")
+    tfiles.read_file(str(target))  # 编码护栏：改已有文件前须先读取
     out = tfiles.edit_file(str(target), old="# v1 guard_y.py", new="# v2 编辑过")
     assert "已替换" in out and "已登记为信任内核声明改动" in out
     assert "v2 编辑过" in target.read_text(encoding="utf-8")

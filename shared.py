@@ -418,6 +418,44 @@ EDIT_FILE_MAX_SIZE = _env_int("EDIT_FILE_MAX_SIZE", 20 * 1024 * 1024)  # edit_fi
 
 EDIT_FILE_REGEX_MAX = _env_int("EDIT_FILE_REGEX_MAX", 1000)  # 正则长度上限（防灾难性回溯挂死工具线程的粗略防线）
 
+# ── 编码护栏：代码文件里的「省略占位」检测（write_file / write_code_project 共用）──
+# 只看强信号，宁可少报也不误伤散文/日志里的 "..."；仅对代码类扩展名生效。
+CODE_EXTS = frozenset({
+    ".py", ".pyi", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".svelte",
+    ".java", ".kt", ".go", ".rs", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".rb",
+    ".php", ".swift", ".scala", ".lua", ".r", ".m", ".sql", ".sh", ".bash", ".ps1",
+    ".bat", ".cmd", ".html", ".htm", ".css", ".scss", ".less", ".json", ".yaml", ".yml",
+})
+
+# 注释/中文省略话术：所有代码文件都判（"# ... 省略"、"// 其余不变" 等）
+_PLACEHOLDER_COMMENT_PATTERNS = (
+    re.compile(r"^[ \t]*(#|//|/\*|\*|<!--)[ \t]*(\.\.\.|…|省略|其余不变|其余代码不变|此处省略)", re.M),
+    re.compile(r"(省略若干|其余代码不变|其余不变|此处省略|（略|\(略)"),
+)
+# 裸省略行：Python 的 `...` 是合法 Ellipsis（stub/Protocol 常用），不判；
+# 其余语言里孤零零一行 .../… 基本就是"省略"，判。
+_PLACEHOLDER_BARE_LINE = re.compile(r"^[ \t]*(\.\.\.|…)[ \t]*$", re.M)
+
+
+def find_code_placeholder(path, content):
+    """代码文件内容里的省略占位检测，返回命中的片段（无则空串）。"""
+    try:
+        ext = os.path.splitext(str(path))[1].lower()
+    except Exception:
+        return ""
+    if ext not in CODE_EXTS:
+        return ""
+    s = str(content)
+    for pat in _PLACEHOLDER_COMMENT_PATTERNS:
+        m = pat.search(s)
+        if m:
+            return m.group(0).strip()[:40]
+    if ext not in (".py", ".pyi"):
+        m = _PLACEHOLDER_BARE_LINE.search(s)
+        if m:
+            return m.group(0).strip()[:40]
+    return ""
+
 EXTRACT_MAX_ENTRIES = _env_int("EXTRACT_MAX_ENTRIES", 10000)  # 解压条目数上限（防 zip 海量小文件 DoS）
 
 EXTRACT_MAX_TOTAL_BYTES = _env_int("EXTRACT_MAX_TOTAL_BYTES", 2 * 1024 * 1024 * 1024)  # 解压总字节上限（防磁盘写满）

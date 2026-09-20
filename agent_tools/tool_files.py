@@ -5,6 +5,7 @@
 仅剩余辅助函数仍依赖主文件加载顺序契约（在 `from agent_tools import *` 前已定义）。
 """
 
+import ast
 import json
 import os
 import re
@@ -33,6 +34,7 @@ from shared import (  # D4: 参数校验辅助
     READ_FILE_MAX_BYTES,
     READ_LINE_MAX,
     clamp_int,
+    find_code_placeholder,
     over_limit,
 )
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
@@ -125,6 +127,100 @@ def _write_with_encoding(path, content, enc):
         raise
 
 
+# ── 编码护栏（防盲改 / 防省略 / 防坏语法；不限制 AI 自主决策，只保证写对）──
+# 改前必读：仅对「已存在且本进程未读过/未写过」的文件生效，工具自身写入后即登记，
+# 因此不会让 AI 为自己刚建的文件多做一次读取；可用 WHALETALK_READ_BEFORE_WRITE=0 关闭。
+_READ_STATE = {}                      # abspath(normcase) -> (mtime_ns, size)
+_READ_STATE_LOCK = threading.Lock()
+
+def _read_before_write_enabled():
+    return os.environ.get("WHALETALK_READ_BEFORE_WRITE", "1").strip().lower() not in ("0", "false", "no", "")
+
+
+def _auto_lint_enabled():
+    return os.environ.get("WHALETALK_AUTO_LINT", "1").strip().lower() not in ("0", "false", "no", "")
+
+
+def _stat_key(path):
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _mark_read(path):
+    """登记「本进程已见过该路径当前版本」。写入成功后也调用（内容即最新）。"""
+    key = _stat_key(path)
+    if key is None:
+        return
+    with _READ_STATE_LOCK:
+        _READ_STATE[os.path.normcase(os.path.abspath(path))] = key
+
+
+def _read_is_fresh(path):
+    key = _stat_key(path)
+    if key is None:
+        return True  # 不存在 → 无需读
+    with _READ_STATE_LOCK:
+        return _READ_STATE.get(os.path.normcase(os.path.abspath(path))) == key
+
+
+def _precheck_read(path, action):
+    """已存在且未读（或读后被外部改动）→ 拒绝，附如何解除。新建文件直接放行。"""
+    if not _read_before_write_enabled() or not os.path.exists(path):
+        return None
+    if _read_is_fresh(path):
+        return None
+    return (
+        f"错误：{path} 已存在，但你尚未读取其当前内容（或它在读取后被改动）。"
+        f"请先 read_file 确认后再 {action}，避免盲改覆盖；"
+        f"确需跳过可设环境变量 WHALETALK_READ_BEFORE_WRITE=0。"
+    )
+
+
+def _syntax_check(path, content):
+    """写后语法自检（.py 用 ast、.json 用 json）——不阻断，但把错误立刻回给模型。"""
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext in (".py", ".pyi"):
+            ast.parse(str(content))
+        elif ext == ".json":
+            json.loads(str(content))
+        else:
+            return ""
+    except SyntaxError as e:
+        return f"\n⚠ 语法自检未通过（已写入，请立即修复）：{e.__class__.__name__}: {e.msg}（第 {e.lineno} 行）"
+    except Exception as e:
+        return f"\n⚠ 语法自检未通过（已写入，请立即修复）：{e}"
+    return ""
+
+
+def _auto_lint(path, timeout=30, cap=6000):
+    """写完 .py 自动跑 ruff（未安装则静默跳过）。返回附在工具结果后的提示。"""
+    if os.path.splitext(path)[1].lower() not in (".py", ".pyi") or not _auto_lint_enabled():
+        return ""
+    ruff = shutil.which("ruff")
+    if not ruff:
+        return ""
+    try:
+        r = subprocess.run(
+            [ruff, "check", "--output-format", "concise", path],
+            capture_output=True, text=True, timeout=timeout,
+            cwd=os.path.dirname(path) or None,
+        )
+    except Exception:
+        return ""
+    if r.returncode == 0:
+        return ""
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    if not out:
+        return ""
+    if len(out) > cap:
+        out = out[:cap] + "\n…[lint 输出已截断]"
+    return f"\n⚠ ruff 静态检查发现问题（已自动运行，请修复）：\n{out}"
+
+
 @tool(
         {
             "type": "function",
@@ -183,11 +279,13 @@ def read_file(path, start_line=None, max_lines=None):
                     lines.append(ln)
             lines = [ln for ln in lines if ln != ""]
             if not lines:
+                _mark_read(permissions.resolve(path) or path)
                 return f"（第 {start} 行起无内容）"
             body = "".join(lines)
             if not body.endswith("\n"):
                 body += "\n"
             prefix = f"[按行读取 {path} 第 {start}-{start + len(lines) - 1} 行]\n"
+            _mark_read(permissions.resolve(path) or path)
             return prefix + body + enc_note
         _cap = READ_FILE_MAX_BYTES if (READ_FILE_MAX_BYTES and READ_FILE_MAX_BYTES > 0) else None
         # 按**字节**读取并按字节截断：文本 read() 的 cap 是字符数，CJK 可读入远超声明上限
@@ -195,7 +293,8 @@ def read_file(path, start_line=None, max_lines=None):
             raw = f.read(_cap) if _cap else f.read()
         content = raw.decode(enc, "replace")
         if _cap and len(raw) >= _cap:
-            content += f"\n[文件较大，已截断前 {_cap} 字节]"
+            content += f"\n[文件较大，已截断前 {_cap} 字节；如需后续内容请用 start_line/max_lines 按行续读]"
+        _mark_read(permissions.resolve(path) or path)
         return content + enc_note
     except Exception as e:
         return f"错误：无法读取文件 {path}: {e}"
@@ -238,14 +337,26 @@ def write_file(path, content):
     if _mws and _mws > 0 and content_bytes > _mws:
         return f"错误：内容 {content_bytes} 字节超过大小限制 {_mws}"
     p = permissions.resolve(path)
+    _pre = _precheck_read(p, "覆盖写入")
+    if _pre:
+        return _pre
+    _ph = find_code_placeholder(p, content)
+    if _ph:
+        return (
+            f"错误：内容疑似省略占位「{_ph}」。write_file 要求给出完整内容，"
+            f"请补全后重写；若只想改局部，请改用 edit_file。"
+        )
     try:
         created, real_size = _atomic_write(p, str(content))
         if not os.path.exists(p):
             return f"错误：写入后核验失败，文件不存在：{p}"
+        _mark_read(p)  # 写后即最新，避免 AI 改自己刚写的文件时被要求先读
         permissions.audit("write_file", p, f"{real_size} 字节")
         return (
-            f"已写入 {p}（{'新建' if created else '覆盖并备份 .bak'}，"
+            f"已写入 {p}（{'新建' if created else '覆盖'}，"
             f"实际 {real_size} 字节，已核验存在）"
+            + _syntax_check(p, content)
+            + _auto_lint(p)
         )
     except Exception as e:
         return f"错误：写入失败: {e}"
@@ -265,6 +376,7 @@ def write_file(path, content):
                         "new": {"type": "string", "description": "替换后的新文本"},
                         "regex": {"type": "string", "description": "可选：正则表达式模式（Python re 语法）"},
                         "replacements": {"type": "string", "description": "可选：批量替换列表（JSON 数组，如 [{\"old\":\"旧文本\",\"new\":\"新文本\"},{\"regex\":\"正则\",\"new\":\"替换\"}]，按顺序逐项替换；与 old/regex 互斥）"},
+                        "replace_all": {"type": "boolean", "description": "可选：当 old 在文件中出现多次时是否全部替换；默认 false——多处命中会报错，须先扩长上下文使其唯一"},
                     },
                     "required": ["path", "new"],
                 },
@@ -275,7 +387,7 @@ def write_file(path, content):
     preactivate=(('修改', '编辑', '改动', '改一下', '改一次', '改成', '改为', '改下', '改改', '改掉', '更新', '替换', '重写', '覆盖', '重命名', '改名', '删掉', '删除'),),
     hooks=('snapshot',),  # 改写前自动快照（P0-1：横切关注点声明式，不再内联）
 )
-def edit_file(path, old="", new="", regex=None, replacements=None):
+def edit_file(path, old="", new="", regex=None, replacements=None, replace_all=False):
     """编辑文件：按文本/正则替换（自动备份 .bak）；replacements 支持一次批量替换多处。
 
     快照与信任内核声明由 tool_hooks 的钩子统一处理，见 tool_hooks.py。
@@ -288,6 +400,9 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
         return f"错误：文件不存在：{p}"
     if replacements and (old or regex):
         return "错误：replacements 与 old/regex 不能同时使用"
+    _pre = _precheck_read(p, "编辑")
+    if _pre:
+        return _pre
     try:
         # 读入上限：允许目录内也可能有 GB 级文件，全量读入内存会 OOM（<=0 = 不限，用户可配）
         if EDIT_FILE_MAX_SIZE and EDIT_FILE_MAX_SIZE > 0 and os.path.getsize(p) > EDIT_FILE_MAX_SIZE:
@@ -326,9 +441,14 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
                     return f"错误：replacements[{i}] 正则无效: {e}"
                 n += k
             else:
-                if r_old not in content:
-                    continue  # 该项无匹配：跳过，其余项继续
                 k = content.count(r_old)
+                if k == 0:
+                    return f"错误：replacements[{i}] 未匹配到目标文本，未做任何修改（拒绝静默半成品）"
+                if k > 1 and not (replace_all or rep.get("replace_all")):
+                    return (
+                        f"错误：replacements[{i}] 目标文本出现 {k} 次、不唯一；"
+                        f"请扩长上下文，或在该项传 replace_all=true。"
+                    )
                 content = content.replace(r_old, r_new)
                 n += k
     elif regex:
@@ -343,9 +463,15 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
     else:
         if not old:
             return "错误：需要提供 old（原文）或 regex（正则）"
-        if old not in content:
+        cnt = content.count(old)
+        if cnt == 0:
             return "错误：目标文本未找到"
-        n = content.count(old)
+        if cnt > 1 and not replace_all:
+            return (
+                f"错误：目标文本在文件中出现 {cnt} 次、不唯一，未做修改。"
+                f"请扩长 old 使其唯一，或明确传 replace_all=true 表示全部替换。"
+            )
+        n = cnt
         content = content.replace(old, new or "")
     if n == 0:
         return "错误：无匹配内容，未做修改"
@@ -357,8 +483,12 @@ def edit_file(path, old="", new="", regex=None, replacements=None):
             _write_with_encoding(p, content, src_enc)
         if not os.path.exists(p):
             return f"错误：写入后核验失败，文件不存在：{p}"
+        _mark_read(p)
         permissions.audit("edit_file", p, f"替换 {n} 处")
-        return f"已替换 {n} 处，写入 {p}（已备份 .bak，已核验存在）"
+        return (
+            f"已替换 {n} 处，写入 {p}（已核验存在）"
+            + _syntax_check(p, content) + _auto_lint(p)
+        )
     except Exception as e:
         return f"错误：写入失败: {e}"
 
