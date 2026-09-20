@@ -241,7 +241,7 @@ def run_python(code):
             "type": "function",
             "function": {
                 "name": "run_command",
-                "description": "执行系统命令（完整 shell 语法：支持管道 |、重定向 >、变量展开等，Windows 走 cmd、其他平台走 sh）；默认不受限，若在权限页配置了「禁命令」（shell.blocklist）则命中即拒绝；超时由配置决定（默认 120 秒）",
+                "description": "执行系统命令（完整 shell 语法：支持管道 |、重定向 >、变量展开等，Windows 走 cmd、其他平台走 sh）；默认不受限，若在权限页配置了「禁命令」（shell.blocklist）则命中即拒绝。**同步执行**，超时由配置决定（默认 120 秒，超时 kill 进程树）；预计超过 1 分钟的长任务（批量渲染/编译/下载/训练/服务）请改用 start_process 后台启动，不要在此同步干等",
                 "parameters": {
                     "type": "object",
                     "properties": {"command": {"type": "string", "description": "完整命令行，如 python hello.py 或 dir | findstr .py 或 echo a > out.txt"}},
@@ -274,7 +274,8 @@ def run_command(command):
                                         cwd=_dc.WORKING_DIR or permissions.WORKSPACE_DIR or None,
                                         shell=True)
         except TimeoutError:
-            return f"错误：命令超时（>{timeout} 秒）"
+            return (f"错误：命令超时（>{timeout} 秒，进程树已终止）。长任务请改用 start_process 后台启动，"
+                    f"再用 list_processes 查进度 / stop_process 停止。")
         permissions.audit("run_command", cmd[:200], f"rc={rc}")
         if rc not in (0, None):
             body = out_data.strip() or "（无输出）"

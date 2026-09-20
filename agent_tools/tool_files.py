@@ -1158,7 +1158,7 @@ def batch_rename(directory, pattern, replacement, dry_run=False):
             "type": "function",
             "function": {
                 "name": "start_process",
-                "description": "在后台启动长驻进程（如网站服务器），实时输出显示在进程终端，返回进程名与 pid",
+                "description": "在后台启动长驻进程或长时任务（网站服务器、批量渲染/编译/下载/训练等预计 >1 分钟的操作），实时输出显示在进程终端，返回进程名与 pid；用 list_processes 查进度、stop_process 停止。注意：run_python（同步约 60s）/run_command（默认 120s）超时会 kill 整个进程树，长任务不要用它们同步干等",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1251,6 +1251,7 @@ def start_process(command, name="", cwd=""):
             "cwd": workdir or _dc.WORKING_DIR or permissions.WORKSPACE_DIR or "",
             "started": datetime.now().strftime("%H:%M:%S"),
             "started_ts": time.time(),
+            "last_activity_ts": time.time(),
             "exited": False,
             "code": None,
             "lines": deque(maxlen=2000),

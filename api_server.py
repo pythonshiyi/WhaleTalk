@@ -4292,8 +4292,10 @@ _process_watchdog_started = False
 
 
 def _start_process_watchdog(interval=180, max_idle=3600):
-    """空闲进程守卫生：定期清理空闲超过 max_idle 秒的后台子进程（AI 起的服务/浏览器等）。
+    """空闲进程守卫生：定期清理**无输出**超过 max_idle 秒的后台子进程（AI 起的服务/浏览器等）。
 
+    有持续输出 = 仍活跃，不清理（判据为最后一条输出距今，非启动至今）——避免长任务
+    （批量渲染/编译/下载等）在跑满 max_idle 秒时被按运行时长误杀。
     防止长会话里 AI 启动的进程/浏览器长期驻留成孤儿拖垮系统。
     interval 最低 30s，防过频；max_idle 可经 config 的 process_max_idle_seconds 覆盖。
     """

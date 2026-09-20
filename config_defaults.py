@@ -4,7 +4,7 @@
 """
 
 # 应用版本号（统一来源：deepseek_client / backup 引用此处）
-VERSION = "3.16.7"
+VERSION = "3.16.8"
 
 # 统一模型能力说明（v3.10.0）：DeepSeek 已把「快速模式 / 专家模式 / 识图模式」
 # 合并为统一的智能模式——V4.1 Flash 原生多模态，自行判断任务复杂度并在检测到
@@ -32,6 +32,9 @@ DEFAULT_SYSTEM_PROMPT = (
     "- edit_file 优先于 write_file；只改与任务相关的部分，不顺手重构无关代码。\n"
     "- 覆盖或删除前确认目标当前内容；删除走回收站，不硬删。\n"
     "- 改完走验证链：run_lint → run_tests → verify_project（按项目实际存在的链路）。\n"
+    "- 预计可能超过 1 分钟的任务（批量渲染/编译/下载/训练/服务）用 start_process 后台启动，"
+    "再用 list_processes / get_status 轮询；不要用 run_python（同步 60s）/run_command（默认 120s）干等，"
+    "超时会连同进程树一起被杀。\n"
     "- 涉及网络、文件路径、shell 命令时，先过用户黑名单与内置底线。\n"
     "- 同类任务优先复用 failure_memory 中已验证的规避路径。\n"
     "\n## 收尾\n"
@@ -138,7 +141,13 @@ TASK_QUALITY_GUIDE = (
     "18. 是否删除文件/目录由你自行判断（无强制限制）；但删除前先确认它确实不该保留，"
     "避免删了又重建、反复浪费轮次。\n"
     "19. 长任务纪律：开工先 dev_plan 建计划并逐步标记完成；上下文变长或被压缩后，"
-    "不要凭记忆重写文件，先 read_file 复核当前内容再动手。"
+    "不要凭记忆重写文件，先 read_file 复核当前内容再动手。\n"
+    "[长任务后台化]（避免 60/120 秒被同步超时杀掉）\n"
+    "20. 预计耗时可能超过 1 分钟的任务（批量渲染/编译/下载/训练/长循环/启动服务），"
+    "开工就要用 start_process 后台启动，再用 list_processes / get_status 轮询进度；"
+    "不要用 run_python / run_command 同步干等——run_python 同步上限 60s、run_command 默认 120s，"
+    "超时会把整个进程树 kill 掉，连带脚本内的多进程/进程池一起被杀（表现为 BrokenProcessPool），"
+    "切成小块重试也救不回来。"
 )
 
 # 内置指令库（只读模板：可在指令库栏目「复制到我的指令」后自由修改）
@@ -336,5 +345,5 @@ DEFAULT_CONFIG = {
     "update_public_key": "",  # 更新包签名公钥（可选；配置后校验 Ed25519 签名/或 sha256 字段）
     "agent_mail_enabled": False,  # Agent Mail（agently-cli）集成开关；默认关闭，不配置不影响使用
     "agent_mail_cli": "agently-cli",  # agently-cli 可执行文件（或绝对路径）
-    "process_max_idle_seconds": 3600,  # 后台子进程空闲清理阈值（AI 起的服务/浏览器等，默认 1 小时）
+    "process_max_idle_seconds": 3600,  # 后台子进程空闲清理阈值（无输出超过该秒数才清理；有持续输出的长任务不清理，默认 1 小时）
 }

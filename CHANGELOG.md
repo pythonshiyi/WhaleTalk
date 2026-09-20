@@ -2,6 +2,27 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.8（2026-09-20）—— ⏱ 长任务不再被 60/120 秒同步超时与进程守卫误杀
+
+**版本号 3.16.7 → 3.16.8。** 回应实测：《三更帖》MV 全片渲染总在 60/120 秒被终止、模型随后才想起用后台——根因是 `run_python` 同步上限 60s、`run_command` 默认 120s，超时 `_kill_tree` 杀掉**整棵进程树**，连带脚本内的 `ProcessPoolExecutor` 一起死（`BrokenProcessPool`）。
+
+### 行为层：让模型开工就用后台
+
+- `DEFAULT_SYSTEM_PROMPT` 执行纪律新增：预计 >1 分钟的任务用 `start_process` 后台启动 + `list_processes`/`get_status` 轮询，勿用 `run_python`/`run_command` 同步干等。
+- `TASK_QUALITY_GUIDE` 新增第 20 条「长任务后台化」，写明 60s/120s 同步超时会 kill 进程树、进程池一并被杀，切块重试也救不回来。
+- `run_command` 描述与超时文案改为引导 `start_process`；`start_process` 描述由「长驻进程（如网站服务器）」扩展为「长驻进程**或长时任务**（批量渲染/编译/下载/训练等）」。
+
+### 逻辑层：空闲守卫改按「最后输出」判定
+
+- 原 `cleanup_idle_processes` 用 `started_ts` 判空闲（默认 3600s）——**按运行时长杀进程**，持续输出的长任务跑满 1 小时即被误杀。
+- 改为按 `last_activity_ts`（`_process_reader` 每有输出刷新）判定：持续输出 = 仍活跃，不清理；真正无输出的进程才回收。`start_process` 进程表与守卫 docstring 同步。
+
+### 验证
+
+`pytest` **835 passed · 1 skipped**（收集 836；新增 `tests/test_process_contract.py::test_cleanup_idle_uses_activity_not_start_age`）· 四道门禁全绿 · `check_docs` 通过。
+
+---
+
 ## v3.16.7（2026-09-20）—— 📝 任务模式提示词优化：补行为纪律 + 压缩保留行为准则
 
 **版本号 3.16.6 → 3.16.7。** 回应「当前提示词解决了『模型能不能』，没解决『模型该不该、怎么稳』」：基础提示词只有能力清单、缺少行为规范；压缩提示词质量虽高，但压缩后模型可能「忘了自己该怎么说话」。

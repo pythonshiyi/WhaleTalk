@@ -1738,6 +1738,8 @@ def _process_reader(name):
             # 持锁 extend：与 list_processes 的拷贝迭代互斥，防 deque 迭代竞态
             with _PROCESSES_LOCK:
                 entry["lines"].extend(batch)  # deque(maxlen=2000) 自动裁剪
+                # 有输出 = 仍活跃：空闲守卫据此判定，长任务不被「运行时长」误杀（见 cleanup_idle_processes）
+                entry["last_activity_ts"] = time.time()
         except Exception:
             pass
         _emit_process(name, joined)  # 整批回调：队列条目降为 1，UI 批量渲染
@@ -1762,10 +1764,11 @@ def _process_reader(name):
 
 
 def cleanup_idle_processes(max_idle_seconds=3600, force_all=False):
-    """清理后台进程：force_all 时终止全部运行中进程；否则终止空闲超过 max_idle_seconds 的。
+    """清理后台进程：force_all 时终止全部运行中进程；否则终止**无输出**超过 max_idle_seconds 的。
 
     供服务器停止与空闲守卫生调用，防止 AI 起的进程/浏览器长驻成孤儿拖垮系统。
-    返回终止的进程名列表。
+    判据是「最后一条输出距今」而非「启动至今」——否则长时间输出中的任务（批量渲染等）
+    会在跑满 max_idle_seconds 时被按运行时长误杀。返回终止的进程名列表。
     """
     killed = []
     failed = []
@@ -1775,7 +1778,8 @@ def cleanup_idle_processes(max_idle_seconds=3600, force_all=False):
             with _PROCESSES_LOCK:
                 PROCESSES.pop(name, None)
             continue
-        idle = True if force_all else now - float(entry.get("started_ts") or now) > max_idle_seconds
+        last_active = float(entry.get("last_activity_ts") or entry.get("started_ts") or now)
+        idle = True if force_all else now - last_active > max_idle_seconds
         if idle:
             # 只有确认退出才摘除条目：杀失败就摘 = 进程孤儿化（端口占着、
             # stop/list 都看不见、再也停不掉）。失败时保留条目并如实提示。

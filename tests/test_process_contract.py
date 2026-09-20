@@ -96,6 +96,23 @@ def test_cleanup_idle_pops_when_killed(monkeypatch):
     assert "fake" not in dc.PROCESSES
 
 
+def test_cleanup_idle_uses_activity_not_start_age(monkeypatch):
+    """长任务判据是「最后一条输出距今」，不是「启动至今」：持续输出的任务不得被按运行时长误杀。"""
+    import time as _t
+    _add_fake()
+    monkeypatch.setattr(dc, "_kill_tree", lambda p: True)
+    with dc._PROCESSES_LOCK:
+        dc.PROCESSES["fake"]["started_ts"] = _t.time() - 99999       # 启动很久
+        dc.PROCESSES["fake"]["last_activity_ts"] = _t.time() - 1     # 刚刚还有输出
+    assert dc.cleanup_idle_processes(max_idle_seconds=3600) == [], "仍在输出的长任务不得被清理"
+    assert "fake" in dc.PROCESSES
+
+    with dc._PROCESSES_LOCK:
+        dc.PROCESSES["fake"]["last_activity_ts"] = _t.time() - 99999  # 长时间无任何输出
+    assert dc.cleanup_idle_processes(max_idle_seconds=3600) == ["fake"], "真正空闲（无输出）的进程应被清理"
+    assert "fake" not in dc.PROCESSES
+
+
 def test_start_process_rejects_missing_cwd():
     out = tool_files.start_process("echo hi", cwd="Z:/__no_such_dir__/xyz")
     assert out.startswith("错误：工作目录不存在")

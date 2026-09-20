@@ -51,7 +51,7 @@ python tools/check_docs.py             # 文档数字 vs 源码实测
 - 工具声明是**单一事实源**：新增/修改工具只在函数定义处写一次 `@tool()`（`schema` / `groups` / `phrases` / `preactivate` / `hooks`），六层数据由注册表自动生成。随后把工具名加入 `deepseek_client.py` 的 `_TOOL_ORDER`（涉及分组/预激活时再加 `_GROUP_ORDER` / `_HINT_ORDER`），并在域模块 `__all__` 与 `agent_tools/__init__.py.__all__` re-export
 - 新增工具默认**零审批**（blacklist 主导，`approval_actions` 默认空）。仅当设计上确需让用户可选加严时，才把工具名登记入 `permissions` 的 `approval_actions`（blacklist 模式）或 `ACTION_TOOLS`（旧 whitelist 模式），并在变更说明中写明理由；否则不要登记
 - 工具描述要完整说清「做什么 + 关键约束」，**没有长度上限**——smart 模式不截断描述（描述是工具能力的一部分，不得为省 token 删减）；参数描述必须 100% 覆盖；数组参数必须带 `items`（缺则 API 400）
-- 当前 CI（`.github/workflows/ci.yml`）执行 ruff 关键规则 + 入口编译检查 + WebUI 构建 + `pytest tests/`（82 文件 / 835 用例）+ 工具系统四道门禁；前端另有 `npm test`（20 个 node 套件）与 `npm run typecheck`。本地改完先跑四道门禁，再 `python -m pytest -q` 与 `cd webui && npm test`。
+- 当前 CI（`.github/workflows/ci.yml`）执行 ruff 关键规则 + 入口编译检查 + WebUI 构建 + `pytest tests/`（82 文件 / 836 用例）+ 工具系统四道门禁；前端另有 `npm test`（20 个 node 套件）与 `npm run typecheck`。本地改完先跑四道门禁，再 `python -m pytest -q` 与 `cd webui && npm test`。
 
 ## 提交信息 / Commit Messages
 
