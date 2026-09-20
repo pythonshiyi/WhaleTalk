@@ -2187,7 +2187,11 @@ def _roles():
 
 
 def _processes():
-    """后台进程快照：{name: {pid, started, exited, code, lines}}。"""
+    """后台进程快照：{name: {pid, started, exited, code, lines, cpu, mem_mb, uptime}}。
+
+    P2：运行中进程附带 CPU/内存/运行时长（psutil 可用时；不可用则字段缺失，前端自动隐藏）。
+    psutil.Process.cpu_percent(interval=None) 首次调用返回 0，靠前端 2.5s 轮询自然收敛。
+    """
     import deepseek_client as dc
     out = {}
     try:
@@ -2204,6 +2208,27 @@ def _processes():
             }
     except Exception:
         logger.exception("读取进程失败")
+    # 资源用量：仅运行中且有 pid 的进程；任何失败都静默跳过（不影响快照主体）
+    try:
+        import psutil
+        now = time.time()
+        for item in out.values():
+            pid = item.get("pid")
+            if not pid or item.get("exited"):
+                continue
+            try:
+                proc = psutil.Process(int(pid))
+                with proc.oneshot():
+                    cpu = proc.cpu_percent(interval=None)
+                    rss = proc.memory_info().rss
+                    created = proc.create_time()
+                item["cpu"] = round(float(cpu), 1)
+                item["mem_mb"] = round(rss / 1048576.0, 1)
+                item["uptime"] = max(0, int(now - created))
+            except Exception:
+                continue
+    except Exception:
+        pass
     return {"processes": out}
 
 
@@ -2307,6 +2332,79 @@ def _list_dir(path):
     except Exception:
         pass
     return {"path": path, "entries": entries[:300]}, None
+
+
+_SEARCH_SKIP_DIRS = {"__pycache__", ".venv", "node_modules", ".git", "dist", "build", ".idea", ".vscode"}
+
+
+def _search_files(root, query, limit=50, max_scan=20000, max_depth=8):
+    """按文件名递归检索（结构化返回，供文件面板全局搜索）。
+
+    只读、有界：跳过隐藏/依赖目录，限制扫描节点数与深度，防止大目录卡死。
+    返回 (data, err)；data 含 entries/scanned/truncated。
+    """
+    q = str(query or "").strip().lower()
+    if not q:
+        return None, "缺少查询关键词"
+    path, err = _guard_path(root)
+    if err:
+        return None, err
+    if not os.path.isdir(path):
+        return None, "目录不存在"
+    try:
+        lim = int(limit)
+    except (TypeError, ValueError):
+        lim = 50
+    lim = max(1, min(lim, 200))
+    entries = []
+    scanned = 0
+    truncated = False
+
+    def _mtime(p):
+        try:
+            st = os.stat(p)
+            return st, time.strftime("%m-%d %H:%M", time.localtime(st.st_mtime)), int(st.st_mtime)
+        except OSError:
+            return None, "", 0
+
+    for dirpath, dirnames, filenames in os.walk(path):
+        if dirpath[len(path):].count(os.sep) >= max_depth:
+            dirnames[:] = []
+        for d in list(dirnames):
+            if d.startswith(".") or d in _SEARCH_SKIP_DIRS:
+                continue
+            if q in d.lower():
+                full = os.path.join(dirpath, d)
+                st, label, epoch = _mtime(full)
+                if st is not None:
+                    entries.append({"name": d, "path": full, "is_dir": True, "size": 0,
+                                    "size_label": "", "mtime": label, "mtime_epoch": epoch, "ext": ""})
+                    if len(entries) >= lim:
+                        truncated = True
+                        break
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _SEARCH_SKIP_DIRS]
+        if truncated:
+            break
+        for fn in filenames:
+            scanned += 1
+            if scanned > max_scan:
+                truncated = True
+                break
+            if q in fn.lower():
+                full = os.path.join(dirpath, fn)
+                st, label, epoch = _mtime(full)
+                if st is None:
+                    continue
+                entries.append({"name": fn, "path": full, "is_dir": False,
+                                "size": st.st_size, "size_label": _fmt_size(st.st_size),
+                                "mtime": label, "mtime_epoch": epoch,
+                                "ext": os.path.splitext(fn)[1].lstrip(".").lower()})
+                if len(entries) >= lim:
+                    truncated = True
+                    break
+        if truncated:
+            break
+    return {"path": path, "query": q, "entries": entries, "scanned": scanned, "truncated": truncated}, None
 
 
 def _read_file(path, max_chars=30000):
@@ -7051,6 +7149,21 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, _files())
 
 
+    @_get_route(("qpath", "/v1/files/search"))
+    def _g_v1_files_search(self):
+        """按文件名全局检索（递归、有界）。默认在 active_dir 下搜索。"""
+        import urllib.parse
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        q = (qs.get("q") or [""])[0]
+        root = (qs.get("dir") or [""])[0] or _status()["active_dir"]
+        limit = (qs.get("limit") or ["50"])[0]
+        data, err = _search_files(root, q, limit)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, data)
+
+
     @_get_route(("qpath", "/v1/files/raw"))
     def _g_v1_files_raw(self):
         """按绝对路径返回文件原始字节（供前端 docx-preview/pptx-preview/PDF iframe 拉取）。
@@ -7676,6 +7789,48 @@ class _Handler(BaseHTTPRequestHandler):
             return
         result = _tool_invoke(name, args)
         self._json(200, {"name": name, "result": result})
+
+
+    @_post_route("/v1/files/rename")
+    def _p_v1_files_rename(self):
+        """重命名文件/目录（同目录内改名为 new_name）。走与工具一致的路径沙箱 + 写前快照。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        new_name = str(body.get("new_name") or "").strip()
+        if not new_name:
+            self._json(400, {"error": "缺少 new_name"})
+            return
+        if new_name in (".", "..") or any(c in new_name for c in '\\/:*?"<>|'):
+            self._json(400, {"error": "非法的新名称（不能含路径分隔符或非法字符）"})
+            return
+        path, err = _guard_path(body.get("path"), write=True)
+        if err:
+            self._json(403, {"error": err})
+            return
+        if not os.path.exists(path):
+            self._json(404, {"error": "路径不存在"})
+            return
+        dst = os.path.join(os.path.dirname(path), new_name)
+        dst, dst_err = _guard_path(dst, write=True)
+        if dst_err:
+            self._json(403, {"error": dst_err})
+            return
+        if os.path.exists(dst):
+            self._json(400, {"error": "目标名称已存在"})
+            return
+        try:
+            try:
+                import snapshot as snapshot_mod
+                snapshot_mod.snapshot_before("rename", path)
+            except Exception as e:
+                import degrade
+                degrade.degrade("api.files.rename.snapshot", e, "重命名前未能快照（原内容不在撤销栈）")
+            os.rename(path, dst)
+            self._json(200, {"ok": True, "path": dst, "name": new_name})
+        except Exception as e:
+            self._fail(500, e)
 
 
     @_post_route("/v1/fim")

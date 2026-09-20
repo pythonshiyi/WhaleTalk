@@ -28,7 +28,7 @@ describe("continueRef 复位点", () => {
   });
 
   it("onSend（正常发送）复位续写标记", () => {
-    assert.ok(windowFrom("const onSend = (text", 900).includes(RESET), "onSend 未复位续写标记");
+    assert.ok(windowFrom("const onSend =", 900).includes(RESET), "onSend 未复位续写标记");
   });
 
   it("onStop（停止生成）复位续写标记", () => {

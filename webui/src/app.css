@@ -3668,3 +3668,161 @@ button { -webkit-tap-highlight-color: transparent; }
 .cmd-item:hover .cmd-item-ic { color: var(--brand-strong); }
 
 
+
+/* ═══════════════════════════════════════════════════════════════
+   控制台 2.1 · 活动时间线 / 文件工具条 / 进程列表（P0）
+   在「控制台 2.0」基础上追加，令牌优先，勿裸写色值/尺寸。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 活动：过滤条 ── */
+.act-filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: var(--sp-2); }
+.act-filter-sel { font-size: var(--fs-2xs); padding: 4px 6px; max-width: 46%; }
+.act-filter-search { position: relative; display: flex; align-items: center; gap: 4px; flex: 1; min-width: 110px; }
+.act-filter-note { font-size: var(--fs-2xs); color: var(--text-3); margin-bottom: var(--sp-1); }
+
+/* ── 活动：轮次时间线 ── */
+.act-timeline { display: flex; flex-direction: column; gap: var(--sp-2); }
+.act-turn { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-1); padding: 6px 8px; }
+.act-turn.is-run { border-color: rgba(var(--brand-rgb), .45); }
+.act-turn.is-fail { border-color: rgba(var(--danger-rgb), .35); }
+.act-turn-head { display: flex; align-items: center; gap: 6px; width: 100%; background: none; border: none; cursor: pointer; padding: 2px 0; color: var(--text-2); text-align: left; font-family: var(--font-ui); }
+.act-turn-head:disabled { cursor: default; }
+.act-turn-head svg { color: var(--text-3); flex-shrink: 0; }
+.act-turn-no { font-size: var(--fs-xs); font-weight: 700; color: var(--text-1); }
+.act-turn-time { font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono); }
+.act-turn-sum { margin-left: auto; font-size: var(--fs-2xs); color: var(--text-3); }
+.act-turn .act-steps { margin-top: 6px; }
+
+/* ── 活动：步骤摘要 + 结构化结果 ── */
+.act-tool-ic { display: inline-grid; place-items: center; color: var(--ai); flex-shrink: 0; }
+.act-step-sum { font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono); padding: 0 0 3px 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-kv { display: grid; grid-template-columns: minmax(64px, auto) 1fr; gap: 2px 10px; font-size: var(--fs-2xs); font-family: var(--font-mono); }
+.act-kv-row { display: contents; }
+.act-kv-k { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; }
+.act-kv-v { color: var(--text-2); word-break: break-word; user-select: text; }
+
+/* ── 文件：工具条 + 分组按钮 ── */
+.fx-toolbar { display: flex; align-items: center; gap: 6px; margin-bottom: var(--sp-2); }
+.fx-sort-sel { font-size: var(--fs-2xs); padding: 4px 6px; flex: 1; min-width: 0; }
+.fx-group-title { width: 100%; border: none; cursor: pointer; text-align: left; font-family: var(--font-ui); }
+.fx-group-title:hover { color: var(--text-2); }
+.fx-fname-missing { color: var(--text-3); text-decoration: line-through; }
+
+/* ── 进程：列表视图 ── */
+.px-proc-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--sp-2); max-height: 180px; overflow-y: auto; }
+.px-proc-group { font-size: var(--fs-2xs); font-weight: 700; color: var(--text-3); letter-spacing: .3px; padding: 4px 4px 2px; }
+.px-proc { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 8px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm); cursor: pointer; text-align: left; font-family: var(--font-ui); transition: var(--t-colors); }
+.px-proc:hover { background: var(--bg-hover); }
+.px-proc.on { border-color: var(--brand); background: var(--bg-active); }
+.px-proc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--text-1); }
+.px-proc-meta { font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono); flex-shrink: 0; }
+.px-proc-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--text-3); }
+.px-proc-dot.run { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); animation: pulse 1.6s var(--ease) infinite; }
+.px-proc-dot.exit { background: var(--text-3); }
+
+/* ── 进程：终端包装 + 回到最新 + 输出搜索 ── */
+.px-term-wrap { position: relative; }
+.px-term-title { flex: 1; min-width: 0; font-size: var(--fs-xs); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.px-jump { position: absolute; right: 10px; bottom: 10px; display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-full); background: var(--bg-3); color: var(--brand-strong); font-size: var(--fs-2xs); cursor: pointer; box-shadow: var(--shadow-1); }
+.px-jump:hover { background: var(--bg-active); }
+.px-term-search { display: flex; align-items: center; gap: 5px; padding: 5px 8px; background: var(--bg-2); border: 1px solid var(--border); border-top: none; }
+.px-term-search .fx-q { font-size: var(--fs-xs); }
+.px-term-search-n { font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono); }
+/* ═══════════════════════════════════════════════════════════════
+   控制台 2.2 · 运行事件 / 上下文装配 / 工具清单 / 文件多选（P1）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 活动：运行事件合流 ── */
+.act-events { margin: 0 0 var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-2); }
+.act-events-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 10px; background: none; border: none; cursor: pointer; color: var(--text-1); font-family: var(--font-ui); font-size: var(--fs-xs); font-weight: 700; text-align: left; }
+.act-events-head svg { color: var(--text-3); flex-shrink: 0; }
+.act-events-sum { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 8px; font-weight: 500; font-size: var(--fs-2xs); color: var(--text-3); }
+.act-events-sum em { font-style: normal; }
+.act-events-sum em.is-warn { color: var(--warn-text); }
+.act-events-body { padding: 0 10px 10px; display: flex; flex-direction: column; gap: var(--sp-2); }
+.act-ev-group { border-top: 1px solid var(--border); padding-top: 6px; }
+.act-ev-title { display: flex; align-items: center; gap: 5px; font-size: var(--fs-2xs); font-weight: 700; color: var(--text-3); margin-bottom: 4px; }
+.act-ev-title svg { color: var(--text-3); flex-shrink: 0; }
+.act-ev-row { display: flex; gap: 8px; font-size: var(--fs-2xs); line-height: 1.5; }
+.act-ev-k { flex-shrink: 0; font-family: var(--font-mono); color: var(--text-2); }
+.act-ev-v { color: var(--text-3); word-break: break-word; }
+.act-ev-v.is-warn { color: var(--warn-text); }
+
+/* ── 参数：作用域标签 ── */
+.px-scope { font-size: var(--fs-4xs); font-weight: 600; padding: 1px 6px; border-radius: var(--r-full); background: var(--bg-3); color: var(--text-3); }
+.px-scope-session { color: var(--brand-strong); background: rgba(var(--brand-rgb), .12); }
+.px-scope-global { color: var(--text-3); }
+
+/* ── 参数：预算条 ── */
+.px-budget { margin: var(--sp-2) 0; }
+.px-budget-bar { height: 6px; border-radius: var(--r-full); background: var(--bg-3); overflow: hidden; }
+.px-budget-fill { height: 100%; background: var(--brand); border-radius: var(--r-full); transform-origin: left center; transition: transform var(--dur) var(--ease); }
+.px-budget-fill.is-warn { background: var(--warn); }
+.px-budget-legend { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono); }
+
+/* ── 参数：注入清单 ── */
+.px-inj-list { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; }
+.px-inj { display: flex; align-items: center; gap: 6px; font-size: var(--fs-2xs); }
+.px-inj-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
+.px-inj-dot.on { background: var(--ok); }
+.px-inj-dot.err { background: var(--danger); }
+.px-inj-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); color: var(--text-2); }
+.px-inj-meta { margin-left: auto; flex-shrink: 0; color: var(--text-3); font-family: var(--font-mono); }
+.px-inj-meta.is-warn { color: var(--warn-text); }
+.px-inj-sum { font-size: var(--fs-2xs); color: var(--text-3); margin-bottom: var(--sp-2); }
+
+/* ── 参数：工具清单（能力域） ── */
+.px-tool-domains { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow-y: auto; }
+.px-domain-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 4px; background: none; border: none; cursor: pointer; color: var(--text-2); font-family: var(--font-ui); font-size: var(--fs-xs); text-align: left; }
+.px-domain-head:hover { color: var(--text-1); }
+.px-domain-head svg { color: var(--text-3); flex-shrink: 0; }
+.px-domain-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.px-domain-n { font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono); }
+.px-domain-tools { display: flex; flex-direction: column; gap: 1px; padding: 2px 0 4px 18px; }
+.px-tool { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: var(--fs-2xs); }
+.px-tool-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
+.px-tool-dot.on { background: var(--ok); }
+.px-tool-name { font-family: var(--font-mono); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 文件：多选 + 拖拽 + 批量条 ── */
+.fx-check { width: 16px; height: 16px; flex-shrink: 0; display: inline-grid; place-items: center; background: none; border: 1px solid var(--border-strong); border-radius: var(--r-xs); color: var(--text-on-brand); cursor: pointer; padding: 0; }
+.fx-check.on { background: var(--brand); border-color: var(--brand); }
+.fx-row.fx-sel { background: var(--bg-active); }
+.fx-row[draggable="true"] { cursor: grab; }
+.fx-batchbar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 5px 6px; margin-bottom: var(--sp-2); background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-md); }
+.fx-batch-n { font-size: var(--fs-2xs); color: var(--text-2); font-family: var(--font-mono); margin-right: auto; }
+.fx-batchbar .msg-op { font-size: var(--fs-2xs); padding: 3px 8px; }
+.fx-batchbar .msg-op:disabled { opacity: .4; cursor: not-allowed; }
+.fx-tip { color: var(--brand-strong); }
+/* ═══════════════════════════════════════════════════════════════
+   控制台 2.3 · 文件重命名/全局搜索 / 进程资源与固定标签 / 弹出窗口（P2）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 文件：内联重命名 + 全局搜索结果 ── */
+.fx-rename { flex: 1; min-width: 0; font-size: var(--fs-xs); padding: 3px 6px; height: 22px; }
+.fx-gsearch { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-2); padding: 4px 6px 2px; margin-bottom: var(--sp-2); }
+.fx-gsearch .fx-group-title { position: static; background: none; padding: 2px 2px 4px; }
+
+/* ── 进程：资源用量 + 固定标签 ── */
+.px-proc { border: 1px solid var(--border); }
+.px-proc-res { font-size: var(--fs-4xs); color: var(--text-3); font-family: var(--font-mono); flex-shrink: 0; }
+.px-proc-pin { width: 18px; height: 18px; flex-shrink: 0; display: inline-grid; place-items: center; background: none; border: none; cursor: pointer; color: var(--text-3); opacity: .35; border-radius: var(--r-sm); transition: var(--t-colors); }
+.px-proc:hover .px-proc-pin { opacity: 1; }
+.px-proc-pin:hover { color: var(--brand-strong); }
+.px-proc-pin.on { opacity: 1; color: var(--brand-strong); }
+.px-proc-tabs { display: flex; gap: 3px; flex-wrap: wrap; margin-bottom: var(--sp-1); }
+.px-proc-tab { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 4px 6px 4px 8px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm); cursor: pointer; font-family: var(--font-ui); font-size: var(--fs-2xs); color: var(--text-2); transition: var(--t-colors); }
+.px-proc-tab:hover { background: var(--bg-hover); }
+.px-proc-tab.on { border-color: var(--brand); background: var(--bg-active); color: var(--text-1); }
+.px-proc-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.px-proc-tab-x { display: inline-grid; place-items: center; color: var(--text-3); border-radius: var(--r-xs); }
+.px-proc-tab-x:hover { color: var(--danger-text); background: var(--danger-soft); }
+
+/* ── 控制台头部操作 ── */
+.aux-head-ops { display: inline-flex; align-items: center; gap: 2px; }
+
+/* ── 弹出窗口 ── */
+body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
+.aux-popout-root { height: 100vh; }
+.aux-popout-root .aux-panel { width: 100% !important; max-width: none; height: 100vh; border-left: none; border-radius: 0; }
+.aux-popout-root .aux-resize { display: none; }

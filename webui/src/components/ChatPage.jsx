@@ -1,4 +1,5 @@
 import React from "react";
+import { createPortal } from "react-dom";
 import Message from "./Message.jsx";
 import { findToolCard, makePatchLast, trimHistory } from "../msgUpdates.js";
 import Composer from "./Composer.jsx";
@@ -721,8 +722,18 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [ctxOpen, setCtxOpen] = React.useState(false);
   const [listOpen, setListOpen] = React.useState(() => !mq("(max-width: 860px)"));
   const [auxOpen, setAuxOpen] = React.useState(() => !mq("(max-width: 1000px)"));
-  const [auxTab, setAuxTab] = React.useState("params");
+  // 记忆上次停留的控制台页签（程序化切到 activity 时不覆盖，仅用户点击时由 AuxPanel 写入）
+  const [auxTab, setAuxTab] = React.useState(() => {
+    try {
+      const v = localStorage.getItem("wt_aux_tab");
+      return ["activity", "params", "files", "procs"].includes(v) ? v : "params";
+    } catch { return "params"; }
+  });
   const focusActivity = React.useCallback(() => setAuxTab("activity"), []);
+  // 控制台弹出为独立窗口（P2）
+  const [auxPop, setAuxPop] = React.useState(false);
+  const [popoutEl, setPopoutEl] = React.useState(null);
+  const popWinRef = React.useRef(null);
   const [promptReq, setPromptReq] = React.useState(null);
   const [backendNote, setBackendNote] = React.useState("");
   const [multiSel, setMultiSel] = React.useState(null); // null=关闭, Set(index)
@@ -791,31 +802,93 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     return () => window.removeEventListener("keydown", onKey);
   }, [active]);
 
+  // ── 控制台弹出为独立窗口（P2）：把同一份 React 树 portal 到新窗口 ──
+  // 复制主文档样式 + data-theme，主窗口不再内嵌渲染（面板“搬家”而非复制），
+  // 因此活动/产物等实时状态无需跨窗口同步。
+  React.useEffect(() => {
+    if (!auxPop || !auxOpen) {
+      if (popWinRef.current) {
+        try { popWinRef.current.close(); } catch (e) { silentWarn(e, "ChatPage"); }
+        popWinRef.current = null;
+      }
+      setPopoutEl(null);
+      return undefined;
+    }
+    const win = window.open("", "wt-console", "width=580,height=940,menubar=no,toolbar=no,location=no,status=no");
+    if (!win) { setAuxPop(false); return undefined; }  // 被拦截 → 回退内嵌
+    popWinRef.current = win;
+    try {
+      win.document.title = "鲸语 · 控制台";
+      document.querySelectorAll('link[rel="stylesheet"], style').forEach((node) => {
+        win.document.head.appendChild(node.cloneNode(true));
+      });
+      win.document.documentElement.setAttribute("data-theme", document.documentElement.getAttribute("data-theme") || "");
+      win.document.body.className = "wt-popout";
+      const root = win.document.createElement("div");
+      root.className = "aux-popout-root";
+      win.document.body.appendChild(root);
+      setPopoutEl(root);
+    } catch (e) {
+      silentWarn(e, "ChatPage");
+      setAuxPop(false);
+    }
+    const iv = setInterval(() => {
+      if (win.closed) {
+        clearInterval(iv);
+        popWinRef.current = null;
+        setPopoutEl(null);
+        setAuxPop(false);
+      }
+    }, 600);
+    return () => {
+      clearInterval(iv);
+      // 依赖变化/卸载时关闭本 effect 打开的窗口（StrictMode 双调用下避免残留窗口）
+      if (popWinRef.current === win) {
+        try { win.close(); } catch (e) { silentWarn(e, "ChatPage"); }
+        popWinRef.current = null;
+      }
+    };
+  }, [auxPop, auxOpen]);
+
   // ── 活动镜像：把"最近一次工具链"喂给侧栏「🔧 活动」标签 ──
   // 取最新的 assistant 消息（含工具或正在流式）作为实时活动；工具执行从聊天流"搬"到侧栏，
   // 聊天正文只保留精简摘要。streaming=true 时侧栏自动切到活动标签并显示进行中。
   const liveActivity = React.useMemo(() => {
-    let idx = -1;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
-      if (m && m.role === "assistant" && ((m.tools && m.tools.length > 0) || m.streaming)) { idx = i; break; }
-    }
-    if (idx < 0) return { steps: [], streaming: false, text: "", taskId: -1 };
-    const last = msgs[idx];
-    const steps = (last.tools || []).map((t) => ({
+    // 单条 assistant 消息 → 步骤数组（含 args 原对象，供活动面板结构化渲染）
+    const mapSteps = (last) => (last.tools || []).map((t) => ({
       tool: t.tool || "?",
       status: t.status || (last.streaming ? "running" : "done"),
       duration: t.duration,
       result: t.result,
+      args: t.args,
       argsText: t.args ? JSON.stringify(t.args).slice(0, 200) : undefined,
     }));
+    // 全量会话时间线：不再只保留「最近一次」，每一轮含工具调用的 assistant 消息都留档
+    const turns = [];
+    msgs.forEach((m, i) => {
+      if (!m || m.role !== "assistant") return;
+      if (!((m.tools && m.tools.length > 0) || m.streaming)) return;
+      const steps = mapSteps(m);
+      const failed = steps.filter((s) => s.status === "failed").length;
+      turns.push({
+        // 稳定任务标识：同一条 assistant 消息内不变，新消息即新任务 → 供活动面板重置展开态
+        taskId: i,
+        time: m.time || "",
+        steps,
+        streaming: !!m.streaming,
+        failed,
+        label: m.streaming ? "AI 正在执行" : failed ? "含失败步骤" : "已完成",
+      });
+    });
+    if (!turns.length) return { steps: [], streaming: false, text: "", taskId: -1, turns: [] };
+    const last = turns[turns.length - 1];
     return {
-      steps,
-      streaming: !!last.streaming,
-      text: last.text || "",
-      // 稳定任务标识：同一条 assistant 消息内不变，新消息即新任务 → 供活动面板重置展开态
-      taskId: idx,
+      steps: last.steps,
+      streaming: last.streaming,
+      text: msgs[last.taskId]?.text || "",
+      taskId: last.taskId,
       label: last.streaming ? "AI 正在执行" : "最近一次工具调用",
+      turns,
     };
   }, [msgs]);
 
@@ -946,11 +1019,18 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   // 全局监听：阻止浏览器「打开文件」默认行为（否则拖歪一点就跳走），并用计数
   // 抵消 dragenter/dragleave 在子元素间来回触发的抖动。仅在确实携带文件时接管。
   const dragDepthRef = React.useRef(0);
+  // 拖入「文件路径」时复用的注入函数（在下方定义；用 ref 避开 effect 首渲染闭包）
+  const onInjectFileRef = React.useRef(null);
   React.useEffect(() => {
+    // 拖拽载荷两类：真实文件（Files）+ 控制台文件行拖出的路径（自定义 MIME）
+    const WT_PATH_MIME = "application/x-whaletalk-path";
     const hasFiles = (e) => {
       const dt = e && e.dataTransfer;
       if (!dt) return false;
-      try { return Array.from(dt.types || []).indexOf("Files") !== -1; } catch (err) { return false; }
+      try {
+        const types = Array.from(dt.types || []);
+        return types.indexOf("Files") !== -1 || types.indexOf(WT_PATH_MIME) !== -1;
+      } catch (err) { return false; }
     };
     // 仅接管落在对话区（.chat-main）内的拖拽：其它区域的 file input（如大脑导入）
     // 保持浏览器原生行为，不被全局 preventDefault 干扰。
@@ -967,7 +1047,11 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       e.preventDefault();
       dragDepthRef.current = 0;
       setDropActive(false);
-      const fs = e.dataTransfer && e.dataTransfer.files;
+      const dt = e.dataTransfer;
+      let path = "";
+      try { path = (dt && dt.getData && dt.getData(WT_PATH_MIME)) || ""; } catch (err) { path = ""; }
+      if (path) { onInjectFileRef.current?.(path); return; }
+      const fs = dt && dt.files;
       if (fs && fs.length) composerRef.current?.addFiles(fs);
     };
     window.addEventListener("dragenter", onEnter);
@@ -1216,6 +1300,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       }
     } catch (e) { silentWarn(e, "ChatPage"); }
   };
+  onInjectFileRef.current = onInjectFile;
 
     const onContinue = (idx) => {
     if (busy || !msgs[idx] || msgs[idx].role !== "assistant") return;
@@ -1698,7 +1783,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                   <path d="M21.4 11.05l-9.19 9.19a5 5 0 01-7.07-7.07l9.19-9.19a3.5 3.5 0 014.95 4.95l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
                 </svg>
                 <div className="drop-overlay-title">松开即可添加附件</div>
-                <div className="drop-overlay-sub">图片将作为视觉输入 · 其它文件随消息提供路径给 AI 读取</div>
+                <div className="drop-overlay-sub">图片将作为视觉输入 · 其它文件随消息提供路径 · 控制台拖出的文件读入输入框</div>
               </div>
             </div>
           )}
@@ -1923,11 +2008,17 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
           <ContextPanel data={{ ...(ctx || {}), session: sessionStats }} loading={!ctx && !loadErr} err={loadErr || ""} onClose={() => setCtxOpen(false)} />
         )}
 
-        {auxOpen && <div className="drawer-scrim scrim-aux" onClick={() => setAuxOpen(false)} />}
-        {auxOpen && (
+        {auxOpen && !auxPop && <div className="drawer-scrim scrim-aux" onClick={() => setAuxOpen(false)} />}
+        {auxOpen && !auxPop && (
           <AuxPanel onClose={() => setAuxOpen(false)} onInjectFile={onInjectFile} activity={liveActivity}
             products={liveProducts}
-            tab={auxTab} onTabChange={setAuxTab} />
+            tab={auxTab} onTabChange={setAuxTab} onPopout={() => setAuxPop(true)} />
+        )}
+        {auxOpen && auxPop && popoutEl && createPortal(
+          <AuxPanel onClose={() => { setAuxPop(false); setAuxOpen(false); }} onInjectFile={onInjectFile} activity={liveActivity}
+            products={liveProducts}
+            tab={auxTab} onTabChange={setAuxTab} onPopout={() => setAuxPop(false)} inPopout />,
+          popoutEl
         )}
       </div>
 

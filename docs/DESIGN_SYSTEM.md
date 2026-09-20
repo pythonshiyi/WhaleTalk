@@ -124,6 +124,9 @@
 - **文件**：`.fx-row` 行高 30、整行 hover、类型图标、右侧 mono meta、hover 揭示操作；分组头 `.fx-group-title` 吸顶。
 - **进程**：`.px-term-head`（图标+选择+状态）+ `.px-term-ops`（跟随/复制/清屏/重启/停止图标按钮）+ 等宽终端 `.px-term`。
 - **保存条**：`.px-savebar` 贴底 sticky。
+- **2.1 追加**（`app.css` 末尾同区段）：活动轮次时间线 `.act-turn*`、结构化结果 `.act-kv*`、文件工具条 `.fx-toolbar`、进程列表 `.px-proc*`、终端回到最新 `.px-jump`。
+- **2.2 追加**（P1）：运行事件合流 `.act-events*`、预算条 `.px-budget*`、注入清单 `.px-inj*`、工具清单 `.px-domain*/.px-tool*`、作用域标签 `.px-scope*`、文件多选 `.fx-check/.fx-batchbar`。
+- **2.3 追加**（P2）：文件内联重命名 `.fx-rename`/全局搜索结果 `.fx-gsearch`、进程资源与固定标签 `.px-proc-res/.px-proc-pin/.px-proc-tabs`、头部操作 `.aux-head-ops`、弹出窗口 `body.wt-popout/.aux-popout-root`。
 
 ## 10. 文档渲染设计系统（`assets/render/`，面向导出而非界面）
 

@@ -981,6 +981,22 @@ export async function readFile(path) {
   return api("/v1/files/read", { method: "POST", body: JSON.stringify({ path }) });
 }
 
+/** 按文件名递归检索（默认在 active_dir 下）。
+ * @param {string} query @param {string} [dir] @param {number} [limit]
+ * @returns {Promise<{path?:string, query?:string, entries?:any[], scanned?:number, truncated?:boolean, error?:string}>} */
+export async function searchFiles(query, dir, limit) {
+  const qs = new URLSearchParams({ q: String(query || "") });
+  if (dir) qs.set("dir", dir);
+  if (limit) qs.set("limit", String(limit));
+  return api(`/v1/files/search?${qs.toString()}`);
+}
+
+/** 重命名文件/目录（同目录内）。
+ * @param {string} path @param {string} newName @returns {Promise<{ok?:boolean, path?:string, error?:string}>} */
+export async function renameFile(path, newName) {
+  return api("/v1/files/rename", { method: "POST", body: JSON.stringify({ path, new_name: newName }) });
+}
+
 // ── 进程管理 ─────────────────────────────────────────
 
 /** @returns {Promise<Array<any>>} 进程列表 */
