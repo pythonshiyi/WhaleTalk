@@ -3826,3 +3826,26 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
 .aux-popout-root { height: 100vh; }
 .aux-popout-root .aux-panel { width: 100% !important; max-width: none; height: 100vh; border-left: none; border-radius: 0; }
 .aux-popout-root .aux-resize { display: none; }
+/* ═══════════════════════════════════════════════════════════════
+   控制台 2.4 · 参数折叠分组（抽屉式，P3）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 分组头按钮化：整行可点，收起只露大项 */
+.px-group-btn { width: 100%; margin-bottom: 0; padding: 0; background: none; border: none; cursor: pointer; text-align: left; font-family: var(--font-ui); color: var(--text-2); }
+.px-group-btn:hover { color: var(--text-1); }
+.px-group-chev { color: var(--text-3); flex-shrink: 0; }
+.px-group-body { margin-top: var(--sp-3); }
+.px-group.is-collapsed { padding-bottom: var(--sp-3); }
+.px-dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
+
+/* 分组工具条（全部展开/收起） */
+.px-groups-bar { display: flex; align-items: center; gap: 6px; margin: 0 0 var(--sp-3); }
+.px-groups-hint { font-size: var(--fs-2xs); color: var(--text-3); margin-right: auto; }
+.px-groups-bar .msg-op { font-size: var(--fs-2xs); padding: 3px 8px; }
+
+/* 保存条：未保存分组数 */
+.px-dirty-note { font-size: var(--fs-2xs); color: var(--warn-text); margin-left: auto; }
+/* 进程：已退出分组可折叠（列表变长时自动收起） */
+.px-proc-group-btn { display: flex; align-items: center; gap: 4px; width: 100%; background: none; border: none; cursor: pointer; text-align: left; font-family: var(--font-ui); }
+.px-proc-group-btn:hover { color: var(--text-2); }
+.px-proc-group-btn svg { flex-shrink: 0; }

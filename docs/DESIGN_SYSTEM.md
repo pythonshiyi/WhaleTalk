@@ -127,6 +127,8 @@
 - **2.1 追加**（`app.css` 末尾同区段）：活动轮次时间线 `.act-turn*`、结构化结果 `.act-kv*`、文件工具条 `.fx-toolbar`、进程列表 `.px-proc*`、终端回到最新 `.px-jump`。
 - **2.2 追加**（P1）：运行事件合流 `.act-events*`、预算条 `.px-budget*`、注入清单 `.px-inj*`、工具清单 `.px-domain*/.px-tool*`、作用域标签 `.px-scope*`、文件多选 `.fx-check/.fx-batchbar`。
 - **2.3 追加**（P2）：文件内联重命名 `.fx-rename`/全局搜索结果 `.fx-gsearch`、进程资源与固定标签 `.px-proc-res/.px-proc-pin/.px-proc-tabs`、头部操作 `.aux-head-ops`、弹出窗口 `body.wt-popout/.aux-popout-root`。
+- **2.4 追加**（P3·参数抽屉）：折叠分组头 `.px-group-btn/.px-group-chev/.px-group-body`、未保存脏点 `.px-dirty-dot`、分组工具条 `.px-groups-bar`、保存条脏分组数 `.px-dirty-note`。参数页默认只露大项，展开态存 `localStorage: wt_params_open`。
+- **可折叠分组已抽为共享组件** `components/CollapsibleGroup.jsx`（默认导出）：提供 `onToggle` 即变抽屉式，未提供则退化为静态标题块；控制台以外页面可直接复用 `.px-group*` 样式。进程「已退出」列表用同款折叠（`.px-proc-group-btn`，>3 条默认收起）。
 
 ## 10. 文档渲染设计系统（`assets/render/`，面向导出而非界面）
 

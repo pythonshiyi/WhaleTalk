@@ -2,6 +2,7 @@ import React from "react";
 import * as api from "../api.js";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 import { Icon } from "./icons.jsx";
+import Group from "./CollapsibleGroup.jsx";
 import formatToolResult from "../formatToolResult.js";
 
 import { silentWarn } from "../quiet.js";
@@ -55,19 +56,6 @@ function MiniBtn({ icon, label, onClick, danger, active }) {
     >
       <Icon name={icon} size={14} />
     </button>
-  );
-}
-
-function Group({ icon, title, right, children }) {
-  return (
-    <section className="px-group">
-      <header className="px-group-title">
-        <Icon name={icon} size={14} className="px-group-ic" />
-        <span>{title}</span>
-        {right && <span className="px-group-right">{right}</span>}
-      </header>
-      {children}
-    </section>
   );
 }
 
@@ -604,6 +592,8 @@ function ProcessesTab({ active, onBadge }) {
   const [pinned, setPinned] = React.useState(() => {
     try { const a = JSON.parse(localStorage.getItem(PROC_PIN_KEY) || "[]"); return Array.isArray(a) ? a : []; } catch { return []; }
   });
+  // 「已退出」分组：null=自动（超过阈值才默认收起，用户手动点后以其为准）
+  const [exitedOpen, setExitedOpen] = React.useState(null);
   const termRef = React.useRef(null);
 
   const load = React.useCallback(async () => {
@@ -689,6 +679,8 @@ function ProcessesTab({ active, onBadge }) {
   const names = Object.keys(procs);
   const runningList = names.filter((n) => procs[n] && !procs[n].exited);
   const exitedList = names.filter((n) => procs[n] && procs[n].exited);
+  // 已退出项多了会淹没运行中项：自动收起（>3 条），用户手动切换后以其为准
+  const exitedShown = exitedOpen === null ? exitedList.length <= 3 : exitedOpen;
 
   const procRow = (n) => {
     const p = procs[n];
@@ -719,8 +711,14 @@ function ProcessesTab({ active, onBadge }) {
         <div className="px-proc-list">
           {runningList.length > 0 && <div className="px-proc-group">运行中 · {runningList.length}</div>}
           {runningList.map(procRow)}
-          {exitedList.length > 0 && <div className="px-proc-group">已退出 · {exitedList.length}</div>}
-          {exitedList.map(procRow)}
+          {exitedList.length > 0 && (
+            <button type="button" className="px-proc-group px-proc-group-btn" aria-expanded={exitedShown}
+              onClick={() => setExitedOpen(!exitedShown)}>
+              <Icon name={exitedShown ? "chevron-down" : "chevron-right"} size={11} />
+              <span>已退出 · {exitedList.length}</span>
+            </button>
+          )}
+          {exitedShown && exitedList.map(procRow)}
         </div>
       )}
 
@@ -813,6 +811,18 @@ const THEME_CHOICES = [
   { id: "arctic", name: "北极冰", desc: "冰白底 · 深海蓝字" },
 ];
 
+// 参数分组与「脏值」归属（用于折叠分组头的未保存标记）
+const PARAMS_GROUPS = [
+  { id: "engine", keys: ["model", "thinking", "scenario", "base_url"] },
+  { id: "sampling", keys: ["temperature", "top_p", "max_tokens", "seed"] },
+  { id: "context", keys: [] },
+  { id: "tools", keys: [] },
+  { id: "toggles", keys: ["json_output", "beta_api", "strict_tools", "tools_enabled"] },
+  { id: "budget", keys: ["monthly_budget", "peak_warning", "block_on_budget"] },
+  { id: "appearance", keys: [] },
+];
+const PARAMS_OPEN_KEY = "wt_params_open";
+
 function ParamsTab({ active }) {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { density, setDensity, fontSize, setFontSize } = React.useContext(DisplayContext);
@@ -827,6 +837,18 @@ function ParamsTab({ active }) {
   const [abilities, setAbilities] = React.useState(null);
   const [toolQ, setToolQ] = React.useState("");
   const [openDomains, setOpenDomains] = React.useState(() => new Set());
+  // 折叠分组：日常只露大项，展开看细节；展开态持久化
+  const [openGroups, setOpenGroups] = React.useState(() => {
+    try {
+      const a = JSON.parse(localStorage.getItem(PARAMS_OPEN_KEY) || "null");
+      return Array.isArray(a) ? new Set(a) : new Set(["engine"]);
+    } catch { return new Set(["engine"]); }
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem(PARAMS_OPEN_KEY, JSON.stringify([...openGroups])); } catch (e) { silentWarn(e, "AuxPanel"); }
+  }, [openGroups]);
+  const toggleGroup = (id) => setOpenGroups((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const isOpen = (id) => openGroups.has(id);
 
   React.useEffect(() => {
     const apply = (d, set, fn) => {
@@ -865,6 +887,8 @@ function ParamsTab({ active }) {
   };
 
   const dirty = draft != null;
+  const dirtyGroups = new Set();
+  if (draft) PARAMS_GROUPS.forEach((g) => { if (g.keys.some((k) => k in draft)) dirtyGroups.add(g.id); });
 
   if (!cfg) {
     return (
@@ -938,7 +962,14 @@ function ParamsTab({ active }) {
         </div>
       </div>
 
-      <Group icon="cpu" title="模型引擎" right={hasKey ? <span className="px-key-ok">Key 就绪</span> : <span className="px-key-warn">未配置 Key</span>}>
+      <div className="px-groups-bar">
+        <span className="px-groups-hint">点击大项展开细节</span>
+        <button className="msg-op" onClick={() => setOpenGroups(new Set(PARAMS_GROUPS.map((g) => g.id)))}>全部展开</button>
+        <button className="msg-op" onClick={() => setOpenGroups(new Set())}>全部收起</button>
+      </div>
+
+      <Group id="engine" icon="cpu" title="模型引擎" open={isOpen("engine")} onToggle={toggleGroup} dirty={dirtyGroups.has("engine")}
+        right={hasKey ? <span className="px-key-ok">{cur.model}</span> : <span className="px-key-warn">未配置 Key</span>}>
         <Field label="模型" hint="编辑后点保存生效">
           {customModel || !modelOptions.includes(cur.model) ? (
             <input className="tf-input px-sel" value={cur.model || ""} placeholder="输入任意模型名" onChange={(e) => edit({ model: e.target.value })} />
@@ -967,9 +998,13 @@ function ParamsTab({ active }) {
       </Group>
 
       <Group
+        id="sampling"
         icon="thermometer"
         title="采样参数"
-        right={samplingLocked ? <span className="px-lock-tag" title="思考档开启时由模型控制，切到 none 可手动调节"><Icon name="lock" size={11} /> 由思考档接管</span> : "无思考档时生效"}
+        open={isOpen("sampling")} onToggle={toggleGroup} dirty={dirtyGroups.has("sampling")}
+        right={samplingLocked
+          ? <span className="px-lock-tag" title="思考档开启时由模型控制，切到 none 可手动调节"><Icon name="lock" size={11} /> 接管</span>
+          : `温度 ${cur.temperature}`}
       >
         <div className={`px-grid2 ${samplingLocked ? "px-locked" : ""}`}>
           <Field label="温度" hint="0-2">
@@ -987,7 +1022,8 @@ function ParamsTab({ active }) {
         </div>
       </Group>
 
-      <Group icon="layers" title="上下文装配" right={<span className="px-scope px-scope-session">本会话 · 只读</span>}>
+      <Group id="context" icon="layers" title="上下文装配" open={isOpen("context")} onToggle={toggleGroup} dirty={false}
+        right={<span className="px-scope px-scope-session">{injChars ? `${injChars.toLocaleString()} 字` : "本会话 · 只读"}</span>}>
         <div className="px-budget" title={`本轮注入 ${injChars} 字符${ctxBudgetChars ? `，字符预算 ${ctxBudgetChars}` : "（未设字符预算）"}`}>
           <div className="px-budget-bar"><div className={`px-budget-fill ${injPct >= 90 ? "is-warn" : ""}`} style={{ transform: `scaleX(${injPct / 100})` }} /></div>
           <div className="px-budget-legend">
@@ -1034,7 +1070,8 @@ function ParamsTab({ active }) {
         </div>
       </Group>
 
-      <Group icon="grid" title={`工具清单 · ${toolTotal}`} right={<span className="px-scope">任务模式全可用</span>}>
+      <Group id="tools" icon="grid" title={`工具清单 · ${toolTotal}`} open={isOpen("tools")} onToggle={toggleGroup} dirty={false}
+        right={<span className="px-scope">任务模式全可用</span>}>
         <div className="fx-search" style={{ marginBottom: 6 }}>
           <Icon name="search" size={13} className="fx-search-ic" />
           <input className="fx-q" placeholder="搜索工具…" aria-label="搜索工具" value={toolQ} onChange={(e) => setToolQ(e.target.value)} />
@@ -1072,14 +1109,16 @@ function ParamsTab({ active }) {
         )}
       </Group>
 
-      <Group icon="puzzle" title="功能开关">
+      <Group id="toggles" icon="puzzle" title="功能开关" open={isOpen("toggles")} onToggle={toggleGroup} dirty={dirtyGroups.has("toggles")}
+        right={`开 ${[cur.json_output, cur.beta_api, cur.strict_tools, cur.tools_enabled].filter(Boolean).length}/4`}>
         <TglRow label="JSON 输出" hint="response_format，失败自动重试" on={!!cur.json_output} onClick={() => edit({ json_output: !cur.json_output })} />
         <TglRow label="Beta API" hint="前缀续写 / FIM 补全" on={!!cur.beta_api} onClick={() => edit({ beta_api: !cur.beta_api })} />
         <TglRow label="strict 工具" hint="严格遵循 JSON Schema（自动 Beta）" on={!!cur.strict_tools} onClick={() => edit({ strict_tools: !cur.strict_tools })} />
         <TglRow label="工具开关" hint="向模型暴露工具定义" on={!!cur.tools_enabled} onClick={() => edit({ tools_enabled: !cur.tools_enabled })} />
       </Group>
 
-      <Group icon="yen" title="预算与峰谷" right={<span className="px-scope px-scope-global">保存后全局生效</span>}>
+      <Group id="budget" icon="yen" title="预算与峰谷" open={isOpen("budget")} onToggle={toggleGroup} dirty={dirtyGroups.has("budget")}
+        right={<span className={monthBudget > 0 && monthPct >= 90 ? "px-key-warn" : ""}>{st?.peak_hour ? "高峰" : "空闲"} · ¥{monthCost.toFixed(2)}</span>}>
         <Field label="月预算（元）" hint="0 = 不限">
           <input className="tf-input px-num" type="number" step="1" min="0" value={cur.monthly_budget} onChange={(e) => edit({ monthly_budget: Number(e.target.value) })} />
         </Field>
@@ -1094,7 +1133,8 @@ function ParamsTab({ active }) {
         <TglRow label="超预算拦截" hint="达到月预算时阻止发送" on={!!cur.block_on_budget} onClick={() => edit({ block_on_budget: !cur.block_on_budget })} />
       </Group>
 
-      <Group icon="palette" title="外观">
+      <Group id="appearance" icon="palette" title="外观" open={isOpen("appearance")} onToggle={toggleGroup} dirty={false}
+        right={(THEME_CHOICES.find((t) => t.id === theme) || {}).name || theme}>
         <Field label="风格">
           <div className="px-themes">
             {THEME_CHOICES.map((t) => (
@@ -1127,6 +1167,7 @@ function ParamsTab({ active }) {
           {saving ? "保存中…" : dirty ? "保存并锁定" : "已锁定"}
         </button>
         {dirty && <button className="confirm-btn" onClick={() => setDraft(null)} title="放弃未保存修改">取消</button>}
+        {dirty && dirtyGroups.size > 0 && <span className="px-dirty-note">{dirtyGroups.size} 组未保存</span>}
       </div>
 
       {tip && <div className="px-tip">{tip}</div>}
