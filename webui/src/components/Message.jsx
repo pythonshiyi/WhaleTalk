@@ -423,6 +423,16 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
           </div>
         )}
 
+        {(msg.notices || []).length > 0 && (
+          <div className="msg-notices">
+            {(msg.notices || []).map((t, i) => (
+              <div className="msg-notice" key={i}>
+                <span className="mn-text">{t}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {!msg.streaming && msg.text && (msg.usage || msg.metrics) && (() => {
           const mt = msg.metrics || {};
           const u = (mt.prompt || mt.completion) ? mt : (msg.usage || {});

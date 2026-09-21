@@ -3780,6 +3780,9 @@ def _env_int(name, default):
 MAX_TOOL_ROUNDS = _env_int("MAX_TOOL_ROUNDS", 100)          # 0 = 不限轮数
 MAX_EMPTY_RETRIES = _env_int("MAX_EMPTY_RETRIES", 1)
 MAX_SAME_TOOL_REPEATS = _env_int("MAX_SAME_TOOL_REPEATS", 3)  # 0 = 关闭重复防护
+# 循环防护累计命中上限：命中先「拦截本轮 + 回灌换策略提示」让模型自我纠正，
+# 达到该上限才真正终止（<=0 = 不设上限，仅纠正不停）。
+MAX_LOOP_GUARD_TRIPS = _env_int("MAX_LOOP_GUARD_TRIPS", 3)
 MAX_PLAN_REJECTIONS = _env_int("MAX_PLAN_REJECTIONS", 3)      # 0 = 不限
 _RESULT_INTO_CONTEXT_MAX = _env_int("RESULT_INTO_CONTEXT_MAX", 40000)  # 0 = 不落盘/不截断
 # 停止后等待已提交工具结果的宽限期：副作用已发生的工具（发信/写文件/启进程）
@@ -4784,6 +4787,7 @@ class DeepSeekClient:
             rounds = _mr if _mr > 0 else 10 ** 9
         last_round_sig = None
         same_repeats = 0
+        guard_trips = 0
         try:
             for _ in range(rounds):
                 if stop_event and stop_event.is_set():
@@ -5112,26 +5116,39 @@ class DeepSeekClient:
                     guarded = True
                 if guarded:
                     guard_name = "+".join(tc["name"] for tc in tool_calls[:3]) or "(未知)"
+                    guard_trips += 1
+                    _reps = same_repeats
+                    _give_up = MAX_LOOP_GUARD_TRIPS > 0 and guard_trips >= MAX_LOOP_GUARD_TRIPS
                     logger.warning(
-                        "工具循环防护：%s 连续 %s 轮相同调用，终止工具循环",
-                        guard_name, same_repeats,
+                        "工具循环防护：%s 连续 %s 轮相同调用（累计第 %s 次），本轮拦截%s",
+                        guard_name, _reps, guard_trips, "并终止" if _give_up else "，转交模型换策略",
                     )
-                    if on_loop_guard:
-                        on_loop_guard(guard_name, same_repeats)
-                    # 补齐本轮全部 tool 结果，避免历史残留「悬空 tool_call」
-                    # （assistant 含 tool_calls 但无对应 tool 消息，下一次请求会被 API 以 400 拒绝）
+                    # 不直接结束：把「已拦截 + 请换策略」作为工具结果回灌，给模型一次
+                    # 自我纠正的机会。此前直接 return True——任务被静默腰斩，且还上报
+                    # 成功，用户完全看不出原因（on_loop_guard 此前也无人接线）。
+                    _blocked_hint = (
+                        f"本轮未执行：检测到你连续 {_reps} 轮以相同参数调用「{guard_name}」。"
+                        "相同调用不会产生新结果，请勿重复。先分析上一步为何没有进展/失败，"
+                        "改用不同参数或不同工具；若确实无法推进，直接向用户说明卡点、不要空转。"
+                    )
                     for tc in tool_calls:
                         work.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tc["id"],
-                                "content": (
-                                    f"已终止：{tc['name']} 连续调用相同参数达到上限"
-                                    f"（{MAX_SAME_TOOL_REPEATS} 次）"
-                                ),
-                            }
+                            {"role": "tool", "tool_call_id": tc["id"], "content": _blocked_hint}
                         )
-                    return True
+                    # 重置重复计数：若模型再以相同参数调用，重新累计至下一次拦截
+                    last_round_sig = None
+                    same_repeats = 0
+                    if not _give_up:
+                        if on_loop_guard:
+                            on_loop_guard(guard_name, _reps)
+                        continue
+                    logger.warning("工具循环防护累计 %s 次，终止本轮生成", guard_trips)
+                    if on_truncated:
+                        on_truncated(
+                            f"检测到「{guard_name}」反复以相同参数调用已达 {guard_trips} 次，"
+                            "已终止以避免空转。任务可能尚未完成，请换一种思路或补充指令后继续。"
+                        )
+                    return False
 
                 custom_map = {
                     t["function"]["name"]: t for t in (custom_tools or [])

@@ -417,6 +417,14 @@ function useBackendChat({
               else patchLast((x) => ({ ...x, metrics: mt }));
               setGenTps(mt?.tps || 0);
             },
+            onNotice: (ev) => {
+              if (!alive || stopRef.current) return;
+              const text = String((ev && ev.text) || "").trim();
+              if (!text) return;
+              // 生成提前结束/循环防护等真实原因：挂到当前助手消息的 notices，随消息可见
+              if (isContinue) updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, notices: [...(x.notices || []), text] } : x)));
+              else patchLast((x) => ({ ...x, notices: [...(x.notices || []), text] }));
+            },
             onCompressed: (ev) => {
               if (!alive) return;
               if (!isContinue) {

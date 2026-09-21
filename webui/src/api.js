@@ -63,6 +63,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {(ev:SSEEvent)=>void} [onUsage] 用量与缓存命中（同时后端已累计统计）
  * @property {(ev:SSEEvent)=>void} [onMetrics] 实时速率统计（每条回复）
  * @property {(ev:SSEEvent)=>void} [onCompressed] 上下文已压缩
+ * @property {(ev:SSEEvent)=>void} [onNotice] 生成过程的可见提示（截断/循环防护/未正常完成等）
  * @property {(ev:SSEEvent)=>void} [onAskRequest] 询问（需 POST /v1/respond 回传）
  * @property {(ev:SSEEvent)=>void} [onApprovalRequest] 审批请求
  * @property {(ev:SSEEvent)=>void} [onPlanRequest] 工具批计划确认（steps，可编辑参数后回传）
@@ -414,6 +415,7 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
     else if (ev.type === "usage") handlers.onUsage?.(ev);
     else if (ev.type === "metrics") handlers.onMetrics?.(ev);
     else if (ev.type === "compressed") handlers.onCompressed?.(ev);
+    else if (ev.type === "notice") handlers.onNotice?.(ev);
     else if (ev.type === "ask_request") handlers.onAskRequest?.(ev);
     else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);
     else if (ev.type === "plan_request") handlers.onPlanRequest?.(ev);

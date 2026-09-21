@@ -164,6 +164,31 @@ def test_stream_job_triggers_memory_harvest(monkeypatch):
     assert called, "流式作业正常结束后应触发自动记忆提炼（此前从未调用 → auto_memory 失效）"
 
 
+class _TruncClient:
+    def chat(self, messages, **kwargs):
+        cb = kwargs.get("on_truncated")
+        if cb:
+            cb("测试：本轮输出被截断")
+        return False
+
+
+def test_stream_job_emits_notice_on_truncated(monkeypatch):
+    """on_truncated 必须接线：提前结束的真实原因要回传前端（此前提示全部落空）。"""
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(api_server._Handler, "_client_from_cfg",
+                        lambda self, body: (_TruncClient(), {}))
+    h = _JobH()
+    job = api_server._ChatJob("st-tr", "sid-tr", "gw-tr")
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    api_server._Handler._run_chat_job_thread(
+        h, job, body, [{"role": "user", "content": "hi"}])
+    notices = [d.get("text") for (_s, ev, d) in job.events if ev == "notice"]
+    assert any("本轮输出被截断" in (t or "") for t in notices), "on_truncated 的提示必须回传前端"
+    # 已给出具体原因时不再叠加泛化提示
+    assert not any("未正常完成" in (t or "") for t in notices)
+
+
+
 # ── 6. _sanitize_messages：不得残留悬空 tool_calls（否则 API 400）─────
 
 def _tc(i):

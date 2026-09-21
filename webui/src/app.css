@@ -1978,6 +1978,17 @@ button.st-alert:focus-visible { outline: none; box-shadow: var(--ring); }
   font-size: var(--fs-xs); font-weight: 600;
 }
 .me-retry:hover { background: rgba(var(--danger-rgb), .12); }
+/* 生成过程提示（截断/循环防护/未正常完成）：说明「为什么提前结束」，随消息可见 */
+.msg-notices { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.msg-notice {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 7px 12px;
+  border-left: 3px solid var(--warn);
+  background: var(--warn-soft);
+  border-radius: var(--r-sm);
+  color: var(--warn-text); font-size: var(--fs-sm);
+}
+.mn-text { min-width: 0; word-break: break-word; line-height: 1.5; }
 .msg-flag-emoji { font-size: var(--fs-2xs); }
 .msg-flag { margin-right: 6px; font-size: var(--fs-2xs); }
 .msg-ops { display: flex; gap: var(--sp-1); margin-top: 6px; opacity: 0; transition: opacity .15s var(--ease); flex-wrap: wrap; align-items: center; }

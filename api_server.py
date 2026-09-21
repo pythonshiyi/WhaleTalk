@@ -9422,6 +9422,14 @@ class _Handler(BaseHTTPRequestHandler):
                 _tool_bookkeeping(n, a, r)
                 _save_progress(force=True)
 
+            # 本轮「未正常完成」提示的去重标记：具体原因（截断/循环防护等）由
+            # on_truncated 给出更精确的说明，避免再叠一句泛化提示。
+            _trunc = {"seen": False}
+
+            def _on_truncated(msg):
+                _trunc["seen"] = True
+                send("notice", {"text": str(msg), "level": "warn"})
+
             kwargs.update({
                 "on_reasoning": lambda t: send("reasoning", {"text": t}),
                 "on_content": _on_content,
@@ -9430,6 +9438,13 @@ class _Handler(BaseHTTPRequestHandler):
                 "on_tool_duration": lambda n, d, cid=None: send("tool_duration", {"name": n, "duration": d, "id": cid}),
                 "on_usage": lambda u: (send("usage", u), _record_usage(u, cfg, body)),
                 "on_metrics": _on_metrics,
+                # 生成提前结束的真实原因必须回传，否则用户只看到「对话突然结束」而无从判断
+                # （此前 on_truncated / on_loop_guard 从未接线，提示全部落空）。
+                "on_truncated": _on_truncated,
+                "on_loop_guard": lambda name, n: send("notice", {
+                    "text": f"检测到「{name}」连续 {n} 轮相同调用，已拦截并提示模型换策略后继续",
+                    "level": "warn",
+                }),
                 "on_approval": _make_approval_cb(
                     send, job.stop_event,
                     (str(body.get("mode") or "") == "task") or bool(cfg.get("full_auto"))),
@@ -9443,7 +9458,14 @@ class _Handler(BaseHTTPRequestHandler):
                 # 本轮新增消息（供断连兜底做「只追加本轮」的落盘，避免长会话丢历史）
                 "new_messages_out": generated,
             })
-            client.chat(messages, **kwargs)
+            ok = client.chat(messages, **kwargs)
+            # 作业线程此前忽略 chat 的返回值：提前终止（return False）也会照发 done，
+            # 与「正常完成」无从区分。补一条可见提示（停止/已给具体原因时不重复）。
+            if not ok and not job.stop_event.is_set() and not _trunc["seen"]:
+                send("notice", {
+                    "text": "本轮生成未正常完成，任务可能未做完；可补充指令继续或重试。",
+                    "level": "warn",
+                })
             # 任务记录：工具链写入工作目录 tasklog（对齐原程序 _record_tasklog）
             try:
                 with _TOOL_CHAIN_LOCK:
