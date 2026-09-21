@@ -2756,6 +2756,11 @@ def _friendly_error(e):
                 "（官方已把旧模型名路由到它），或在设置中换成支持视觉的模型")
     if "model not found" in low or "invalid model" in low or "model does not exist" in low:
         return "模型不存在或不可用——请检查设置中的模型名（可输入任意 OpenAI 兼容模型）"
+    if ("context_length" in low or "maximum context" in low or "context window" in low
+            or "too many tokens" in low or "reduce the length" in low
+            or "exceeds the maximum" in low):
+        return ("上下文超出该网关的窗口上限——请在「设置 → 通知与安全」调低最大上下文，"
+                "或开启一个新会话后重试")
     if "reasoning_content" in low and "400" in low:
         return "推理链回传缺失（400）——请刷新会话后重试，或切换到对话模式"
     if "insufficient_system_resource" in low:
@@ -2765,6 +2770,27 @@ def _friendly_error(e):
     # 未映射：脱敏后回传（保留可读信息，抹掉路径/文件行号），原文只落服务端日志
     logger.warning("服务端错误（未映射，原文仅记录日志）: %s", s)
     return _sanitize_error_text(s)
+
+
+def _log_chat_error(e, where):
+    """把对话失败原文追加到 `data/logs/chat_errors.log`（便于事后诊断）。
+
+    托盘/无窗启动时 stdout/stderr 不可见，用户报「生成中断」时无从定位；
+    这里落盘一份**原文**（含 type + 异常消息，截断 4000 字），供排障。
+    永不抛出。
+    """
+    try:
+        import traceback
+        from datetime import datetime
+        log_dir = os.path.join(DATA_DIR, "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        tb = traceback.format_exc()
+        with open(os.path.join(log_dir, "chat_errors.log"), "a", encoding="utf-8") as f:
+            f.write("\n===== %s [%s] =====\n%s: %s\n%s\n" % (
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), where,
+                type(e).__name__, str(e)[:4000], tb[-4000:] if tb else ""))
+    except Exception:
+        pass
 
 
 def _dc_wiring_table():
@@ -9152,6 +9178,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"content": text or "", "usage": usage})
         except Exception as e:
             logger.exception("API chat 失败")
+            _log_chat_error(e, "chat")
             self._json(500, {"error": _friendly_error(e)})
         finally:
             _end_job_state()
@@ -9314,6 +9341,7 @@ class _Handler(BaseHTTPRequestHandler):
             job.finish("stopped" if job.stop_event.is_set() else "done")
         except Exception as e:
             logger.exception("API chat/stream 失败")
+            _log_chat_error(e, "chat/stream")
             send("error", {"message": _friendly_error(e)})
             send("done", {})
             job.finish("error")

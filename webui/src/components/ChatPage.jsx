@@ -453,8 +453,13 @@ function useBackendChat({
               done = true;       // 错误即终结：短路 streamChat resolve 后误走 finish(true)
               flushNow();
               silentWarn(e, "ChatPage.stream");
-              // 错误写入独立字段（不并入正文）：不污染会话历史/导出，由 Message 渲染成可重试的错误块
-              updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, error: "生成中断：后端返回错误，请重试或检查「设置 → 网关 / API Key」。", streaming: false } : x)));
+              // 展示后端返回的**真实**错误（此前固定成一句通用文案，真正原因被吞掉，无从排查）；
+              // 无详情时才回退到通用提示。错误写入独立字段，不污染会话历史/导出。
+              const _detail = (typeof e === "string" ? e : (e && e.message) || "").trim();
+              const _errText = _detail
+                ? `生成中断：${_detail}`
+                : "生成中断：后端返回错误，请重试或检查「设置 → 网关 / API Key」。";
+              updateMsgs((m) => m.map((x, i) => (i === (isContinue ? continueIdx : m.length - 1) ? { ...x, error: _errText, streaming: false } : x)));
               setBusy(false);
               setGenState({ on: false, text: "" });
               setGenTps(0);

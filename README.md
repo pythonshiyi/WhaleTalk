@@ -205,7 +205,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 ## 🕘 更新与版本
 
-- **版本单一源**：`config_defaults.VERSION`（当前 **3.16.11**），最新变更见 [CHANGELOG.md](CHANGELOG.md)。
+- **版本单一源**：`config_defaults.VERSION`（当前 **3.16.12**），最新变更见 [CHANGELOG.md](CHANGELOG.md)。
 - **更新源**：GitHub Releases（`api.github.com/repos/pythonshiyi/WhaleTalk/releases/latest`，可自定义 `update_url`）。
 - **更新方式**：应用内「关于 → 检查更新」自动检测；更新包支持 Ed25519 签名 + SHA-256 校验；更新前自动备份，可一键回滚。
 - **兼容性**：旧配置自动迁移，旧数据目录无缝升级。
@@ -230,7 +230,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 ## English Introduction
 
-**WhaleTalk v3.16.11** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
+**WhaleTalk v3.16.12** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
 
 - **Capabilities**: **165 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
 - **Self-evolution**: proposal branches, failure-pattern lifecycle, success-pattern reuse — merging stays in your hands.
