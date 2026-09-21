@@ -1,7 +1,7 @@
 // 回归：多段输出按锚点切分（因果标注「↳ 基于第 N 步」的数据基础）。
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { splitSegments } from "../src/segmentNotes.js";
+import { splitSegments, buildTurnFlow } from "../src/segmentNotes.js";
 
 describe("splitSegments", () => {
   it("无锚点 → 单段、无标注", () => {
@@ -38,5 +38,36 @@ describe("splitSegments", () => {
   it("空文本安全", () => {
     assert.deepEqual(splitSegments("", [{ i: 1, n: 1 }]), [{ text: "", note: null }]);
     assert.deepEqual(splitSegments(null, null), [{ text: "", note: null }]);
+  });
+});
+
+describe("buildTurnFlow（步骤与正文按时间交错）", () => {
+  const tools = [{ tool: "t1" }, { tool: "t2" }, { tool: "t3" }, { tool: "t4" }, { tool: "t5" }];
+
+  it("有锚点：步骤插到正确的段间位置（不再全堆在顶部）", () => {
+    const text = "开头\n\n结尾";
+    const i = text.indexOf("结尾");
+    const flow = buildTurnFlow(text, [{ i, n: 3 }], tools);
+    assert.deepEqual(flow.map((b) => b.type), ["text", "steps", "text", "steps"]);
+    assert.equal(flow[0].text, "开头\n\n");
+    assert.deepEqual(flow[1].steps.map((t) => t.tool), ["t1", "t2", "t3"]);
+    assert.equal(flow[1].start, 0);
+    assert.equal(flow[2].text, "结尾");
+    assert.equal(flow[2].note, 3);
+    assert.deepEqual(flow[3].steps.map((t) => t.tool), ["t4", "t5"]);
+    assert.equal(flow[3].start, 3);
+  });
+
+  it("无锚点：退化为「先步骤、后正文」", () => {
+    const flow = buildTurnFlow("正文", [], tools);
+    assert.deepEqual(flow.map((b) => b.type), ["steps", "text"]);
+    assert.equal(flow[0].steps.length, 5);
+    assert.equal(flow[0].start, 0);
+  });
+
+  it("无工具：仅正文；无正文：仅步骤", () => {
+    assert.deepEqual(buildTurnFlow("hi", [], []).map((b) => b.type), ["text"]);
+    assert.deepEqual(buildTurnFlow("", [], tools).map((b) => b.type), ["steps"]);
+    assert.deepEqual(buildTurnFlow("", [], []), []);
   });
 });

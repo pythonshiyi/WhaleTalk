@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.14）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.15）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,9 +17,9 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.14`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.15`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-09）**：**165 个 Agent 工具**（11 组）、
-  **101 个 `/v1` 路由**、**86 个 pytest 文件 / 852 用例 + 21 个前端 node 套件**、
+  **102 个 `/v1` 路由**、**86 个 pytest 文件 / 852 用例 + 21 个前端 node 套件**、
   源码约 **7.2 万行**（根目录 3.3 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万；
   主力为 `api_server.py` 9,364 / `deepseek_client.py` 5,574 / `brainkit.py` 2,865）。
 - **三层架构**：`web_app.py`（入口）→ `api_server.py`（本地 API）→
@@ -53,7 +53,7 @@ cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typed
 python tools/audit_tools.py --strict     # 六层一致性审计（error 级门禁，可入 CI）
 python tools/validate_tools.py           # smart_tools 全链路回归（描述无损等）
 python tools/island_check.py --strict    # 十层孤岛对账（工具可达性，含 __all__ re-export）
-python tools/check_docs.py               # 文档数字 vs 源码实测（165 工具 / 101 路由 / 版本）
+python tools/check_docs.py               # 文档数字 vs 源码实测（165 工具 / 102 路由 / 版本）
 ```
 
 > **CI**：`.github/workflows/ci.yml` 含 4 个 job——`check`（ruff 关键规则 `E9,F63,F7,F82` +
@@ -69,7 +69,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（165 �
 | 层 | 模块 | 一句话职责 |
 |---|---|---|
 | **入口** | `web_app.py`（925 行） | 唯一启动入口：参数解析 → 依赖自检/自动安装 → 桌面+开始菜单快捷方式 → WebUI 自动构建 → 单实例探测 → 起 API → 开浏览器 → 托盘常驻 |
-| **API 层** | `api_server.py`（9,364 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**101 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
+| **API 层** | `api_server.py`（9,364 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**102 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
 | **能力引擎** | `deepseek_client.py`（5,574 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步。**工具实现已迁出至 `agent_tools/`** |
 | **工具声明** | `toolkit.py`（269 行） | **`@tool()` 装饰器 + 注册表 + 六层构建函数**——工具系统单一事实源（见 §6.1） |
 | **钩子管线** | `tool_hooks.py`（344 行） | 横切关注点收口：pre/post 钩子表 + `wrap()` 包装器；在 `@tool()` **注册处**统一包装执行体，任何调用路径都逃不掉钩子（P0-1） |
@@ -205,7 +205,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（165 �
   `("qpath",path)`（去查询串精确）。**表顺序即匹配优先级（= 源码顺序）**。
 - 兼容 `/api/v1/...` 与 `/v1/...`（Vite 代理）。
 
-### 4.3 端点分组（共 101 个 `/v1` 路由）
+### 4.3 端点分组（共 102 个 `/v1` 路由）
 
 **会话与消息**：`GET /v1/sessions` · `/v1/sessions/<id>/messages` · `POST /v1/sessions`
 (+`delete_batch`/`delete`/`pin`/`rename`/`tags`) · `POST /v1/search`
@@ -477,7 +477,7 @@ def my_tool(...): ...
   核验同步用 `git ls-remote origin refs/heads/main` 与 `git rev-parse HEAD` 是否一致。
 - **本地不入库产物**：`能力差距分析_*.md` / `*能力报告_*.md` / `*阅读报告_*.md` 等分析文档历来
   不入库；`brain/`/`trust/`/`evolutions/`/`data/` 均在 `.gitignore`。
-- **文档数字由门禁守护**：`tools/check_docs.py` 从源码 AST 实测（165 工具 / 101 路由 / 版本），
+- **文档数字由门禁守护**：`tools/check_docs.py` 从源码 AST 实测（165 工具 / 102 路由 / 版本），
   与 README/TECH_NOTES/MODULES 比对，`--fix` 可自动修正（**保留原行尾写回**）。
   注意 README 需保留门禁匹配的固定短语（`N 项 Agent 工具` / `N Agent tools` / `（N 工具）` /
   `工具链（N 项）` / `全部 N 项工具`），重写 README 时勿丢失。
@@ -529,7 +529,7 @@ def my_tool(...): ...
 
 ## 13. 明确不做的设计边界（改代码前先确认不越线）
 
-- **不为"优雅"合并那 101 个端点**：CRUD 端点薄是特性不是缺陷。
+- **不为"优雅"合并那 102 个端点**：CRUD 端点薄是特性不是缺陷。
 - **不给 `write_file`/`run_python` 加拦截**：`run_python` 本就绕得过，工具层设卡只挡君子。
 - **不合并 `snapshot.py` 与 `trust_kernel.py`**：生命周期语义不同（200 条轮转 vs 永不裁剪）。
 - **不按相似度自动作废记忆**、**不存出网明文内容**、**不接管大脑记忆**（两套体系边界清晰）。
@@ -583,5 +583,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（165 工具 / 101 路由 / 852 用例 / 版本 3.16.14）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（165 工具 / 102 路由 / 852 用例 / 版本 3.16.15）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

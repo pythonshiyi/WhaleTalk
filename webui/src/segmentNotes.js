@@ -24,3 +24,35 @@ export function splitSegments(text, segs) {
   out.push({ text: s.slice(last), note });
   return out;
 }
+
+// 把「正文分段 + 工具步骤」重排为**按时间顺序的信息流**：
+//   [{type:"text", text, note}] 与 [{type:"steps", steps:[...]}] 交替。
+//
+// 依据：分段锚点 `segs` 的 `n` = 该段正文之前的工具步数——于是可以把工具按
+// 「发生在哪两段正文之间」切组，插到正确的时序位置，而不是全部堆在正文之前。
+//
+// 无锚点（历史会话/尚未产生分段）时退化为「先步骤、后正文」的近似顺序。
+export function buildTurnFlow(text, segs, tools) {
+  const list = (Array.isArray(tools) ? tools : []).filter((t) => t && t.tool);
+  const s = String(text || "");
+  const hasSegs = Array.isArray(segs) && segs.some((x) => x && Number(x.i) > 0);
+  const flow = [];
+  if (!hasSegs) {
+    if (list.length) flow.push({ type: "steps", steps: list, start: 0 });
+    if (s) flow.push({ type: "text", text: s, note: null });
+    return flow;
+  }
+  const chunks = splitSegments(s, segs);
+  let cursor = 0;
+  chunks.forEach((c, idx) => {
+    if (idx > 0) {
+      const want = c.note == null ? cursor : c.note;
+      const n = Math.min(list.length, Math.max(cursor, want));
+      if (n > cursor) flow.push({ type: "steps", steps: list.slice(cursor, n), start: cursor });
+      cursor = n;
+    }
+    if (c.text) flow.push({ type: "text", text: c.text, note: idx > 0 ? c.note : null });
+  });
+  if (cursor < list.length) flow.push({ type: "steps", steps: list.slice(cursor), start: cursor });
+  return flow;
+}

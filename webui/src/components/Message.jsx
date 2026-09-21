@@ -4,7 +4,7 @@ import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
 import extractProducts from "../extractProducts.js";
-import { splitSegments } from "../segmentNotes.js";
+import { buildTurnFlow } from "../segmentNotes.js";
 import { Icon } from "./icons.jsx";
 
 import { silentWarn } from "../quiet.js";
@@ -224,17 +224,15 @@ function Step({ t, index }) {
   );
 }
 
-// ── 过程带（内联时间线）───────────────────────────────
-function ProcessRail({ tools, streaming, onFocusActivity }) {
-  const list = (tools || []).filter((t) => t && t.tool);
-  const [open, setOpen] = React.useState(streaming);
-  React.useEffect(() => { if (!streaming) setOpen(false); }, [streaming]);
+// ── 步骤组：内联在正文之间，按「发生顺序」展示（默认展开，可收起）──
+// 相邻正文段之间的工具归为一组，插到正确的时序位置——解决「所有工具堆在正文顶部」。
+function StepGroup({ steps, start = 0, streaming, onFocusActivity, showMore }) {
+  const list = (steps || []).filter((t) => t && t.tool);
+  const [open, setOpen] = React.useState(true);
   if (!list.length) return null;
-  const total = list.length;
   const done = list.filter((t) => t.status === "done").length;
   const failed = list.filter((t) => t.status === "failed").length;
   const running = list.filter((t) => t.status === "running").length;
-  const pct = total ? Math.round((done / total) * 100) : 0;
   const durSum = list.reduce((n, t) => n + (Number(String(t.duration || "").replace(/[^\d.]/g, "")) || 0), 0);
   return (
     <div className={`rail ${open ? "rail-open" : ""}`}>
@@ -244,18 +242,17 @@ function ProcessRail({ tools, streaming, onFocusActivity }) {
         <span className="rail-ic"><Icon name="settings" size={13} /></span>
         <span className="rail-title">执行过程</span>
         <span className="rail-sub">
-          {streaming ? `${done}/${total}` : `${total} 步`}
+          {streaming && running ? `${done}/${list.length}` : `${list.length} 步`}
           {failed ? ` · ${failed} 失败` : ""}
           {durSum > 0 ? ` · 共 ${durSum.toFixed(1)}s` : ""}
         </span>
-        <span className="rail-prog"><span className="rail-track"><i style={{ width: `${pct}%` }} /></span>
-          {streaming && running ? <span className="rail-live" /> : null}</span>
+        {streaming && running ? <span className="rail-live" /> : null}
         <svg className="rail-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6" /></svg>
       </div>
       {open && (
         <div className="rail-body">
-          {list.map((t, i) => <Step key={t.id || i} t={t} index={i + 1} />)}
-          {onFocusActivity && (
+          {list.map((t, i) => <Step key={t.id || i} t={t} index={start + i + 1} />)}
+          {showMore && onFocusActivity && (
             <button className="rail-more" onClick={onFocusActivity}>在右侧「活动」查看全部与筛选 ▸</button>
           )}
         </div>
@@ -289,18 +286,10 @@ function Artifacts({ paths }) {
   );
 }
 
-// ── 正文：按「分段锚点」在多段输出间接入因果标注 ──────────
-function SegmentedBody({ text, segs, streaming }) {
-  const chunks = React.useMemo(() => splitSegments(text, segs), [text, segs]);
+// ── 正文/步骤的因果标注 ──────────────────────────────
+function SegNote({ n }) {
   return (
-    <>
-      {chunks.map((c, i) => (
-        <React.Fragment key={i}>
-          {c.note != null && <div className="seg-note"><Icon name="refresh" size={11} /><span>基于第 {c.note} 步结果</span></div>}
-          {c.text && <Markdown text={c.text} deferCode={streaming && i === chunks.length - 1} />}
-        </React.Fragment>
-      ))}
-    </>
+    <div className="seg-note"><Icon name="refresh" size={11} /><span>基于第 {n} 步结果</span></div>
   );
 }
 
@@ -381,6 +370,12 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
   const stepCount = (msg.tools || []).filter((t) => t && t.tool).length;
   const failedCount = (msg.tools || []).filter((t) => t && t.status === "failed").length;
   const totalMs = msg.metrics && msg.metrics.total_ms;
+  // 按时间顺序把「步骤」与「正文段」交错排列（信息流）；无锚点时退化为步骤在前。
+  const flow = React.useMemo(
+    () => buildTurnFlow(msg.text, msg.segs, msg.tools),
+    [msg.text, msg.segs, msg.tools]
+  );
+  const lastStepBlock = flow.reduce((acc, b, idx) => (b.type === "steps" ? idx : acc), -1);
 
   return (
     <div className="msg msg-assistant">
@@ -407,8 +402,16 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
 
         <PlanBlock plan={msg.plan} tools={msg.tools} />
         {msg.think && <ThinkBlock text={msg.think} streaming={msg.streaming} />}
-        {stepCount > 0 && <ProcessRail tools={msg.tools} streaming={msg.streaming} onFocusActivity={onFocusActivity} />}
-        {msg.text && <SegmentedBody text={msg.text} segs={msg.segs} streaming={msg.streaming} />}
+        {flow.map((b, i) => (b.type === "steps"
+          ? <StepGroup key={`s${i}`} steps={b.steps} start={b.start || 0}
+              streaming={msg.streaming} onFocusActivity={onFocusActivity} showMore={i === lastStepBlock} />
+          : (
+            <React.Fragment key={`t${i}`}>
+              {b.note != null && <SegNote n={b.note} />}
+              <Markdown text={b.text} deferCode={msg.streaming} />
+            </React.Fragment>
+          )
+        ))}
         {msg.streaming && <span className="caret" />}
         {!msg.streaming && <Artifacts paths={artifacts} />}
 

@@ -1243,9 +1243,174 @@ function ResultView({ raw }) {
   return <pre className="act-result">{text}</pre>;
 }
 
+// ── 交付物：跨会话最近产出 + 本会话产物，按类型分组 / 最新优先 ──
+// 数据来自 /v1/deliverables（后端已规范化去重、剔除系统路径/目录）与消息推导产物；
+// 前端再按绝对路径合并去重，交付类型优先，代码/脚本默认折叠。
+const DLV_TYPES = [
+  { id: "video", label: "视频", icon: "play" },
+  { id: "image", label: "图片", icon: "image" },
+  { id: "doc", label: "文档", icon: "file" },
+  { id: "sheet", label: "表格", icon: "grid" },
+  { id: "slides", label: "演示", icon: "layers" },
+  { id: "audio", label: "音频", icon: "volume" },
+  { id: "data", label: "数据", icon: "database" },
+  { id: "archive", label: "压缩包", icon: "package" },
+  { id: "code", label: "代码/脚本", icon: "code" },
+  { id: "other", label: "其他", icon: "file" },
+];
+const DLV_EXT = {
+  video: ["mp4", "mov", "webm", "mkv", "avi", "flv", "wmv", "m4v"],
+  audio: ["mp3", "wav", "flac", "aac", "m4a", "ogg", "opus", "wma"],
+  image: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tif", "tiff", "avif"],
+  doc: ["pdf", "doc", "docx", "md", "markdown", "txt", "rtf", "odt", "epub", "mobi", "log"],
+  sheet: ["xlsx", "xls", "csv", "tsv"],
+  slides: ["ppt", "pptx", "key", "odp"],
+  data: ["json", "jsonl", "xml", "yaml", "yml", "toml", "ini", "db", "sqlite", "sql"],
+  code: ["py", "js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "html", "htm", "css", "scss", "java", "c", "h", "cpp", "hpp", "cs", "go", "rs", "rb", "php", "sh", "ps1", "bat", "cmd", "lua"],
+  archive: ["zip", "rar", "7z", "tar", "gz", "bz2", "xz"],
+};
+const DLV_TYPE_BY_EXT = (() => {
+  const m = {};
+  for (const [t, exts] of Object.entries(DLV_EXT)) exts.forEach((e) => { m[e] = t; });
+  return m;
+})();
+const dlvTypeOf = (name) => DLV_TYPE_BY_EXT[extOf(name)] || "other";
+const dlvMetaOf = (t) => DLV_TYPES.find((x) => x.id === t) || DLV_TYPES[DLV_TYPES.length - 1];
+const dlvNorm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+
+export function DeliverablesSection({ products, items, onGoFiles, onInject }) {
+  const [groupBy, setGroupBy] = React.useState("type");
+  const [typeFilter, setTypeFilter] = React.useState("all");
+  const [hideCode, setHideCode] = React.useState(true);
+  const [q, setQ] = React.useState("");
+
+  const merged = React.useMemo(() => {
+    const map = new Map();
+    (products || []).forEach((p) => {
+      const path = p && (p.path || p);
+      if (!path) return;
+      const k = dlvNorm(path);
+      map.set(k, {
+        path, name: (p && p.name) || String(path).split(/[\\/]/).pop(),
+        type: dlvTypeOf(path), size_label: "", mtime: 0, mtime_label: "", _at: (p && p.at) || 0,
+      });
+    });
+    (items || []).forEach((d) => {
+      if (!d || !d.path) return;
+      const k = dlvNorm(d.path);
+      const prev = map.get(k) || {};
+      map.set(k, { ...prev, ...d, type: d.type || prev.type || dlvTypeOf(d.path) });
+    });
+    return [...map.values()].sort((a, b) => (b.mtime || 0) - (a.mtime || 0) || (b._at || 0) - (a._at || 0));
+  }, [products, items]);
+
+  const latestKey = merged.length ? dlvNorm(merged[0].path) : "";
+  const qq = q.trim().toLowerCase();
+  const filtered = merged.filter((d) => {
+    if (typeFilter !== "all" && d.type !== typeFilter) return false;
+    if (hideCode && d.type === "code") return false;
+    if (qq && !`${d.name} ${d.path}`.toLowerCase().includes(qq)) return false;
+    return true;
+  });
+  const codeCount = merged.filter((d) => d.type === "code").length;
+
+  if (!merged.length) {
+    return (
+      <section className="dlv">
+        <div className="dlv-head"><Icon name="package" size={14} /><span>交付物</span></div>
+        <div className="fx-hint">AI 产出文件（成片 / 图 / 文档…）会按类型汇总到这里。</div>
+      </section>
+    );
+  }
+
+  const renderItem = (d) => {
+    const mt = dlvMetaOf(d.type);
+    const isLatest = dlvNorm(d.path) === latestKey;
+    return (
+      <div className="dlv-item" key={d.path} title={d.path}>
+        <span className="dlv-ic"><Icon name={mt.icon} size={13} /></span>
+        <span className="dlv-main">
+          <span className="dlv-name">{d.name}{isLatest && <em className="dlv-new">最新</em>}</span>
+          <span className="dlv-meta">{[mt.label, d.size_label || "", d.mtime_label || ""].filter(Boolean).join(" · ")}</span>
+        </span>
+        <span className="dlv-ops">
+          <MiniBtn icon="external" label="打开" onClick={() => api.openFile(d.path).catch(() => {})} />
+          <MiniBtn icon="folder-open" label="定位" onClick={() => api.openDir(d.path).catch(() => {})} />
+          <MiniBtn icon="copy" label="复制路径" onClick={() => copyText(d.path).catch(() => {})} />
+          {onInject && <MiniBtn icon="import" label="注入输入框" onClick={() => onInject(d.path)} />}
+        </span>
+      </div>
+    );
+  };
+
+  let groups;
+  if (groupBy === "latest") {
+    groups = [{ key: "all", title: "", list: filtered }];
+  } else if (groupBy === "time") {
+    const now = Date.now();
+    const just = [], today = [], older = [];
+    filtered.forEach((d) => {
+      const ms = (d.mtime || 0) * 1000;
+      if (ms && now - ms < 2 * 60 * 1000) just.push(d);
+      else if (ms && new Date(ms).toDateString() === new Date(now).toDateString()) today.push(d);
+      else older.push(d);
+    });
+    groups = [["just", "刚刚产出", just], ["today", "今天", today], ["older", "更早", older]]
+      .filter((b) => b[2].length).map((b) => ({ key: b[0], title: b[1], list: b[2] }));
+  } else {
+    groups = DLV_TYPES
+      .map((t) => ({ key: t.id, title: t.label, icon: t.icon, list: filtered.filter((d) => d.type === t.id) }))
+      .filter((g) => g.list.length);
+  }
+
+  return (
+    <section className="dlv">
+      <div className="dlv-head">
+        <Icon name="package" size={14} /><span>交付物</span>
+        <span className="act-count">{filtered.length}</span>
+        {onGoFiles && <button className="msg-op" title="去文件栏管理" onClick={() => onGoFiles()}>文件栏</button>}
+      </div>
+      <div className="dlv-toolbar">
+        <select className="dlv-sel" aria-label="分组方式" value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
+          <option value="type">按类型</option>
+          <option value="latest">最新优先</option>
+          <option value="time">按时间</option>
+        </select>
+        <select className="dlv-sel" aria-label="类型筛选" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+          <option value="all">全部类型</option>
+          {DLV_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+        <input className="dlv-q" placeholder="筛选…" aria-label="筛选交付物" value={q} onChange={(e) => setQ(e.target.value)} />
+        {codeCount > 0 && (
+          <button className="msg-op" title="是否显示代码/脚本文件" onClick={() => setHideCode((v) => !v)}>
+            {hideCode ? `代码 ${codeCount}` : "隐藏代码"}
+          </button>
+        )}
+      </div>
+      {filtered.length === 0 ? (
+        <div className="fx-hint">当前筛选下没有交付物{hideCode && codeCount ? "（代码文件已隐藏，点上方按钮显示）" : ""}。</div>
+      ) : (
+        <div className="dlv-list">
+          {groups.map((g) => (
+            <div className="dlv-group" key={g.key}>
+              {g.title && (
+                <div className="dlv-group-t">
+                  {g.icon && <Icon name={g.icon} size={12} />}<span>{g.title}</span>
+                  <span className="dlv-group-n">{g.list.length}</span>
+                </div>
+              )}
+              {g.list.map(renderItem)}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+
 function ActivityTab({ activity, products, onGoFiles, onInject, active }) {
   const [fullResult, setFullResult] = React.useState({});
-  const [prodOpen, setProdOpen] = React.useState(true);
   const [copied, setCopied] = React.useState("");
   const [expanded, setExpanded] = React.useState(null);
   const [statusFilter, setStatusFilter] = React.useState("all");
@@ -1257,10 +1422,12 @@ function ActivityTab({ activity, products, onGoFiles, onInject, active }) {
   const [evSt, setEvSt] = React.useState(null);
   const [evFail, setEvFail] = React.useState(null);
   const [evOpen, setEvOpen] = React.useState(false);
+  const [dlvItems, setDlvItems] = React.useState(null);
   useVisiblePolling(() => {
     api.getContext().then((d) => d && setEvCtx(d)).catch(() => {});
     api.getStatus().then((d) => d && setEvSt(d)).catch(() => {});
     api.getFailures().then((d) => d && setEvFail(d)).catch(() => {});
+    api.getDeliverables().then((d) => d && setDlvItems(d.items || [])).catch(() => {});
   }, 10000, active);
 
   const degradations = (evCtx && evCtx.degradations) || [];
@@ -1307,10 +1474,6 @@ function ActivityTab({ activity, products, onGoFiles, onInject, active }) {
   const matchCount = filterOn ? turns.reduce((n, t) => n + t.steps.filter(matchStep).length, 0) : totalSteps;
 
   const prodList = Array.isArray(products) ? products : [];
-  const prodAct = (path, act) => {
-    const p = act === "opendir" ? api.openDir(path) : api.openFile(path);
-    p && p.catch && p.catch(() => {});
-  };
   const flashCopy = (key) => { setCopied(key); setTimeout(() => setCopied(""), 1500); };
   const copyStep = (s, key) => copyText(`# ${s.tool}\n参数：${s.argsText || "—"}\n结果：\n${s.result == null ? "" : String(s.result)}`).then(() => flashCopy(key)).catch(() => {});
   const copyAll = () => copyText(turns.map((t) => `## 轮次 ${t.taskId + 1}${t.time ? ` (${t.time})` : ""}\n` + t.steps.map((s) => `[${s.status}] ${s.tool}${s.duration ? ` (${s.duration}s)` : ""}\n  ${s.argsText || ""}\n  ${s.result == null ? "" : String(s.result)}`).join("\n\n")).join("\n\n")).then(() => flashCopy("all")).catch(() => {});
@@ -1321,39 +1484,7 @@ function ActivityTab({ activity, products, onGoFiles, onInject, active }) {
 
   return (
     <div className="aux-tab">
-      <section className="act-products">
-        <div className="act-products-head">
-          <button className="act-products-toggle" aria-expanded={prodOpen} onClick={() => setProdOpen(!prodOpen)}>
-            <Icon name={prodOpen ? "chevron-down" : "chevron-right"} size={13} />
-            <Icon name="package" size={14} />
-            <span>本会话产物</span>
-            <span className="act-count">{prodList.length}</span>
-          </button>
-          {prodList.length > 0 && onGoFiles && (
-            <button className="msg-op" title="去文件栏管理" onClick={() => onGoFiles()}>去文件</button>
-          )}
-        </div>
-        {prodOpen && (prodList.length > 0 ? (
-          <div className="act-prods">
-            {prodList.map((item) => {
-              const path = item.path || item;
-              const nm = item.name || String(path).split(/[\\/]/).pop();
-              return (
-                <div className="act-prod" key={path} title={path}>
-                  <span className="act-prod-name"><Icon name={fileIconName(nm)} size={13} />{nm}</span>
-                  <span className="act-prod-ops">
-                    <MiniBtn icon="external" label="打开" onClick={() => prodAct(path, "open")} />
-                    <MiniBtn icon="folder-open" label="定位" onClick={() => prodAct(path, "opendir")} />
-                    {onInject && <MiniBtn icon="import" label="注入输入框" onClick={() => onInject(path)} />}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="fx-hint">AI 写出文件后会自动列在这里，反复可看。</div>
-        ))}
-      </section>
+      <DeliverablesSection products={prodList} items={dlvItems} onGoFiles={onGoFiles} onInject={onInject} />
 
       {hasEvents && (
         <section className="act-events">

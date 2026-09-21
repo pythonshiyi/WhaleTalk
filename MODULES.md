@@ -1,8 +1,8 @@
-# 模块地图（v3.16.14 Web 版）
+# 模块地图（v3.16.15 Web 版）
 
-本文档描述鲸语 WhaleTalk 当前（v3.16.14，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
+本文档描述鲸语 WhaleTalk 当前（v3.16.15，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
 
-> 规模口径（`tools/check_docs.py` 实测）：**165 个 Agent 工具**（11 组）· **101 /v1 端点** · 后端 86 个 pytest 文件 / 852 用例 · 前端 21 个 node 套件；源码约 7.2 万行（根目录 3.3 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万）。
+> 规模口径（`tools/check_docs.py` 实测）：**165 个 Agent 工具**（11 组）· **102 /v1 端点** · 后端 86 个 pytest 文件 / 852 用例 · 前端 21 个 node 套件；源码约 7.2 万行（根目录 3.3 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万）。
 
 ## 分层总览
 
@@ -10,7 +10,7 @@
 web_app.py（唯一入口：浏览器 + 托盘 + 快捷方式 + 依赖自检）
     │
     ▼
-api_server.py（本地 HTTP API：REST + SSE，101 /v1 端点）
+api_server.py（本地 HTTP API：REST + SSE，102 /v1 端点）
     │
     ▼
 deepseek_client.py（能力引擎：DeepSeekClient + 165 工具 + smart_tools）
@@ -37,7 +37,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 165 工具 + smart_tools）
 | 模块 | 职责 |
 |---|---|
 | `web_app.py`（925 行） | 唯一启动入口：启动本地 API、自动打开浏览器、系统托盘常驻、桌面/开始菜单快捷方式、开机自启、单实例、WebUI 自动构建（npm）、Python 依赖自检与自动安装 |
-| `api_server.py`（9,364 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/插件/指令库/工作台/大脑/TTS/审计/备份/更新等 **101 个 /v1 端点**（等 101 端点，含失败记忆生命周期 `/v1/failures/resolve|reopen|forget`、技能结晶 `/v1/skills/crystallize`、文件全局搜索 `/v1/files/search` 与重命名 `/v1/files/rename`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
+| `api_server.py`（9,364 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/插件/指令库/工作台/大脑/TTS/审计/备份/更新等 **102 个 /v1 端点**（等 102 端点，含失败记忆生命周期 `/v1/failures/resolve|reopen|forget`、技能结晶 `/v1/skills/crystallize`、文件全局搜索 `/v1/files/search` 与重命名 `/v1/files/rename`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
 
 ### 能力引擎
 
@@ -183,6 +183,6 @@ deepseek_client.py（能力引擎：DeepSeekClient + 165 工具 + smart_tools）
 
 ### 明确不做
 
-- **不为"优雅"合并那 101 个端点**：CRUD 端点薄是特性不是缺陷。
+- **不为"优雅"合并那 102 个端点**：CRUD 端点薄是特性不是缺陷。
 - **不给 `write_file`/`run_python` 加拦截**：`run_python` 本就绕得过，工具层设卡只挡君子（详见 [docs/信任内核.md](docs/信任内核.md) 第 8 节）。
 - **不合并 `snapshot.py` 与 `trust_kernel.py`**：两者生命周期语义不同（200 条轮转 vs 永不裁剪）。

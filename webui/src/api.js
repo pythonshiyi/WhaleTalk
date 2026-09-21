@@ -760,6 +760,14 @@ export async function getSelfProfile() {
 export async function getFailures() {
   return api("/v1/failures");
 }
+
+/**
+ * 交付物清单（跨会话·最近产出，规范化去重 + 类型/大小/时间）。
+ * @returns {Promise<{items:Array<{path:string,name:string,type:string,size_label?:string,mtime?:number,mtime_label?:string}>}>}
+ */
+export async function getDeliverables() {
+  return api("/v1/deliverables");
+}
 /**
  * 失败记忆生命周期动作（G18）：resolve=标记已修复 / reopen=撤销消解 / forget=彻底移除。
  * @param {{fingerprint?: string, tool?: string, note?: string}} body

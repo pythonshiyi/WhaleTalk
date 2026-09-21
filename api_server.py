@@ -3237,20 +3237,118 @@ def _insight_report(days=7):
         self_model=self_model, days=days)
 
 
+def _is_system_path(p):
+    """系统/程序目录下的路径视为「非产物」（如 C:\\Windows\\Fonts、Program Files）。"""
+    try:
+        low = os.path.normcase(os.path.abspath(str(p)))
+    except Exception:
+        return True
+    for root in (os.environ.get("WINDIR"), os.environ.get("ProgramFiles"),
+                 os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramData"),
+                 os.environ.get("SystemRoot")):
+        if not root:
+            continue
+        try:
+            r = os.path.normcase(os.path.abspath(root))
+        except Exception:
+            continue
+        if low == r or low.startswith(r + os.sep):
+            return True
+    return False
+
+
 def _record_recent_output(result):
-    """工具产物路径提取（recent_outputs.json，去重上限 50）。"""
+    """工具产物路径提取（recent_outputs.json）。
+
+    只收**真实文件**（跳过目录/系统路径），路径**规范化 + 大小写去重**（旧实现把
+    `d:\\x` / `D:\\x` / `D:\\\\x` 当成三个不同项，且把 AI 写的脚本、读过的字体、
+    工作区目录一并塞进来——「最近产出」因此被噪声淹没）。上限 80，保留最新。
+    """
     try:
         import stores
-        recent = stores.load_recent(RECENT_PATH)
+        prev = stores.load_recent(RECENT_PATH)
+        seen = set()
+        clean = []
+        for p in prev:
+            try:
+                np = os.path.normpath(str(p))
+            except Exception:
+                continue
+            if not os.path.isfile(np) or _is_system_path(np):
+                continue  # 清洗历史噪声：目录 / 系统路径 / 已不存在
+            key = os.path.normcase(np)
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(np)
+        added = False
         for m in shared.PATH_RE.finditer(str(result or "")):
-            p = m.group(0)
-            if os.path.exists(p) and p not in recent:
-                recent.append(p)
-        if len(recent) > 50:
-            recent = recent[-50:]
-        stores.save_recent(RECENT_PATH, recent)
+            try:
+                np = os.path.normpath(m.group(0).strip())
+            except Exception:
+                continue
+            if not os.path.isfile(np) or _is_system_path(np):
+                continue
+            key = os.path.normcase(np)
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(np)
+            added = True
+        if len(clean) > 80:
+            clean = clean[-80:]
+        if added or len(clean) != len(prev):
+            stores.save_recent(RECENT_PATH, clean)
     except Exception:
         pass
+
+
+_DELIVERABLE_TYPES = {
+    "video": {"mp4", "mov", "webm", "mkv", "avi", "flv", "wmv", "m4v"},
+    "audio": {"mp3", "wav", "flac", "aac", "m4a", "ogg", "opus", "wma"},
+    "image": {"png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tif", "tiff", "avif"},
+    "doc": {"pdf", "doc", "docx", "md", "markdown", "txt", "rtf", "odt", "epub", "mobi", "log"},
+    "sheet": {"xlsx", "xls", "csv", "tsv"},
+    "slides": {"ppt", "pptx", "key", "odp"},
+    "data": {"json", "jsonl", "xml", "yaml", "yml", "toml", "ini", "db", "sqlite", "sql"},
+    "code": {"py", "js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "html", "htm", "css", "scss",
+             "java", "c", "h", "cpp", "hpp", "cs", "go", "rs", "rb", "php", "sh", "ps1", "bat", "cmd", "lua"},
+    "archive": {"zip", "rar", "7z", "tar", "gz", "bz2", "xz"},
+}
+
+
+def _deliverable_type(name):
+    ext = (str(name or "").rsplit(".", 1)[-1] if "." in str(name or "") else "").lower()
+    for t, exts in _DELIVERABLE_TYPES.items():
+        if ext in exts:
+            return t
+    return "other"
+
+
+def _deliverables():
+    """交付物清单：最近产出中**真实存在**的文件，规范化去重、补齐类型/大小/时间，按时间倒序。
+
+    跨会话（recent_outputs.json），供右栏「交付物」按类型分组/排序展示。
+    """
+    import stores
+    out = []
+    seen = set()
+    for p in reversed(stores.load_recent(RECENT_PATH)[-120:]):  # 新→旧
+        try:
+            np = os.path.normpath(str(p))
+        except Exception:
+            continue
+        key = os.path.normcase(np)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not os.path.isfile(np) or _is_system_path(np):
+            continue
+        m = _file_meta(np)
+        m["type"] = _deliverable_type(m.get("name") or np)
+        out.append(m)
+    out.sort(key=lambda x: (x.get("mtime") or 0), reverse=True)
+    return {"items": out}
 
 
 def _decrypt_val(v):
@@ -7370,6 +7468,11 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(200, data)
         else:
             self._json(200, _files())
+
+
+    @_get_route("/v1/deliverables")
+    def _g_v1_deliverables(self):
+        self._json(200, _deliverables())
 
 
     @_get_route(("qpath", "/v1/files/search"))

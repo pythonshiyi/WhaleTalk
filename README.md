@@ -145,7 +145,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：165 工具（11 组）· 101 个 `/v1` 路由 · 后端 86 个 pytest 文件 / 852 用例 · 前端 21 个 node 套件。
+- **规模**：165 工具（11 组）· 102 个 `/v1` 路由 · 后端 86 个 pytest 文件 / 852 用例 · 前端 21 个 node 套件。
 
 ---
 
@@ -205,7 +205,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 ## 🕘 更新与版本
 
-- **版本单一源**：`config_defaults.VERSION`（当前 **3.16.14**），最新变更见 [CHANGELOG.md](CHANGELOG.md)。
+- **版本单一源**：`config_defaults.VERSION`（当前 **3.16.15**），最新变更见 [CHANGELOG.md](CHANGELOG.md)。
 - **更新源**：GitHub Releases（`api.github.com/repos/pythonshiyi/WhaleTalk/releases/latest`，可自定义 `update_url`）。
 - **更新方式**：应用内「关于 → 检查更新」自动检测；更新包支持 Ed25519 签名 + SHA-256 校验；更新前自动备份，可一键回滚。
 - **兼容性**：旧配置自动迁移，旧数据目录无缝升级。
@@ -230,7 +230,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 ## English Introduction
 
-**WhaleTalk v3.16.14** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
+**WhaleTalk v3.16.15** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
 
 - **Capabilities**: **165 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
 - **Self-evolution**: proposal branches, failure-pattern lifecycle, success-pattern reuse — merging stays in your hands.
