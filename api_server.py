@@ -6833,6 +6833,21 @@ class _Handler(BaseHTTPRequestHandler):
                     ][:9]
                     if fls:
                         item["files"] = fls
+                # 多段输出的分段锚点（重载后还原「↳ 基于第 N 步」因果标注）
+                if isinstance(m.get("segs"), list):
+                    segs = []
+                    for s in m["segs"][:64]:
+                        if not isinstance(s, dict):
+                            continue
+                        try:
+                            _i = int(s.get("i"))
+                            _n = int(s.get("n"))
+                        except (TypeError, ValueError):
+                            continue
+                        if _i >= 0 and _n >= 0:
+                            segs.append({"i": _i, "n": _n})
+                    if segs:
+                        item["segs"] = segs
                 msgs.append(item)
             return {
                 "id": str(d.get("id") or sid),
@@ -7010,6 +7025,22 @@ class _Handler(BaseHTTPRequestHandler):
                         })
                 if cleaned_files:
                     item["files"] = cleaned_files
+            # 多段输出的分段锚点（{i: 字符偏移, n: 该段前工具步数}）：仅用于前端重载后还原因果标注
+            segs = m.get("segs")
+            if isinstance(segs, list):
+                cleaned_segs = []
+                for s in segs[:64]:
+                    if not isinstance(s, dict):
+                        continue
+                    try:
+                        _i = int(s.get("i"))
+                        _n = int(s.get("n"))
+                    except (TypeError, ValueError):
+                        continue
+                    if _i >= 0 and _n >= 0:
+                        cleaned_segs.append({"i": _i, "n": _n})
+                if cleaned_segs:
+                    item["segs"] = cleaned_segs
             clean.append(item)
         sid = self._safe_sid(str(body.get("id") or ""))
         if not sid:

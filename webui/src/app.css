@@ -3996,3 +3996,104 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
 .px-proc-group-btn { display: flex; align-items: center; gap: 4px; width: 100%; background: none; border: none; cursor: pointer; text-align: left; font-family: var(--font-ui); }
 .px-proc-group-btn:hover { color: var(--text-2); }
 .px-proc-group-btn svg { flex-shrink: 0; }
+
+/* ═══ 回合信息流（P3）：状态徽标 / 计划 / 过程带 / 产物 / 分段因果 ═══ */
+/* 回合状态徽标 */
+.turn-badge { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-3xs); padding: 2px 8px; border-radius: var(--r-full); border: 1px solid var(--border); color: var(--text-3); }
+.turn-badge-run { color: var(--brand-strong); border-color: rgba(var(--brand-rgb), .4); background: var(--brand-soft); }
+.turn-badge-ok { color: var(--ok-text); border-color: rgba(var(--ok-rgb), .4); background: var(--ok-soft); }
+.turn-badge-warn { color: var(--warn-text); border-color: rgba(var(--warn-rgb), .4); background: var(--warn-soft); }
+.turn-badge-err { color: var(--danger-text); border-color: rgba(var(--danger-rgb), .4); background: var(--danger-soft); }
+.turn-live { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s infinite; }
+
+/* 思考块：仅生成中脉冲；结束给体量 */
+.think-block:not(.think-live) .think-dot { animation: none; background: var(--text-3); box-shadow: none; }
+.think-meta { color: var(--text-3); font-size: var(--fs-3xs); font-family: var(--font-mono); margin-left: auto; }
+
+/* 计划 checklist */
+.plan-block { border: 1px dashed var(--border-strong); border-radius: var(--r-md); background: var(--bg-1); padding: 9px 12px; margin-bottom: var(--sp-3); }
+.plan-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-3xs); color: var(--text-3); margin-bottom: 6px; }
+.plan-cnt { margin-left: auto; font-family: var(--font-mono); }
+.plan-list { list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.plan-item { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-2); }
+.plan-node { width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--border-strong); display: grid; place-items: center; font-size: 9px; color: var(--text-3); font-family: var(--font-mono); flex-shrink: 0; }
+.plan-name { font-family: var(--font-mono); font-size: var(--fs-xs); }
+.plan-done .plan-node { color: var(--ok-text); border-color: rgba(var(--ok-rgb), .5); background: var(--ok-soft); }
+.plan-done .plan-name { color: var(--text-3); text-decoration: line-through; }
+.plan-run .plan-name { color: var(--text-1); }
+.plan-run .plan-node { color: var(--brand-strong); border-color: rgba(var(--brand-rgb), .55); animation: pulse 1.5s infinite; }
+.plan-fail .plan-node { color: var(--danger-text); border-color: rgba(var(--danger-rgb), .5); background: var(--danger-soft); }
+
+/* 过程带 */
+.rail { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; margin-bottom: var(--sp-3); }
+.rail-head { display: flex; align-items: center; gap: var(--sp-2); padding: 8px var(--sp-3); cursor: pointer; user-select: none; transition: background var(--dur-fast) var(--ease); }
+.rail-head:hover { background: var(--bg-hover); }
+.rail-ic { width: 22px; height: 22px; border-radius: var(--r-sm); display: grid; place-items: center; background: var(--brand-soft); color: var(--brand-strong); border: 1px solid var(--border); flex-shrink: 0; }
+.rail-title { font-size: var(--fs-sm); font-weight: 600; color: var(--text-1); }
+.rail-sub { font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono); white-space: nowrap; }
+.rail-prog { margin-left: auto; display: flex; align-items: center; gap: 7px; }
+.rail-track { width: 130px; height: 5px; border-radius: 3px; background: var(--bg-3); overflow: hidden; }
+.rail-track > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--brand), var(--ai)); transition: width .35s var(--ease); }
+.rail-live { width: 7px; height: 7px; border-radius: 50%; background: var(--brand-strong); animation: pulse 1.4s infinite; }
+.rail-chev { color: var(--text-3); transition: transform var(--dur) var(--ease); flex-shrink: 0; }
+.rail-open .rail-chev { transform: rotate(180deg); }
+.rail-body { border-top: 1px solid var(--border); padding: 4px 6px 8px; animation: msgIn .2s var(--ease); }
+.rail-more { width: 100%; margin-top: 4px; background: none; border: none; color: var(--text-3); font-size: var(--fs-3xs); cursor: pointer; padding: 5px; border-radius: var(--r-sm); }
+.rail-more:hover { color: var(--brand-strong); background: var(--bg-hover); }
+
+/* 步骤 */
+.step { position: relative; padding: 5px 6px 5px 28px; border-radius: var(--r-sm); transition: background var(--dur-fast) var(--ease); }
+.step:hover { background: var(--bg-hover); }
+.step::before { content: ""; position: absolute; left: 13px; top: 25px; bottom: -3px; width: 1px; background: var(--border); }
+.step:last-child::before { display: none; }
+.step-node { position: absolute; left: 5px; top: 5px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-family: var(--font-mono); border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--text-3); z-index: 1; }
+.step-done .step-node { color: var(--ok-text); border-color: rgba(var(--ok-rgb), .5); background: var(--ok-soft); }
+.step-fail .step-node { color: var(--danger-text); border-color: rgba(var(--danger-rgb), .55); background: var(--danger-soft); }
+.step-run .step-node { color: var(--brand-strong); border-color: rgba(var(--brand-rgb), .6); animation: pulse 1.4s infinite; }
+.step-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.step-ic { width: 20px; height: 20px; border-radius: var(--r-xs); display: grid; place-items: center; background: var(--bg-2); border: 1px solid var(--border); color: var(--text-2); flex-shrink: 0; }
+.step-done .step-ic { color: var(--ok-text); border-color: rgba(var(--ok-rgb), .3); }
+.step-fail .step-ic { color: var(--danger-text); border-color: rgba(var(--danger-rgb), .35); }
+.step-run .step-ic { color: var(--brand-strong); border-color: rgba(var(--brand-rgb), .4); }
+.step-name { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-1); white-space: nowrap; }
+.step-args { font-family: var(--font-mono); font-size: var(--fs-3xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+.step-right { margin-left: auto; display: flex; align-items: center; gap: 9px; font-size: var(--fs-3xs); font-family: var(--font-mono); white-space: nowrap; flex-shrink: 0; }
+.step-dur { color: var(--ok-text); }
+.step-run .step-run, .step-run .step-dur { color: var(--brand-strong); }
+.step-fail .step-dur { color: var(--danger-text); }
+.step-chev { color: var(--text-3); }
+.step-row:hover .step-chev { color: var(--brand-strong); }
+.step-detail { margin: 6px 0 2px; border: 1px solid var(--border); border-left: 2px solid var(--border-strong); border-radius: 0 var(--r-sm) var(--r-sm) 0; background: var(--bg-2); padding: 8px 11px; font-family: var(--font-mono); font-size: var(--fs-3xs); color: var(--text-2); line-height: 1.65; max-height: 200px; overflow: auto; animation: msgIn .2s var(--ease); user-select: text; }
+.step-detail .sd-args, .step-detail .sd-result { white-space: pre-wrap; word-break: break-word; }
+.step-detail .sd-args { margin-bottom: 6px; }
+.step-fail .step-detail { border-left-color: var(--danger); color: var(--danger-text); }
+.sd-lbl { display: inline-block; min-width: 34px; color: var(--text-3); margin-right: 6px; }
+.sd-ops { margin-top: 6px; display: flex; gap: 4px; }
+
+/* 本回合产物（ta-* 前缀，避免与工作台 .prod-* 冲突） */
+.ta-wrap { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-1); padding: 9px 12px; margin-top: 10px; }
+.ta-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-3xs); color: var(--text-3); margin-bottom: 8px; }
+.ta-cnt { margin-left: auto; font-family: var(--font-mono); }
+.ta-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.ta-item { display: flex; align-items: center; gap: 9px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-2); padding: 6px 9px; min-width: 200px; flex: 1 1 220px; }
+.ta-ic { width: 30px; height: 30px; border-radius: var(--r-sm); display: grid; place-items: center; background: var(--bg-3); color: var(--brand-strong); flex-shrink: 0; }
+.ta-meta { min-width: 0; display: flex; flex-direction: column; }
+.ta-name { font-size: var(--fs-sm); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ta-tag { font-size: var(--fs-3xs); color: var(--text-3); font-family: var(--font-mono); }
+.ta-ops { margin-left: auto; display: flex; gap: 3px; flex-shrink: 0; }
+
+/* 分段因果：↳ 基于第 N 步结果 */
+.seg-note { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0 3px; font-size: var(--fs-3xs); color: var(--text-3); }
+.seg-note::before { content: ""; width: 12px; height: 1px; background: var(--border-strong); }
+
+/* 密度：过程带/步骤/计划 */
+.chat-scroll[data-density="compact"] .rail-head { padding: 5px 10px; }
+.chat-scroll[data-density="compact"] .step { padding: 3px 6px 3px 26px; }
+.chat-scroll[data-density="compact"] .plan-block,
+.chat-scroll[data-density="compact"] .rail,
+.chat-scroll[data-density="compact"] .ta-wrap { margin-bottom: 6px; }
+.chat-scroll[data-density="loose"] .rail-head { padding: 10px 14px; }
+.chat-scroll[data-density="loose"] .step { padding: 7px 8px 7px 30px; }
+.chat-scroll[data-density="loose"] .plan-block,
+.chat-scroll[data-density="loose"] .rail,
+.chat-scroll[data-density="loose"] .ta-wrap { margin-bottom: 14px; }

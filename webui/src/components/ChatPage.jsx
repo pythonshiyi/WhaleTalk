@@ -54,6 +54,7 @@ function toSaveMessages(msgs) {
     } else if (m.role === "assistant") {
       const am = { role: "assistant", content: unwrapLongText(m.text || "") };
       if (m.think) am.reasoning_content = m.think;
+      if (m.segs && m.segs.length) am.segs = m.segs;
       if (m.usage) am.usage = m.usage;
       if (m.metrics) am.metrics = m.metrics;
       if (m.tools && m.tools.length) {
@@ -335,9 +336,18 @@ function useBackendChat({
             },
             onContent: (t) => {
               if (!alive || stopRef.current) return;
-              // 新一段（前面已出过文字、且其间调用了工具）：补段间空行，避免多轮输出粘连
-              const chunk = withSegmentBreak(acc, t, needSegBreak);
+              // 新一段（前面已出过文字、且其间调用了工具）：补段间空行，避免多轮输出粘连。
+              // 同时记录「分段锚点」{i: 段起点字符偏移, n: 该段之前的工具步数}——
+              // 供渲染层在段间插入「↳ 基于第 N 步结果」，把输出与步骤的因果显式化。
+              const wasBreak = needSegBreak;
               needSegBreak = false;
+              const segIndex = acc.length;
+              const chunk = withSegmentBreak(acc, t, wasBreak);
+              if (wasBreak && !isContinue) {
+                const _cur = currentMsg();
+                const stepN = _cur && _cur.tools ? _cur.tools.length : 0;
+                patchLast((x) => ({ ...x, segs: [...(x.segs || []), { i: segIndex, n: stepN }] }));
+              }
               acc += chunk;
               feedAuto();
               scheduleBatch({ text: chunk, gen: "⏳ 等待模型响应…" });
@@ -430,7 +440,17 @@ function useBackendChat({
               if (alive && !stopRef.current) onPrompt && onPrompt({ ...ev, type: "approval" });
             },
             onPlanRequest: (ev) => {
-              if (alive && !stopRef.current) onPrompt && onPrompt({ ...ev, type: "plan" });
+              if (alive && !stopRef.current) {
+                // 待执行工具计划：落到当前助手消息（渲染为 checklist，状态由已执行工具推导）
+                const steps = Array.isArray(ev && ev.steps)
+                  ? ev.steps.map((s) => ({ name: String((s && s.name) || ""), args: s && s.args })).filter((s) => s.name)
+                  : [];
+                if (steps.length) {
+                  if (isContinue) updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, plan: steps } : x)));
+                  else patchLast((x) => ({ ...x, plan: steps }));
+                }
+                onPrompt && onPrompt({ ...ev, type: "plan" });
+              }
             },
             onNeedsConfirmation: (ev) => {
               // 成本预检拦截：标记本次为「待确认」，由 finish() 移除空占位并等待用户决定。
@@ -646,6 +666,8 @@ function useDataSources() {
               tools,
               text: m.content,
               streaming: false,
+              // 多段输出的分段锚点（用于重载后还原「↳ 基于第 N 步」）
+              ...(Array.isArray(m.segs) && m.segs.length ? { segs: m.segs } : {}),
               // 历史会话回显：单条用量/速率
               usage: m.usage,
               metrics: m.metrics,
@@ -1227,6 +1249,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
               content: msg.text,
               reasoning_content: msg.think || "",
               ...(calls.length ? { tool_calls: calls } : {}),
+              // 多段输出的分段锚点（段起点字符偏移 + 该段前工具步数）：重载后可还原因果标注
+              ...(msg.segs && msg.segs.length ? { segs: msg.segs } : {}),
               // 用量/速率随消息落盘（历史会话回显；后端据此汇总会话级统计）
               ...(msg.usage ? { usage: msg.usage } : {}),
               ...(msg.metrics ? { metrics: msg.metrics } : {}),

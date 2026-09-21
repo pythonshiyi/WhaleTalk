@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.13）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.14）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,9 +17,9 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.13`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.14`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-09）**：**165 个 Agent 工具**（11 组）、
-  **101 个 `/v1` 路由**、**82 个 pytest 文件 / 836 用例 + 20 个前端 node 套件**、
+  **101 个 `/v1` 路由**、**86 个 pytest 文件 / 852 用例 + 21 个前端 node 套件**、
   源码约 **7.2 万行**（根目录 3.3 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万；
   主力为 `api_server.py` 9,364 / `deepseek_client.py` 5,574 / `brainkit.py` 2,865）。
 - **三层架构**：`web_app.py`（入口）→ `api_server.py`（本地 API）→
@@ -45,8 +45,8 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试（改完代码必跑）──
-python -m pytest -q                      # 后端回归（82 个文件 / 836 用例；CI 同款）
-cd webui && npm test                     # 前端 20 个 node 套件（解析器/渲染器/工具函数）
+python -m pytest -q                      # 后端回归（82 个文件 / 852 用例；CI 同款）
+cd webui && npm test                     # 前端 21 个 node 套件（解析器/渲染器/工具函数）
 cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typedef 与后端字段对齐门禁）
 
 # ── 工具系统四道门禁（改工具必跑）──
@@ -165,7 +165,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（165 �
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本、`_restore_proposals.py`（从会话救回被误删提案） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 82 个 pytest 文件 / 836 用例 |
+| `tests/` | 后端回归 86 个 pytest 文件 / 852 用例 |
 | `webui/tests/` | 前端 node 测试 20 个 + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建） |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库） |
 
@@ -537,7 +537,7 @@ def my_tool(...): ...
 
 ---
 
-## 14. 测试资产速查（tests/，82 个 pytest 文件 / 836 用例）
+## 14. 测试资产速查（tests/，86 个 pytest 文件 / 852 用例）
 
 按领域分组（文件名即内容）：
 
@@ -583,5 +583,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（165 工具 / 101 路由 / 836 用例 / 版本 3.16.13）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（165 工具 / 101 路由 / 852 用例 / 版本 3.16.14）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*
