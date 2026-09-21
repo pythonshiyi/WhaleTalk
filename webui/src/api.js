@@ -456,10 +456,12 @@ export async function listSessions() {
 
 /**
  * 保存/追加会话（带 session_id 的流式对话结束后后端也会自动落盘）。
- * @param {{id?:string, name?:string, messages:ChatMessage[], model?:string, append?:boolean, stars?:number, pinned?:boolean, tags?:string[]}} p
+ * `turn_id` 传本次生成的 stream_id：后端据此把生成期周期落盘的「在制回合」就地替换为
+ * 最终回合，既防崩溃丢失、也不重复追加 user。
+ * @param {{id?:string, name?:string, messages:ChatMessage[], model?:string, append?:boolean, turn_id?:string, stars?:number, pinned?:boolean, tags?:string[]}} p
  * @returns {Promise<string>} 会话 id
  */
-export async function saveSession({ id, name, messages, model, append, stars, pinned, tags }) {
+export async function saveSession({ id, name, messages, model, append, turn_id, stars, pinned, tags }) {
   const d = await api("/v1/sessions", {
     method: "POST",
     body: JSON.stringify({
@@ -468,6 +470,7 @@ export async function saveSession({ id, name, messages, model, append, stars, pi
       messages,
       model,
       append,
+      ...(turn_id !== undefined ? { turn_id } : {}),
       ...(stars !== undefined ? { stars } : {}),
       ...(pinned !== undefined ? { pinned } : {}),
       ...(tags !== undefined ? { tags } : {}),

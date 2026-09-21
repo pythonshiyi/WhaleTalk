@@ -1205,6 +1205,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         const sid = await api.saveSession({
           id: activeId || undefined,
           append: isExisting,
+          // 本次生成的 stream_id：后端据此把生成期「在制回合」就地替换为最终回合
+          turn_id: streamIdRef.current || undefined,
           name: isExisting
             ? (activeSession?.title || userText.replace(/\s+/g, " ").slice(0, 24))
             : userText.replace(/\s+/g, " ").slice(0, 24),

@@ -7004,15 +7004,38 @@ class _Handler(BaseHTTPRequestHandler):
                 old = {}
         # append 语义（连续对话）：本轮消息追加到已有会话尾部（按首条 user 消息去重）。
         # 前端 onSend 会清空界面 msgs，闭包保存不到历史 → 由后端读旧文件合并，保证完整。
+        #
+        # 「在制回合」（turn）标记：生成过程中后端会按 turn_id 周期性落盘（user + 已生成），
+        # 若进程被强杀，重启后会话仍有记录（否则新会话会完全丢失）。turn_len 记录该回合
+        # 当前占用的消息条数，使后续保存能「就地替换」而非重复追加。
+        old_msgs = list(old.get("messages") or [])
+        old_turn_id = str(old.get("turn_id") or "")
+        old_turn_len = _safe_int(old.get("turn_len"))
+        new_turn_id = str(body.get("turn_id") or "")
+
+        def _replace_inprogress(msgs, new_msgs):
+            if old_turn_len > 0 and len(msgs) >= old_turn_len:
+                return msgs[:-old_turn_len] + new_msgs
+            return msgs + new_msgs
+
         saved_msgs = clean
-        if body.get("append") and old.get("messages"):
-            # 防重复：**仅当本轮消息恰好是既有会话的尾部**（完全相同的最后 N 条）才跳过。
-            # 旧实现按「首条 user 内容在最近 50 条里出现过」判定，会把用户合法的重复回合
-            # （「继续」「好的」）整轮丢弃（含助手回复与工具结果）——是数据丢失，已改。
-            old_msgs = list(old["messages"])
-            n = len(clean)
-            dup_found = bool(n) and len(old_msgs) >= n and old_msgs[-n:] == clean
-            saved_msgs = old_msgs + clean if not dup_found else old_msgs
+        in_progress = False
+        if body.get("turn_upsert") and new_turn_id:
+            # 生成中的周期落盘：同一 turn_id 就地替换在制回合；否则追加为新回合。
+            saved_msgs = (_replace_inprogress(old_msgs, clean)
+                          if old_turn_id == new_turn_id else old_msgs + clean)
+            in_progress = True
+        elif body.get("append") and old_msgs:
+            if new_turn_id and old_turn_id == new_turn_id:
+                # 最终保存：用最终回合就地替换生成期的在制回合（不重复追加 user）。
+                saved_msgs = _replace_inprogress(old_msgs, clean)
+            else:
+                # 防重复：**仅当本轮消息恰好是既有会话的尾部**（完全相同的最后 N 条）才跳过。
+                # 旧实现按「首条 user 内容在最近 50 条里出现过」判定，会把用户合法的重复回合
+                # （「继续」「好的」）整轮丢弃（含助手回复与工具结果）——是数据丢失，已改。
+                n = len(clean)
+                dup_found = bool(n) and len(old_msgs) >= n and old_msgs[-n:] == clean
+                saved_msgs = old_msgs + clean if not dup_found else old_msgs
         # 会话级累计（输入/输出/缓存 + 平均输出速率）：由消息的 usage/metrics 汇总，
         # append 场景下对「旧消息 + 新消息」整体求和，保证连续对话累计正确。
         usage_total = {"prompt": 0, "completion": 0, "cache_hit": 0, "cache_miss": 0}
@@ -7050,6 +7073,10 @@ class _Handler(BaseHTTPRequestHandler):
             "ephemeral": False,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
         }
+        # 在制回合标记：周期落盘期间保留（供崩溃恢复）；最终/覆盖保存时清除。
+        if in_progress and new_turn_id:
+            data["turn_id"] = new_turn_id
+            data["turn_len"] = len(clean)
         try:
             os.makedirs(SESSIONS_DIR, exist_ok=True)
             from persistence import atomic_json_write
@@ -9144,6 +9171,27 @@ class _Handler(BaseHTTPRequestHandler):
         is_continue = bool(body.get("continue_prefix"))
         generated = []
         reply_parts = []
+        # 崩溃安全：生成期按 turn_id 周期落盘「本轮 user + 已流式正文」，进程被强杀后
+        # 重启仍有会话记录（此前只在回合结束落盘，新会话一旦中途被杀就完全丢失）。
+        _users = [m for m in persist_base if isinstance(m, dict) and m.get("role") == "user"]
+        _user_turn = [_users[-1]] if _users else []
+        _last_save = [0.0]
+
+        def _save_progress(force=False):
+            if is_continue or not _user_turn:
+                return
+            now = time.time()
+            if not force and (now - _last_save[0]) < 4.0:
+                return
+            _last_save[0] = now
+            turn = list(_user_turn)
+            text = "".join(reply_parts)
+            if text:
+                turn.append({"role": "assistant", "content": text})
+            try:
+                _persist_job_turn(job, body, turn, upsert=True)
+            except Exception:
+                logger.exception("在制回合周期落盘失败（可降级）")
         try:
             # 本作业线程私有工具链/断点/任务态（并发会话互不串味）
             _begin_job_state()
@@ -9155,6 +9203,7 @@ class _Handler(BaseHTTPRequestHandler):
             # 事件：会话 id（前端据此统一落盘 id——新会话也能拿到后端分配的 id，
             # 避免「前端另存一份」与兜底落盘各生成一个 id）。
             send("session", {"id": job.sid, "stream_id": job.id})
+            _save_progress(force=True)  # 先落一版（仅本轮 user）：此刻起即使进程被杀也不丢会话
             client, cfg = self._client_from_cfg(body)
             kb = self._budget_block(cfg)
             if kb:
@@ -9198,11 +9247,21 @@ class _Handler(BaseHTTPRequestHandler):
                     pass
                 send("metrics", m)
 
+            def _on_content(t):
+                send("content", {"text": t})
+                reply_parts.append(t)
+                _save_progress()
+
+            def _on_tool(n, a, r, cid=None):
+                send("tool", {"name": n, "args": a, "result": r, "id": cid})
+                _tool_bookkeeping(n, a, r)
+                _save_progress(force=True)
+
             kwargs.update({
                 "on_reasoning": lambda t: send("reasoning", {"text": t}),
-                "on_content": lambda t: (send("content", {"text": t}), reply_parts.append(t)),
+                "on_content": _on_content,
                 "on_tool_start": lambda n, a, cid=None: send("tool_start", {"name": n, "args": a, "id": cid}),
-                "on_tool": lambda n, a, r, cid=None: (send("tool", {"name": n, "args": a, "result": r, "id": cid}), _tool_bookkeeping(n, a, r)),
+                "on_tool": _on_tool,
                 "on_tool_duration": lambda n, d, cid=None: send("tool_duration", {"name": n, "duration": d, "id": cid}),
                 "on_usage": lambda u: (send("usage", u), _record_usage(u, cfg, body)),
                 "on_metrics": _on_metrics,
@@ -9384,6 +9443,31 @@ def _save_session_detached(body):
         return None, "error"
 
 
+def _persist_job_turn(job, body, turn, upsert):
+    """落盘本轮（在制或最终）。
+
+    - upsert=True：生成中周期落盘，按 `job.id`（stream_id）就地替换在制回合，
+      进程被强杀后重启仍有会话记录（否则新会话会完全丢失）。
+    - upsert=False：最终兜底，append 语义（带 turn_id，替换生成期的在制回合）。
+    """
+    turn = [m for m in turn if isinstance(m, dict)]
+    if not turn:
+        return
+    name = str(body.get("session_name") or "").strip()
+    if not name:
+        users = [m for m in turn if m.get("role") == "user"]
+        name = (_msg_text(users[-1]) if users else "").strip().replace("\n", " ")[:24] or "会话"
+    _save_session_detached({
+        "id": job.sid,
+        "append": not upsert,
+        "turn_upsert": bool(upsert),
+        "turn_id": job.id,
+        "name": name[:80],
+        "messages": turn,
+        "model": str(body.get("model") or ""),
+    })
+
+
 def _save_job_turn(job, body, persist_base, generated):
     """断连兜底：把「本轮 user + 新生成的 assistant/tool」以 append 语义落盘。
 
@@ -9391,18 +9475,7 @@ def _save_job_turn(job, body, persist_base, generated):
     """
     users = [m for m in persist_base if isinstance(m, dict) and m.get("role") == "user"]
     turn = ([users[-1]] if users else []) + [m for m in generated if isinstance(m, dict)]
-    if not turn:
-        return
-    name = str(body.get("session_name") or "").strip()
-    if not name:
-        name = (_msg_text(users[-1]) if users else "").strip().replace("\n", " ")[:24] or "会话"
-    _save_session_detached({
-        "id": job.sid,
-        "append": True,
-        "name": name[:80],
-        "messages": turn,
-        "model": str(body.get("model") or ""),
-    })
+    _persist_job_turn(job, body, turn, upsert=False)
 
 
 def _stop_chat(body):
