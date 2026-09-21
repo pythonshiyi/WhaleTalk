@@ -2745,6 +2745,10 @@ def _friendly_error(e):
         return ("无法连接模型网关——请检查网络；若使用了代理软件（Clash/V2Ray 等）请确认其正在运行，"
                 "或在 Windows「设置 → 网络和 Internet → 代理」关闭残留的系统代理（代理已关但系统代理仍启用会导致连接被拒）。"
                 "也可在「设置 → 模型与网关」核对网关地址与 API Key。")
+    if ("incomplete chunked read" in low or "peer closed connection" in low
+            or "remote protocol error" in low or "server disconnected" in low):
+        return ("上游连接中断（流式响应未传完）——多为网关/代理不稳定或服务端主动断开。"
+                "请稍后重试；若频繁出现，检查代理（Clash/V2Ray 等）或换用直连网关。")
     if "429" in low or "rate limit" in low or "too many requests" in low:
         return "请求过于频繁（限速）——请稍等片刻再试"
     if "401" in low or "invalid api key" in low or "authentication" in low or "unauthorized" in low:

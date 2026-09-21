@@ -133,6 +133,14 @@ try:
 except ImportError:
     _fetch_blocked_impl = None
 
+# 瞬时网络/协议错误：openai SDK 只在**建连请求阶段**把 httpx 异常包成
+# APIConnectionError；进入流式迭代（Stream.__next__）后 httpx 的传输/协议异常
+# 会**原样**抛出——例如上游/网关中途断开报
+# 「peer closed connection without sending complete message body (incomplete chunked read)」
+# 实为 httpx.RemoteProtocolError。故一并纳入统一处理，既能在「尚无增量送达 UI」时
+# 整体重试，也能在有半截内容时按「网络中断」收尾，而不是把原始英文栈冒泡到界面。
+_TRANSIENT_NET_ERRORS = (APIConnectionError, APITimeoutError, httpx.TransportError)
+
 logger = logging.getLogger("whaletalk")
 
 
@@ -4835,8 +4843,10 @@ class DeepSeekClient:
                 kw = dict(kwargs) if req_msgs is not work else kwargs
                 if req_msgs is not work:
                     kw["messages"] = req_msgs
-                # 流中途断线（APIConnectionError）会抛在 _create_with_retry 之外：
-                # 仅在「尚无任何增量送达 UI」时整体重试，避免已显示内容重复
+                # 流中途断线（_TRANSIENT_NET_ERRORS：含 openai 包装的 APIConnectionError，
+                # 以及流式迭代阶段原样冒泡的 httpx 传输/协议错误）会抛在
+                # _create_with_retry 之外：仅在「尚无任何增量送达 UI」时整体重试，
+                # 避免已显示内容重复
                 reasoning, content, tool_calls, finish_reason = "", "", {}, None
                 stream_usage = None
                 held = {"reasoning": "", "content": "", "tool_calls": []}
@@ -4850,7 +4860,7 @@ class DeepSeekClient:
                                 response, on_reasoning, on_content, stop_event, holder=held
                             )
                             break
-                        except (APIConnectionError, APITimeoutError) as e:
+                        except _TRANSIENT_NET_ERRORS as e:
                             # 用增量镜像判断是否已有内容送达 UI（局部变量在异常时不会赋值）
                             if (held["reasoning"] or held["content"] or held["tool_calls"]
                                     or stream_attempt == 1):
@@ -4859,7 +4869,7 @@ class DeepSeekClient:
                 except _StopRequested:
                     _emit_metrics(interrupted=True)  # 停止：仍下发已产生的统计（标注已中断）
                     return False  # 停止请求：干净返回，不把半截内容当异常抛给 UI
-                except (APIConnectionError, APITimeoutError) as e:
+                except _TRANSIENT_NET_ERRORS as e:
                     logger.warning("流式连接中途断开，本轮生成未完成: %s", e)
                     # 首轮即断线且零输出（无任何 reasoning/content/tool_calls 送达）：属硬失败。
                     # 向上抛让调用方报错——否则静默 return False 会被 SSE 当成正常 done，
@@ -5411,7 +5421,7 @@ class DeepSeekClient:
             except RateLimitError as e:
                 last_error = e
                 logger.warning("限流(429)，第 %s 次重试", i)
-            except (APIConnectionError, APITimeoutError) as e:
+            except (APIConnectionError, APITimeoutError, httpx.TransportError) as e:
                 last_error = e
                 logger.warning("网络错误，第 %s 次重试", i)
             except APIError as e:

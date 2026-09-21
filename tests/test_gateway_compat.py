@@ -11,6 +11,9 @@ FIM `prefix`、strict 工具 schema、/user/balance）在第三方 OpenAI 兼容
   3. 非官方网关下 fim_complete 明确报错而非发起网络请求；
   4. 非官方网关下 check_balance 返回说明性错误而非请求 /user/balance。
 """
+import types
+
+import httpx
 import pytest
 
 import config_utils
@@ -125,3 +128,67 @@ def test_friendly_error_detects_html_gateway_page():
     # 双拼路径也能识别
     msg2 = api_server._friendly_error(RuntimeError("Error 404 ... /chat/completions/chat/completions"))
     assert "网关" in msg2
+
+
+# ── 6. 流式迭代阶段的上游断开（httpx 协议错误）→ 重试 / 友好收尾 ─────
+def _chunk(content=None, finish=None):
+    delta = types.SimpleNamespace(content=content, reasoning_content=None, tool_calls=None)
+    return types.SimpleNamespace(choices=[types.SimpleNamespace(delta=delta, finish_reason=finish)], usage=None)
+
+
+def test_friendly_error_maps_incomplete_chunked_read():
+    import api_server
+
+    msg = api_server._friendly_error(RuntimeError(
+        "peer closed connection without sending complete message body (incomplete chunked read)"))
+    assert "上游连接中断" in msg
+
+
+def test_chat_retries_httpx_protocol_error_when_no_content_yet():
+    """流式迭代里 httpx.RemoteProtocolError（openai 不会包装）在尚无增量时须整体重试。"""
+    client = dc.DeepSeekClient(api_key="sk-test", base_url=CUSTOM, model="deepseek-flash")
+    calls = {"n": 0}
+
+    class _BoomStream:
+        def __iter__(self):
+            raise httpx.RemoteProtocolError(
+                "peer closed connection without sending complete message body (incomplete chunked read)")
+
+        def close(self):
+            pass
+
+    def fake_create(kwargs, attempts=3, stop_event=None):
+        calls["n"] += 1
+        return _BoomStream() if calls["n"] == 1 else iter([_chunk(content="ok", finish="stop")])
+
+    client._create_with_retry = fake_create
+    got = []
+    ok = client.chat([{"role": "user", "content": "hi"}], pure_chat=True,
+                     thinking="none", on_content=got.append)
+    assert ok is True and "".join(got) == "ok" and calls["n"] == 2
+
+
+def test_chat_reports_truncation_on_protocol_error_after_content():
+    """已有增量送达 UI 后再断线：不重试（避免重复），按「网络中断」明确收尾。"""
+    client = dc.DeepSeekClient(api_key="sk-test", base_url=CUSTOM, model="deepseek-flash")
+    calls = {"n": 0}
+
+    class _PartialThenBoom:
+        def __iter__(self):
+            yield _chunk(content="部分")
+            raise httpx.RemoteProtocolError(
+                "peer closed connection without sending complete message body (incomplete chunked read)")
+
+        def close(self):
+            pass
+
+    def fake_create(kwargs, attempts=3, stop_event=None):
+        calls["n"] += 1
+        return _PartialThenBoom()
+
+    client._create_with_retry = fake_create
+    trunc = []
+    ok = client.chat([{"role": "user", "content": "hi"}], pure_chat=True, thinking="none",
+                     on_content=lambda _t: None, on_truncated=trunc.append)
+    assert ok is False and calls["n"] == 1
+    assert trunc and "网络中断" in trunc[-1]
