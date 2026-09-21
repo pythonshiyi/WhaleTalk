@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.8）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.9）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,7 +17,7 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.8`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.9`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-09）**：**165 个 Agent 工具**（11 组）、
   **101 个 `/v1` 路由**、**82 个 pytest 文件 / 836 用例 + 20 个前端 node 套件**、
   源码约 **7.2 万行**（根目录 3.3 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万；
@@ -392,7 +392,7 @@ def my_tool(...): ...
 | `stats.json` | 用量统计（按天×模型 + 峰谷定价） |
 | `failures.json` / `failures_archive.json` / `patterns.json` | 失败模式（生命周期）/ 归档 / 成功模式 |
 | `schedules.json` / `workflows.json` / `checkpoint.json` | 定时任务 / 流程 / 任务检查点 |
-| `profiles.json` / `user_tools.json` / `prompts.json` | Profile / 自定义工具 / 指令库 |
+| `profiles.json` / `gateway_keys.json` / `user_tools.json` / `prompts.json` | Profile 配置方案 / 按网关地址记忆的凭据（切换网关免重填 Key）/ 自定义工具 / 指令库 |
 | `undo/` | 写操作快照（snapshot.py，200 条轮转） |
 | `archives/` | 上下文压缩归档 |
 | `egress.jsonl` / `degradations.json` | 出网账本 / 退化日志（append-only） |
@@ -583,5 +583,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（165 工具 / 101 路由 / 836 用例 / 版本 3.16.8）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（165 工具 / 101 路由 / 836 用例 / 版本 3.16.9）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

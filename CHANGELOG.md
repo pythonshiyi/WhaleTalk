@@ -2,6 +2,30 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.9（2026-09-21）—— 🔑 多网关切换：方案持久化加固 + 按网关记忆 Key
+
+**版本号 3.16.8 → 3.16.9。** 回应实测：保存的网关（配置方案）「重启或其它原因会消失」，且每次切换不同网关都要重新填写 API Key。
+
+### 根因
+
+- **数据目录曾搬家**（`~/Documents/WhaleTalk` → `<程序>/data`）且不做迁移：旧目录里的方案不再被读取，表现为「保存的网关重启后消失」。
+- **潜在数据丢失**：`profiles.py` 读文件一旦解析失败会**静默返回空表**，下一次保存即以空表为底覆盖磁盘——方案被彻底清空且毫无提示。
+- **设计缺口**：切换网关（改 `base_url`）时**不记忆该网关的 Key**，所以每次切回都要重填。
+
+### 修复
+
+- **方案持久化加固**（`profiles.py`）：读失败不再静默清空——先自动从 `.bak` 恢复并修回主文件，仍失败则抛 `ProfileReadError` 让上层**中止写入**；每次覆盖前保留 `.bak`。
+- **按网关记忆凭据**（新增 `gateway_keys.json`，api_key DPAPI 加密）：`POST /v1/config` 保存时自动「记住旧网关 Key / 回填新网关已记住的 Key」（显式填写的 Key 优先），响应带 `restored_key` 供前端提示。
+- **接口加固**（`api_server.py`）：`/v1/profiles` 对损坏文件明确报错、不覆盖；保存方案不再强制要求 Key（支持 Ollama 等无 Key 网关）；删除方案不再误清 `current`。
+- **一次性迁移**：启动时从旧数据目录（`~/Documents/WhaleTalk`、程序根）补齐**缺失**的方案与网关凭据（哨兵 `.profiles_migrated`，只跑一次，不覆盖现有项）。
+- **前端**（`SettingsPage.jsx`）：方案行显示 `🔑 含 Key / ⚠️ 无 Key`；切换供应商网关若自动回填 Key 会提示；补充说明文案。
+
+### 验证
+
+`pytest` **843 passed / 1 skipped**（新增 `tests/test_profiles.py` 7 项：多方案互不覆盖 / `.bak` 与损坏恢复 / 无备份时抛错 / 网关地址归一 / 切换网关免重填）；前端 `npm run typecheck`、`npm test` 全绿；`tools/check_docs.py` 通过。
+
+---
+
 ## v3.16.8（2026-09-20）—— ⏱ 长任务不再被 60/120 秒同步超时与进程守卫误杀
 
 **版本号 3.16.7 → 3.16.8。** 回应实测：《三更帖》MV 全片渲染总在 60/120 秒被终止、模型随后才想起用后台——根因是 `run_python` 同步上限 60s、`run_command` 默认 120s，超时 `_kill_tree` 杀掉**整棵进程树**，连带脚本内的 `ProcessPoolExecutor` 一起死（`BrokenProcessPool`）。

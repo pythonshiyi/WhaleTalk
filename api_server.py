@@ -2811,6 +2811,7 @@ def _init_dc_paths():
     import deepseek_client as dc
     import profiles as profiles_mod
     profiles_mod.DEFAULT_PROFILES_PATH = os.path.join(DATA_DIR, "profiles.json")
+    profiles_mod.DEFAULT_GATEWAYS_PATH = os.path.join(DATA_DIR, "gateway_keys.json")
 
     wiring = _dc_wiring_table()
     # 注入前存在性检查（必须失败，列出全部缺失项而非第一个）
@@ -4603,15 +4604,96 @@ def _roles_save(body):
 
 def _profiles_get():
     import profiles as profiles_mod
-    data = profiles_mod.load_profiles()
+    try:
+        data = profiles_mod.load_profiles()
+    except profiles_mod.ProfileReadError as e:
+        # 文件损坏：明确报错，不返回空表（避免用户以为方案被删、再次保存覆盖）
+        logger.error("读取配置方案失败：%s", e)
+        return {"profiles": [], "current": "", "error": "配置方案文件损坏，已尝试从备份恢复；请检查 data/profiles.json"}
     profiles = data.get("profiles") or {}
     return {
         "profiles": [
-            {"name": str(name), "model": str(p.get("model") or ""), "base_url": str(p.get("base_url") or "")}
+            {"name": str(name), "model": str(p.get("model") or ""),
+             "base_url": str(p.get("base_url") or ""),
+             "has_key": bool(str(p.get("api_key") or "").strip())}
             for name, p in profiles.items() if isinstance(p, dict)
         ],
         "current": str(data.get("current") or ""),
     }
+
+
+def _touch_file(path):
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "a", encoding="utf-8"):
+            pass
+    except Exception:
+        logger.warning("写哨兵文件失败（可降级）：%s", path, exc_info=True)
+
+
+def _migrate_legacy_profiles():
+    """一次性把旧数据目录里的「配置方案 / 网关凭据」并入当前数据目录。
+
+    背景：数据目录曾被搬到 <程序>/data，旧目录（~/Documents/WhaleTalk）里的
+    方案不会自动读取——用户表现为「保存的网关重启后消失」。
+
+    策略：仅补齐当前**缺失**的方案名（当前文件优先，绝不覆盖），网关凭据同理；
+    全程只跑一次（哨兵 ``.profiles_migrated``），避免用户主动删除后被反复复活。
+    返回补齐的方案数。
+    """
+    import profiles as profiles_mod
+    sentinel = os.path.join(DATA_DIR, ".profiles_migrated")
+    if os.path.exists(sentinel):
+        return 0
+    try:
+        cur = profiles_mod.load_profiles(PROFILES_PATH)
+    except profiles_mod.ProfileReadError:
+        # 当前文件损坏：不迁移，交由读错误处理（避免与恢复流程打架）
+        return 0
+    profiles = dict(cur.get("profiles") or {})
+    added = 0
+    candidates = []
+    for c in (
+        os.path.join(os.path.expanduser("~"), "Documents", "WhaleTalk", "profiles.json"),
+        os.path.join(BASE_DIR, "profiles.json"),
+    ):
+        c = os.path.abspath(c)
+        if c != os.path.abspath(PROFILES_PATH) and os.path.exists(c):
+            candidates.append(c)
+    for c in candidates:
+        try:
+            d = profiles_mod.load_profiles(c)
+        except Exception:
+            logger.warning("读取旧配置方案失败（跳过）：%s", c, exc_info=True)
+            continue
+        for nm, p in (d.get("profiles") or {}).items():
+            if nm not in profiles:
+                profiles[nm] = p
+                added += 1
+    if added:
+        if profiles_mod.save_profiles({"profiles": profiles, "current": cur.get("current") or ""}, PROFILES_PATH):
+            logger.info("已从旧数据目录补齐 %s 个配置方案", added)
+        else:
+            added = 0
+    # 网关凭据：同样只补缺失项
+    try:
+        gk = profiles_mod.load_gateway_keys(GATEWAYS_PATH)
+        g_added = 0
+        for c in candidates:
+            legacy_gk = os.path.join(os.path.dirname(c), "gateway_keys.json")
+            if not os.path.exists(legacy_gk):
+                continue
+            for url, g in profiles_mod.load_gateway_keys(legacy_gk).items():
+                if url not in gk:
+                    gk[url] = g
+                    g_added += 1
+        if g_added:
+            profiles_mod.save_gateway_keys(gk, GATEWAYS_PATH)
+            logger.info("已从旧数据目录补齐 %s 条网关凭据", g_added)
+    except Exception:
+        logger.warning("迁移旧网关凭据失败（可降级）", exc_info=True)
+    _touch_file(sentinel)
+    return added
 
 
 def _reset_llm_client_cache():
@@ -4619,6 +4701,38 @@ def _reset_llm_client_cache():
     import deepseek_client as dc
     dc.set_active_client(None)
     dc._ACTIVE_FALLBACK["sig"], dc._ACTIVE_FALLBACK["client"] = None, None
+
+
+def _sync_gateway_key(cfg, old_base_url, old_api_key, old_model, key_provided, url_provided):
+    """按网关地址记忆/回填 API Key（就地修改 cfg）。
+
+    目标：切换网关不必重填 Key。
+    - 网关地址发生变化且有旧 Key → 把旧 Key 记忆到旧地址；
+    - 本次改了网关地址且未显式提供 api_key → 回填该地址已记住的 Key（显式输入优先）；
+    - 任何情况下，当前有效的 Key 都记忆到当前地址，供下次切回。
+
+    返回是否发生了「回填」（供前端提示）。全程 fail-soft：失败仅留痕，不影响配置保存。
+    """
+    import profiles as profiles_mod
+    restored = False
+    try:
+        new_base_url = str(cfg.get("base_url") or "").strip()
+        old_n = profiles_mod._norm_url(old_base_url)
+        new_n = profiles_mod._norm_url(new_base_url)
+        if old_api_key and old_n and old_n != new_n:
+            profiles_mod.remember_gateway_key(old_base_url, old_api_key, old_model)
+        if url_provided and not key_provided:
+            g = profiles_mod.gateway_key_for(new_base_url)
+            if g and str(g.get("api_key") or "").strip():
+                cfg["api_key"] = g["api_key"]
+                if not str(cfg.get("model") or "").strip() and g.get("model"):
+                    cfg["model"] = str(g["model"]).strip()
+                restored = True
+        if str(cfg.get("api_key") or "").strip():
+            profiles_mod.remember_gateway_key(new_base_url, cfg.get("api_key"), cfg.get("model"))
+    except Exception:
+        logger.warning("网关凭据记忆/回填失败（可降级）", exc_info=True)
+    return restored
 
 
 # ===== 语音朗读（Web 端朗读按钮/自动模式 的合成服务端）=====
@@ -5117,19 +5231,25 @@ def _profiles_post(body):
         return None, "未知 action（save/apply/delete）"
     if not name:
         return None, "缺少方案名 name"
-    data = profiles_mod.load_profiles()
+    try:
+        data = profiles_mod.load_profiles()
+    except profiles_mod.ProfileReadError as e:
+        # 文件损坏：中止任何写操作，否则会以空表覆盖磁盘、彻底丢方案
+        logger.error("配置方案文件损坏，已中止本次操作：%s", e)
+        return None, "配置方案文件损坏（已保留原文件与 .bak 备份），请检查 data/profiles.json 后重试"
     profiles = data.get("profiles") or {}
     if action == "save":
         cfg = config_utils.load_config()
         key = str(cfg.get("api_key") or "").strip()
-        if not key:
-            return None, "当前未配置 API Key，无可保存的方案"
-        profiles[name] = {
-            "api_key": key,
-            "base_url": str(cfg.get("base_url") or "").strip(),
-            "model": str(cfg.get("model") or "").strip(),
-        }
+        base_url = str(cfg.get("base_url") or "").strip()
+        model = str(cfg.get("model") or "").strip()
+        # 允许保存「无需 Key」的网关（如本地 Ollama）；有 Key 则顺带记忆到网关凭据表
+        profiles[name] = {"api_key": key, "base_url": base_url, "model": model}
         data["current"] = name
+        try:
+            profiles_mod.remember_gateway_key(base_url, key, model)
+        except Exception:
+            logger.warning("记忆网关凭据失败（可降级）", exc_info=True)
     elif action == "apply":
         p = profiles.get(name)
         if not isinstance(p, dict):
@@ -5141,6 +5261,11 @@ def _profiles_post(body):
                 cfg[k] = v
         config_utils.save_config(cfg)
         data["current"] = name
+        try:
+            profiles_mod.remember_gateway_key(
+                cfg.get("base_url"), cfg.get("api_key"), cfg.get("model"))
+        except Exception:
+            logger.warning("记忆网关凭据失败（可降级）", exc_info=True)
         _init_dc_paths()          # 接线热同步（图片键/网关派生等跟随新 cfg）
         _reset_llm_client_cache()  # 下次对话/工具调用按新方案重建客户端
         try:
@@ -6003,11 +6128,13 @@ PATTERNS_PATH = os.path.join(DATA_DIR, "patterns.json")
 WORKFLOWS_PATH = os.path.join(DATA_DIR, "workflows.json")
 CHECKPOINT_PATH = os.path.join(DATA_DIR, "task_checkpoint.json")
 PROFILES_PATH = os.path.join(DATA_DIR, "profiles.json")
+GATEWAYS_PATH = os.path.join(DATA_DIR, "gateway_keys.json")
 USER_TOOLS_PATH = os.path.join(DATA_DIR, "user_tools.json")
 DIST_DIR = os.path.join(_ORIG_DIR, "webui", "dist")
 try:
     import profiles as _profiles_mod
     _profiles_mod.DEFAULT_PROFILES_PATH = PROFILES_PATH
+    _profiles_mod.DEFAULT_GATEWAYS_PATH = GATEWAYS_PATH
     import user_tools as _user_tools_mod
     _user_tools_mod.DEFAULT_USER_TOOLS_PATH = USER_TOOLS_PATH
 except Exception:
@@ -8341,6 +8468,11 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             import config_utils
             cfg = config_utils.mutable_config()   # 读—改—写：必须用副本（勿污染共享缓存）
+            old_base_url = str(cfg.get("base_url") or "").strip()
+            old_api_key = str(cfg.get("api_key") or "").strip()
+            old_model = str(cfg.get("model") or "").strip()
+            key_provided = bool(str(body.get("api_key") or "").strip())
+            url_provided = "base_url" in body and body.get("base_url") is not None
             for k, typ in (("model", str), ("thinking", str), ("scenario", str), ("max_tokens", int),
                    ("tools_enabled", bool), ("privacy_mode", bool), ("system_prompt", str),
                    ("temperature", float), ("top_p", float), ("seed", int), ("json_output", bool),
@@ -8418,6 +8550,12 @@ class _Handler(BaseHTTPRequestHandler):
                 v = body["ssrf_trusted"]
                 if isinstance(v, list):
                     cfg["ssrf_trusted"] = [str(x).strip() for x in v if str(x).strip()][:200]
+            # 网关凭据记忆：切换网关（base_url 变更）时记住旧 Key、回填新网关已记住的 Key，
+            # 免去每次切换重填。仅当本次未显式提供 api_key 时才回填（显式输入优先）。
+            restored_key = False
+            if any(k in body for k in ("base_url", "api_key", "model")):
+                restored_key = _sync_gateway_key(
+                    cfg, old_base_url, old_api_key, old_model, key_provided, url_provided)
             config_utils.save_config(cfg)
             # 开机自启注册（HKCU Run / 卸载）
             if "autostart" in body and body["autostart"] is not None:
@@ -8436,7 +8574,7 @@ class _Handler(BaseHTTPRequestHandler):
                 _reset_llm_client_cache()
             if "api_key" in body and body["api_key"] is not None:
                 _cached_invalidate("status")
-            self._json(200, {"ok": True})
+            self._json(200, {"ok": True, "restored_key": restored_key})
         except Exception as e:
             logger.exception("POST /v1/config 失败")
             self._fail(500, e)
@@ -9319,6 +9457,12 @@ def start_server(port=8745, token=""):
         logger.error("dc 运行时装配失败，拒绝启动：%s", e)
         return None, "", f"dc 运行时装配失败: {e}"
     # ── 可降级：外围能力逐项初始化，失败只损失对应能力 ──
+    try:
+        n = _migrate_legacy_profiles()
+        if n:
+            logger.info("已从旧数据目录补齐 %s 个配置方案", n)
+    except Exception:
+        logger.warning("配置方案迁移失败（可降级）：旧方案暂不可见，不影响当前方案")
     try:
         n = _migrate_legacy_sessions()
         if n:

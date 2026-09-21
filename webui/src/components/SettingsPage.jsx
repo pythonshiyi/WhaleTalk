@@ -123,8 +123,9 @@ function ProfilesBlock({ onTip }) {
   return (
     <div className="svc-group">
       <div className="svc-title">🗂 配置方案（API Key + 网关 + 模型 整套切换）</div>
+      {data.error && <div className="empty-tip is-err">{data.error}</div>}
       {(data.profiles || []).map((p) => (
-        <Row key={p.name} label={p.name} desc={`${p.model || "默认模型"} @ ${p.base_url || "默认网关"}${data.current === p.name ? " · ✅ 当前生效" : ""}`}>
+        <Row key={p.name} label={p.name} desc={`${p.model || "默认模型"} @ ${p.base_url || "默认网关"}${p.has_key === false ? " · ⚠️ 无 Key" : " · 🔑 含 Key"}${data.current === p.name ? " · ✅ 当前生效" : ""}`}>
           <div style={{ display: "flex", gap: 6 }}>
             {data.current !== p.name ? (
               <button className="confirm-btn confirm-primary" onClick={() => act("apply", p.name)}>应用</button>
@@ -138,6 +139,7 @@ function ProfilesBlock({ onTip }) {
         <input className="set-select set-combo" placeholder="方案名（如：官方 / 中转站A）" value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} />
         <button className="confirm-btn confirm-primary" disabled={!nameDraft.trim()} onClick={async () => { await act("save", nameDraft.trim()); setNameDraft(""); }}>💾 保存当前</button>
       </div>
+      <div className="empty-tip" style={{ marginTop: 6 }}>提示：切换「供应商网关」或改动网关地址时，系统会按地址自动记住该网关的 Key，切回时无需重填；「方案」则用于整套（Key+网关+模型）命名保存。</div>
     </div>
   );
 }
@@ -1007,11 +1009,15 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
     }
   };
 
-  // 供应商切换：切 base_url + 推荐 model（api_key 用户自填后生效）
+  // 供应商切换：切 base_url + 推荐 model；后端会按网关地址自动回填已记住的 Key
   const applyProvider = async (prov) => {
-    await saveField({ base_url: prov.base, model: prov.model });
+    const d = await saveField({ base_url: prov.base, model: prov.model });
     setBaseUrlDraft(null); setModelDraft(null);
-    setTip(`✅ 已切换网关「${prov.name}」（${prov.base}）——若需新 Key 请在下方 API Key 处填写${prov.id === "ollama" ? "（本地无需 Key）" : ""}`);
+    if (d && d.restored_key) {
+      setTip(`✅ 已切换网关「${prov.name}」并回填该网关之前保存的 API Key`);
+    } else {
+      setTip(`✅ 已切换网关「${prov.name}」（${prov.base}）——若需新 Key 请在下方 API Key 处填写${prov.id === "ollama" ? "（本地无需 Key）" : ""}。填一次后切回本网关会自动带回`);
+    }
     setTimeout(() => setTip(""), 3500);
   };
 
