@@ -109,6 +109,30 @@ cache.invalidate("A8.rain")            # 细粒度失效（按 Shot.deps 标签�
 | `core/encode.py` | 硬件编码器选择（AMF > NVENC > QSV > libx264） |
 | `gpu/element_ops.py` | 通用绘图内核接管（大 σ 高斯降采样 / glow_layer） |
 
+> **分辨率可按需降**（第 0 节铁律）已落成一个可复用档位：`mvrender/lowres/`。
+
+### 4.1 低分辨率极速档（`mvrender.lowres`，可选）
+
+给底座补的「低分辨率档」+ **题材无关**的风格包机制，不回改镜头代码：
+
+```python
+from mvrender.lowres import LowResRenderer
+r = LowResRenderer(shots, ctx, w=1080, h=1920, scale=4, style="ink")  # 或 "pixel"
+frame = r.render_u8(t)     # 逻辑画布 480×270 演算 → 整数×4 放大 → uint8
+```
+
+| 模块 | 职责 |
+|---|---|
+| `lowres/plan.py` | 目标尺寸 → 逻辑画布 + 整数放大倍数（自动求最优） |
+| `lowres/canvas.py` | 逻辑画布（对齐本文件第 2 节图元格式） |
+| `lowres/style.py` | 风格包协议（`background` 不变量 + `apply` 风格化） |
+| `lowres/styles/{pixel,ink}.py` | 像素 / 水墨风格包 |
+| `lowres/renderer_lowres.py` | 实现 `Renderer` 的 render 契约 |
+
+自检：`python -m mvrender.lowres.verify_agnostic`（题材无关）、
+`python -m mvrender.lowres.bench_real`（性能）、
+`python -m mvrender.lowres.diag_bottleneck`（瓶颈与缓存不变量）。
+
 ---
 
 ## 5. 性能决策表（画元素时照着选）
