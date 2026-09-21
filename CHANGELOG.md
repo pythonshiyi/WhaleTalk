@@ -2,6 +2,36 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.10（2026-09-21）—— 🧩 前端构建 Node 定位 + 🌐 死系统代理自动绕过 + 失败不再静默
+
+**版本号 3.16.9 → 3.16.10。** 回应两处实测：① nvm-windows 用户构建前端报 `'node' 不是内部或外部命令`；② 系统代理残留（代理软件已关但仍启用）导致「AI 不回复且无任何报错」。
+
+### 前端构建：Node/npm 自动定位（`web_app.py`）
+
+- 新增 `resolve_node_env()` / `_candidate_node_dirs()`：PATH 找不到 `node` 时，按序探测
+  ① nvm 配置目录（`%APPDATA%\nvm\settings.txt` 的 `path`）② nvm 各版本目录 `v*`（版本倒序）
+  ③ 常见安装位置（`Program Files\nodejs` 等），把命中目录注入子进程 PATH，`npm.cmd` 以绝对路径调用。
+- 覆盖 nvm-windows「当前版本符号链接（`C:\Program Files\nodejs`）缺失」这一常见坑；
+  `_run_npm` / `_run_npm_stream` 均接入，找不到时提示改为「安装 Node.js；若用 nvm 请确认 `nvm use` 已生效」。
+
+### 网络：死系统代理自动绕过（`deps.py` / `api_server.py`）
+
+- 把 pip 专用的代理预检抽为通用 `bypass_dead_system_proxy()`（pip 与运行时共用）。
+- `start_server` 在任何 HTTP 客户端创建前调用：系统代理已配置但端口不可达（如 Clash 关闭后残留
+  `127.0.0.1:7890`）→ 设 `NO_PROXY=*` 直连；代理存活时不干预。
+
+### 健壮性：失败不再被静默吞掉（`deepseek_client.py` / `api_server.py`）
+
+- 首轮即断线且**零输出**（无 reasoning/content/tool_calls）时改为**向上抛错**——此前静默 `return False`
+  被 SSE 当成正常 `done`，用户看到「不回复也没报错」。
+- `_friendly_error` 增加连接/超时/DNS/证书类错误的中文可操作提示（含系统代理残留排查）。
+
+### 验证
+
+`pytest` **845 passed / 1 skipped**（新增 `tests/test_node_resolve.py`）；实测 `npm run build` 成功；`tools/check_docs.py` 通过。
+
+---
+
 ## v3.16.9（2026-09-21）—— 🔑 多网关切换：方案持久化加固 + 按网关记忆 Key
 
 **版本号 3.16.8 → 3.16.9。** 回应实测：保存的网关（配置方案）「重启或其它原因会消失」，且每次切换不同网关都要重新填写 API Key。

@@ -4844,9 +4844,16 @@ class DeepSeekClient:
                     _emit_metrics(interrupted=True)  # 停止：仍下发已产生的统计（标注已中断）
                     return False  # 停止请求：干净返回，不把半截内容当异常抛给 UI
                 except (APIConnectionError, APITimeoutError) as e:
-                    # 流中途断线且已有部分增量送达 UI：不再重试（避免已显示内容重复），
-                    # 明确告知本轮未正常完成（finish_reason=aborted 语义）
                     logger.warning("流式连接中途断开，本轮生成未完成: %s", e)
+                    # 首轮即断线且零输出（无任何 reasoning/content/tool_calls 送达）：属硬失败。
+                    # 向上抛让调用方报错——否则静默 return False 会被 SSE 当成正常 done，
+                    # 用户看到「AI 不回复也没有报错」（如系统代理不可达 / 网关不可连）。
+                    if (not (held["reasoning"] or held["content"] or held["tool_calls"])
+                            and agg.get("rounds", 0) == 0):
+                        _emit_metrics(interrupted=True)
+                        raise
+                    # 已有部分增量送达 UI：不再重试（避免已显示内容重复），
+                    # 明确告知本轮未正常完成（finish_reason=aborted 语义）
                     if on_truncated:
                         on_truncated("网络中断：本轮回复不完整")
                     _emit_metrics(interrupted=True)  # 断线：下发部分统计

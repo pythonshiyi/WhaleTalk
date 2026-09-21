@@ -25,7 +25,9 @@
 - 终端 Ctrl+C（--server 模式）
 """
 import argparse
+import glob
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -332,10 +334,71 @@ def _webui_needs_build():
         return True
 
 
+def _candidate_node_dirs():
+    """候选 Node bin 目录（含 node.exe），按优先级去重。
+
+    覆盖 nvm-windows 场景：其「当前版本」符号链接（默认 C:\\Program Files\\nodejs）
+    可能缺失/失效，此时 node 不在 PATH，仅凭 npm.cmd 会报「'node' 不是内部或外部命令」。
+    """
+    cands = []
+    nvm_root = os.path.join(os.environ.get("APPDATA", ""), "nvm")
+    # 1) nvm 配置里的 path（正常为符号链接目录）
+    try:
+        with open(os.path.join(nvm_root, "settings.txt"), encoding="utf-8") as f:
+            for line in f:
+                if line.lower().startswith("path:"):
+                    cands.append(line.split(":", 1)[1].strip())
+    except OSError:
+        pass
+    # 2) nvm 各版本目录（按版本号倒序，优先较新版本）
+    if os.path.isdir(nvm_root):
+        vers = [d for d in glob.glob(os.path.join(nvm_root, "v*"))
+                if os.path.isfile(os.path.join(d, "node.exe"))]
+        cands.extend(sorted(vers, reverse=True))
+    # 3) 常见安装位置
+    cands += [
+        os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "nodejs"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "nodejs"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "nodejs"),
+    ]
+    seen, out = set(), []
+    for d in cands:
+        if not d:
+            continue
+        d = os.path.normpath(d)
+        if d in seen or not os.path.isfile(os.path.join(d, "node.exe")):
+            continue
+        seen.add(d)
+        out.append(d)
+    return out
+
+
+def resolve_node_env():
+    """定位可用的 npm 并返回 (npm_cmd, env)。
+
+    优先 PATH 上的 node+npm；否则从 nvm/常见目录探测 node.exe，并把其目录加入
+    子进程 PATH（npm.cmd 内部依赖同目录/同 PATH 的 node）。
+    """
+    npm_name = "npm.cmd" if os.name == "nt" else "npm"
+    env = dict(os.environ)
+    if shutil.which("node") and shutil.which("npm"):
+        return shutil.which(npm_name) or npm_name, env
+    for d in _candidate_node_dirs():
+        env["PATH"] = d + os.pathsep + env.get("PATH", "")
+        npm_path = os.path.join(d, npm_name)
+        if os.path.isfile(npm_path):
+            return npm_path, env
+        found = shutil.which(npm_name, path=env["PATH"])
+        if found:
+            return found, env
+        return npm_name, env
+    return npm_name, env
+
+
 def _run_npm(args, timeout=900):
     """在 webui 目录执行 npm 命令。Windows 用 npm.cmd 并静默建窗，避免黑窗闪现。
     返回 (ok, 输出尾部)。"""
-    npm = "npm.cmd" if os.name == "nt" else "npm"
+    npm, env = resolve_node_env()
     kwargs = {}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -348,12 +411,13 @@ def _run_npm(args, timeout=900):
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            env=env,
             **kwargs,
         )
         tail = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()[-2000:]
         return r.returncode == 0, tail
     except FileNotFoundError:
-        return False, "找不到 npm 命令：请先安装 Node.js（https://nodejs.org）"
+        return False, "找不到 Node.js/npm：请先安装 Node.js（https://nodejs.org）；若用 nvm，请确认 `nvm use <版本>` 已生效"
     except subprocess.TimeoutExpired:
         return False, f"npm {' '.join(args)} 超时（{timeout}s）"
     except Exception as e:
@@ -364,18 +428,18 @@ def _run_npm_stream(args, on_line, timeout=1200, on_idle=None):
     """流式执行 npm（供进度窗显示实时输出）。on_line(line) 接收每行文本。
     返回 (ok, 尾部 2000 字符)。on_idle(seconds) 可选：无输出超过 ~4s 时周期性回调，
     供 UI 刷新"仍在进行/已等待 N 秒"，避免下载阶段看似卡死。"""
-    npm = "npm.cmd" if os.name == "nt" else "npm"
+    npm, env = resolve_node_env()
     kwargs = {}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     tail_buf = []
     try:
         p = subprocess.Popen(
-            [npm] + args, cwd=WEBUI_DIR,
+            [npm] + args, cwd=WEBUI_DIR, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", **kwargs)
     except FileNotFoundError:
-        return False, "找不到 npm 命令：请先安装 Node.js（https://nodejs.org）"
+        return False, "找不到 Node.js/npm：请先安装 Node.js（https://nodejs.org）；若用 nvm，请确认 `nvm use <版本>` 已生效"
     except Exception as e:
         return False, str(e)
     import threading as _th

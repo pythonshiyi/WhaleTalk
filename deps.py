@@ -200,10 +200,15 @@ def _socket_reachable(host, port, timeout=1.0):
         return False
 
 
-def guard_pip_proxy(on_line=None):
-    """pip 安装前调用：系统代理不可达则设 NO_PROXY=* 绕过直连（幂等，只探测一次）。
+def bypass_dead_system_proxy(on_line=None):
+    """系统代理已配置但不可达 → 设 NO_PROXY=* 让本进程后续直连（幂等，只探测一次）。
 
-    返回提示文本（未触发为 None）。代理存活或未配置时不做任何改动。
+    通用版（pip 安装 / LLM 客户端 / 联网工具共用）。真实故障：Windows 系统代理
+    （如 Clash 127.0.0.1:7890）残留为「已启用」但进程未运行，httpx/requests 继承该
+    代理 → 所有请求 WinError 10061，而用户看到的是「AI 不回复且无报错」。
+
+    代理存活或未配置时不做任何改动；WHALETALK_SKIP_PROXY_CHECK=1 可禁用。
+    返回提示文本（未触发为 None）。
     """
     global _PROXY_GUARDED
     if _PROXY_GUARDED:
@@ -219,10 +224,15 @@ def guard_pip_proxy(on_line=None):
         return None
     for name in ("NO_PROXY", "no_proxy"):
         os.environ[name] = "*"
-    msg = f"[代理] 检测到系统代理 {hp[0]}:{hp[1]} 不可达 → 本次安装自动绕过（直连）"
+    msg = f"[代理] 检测到系统代理 {hp[0]}:{hp[1]} 不可达 → 本次运行自动绕过（直连）"
     if on_line:
         on_line(msg)
     return msg
+
+
+def guard_pip_proxy(on_line=None):
+    """pip 安装前调用：系统代理不可达则绕过直连（guard 共用）。"""
+    return bypass_dead_system_proxy(on_line)
 
 # ── 安装状态（供前端轮询展示进度：启动后台安装时实时可见）────────────────
 _INSTALL_LOCK = threading.Lock()

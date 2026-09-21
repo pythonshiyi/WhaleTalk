@@ -2738,6 +2738,13 @@ def _friendly_error(e):
                 "或模型名不受该网关支持）。请到 设置 → 模型与网关：把「API 网关」只填到版本段，"
                 "如 https://opencode.ai/zen/go/v1（不要带 /chat/completions），"
                 "并确认模型名是网关支持的 OpenAI 兼容模型（如 deepseek-flash）。")
+    if ("connection error" in low or "connection refused" in low or "10061" in low
+            or "timed out" in low or "timeout" in low or "getaddrinfo" in low
+            or "name resolution" in low or "certificate verify failed" in low
+            or "ssl error" in low or "network is unreachable" in low):
+        return ("无法连接模型网关——请检查网络；若使用了代理软件（Clash/V2Ray 等）请确认其正在运行，"
+                "或在 Windows「设置 → 网络和 Internet → 代理」关闭残留的系统代理（代理已关但系统代理仍启用会导致连接被拒）。"
+                "也可在「设置 → 模型与网关」核对网关地址与 API Key。")
     if "429" in low or "rate limit" in low or "too many requests" in low:
         return "请求过于频繁（限速）——请稍等片刻再试"
     if "401" in low or "invalid api key" in low or "authentication" in low or "unauthorized" in low:
@@ -9450,6 +9457,17 @@ def start_server(port=8745, token=""):
     if _SERVER is not None:
         return _PORT, _TOKEN, None
     import secrets
+    # ── 可降级：死系统代理自动绕过 ──
+    # 系统代理（如 Clash 127.0.0.1:7890）残留为「已启用」但进程未运行时，httpx/OpenAI SDK
+    # 继承该代理 → 所有 LLM/联网请求 WinError 10061，表现为「AI 不回复且无报错」。
+    # 代理存活时不做任何改动；须在任何 HTTP 客户端创建之前执行。
+    try:
+        import deps as _deps
+        _msg = _deps.bypass_dead_system_proxy(logger.warning)
+        if _msg:
+            logger.warning("%s", _msg)
+    except Exception:
+        logger.warning("系统代理预检失败（可降级，不阻断启动）", exc_info=True)
     # ── 必须失败：dc 运行时装配（自检清单见 _init_dc_paths）──
     try:
         _init_dc_paths()
