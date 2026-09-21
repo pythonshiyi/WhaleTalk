@@ -2,6 +2,26 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.13（2026-09-21）—— 🖼 视觉判定按模型家族：同一多模态模型的不同供应商 id 不再误判
+
+**版本号 3.16.12 → 3.16.13。** 回应实测：发送带图消息时报「当前模型 deepseek-v4.1-flash 不支持图片输入，请改用统一多模态模型 deepseek-flash」而中断——但 `deepseek-v4.1-flash`（第三方网关命名）与 `deepseek-flash` 是**同一个原生多模态模型的不同供应商 id**。
+
+### 根因
+
+- `is_vision_model()` 对未收录的自定义模型名只做「名字里有没有 `vision`」的启发式判断。官方 `deepseek-flash` 在 `MODELS` 中标记 `vision:true`，而 `deepseek-v4.1-flash` 不含 "vision" → 被判为不支持图片，二者行为不一致。
+
+### 修复
+
+- 视觉判定升级为**按模型家族识别**（`deepseek_client.py`）：名称含 `vision / vl / omni / multimodal`，或属 **DeepSeek V4.x Flash 系**（`deepseek-v4.1-flash` / `deepseek-v4-flash` / `deepseek-flash`…），或属主流多模态家族（`gpt-4o / gpt-4.1 / gpt-5 / o1·o3·o4 / claude-3·4 / gemini / qwen*-vl / glm-4v / internvl / llava / pixtral / yi-vision / kimi-vision`）。
+- 纯文本模型（`qwen2.5` / `llama-3` / `deepseek-chat` / `deepseek-reasoner`）仍判为不支持。
+
+### 验证
+
+- 用实际网关与 Key 实测：`deepseek-v4.1-flash` 收到 16×16 纯红图，正确回答「红色」。
+- `pytest` **852 passed / 1 skipped**（新增 `tests/test_vision_model.py` 4 项；更新 `test_model_unified.py` 旧的错误断言）；`tools/check_docs.py` 通过。
+
+---
+
 ## v3.16.12（2026-09-21）—— 🔎 生成失败不再「含糊」：显示真实错误 + 落盘排障日志
 
 **版本号 3.16.11 → 3.16.12。** 回应实测：对话时经常出现「生成中断：后端返回错误，请重试或检查「设置 → 网关 / API Key」。」——但这是**固定文案**，真实原因被前端吞掉了，用户与服务方都无从定位。

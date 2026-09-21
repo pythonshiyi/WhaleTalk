@@ -82,9 +82,13 @@ def test_is_vision_model_true_for_unified_and_legacy():
         assert dc.is_vision_model(name) is True, f"{name} 经归一后应支持视觉"
 
 
-def test_is_vision_model_false_for_unknown_custom_without_vision():
-    assert dc.is_vision_model("gpt-4o") is False
+def test_is_vision_model_for_custom_names_by_family():
+    # 已知多模态家族判为支持（同一模型在不同供应商 id 各异，不能只看名字是否含 vision）
+    assert dc.is_vision_model("gpt-4o") is True
+    assert dc.is_vision_model("deepseek-v4.1-flash") is True
+    # 纯文本自定义模型仍判为不支持
     assert dc.is_vision_model("qwen2.5") is False
+    assert dc.is_vision_model("llama-3-8b-instruct") is False
     assert dc.is_vision_model("") is False
     assert dc.is_vision_model(None) is False
     # 名称启发式仍然保留（自定义端点的视觉模型）

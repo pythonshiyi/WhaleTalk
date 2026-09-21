@@ -371,12 +371,28 @@ IMAGE_INLINE_HINT = (
 )
 
 
+# 已知多模态模型家族（同一模型在不同供应商下的 id 各异，名称启发式按家族识别）：
+# - 名称含 vision / vl / omni / multimodal；
+# - DeepSeek V4.x Flash 系（官方统一多模态模型，第三方网关常叫 deepseek-v4.1-flash 等）；
+# - 主流多模态家族（OpenAI 兼容网关常见 id）。
+_MULTIMODAL_NAME_RE = re.compile(
+    r"vision|(^|[^a-z])vl([^a-z]|$)|omni|multimodal"
+    r"|deepseek.*(v4|flash)"
+    r"|gpt-4o|gpt-4\.1|gpt-4\.5|gpt-5|(^|[^a-z])o[134]([^a-z]|$)"
+    r"|claude-3|claude-4|gemini|qwen[\w.\-]*vl|glm-4v|internvl|llava|pixtral"
+    r"|yi-vision|kimi[\w.\-]*vision|moonshot-v1-vision",
+    re.I,
+)
+
+
 def is_vision_model(model):
     """判断模型是否支持图片输入。
 
     统一模型 V4.1 Flash **原生多模态** → 恒为支持。旧模型名经别名归一后同样为
-    支持（官方已把它们路由到 V4.1 Flash）。未收录的自定义 OpenAI 兼容模型沿用
-    名称启发式：含 "vision" 视为支持，否则视为不支持（由调用方走自适应兜底）。
+    支持（官方已把它们路由到 V4.1 Flash）。未收录的自定义 OpenAI 兼容模型按**名称
+    家族**判定：命中已知多模态家族（含 DeepSeek V4.x Flash 系，如第三方网关的
+    `deepseek-v4.1-flash`）即视为支持——同一模型在不同供应商可命名不同，不再因
+    名字不含 "vision" 就误判为不支持而拒绝图片。
     """
     name = str(model or "").strip()
     if not name:
@@ -384,7 +400,7 @@ def is_vision_model(model):
     meta = MODELS.get(resolve_model(name))
     if meta is not None:
         return bool(meta.get("vision"))
-    return "vision" in name.lower()
+    return bool(_MULTIMODAL_NAME_RE.search(name.lower()))
 
 
 def _detect_image_mime(buf):
