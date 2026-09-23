@@ -159,6 +159,57 @@ def test_compose_falls_back_to_render_on_image_failure(monkeypatch, tmp_path):
     assert "回退" in out and "RENDER_FALLBACK_OK" in out
 
 
+# ── 原生引擎工具链：preview / qc（不依赖 ffmpeg/whisper） ──────────────────
+def _stub_native(monkeypatch, tmp_path):
+    tm = _tm()
+    import permissions
+    monkeypatch.setattr(permissions, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(tm, "_mv_native_available", lambda: True)
+    monkeypatch.setattr(tm, "_mv_resolve_audio", lambda a: a)
+    import mv_engine as me
+    monkeypatch.setattr(me, "analyze", lambda audio, **k: {
+        "bpm": 120.0, "beats": [i * 0.5 for i in range(1, 12)], "duration": 6.0})
+    monkeypatch.setattr(me, "align_lyrics", lambda audio, text, model="base", **k: [
+        {"text": "山河为砚", "start": 1.0, "end": 2.5, "index": 0},
+        {"text": "眼里有光", "start": 3.0, "end": 4.5, "index": 1}])
+    return tm
+
+
+def test_native_preview_report(monkeypatch, tmp_path):
+    tm = _stub_native(monkeypatch, tmp_path)
+    out = tm.mv_produce(action="preview", audio="x.wav", lyrics="山河为砚\n眼里有光",
+                        resolution="160x96", fps=8, sample=4)
+    assert "预览帧落盘" in out and "自检门禁" in out
+    assert "引擎：native" in out
+
+
+def test_native_qc_report(monkeypatch, tmp_path):
+    tm = _stub_native(monkeypatch, tmp_path)
+    import numpy as np
+
+    import mv_tex
+    fd = tmp_path / "frames"
+    fd.mkdir()
+    for i in range(4):
+        img = np.full((48, 64, 3), 0.15, np.float32)
+        img[10:20, 10 + i:20 + i, 0] = 1.0
+        mv_tex.imwrite_safe(str(fd / f"{i:06d}.jpg"), img)
+    out = tm.mv_produce(action="qc", frames_dir=str(fd))
+    assert "帧可读" in out and "死白占比" in out
+
+
+def test_native_status(monkeypatch, tmp_path):
+    tm = _stub_native(monkeypatch, tmp_path)
+    import numpy as np
+
+    import mv_tex
+    fd = tmp_path / "frames"
+    fd.mkdir()
+    mv_tex.imwrite_safe(str(fd / "000000.jpg"), np.zeros((16, 16, 3), np.float32))
+    out = tm.mv_produce(action="status", frames_dir=str(fd))
+    assert "进度" in out
+
+
 # ── 真机集成冒烟：有上游项目+依赖才跑（CI 无则跳过） ──────────────────────
 def test_live_styles_if_available():
     tm = _tm()

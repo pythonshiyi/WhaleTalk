@@ -2,7 +2,7 @@
 
 本文档描述鲸语 WhaleTalk 当前（v3.16.15，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
 
-> 规模口径（`tools/check_docs.py` 实测）：**165 个 Agent 工具**（11 组）· **102 /v1 端点** · 后端 86 个 pytest 文件 / 852 用例 · 前端 21 个 node 套件；源码约 7.2 万行（根目录 3.3 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万）。
+> 规模口径（`tools/check_docs.py` 实测）：**165 个 Agent 工具**（11 组）· **104 /v1 端点** · 后端 90 个 pytest 文件 / 896 用例 · 前端 21 个 node 套件；源码约 7.2 万行（根目录 3.3 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万）。
 
 ## 分层总览
 
@@ -10,7 +10,7 @@
 web_app.py（唯一入口：浏览器 + 托盘 + 快捷方式 + 依赖自检）
     │
     ▼
-api_server.py（本地 HTTP API：REST + SSE，102 /v1 端点）
+api_server.py（本地 HTTP API：REST + SSE，104 /v1 端点）
     │
     ▼
 deepseek_client.py（能力引擎：DeepSeekClient + 165 工具 + smart_tools）
@@ -37,7 +37,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 165 工具 + smart_tools）
 | 模块 | 职责 |
 |---|---|
 | `web_app.py`（925 行） | 唯一启动入口：启动本地 API、自动打开浏览器、系统托盘常驻、桌面/开始菜单快捷方式、开机自启、单实例、WebUI 自动构建（npm）、Python 依赖自检与自动安装 |
-| `api_server.py`（9,364 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/插件/指令库/工作台/大脑/TTS/审计/备份/更新等 **102 个 /v1 端点**（等 102 端点，含失败记忆生命周期 `/v1/failures/resolve|reopen|forget`、技能结晶 `/v1/skills/crystallize`、文件全局搜索 `/v1/files/search` 与重命名 `/v1/files/rename`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
+| `api_server.py`（9,364 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/插件/指令库/工作台/大脑/TTS/审计/备份/更新等 **102 个 /v1 端点**（等 104 端点，含失败记忆生命周期 `/v1/failures/resolve|reopen|forget`、技能结晶 `/v1/skills/crystallize`、文件全局搜索 `/v1/files/search` 与重命名 `/v1/files/rename`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
 
 ### 能力引擎
 
@@ -68,7 +68,10 @@ deepseek_client.py（能力引擎：DeepSeekClient + 165 工具 + smart_tools）
 | `memory_facade.py`（463 行） | 记忆门面（P1-B）：`memory.json` 唯一写入门面，为长期记忆补 **origin（血缘）+ confidence + status + supersede 双向链接**。① 血缘：非 user 来源注入时加 `〔推断〕`/`〔来自外部内容〕`标注；② 作废：同 `key` 取代旧条目——**只认显式 key，绝不按相似度**；相似度仅用于冲突提示。旧数据读时补默认值、不改写文件 |
 | `insight.py`（355 行） | 自我洞察（纯函数 · 仅标准库）：`build_heatmap`（能力热力图：工具使用频率/任务链长度/失败率/技能结晶/预激活命中）· `build_self_report`（自我述职）· `render_report`（Markdown）。不依赖运行时，便于单测 |
 | `memory_store.py`（399 行） | 统一记忆读取层（memory.json / knowledge_index / 大脑目录），供工具与 API 复用 |
-| `mv_engine.py` | 自建 MV 引擎（不依赖任何外部程序）：`analyze`（BPM/节拍/能量）、`align_lyrics`（faster-whisper 词级 + 顺序短语映射的声学对轴）、`build_shots`（卡点分镜网格）、`render_frames`（确定性 PIL 帧，支持多进程并行）、`build_srt`、`verify_shots`；被 `agent_tools/tool_mv.py` 的 `mv_produce` 消费 |
+| `mv_engine.py` | 自建 MV 引擎（不依赖任何外部程序）：`analyze`（BPM/节拍/能量）、`align_lyrics`（faster-whisper 词级 + 顺序短语映射的声学对轴）、`build_shots`（卡点分镜网格 + 选景）、`compose_frame`（**逐帧动画**：场景 + 转场 + 片头/片尾卡 + 字幕 + 角标）、`render_movie`（多进程分块 + **断点续跑** + 可选 GPU 融合 pass）、`encode_video`（帧序列 + 音轨 → mp4）、`dynamic_check`（镜内采样动感三判据）、`build_srt`、`verify_shots`；`render_frames`（旧每镜一张 PNG）保留兼容；被 `agent_tools/tool_mv.py` 的 `mv_produce` 消费 |
+| `mv_tex.py` | 程序化影像**质感积木**（题材无关 · 沉淀自《山河砚》MV）：fbm 分形噪声、高斯模糊/缩放（cv2→PIL→numpy 逐级回退）、`neon_glow`/`scanlines`/`glitch`/`holo_grid`/`data_rain`/`ink_ripple`/`mountain_wire`、**时间连续** `film_grain`、`highlight_rolloff`（治死白）、中文路径安全 `imwrite_safe/imread_safe`、字体自动发现 + 字形预检（fontTools 可选）；只依赖 numpy/Pillow，cv2/pyopencl 为可选加速 |
+| `mv_scene.py` | 题材无关**场景基元库**（12 个动画意象，`fn(H,W,t,ctx)->RGB float32`）：inkstone/mountains/sky/city/river/rain/eye/crowd/bridge/text_wall/flow/empty + `choose_scene`（按歌词关键词选景）；统一收尾（暗角→扫描线→故障→颗粒，顺序有物理含义） |
+| `mv_qc.py` | 程序化影像**客观质检**（纯函数）：动感三判据（`frame_diff`/`structure_corr`/`grain_ratio` + `assert_dynamic`）、风格指标（霓虹饱和/冷暗底/边缘密度/死白占比）、`qc_frames`/`qc_frame_files`、`audio_sync`（逐样本相关 + 包络相关 + 偏移搜索）；只依赖 numpy（cv2 可选） |
 | `gpu_accel.py` | GPU 加速层（可选 pyopencl，无 GPU 自动回退 CPU）：`device_info/selftest/benchmark`（实测 A/B，避免盲目上 GPU）、`grade/bloom/composite/gaussian_blur`（融合 pass + 显存常驻）；由 `hardware_accel` 工具暴露，供自研渲染管线调用（真实复盘：逐帧 NumPy/OpenCV CPU 合成打满 CPU 而 GPU 闲置，融合显存常驻 pass 实测约 4.5x） |
 | `deepseek_client._ffmpeg_*` | ffmpeg 硬件编码自动选择（AMD AMF→NVIDIA NVENC→Intel QSV，1 帧实测通过才用）+ MV 分段并行渲染 |
 | `genesis.py`（143 行） | 创世化初始：让 AI 完全自主设定自己的「前半生」，产出多版候选供选 |
@@ -122,7 +125,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 165 工具 + smart_tools）
 | `webui/` | React 前端（React 19 + Vite 8，无 UI 框架）：ChatPage/工作台/指令库/自主/大脑/插件/设置；`webui/dist` 由 api_server 同源服务。渲染链路（纯数据 AST）：`longTextUtil.js`（解除 `@long-text` 包装）→ `mdParser.js`（块级 AST，流式安全 `code-open`）→ `mdInline.js`（行内 tokens，独立 RegExp 防 lastIndex 破坏）→ `mdHighlight.js`（零依赖高亮）→ `mdMath.js`（LaTeX 子集）→ `components/Markdown.jsx`（消费 AST）。**长会话渲染**：`msgUpdates.js` 提供不可变更新，配合 `Message.jsx` 的 `React.memo` 实现每帧只重渲染最后一条 |
 | `wechat_writer/` | 公众号自动写作：sources（多信源采集）/ topic（选题去重）/ writer（三阶段写作）/ quality（质检重试）/ output（草稿箱+存档）/ history / llm / config |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性，`--strict` 可入 CI）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛对账）、`check_docs.py`（文档数字 vs 源码实测） |
-| `tests/` | 自举回归套件（86 个 pytest 文件 / 852 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
+| `tests/` | 自举回归套件（90 个 pytest 文件 / 896 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
 
 ### 辅助脚本
 

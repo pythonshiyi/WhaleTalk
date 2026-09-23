@@ -7972,6 +7972,40 @@ class _Handler(BaseHTTPRequestHandler):
             self._fail(500, e)
 
 
+    # ── 鲸群 L2：大脑身份与授权（新增；不改动任何现有分支）────────────
+    @_get_route(("qpath", "/v1/brain/grants"))
+    def _g_v1_brain_grants(self):
+        """查询某大脑的授权详情。?brain_id=brain_xxx"""
+        if not self._auth():
+            self._json(401, {"error": "unauthorized"})
+            return
+        try:
+            from urllib.parse import parse_qs, urlparse
+
+            import brain_grant_adapter as bga
+            qs = parse_qs(urlparse(self.path).query)
+            brain_id = (qs.get("brain_id") or [""])[0]
+            self._json(200, bga.grant_detail(brain_id))
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
+    @_post_route("/v1/brain/grant")
+    def _p_v1_brain_grant(self):
+        """大脑授权管理。body: {action: create_brain|set_grant|revoke|rotate|status|audit, ...}"""
+        if not self._auth():
+            self._json(401, {"error": "unauthorized"})
+            return
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import brain_grant_adapter as bga
+            result = bga.dispatch(str(body.get("action") or ""), body)
+            self._json(200 if result.get("ok") else 400, result)
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
     @_post_route("/v1/brain/memory")
     def _p_v1_brain_memory(self):
         # 大脑记忆管理：action=add|update|delete

@@ -1,38 +1,46 @@
 """mv_engine —— 鲸语自建 MV 引擎（不依赖任何外部 MV 程序）。
 
-职责：把「音频 + 歌词」变成**卡点 + 对词**的 MV 素材与成片。四个阶段：
+职责：把「音频 + 歌词」变成**卡点 + 对词 + 逐帧动画**的 MV 成片。阶段：
 
     analyze(audio)              → BPM / 节拍 / 下拍 / 时长 / 能量包络
     align_lyrics(audio, text)   → 歌词逐句的**真实声学时间轴**（faster-whisper 词级时间戳；
                                   缺 whisper 时回退能量谷句子切分）
-    build_shots(duration, beats, lines) → 吸附到节拍、覆盖全曲无空隙的分镜网格
-    render_frames(shots, outdir)        → 确定性 PIL 渲染的竖屏帧（离线、可复现）
+    build_shots(duration, beats, lines) → 吸附到节拍、覆盖全曲无空隙的分镜网格（含选景）
+    compose_frame(fi, ctx)      → 单帧完整画面（场景动画 + 转场 + 片头/片尾卡 + 字幕 + 角标）
+    render_movie(shots, lines, out_dir) → 多进程分块渲染帧序列（断点续跑 + 可选 GPU 融合）
+    encode_video(frames_dir, out)       → 帧序列 + 音轨 → mp4（ffmpeg）
+    dynamic_check(shots, lines)         → 镜内采样做「动感三判据」自检（证明非幻灯片）
 
 设计取舍：
-- 音频分析用 librosa（本机已装；缺则退回 scipy/numpy 的 RMS+onset 近似）。
+- 音频分析用 librosa（装了更准；缺则退回 ffmpeg 解码 + numpy RMS/onset 近似）。
 - 歌词对轴**不采信均匀估算**：优先 whisper 词级时间戳与歌词行做字符级模糊匹配；
   匹配不足时用「能量谷 + 人声频段」切句，而不是把段落标签当歌词行。
+- 画面**逐帧动画**（`mv_scene` 场景基元，`fn(H,W,t,ctx)` 纯函数），不是「每句一张静图」。
 - 全程离线确定性，无神经出图依赖；图像质量交给上层（image_generate / 用户供图）。
+
+兼容：`render_frames`（每镜一张确定性 PNG）保留为历史接口（外部程序与旧测试仍用），
+新管线请用 `compose_frame` / `render_movie`。
 
 本模块为纯函数 + 文件 IO，便于门禁与回归测试；被 agent_tools/tool_mv.py 消费。
 """
 from __future__ import annotations
 
 import atexit
+import json
 import math
 import os
 import re
+import time
 
 # 进程内临时文件登记 + 退出清理（如音频解码中间 wav），避免 %TEMP% 持续堆积
 _TEMP_FILES = set()
 
 
 def _cleanup_temp_files():
+    import contextlib
     for p in list(_TEMP_FILES):
-        try:
+        with contextlib.suppress(OSError):
             os.remove(p)
-        except OSError:
-            pass
     _TEMP_FILES.clear()
 
 
@@ -642,8 +650,16 @@ def build_shots(duration, beats, lines=None, min_shot=1.2, max_shot=6.0):
             if ln.get("start") is not None and a <= ln["start"] < b:
                 ref = ln["text"]
                 break
-        shots.append({"index": len(shots), "t_start": round(a, 3), "t_end": round(b, 3),
-                      "duration": round(b - a, 3), "lyric_ref": ref})
+        idx = len(shots)
+        scene = ""
+        try:
+            import mv_scene
+            scene = mv_scene.choose_scene(ref, idx)
+        except Exception:  # noqa: BLE001 - 无渲染依赖时仍产出可用分镜
+            scene = ""
+        shots.append({"index": idx, "t_start": round(a, 3), "t_end": round(b, 3),
+                      "duration": round(b - a, 3), "lyric_ref": ref,
+                      "scene": scene, "ctx": {}})
     return shots
 
 
@@ -860,3 +876,608 @@ def verify_shots(shots, duration, lines=None):
             inside = all(0 <= ln["start"] <= dur + 0.5 for ln in rows)
             checks.append(("歌词轴落在片内", inside, f"{len(rows)} 句"))
     return checks
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 逐帧动画渲染管线（mv_scene / mv_tex）
+#
+# 沉淀自《山河砚》MV（2026-09）：把「每镜一张静图」升级为「逐帧动画」——
+# 每个镜头内部都有连续运动（山脊漂移/星轨旋转/数据雨/漩涡），并在片内合成
+# 片头卡/片尾卡/角标/歌词字幕。渲染走**多进程分块落盘 + 断点续跑**，
+# 可选 **GPU 融合 pass**（实测划算才用），最后 ffmpeg 合成含音轨 mp4。
+# ═══════════════════════════════════════════════════════════════════════════
+DEFAULT_TITLE_DUR = 7.5
+DEFAULT_END_DUR = 8.6
+DEFAULT_TRANSITION = 0.35
+
+
+def shot_at(shots, t):
+    """取 t 时刻的镜头（二分查找）。"""
+    lo, hi = 0, len(shots) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        s = shots[mid]
+        if t < s["t_start"]:
+            hi = mid - 1
+        elif t >= s["t_end"]:
+            lo = mid + 1
+        else:
+            return s
+    return shots[-1] if shots else {}
+
+
+def _shot_pos(shots, s):
+    for i, x in enumerate(shots):
+        if x is s:
+            return i
+    return 0
+
+
+def _parse_credits(credits):
+    pairs = []
+    for raw in str(credits or "").replace("\r", "\n").split("\n"):
+        raw = raw.strip()
+        if not raw:
+            continue
+        if "|" in raw:
+            role, name = raw.split("|", 1)
+        elif "：" in raw:
+            role, name = raw.split("：", 1)
+        else:
+            role, name = raw, ""
+        pairs.append((role.strip(), name.strip()))
+    return pairs
+
+
+def _meta(title="", artist="", credits="", album="", producer="", studio=""):
+    return {"song": str(title or ""), "artist": str(artist or ""),
+            "album": str(album or ""), "producer": str(producer or ""),
+            "studio": str(studio or ""), "credits": _parse_credits(credits)}
+
+
+def build_render_ctx(shots, lines, w=1080, h=1920, fps=30, duration=None, palette="default",
+                     title="", artist="", credits="", album="", producer="", studio="",
+                     transition=DEFAULT_TRANSITION, title_dur=DEFAULT_TITLE_DUR,
+                     end_dur=DEFAULT_END_DUR):
+    """装配逐帧渲染上下文（可 pickle，供多进程 worker 使用）。"""
+    shots = list(shots or [])
+    total = float(duration or (shots[-1]["t_end"] if shots else 0.0))
+    rows = [{"text": str(ln.get("text") or ""), "start": ln.get("start"), "end": ln.get("end")}
+            for ln in (lines or []) if ln.get("start") is not None]
+    # 短片保护：片头/片尾卡不得吃掉整片（否则短视频全是卡、看不到画面）
+    td = max(0.0, float(title_dur or 0.0))
+    ed = max(0.0, float(end_dur or 0.0))
+    if total > 0:
+        cap = total * 0.18
+        td, ed = min(td, cap), min(ed, cap)
+        if td + ed > total * 0.6:
+            ed = max(0.0, total * 0.6 - td)
+    return {"w": int(w), "h": int(h), "fps": int(fps), "total": round(total, 3),
+            "shots": shots, "lines": rows, "palette": str(palette or "default"),
+            "meta": _meta(title, artist, credits, album, producer, studio),
+            "transition": float(transition or 0.0), "title_dur": round(td, 3),
+            "end_dur": round(ed, 3)}
+
+
+def _lyric_index(lines, t):
+    for i, ln in enumerate(lines):
+        if ln["start"] <= t <= (ln["end"] or ln["start"]) + 0.55:
+            return i
+    return -1
+
+
+def _text_layer(W, H):
+    from PIL import Image, ImageDraw
+    ov = Image.new("L", (W, H), 0)
+    return ov, ImageDraw.Draw(ov)
+
+
+def _mask_to_rgb(mask, W, H, color, glow_color, pal, gain=1.0):
+    """把 PIL 字形 mask 变成「实体亮字 + 霓虹描边 + 辉光」的 RGB 层。"""
+    import numpy as np
+
+    import mv_tex as T
+    edge = np.clip(T.blur(mask, 0.6) - T.blur(mask, 2.4), 0, 1)
+    out = np.zeros((H, W, 3), np.float32)
+    out = out + np.repeat(T.neon_glow(mask, 12.0, 1.4, 0.5)[:, :, None], 3, axis=2) \
+        * T.hexr(glow_color)[None, None, :] * (0.7 * gain)
+    out = out + np.repeat(np.clip(edge * 1.2, 0, 1)[:, :, None], 3, axis=2) * T.hexr(color)[None, None, :]
+    out = out + np.repeat(mask[:, :, None], 3, axis=2) * (0.9 * gain)
+    return np.clip(out, 0, 1)
+
+
+def _draw_lyrics(lines, W, H, t, cur, palette):
+    """歌词字幕：当前句楷书 + 霓虹描边，上一句交叉淡出（字为墨、边为光）。"""
+    import numpy as np
+
+    import mv_tex as T
+    if cur < 0 or cur >= len(lines):
+        return np.zeros((H, W, 3), np.float32)
+    pal = T.get_palette(palette)
+    line = lines[cur]
+    lt = t - line["start"]
+    dur = max(0.2, (line["end"] or line["start"]) - line["start"])
+    a = min(min(max(lt / 0.35, 0.0), 1.0), min(max((dur - lt) / 0.30, 0.0), 1.0))
+    if a <= 0.02:
+        return np.zeros((H, W, 3), np.float32)
+    ov, d = _text_layer(W, H)
+    y = int(H * 0.845)
+    size = max(28, int(W * 0.0435))
+    f = T.pick_font("kai", "cjk")(size)
+    txt = str(line["text"])
+    if f is not None:
+        bb = d.textbbox((0, 0), txt, font=f)
+        rise = (1.0 - min(max(lt / 0.35, 0.0), 1.0)) * H * 0.012
+        d.text(((W - (bb[2] - bb[0])) / 2 - bb[0], y - bb[1] + rise), txt, font=f, fill=int(255 * a))
+        if cur > 0:
+            prev = lines[cur - 1]
+            pd = t - (prev["end"] or prev["start"])
+            if -0.30 <= pd <= 0.55:
+                pa = max(0.0, 1.0 - (pd + 0.30) / 0.85) * 0.42
+                fp = T.pick_font("kai", "cjk")(int(size * 0.94))
+                bbp = d.textbbox((0, 0), str(prev["text"]), font=fp)
+                d.text(((W - (bbp[2] - bbp[0])) / 2 - bbp[0], y - bbp[1] - H * 0.052 - (1 - pa) * 14),
+                       str(prev["text"]), font=fp, fill=int(255 * pa))
+    mask = np.asarray(ov, np.float32) / 255.0
+    return _mask_to_rgb(mask, W, H, pal["paper"], pal["glow"], pal, gain=1.0) * a
+
+
+def _title_card(t, W, H, dur, meta):
+    """片头卡：专辑 → 大字歌名 → 演唱/制作人/出品。"""
+    import numpy as np
+
+    import mv_tex as T
+    if t < 0 or t > dur:
+        return np.zeros((H, W, 3), np.float32)
+    a = min(min(t / 1.0, 1.0), min((dur - t) / 1.2, 1.0))
+    if a <= 0.01:
+        return np.zeros((H, W, 3), np.float32)
+    pal = T.get_palette("default")
+    ov, d = _text_layer(W, H)
+    cx = W / 2.0
+    rise = (1.0 - min(t / 1.4, 1.0)) * H * 0.022
+    yl = H * 0.30 - rise
+    d.line([(cx - W * 0.20, yl), (cx + W * 0.20, yl)], fill=int(200 * a), width=2)
+    d.line([(cx - W * 0.07, yl + 6), (cx + W * 0.07, yl + 6)], fill=int(140 * a), width=1)
+    f_album = T.pick_font("tech", "cjk")(int(W * 0.026))
+    f_song = T.pick_font("serif", "cjk")(int(W * 0.12))
+    f_sub = T.pick_font("tech_light", "cjk")(int(W * 0.026))
+
+    def ctr(y, s_, f, fill):
+        if not s_ or f is None:
+            return
+        bb = d.textbbox((0, 0), s_, font=f)
+        d.text((cx - (bb[2] - bb[0]) / 2 - bb[0], y), s_, font=f, fill=fill)
+
+    if meta.get("album"):
+        ctr(yl - H * 0.042, meta["album"], f_album, int(210 * a))
+    sy = yl + H * 0.022
+    ctr(sy, meta.get("song"), f_song, int(255 * a))
+    y = sy + (f_song.size if f_song else 0) * 1.62
+    for key in ("artist", "producer", "studio"):
+        if meta.get(key):
+            ctr(y, meta[key], f_sub, int(225 * a))
+            y += (f_sub.size if f_sub else 0) * 1.55
+    mask = np.asarray(ov, np.float32) / 255.0
+    out = _mask_to_rgb(mask, W, H, pal["paper"], pal["glow"], pal, gain=1.0)
+    out = out + (T.hexr(pal["accent"])[None, None, :] * 0.12 * mask[:, :, None])
+    return np.clip(out * a, 0, 1)
+
+
+def _end_card(t, W, H, dur, meta):
+    """片尾署名卡：可读性优先 —— 深色衬底 + 实体亮字 + 克制辉光。"""
+    import numpy as np
+
+    import mv_tex as T
+    if t < 0 or t > dur:
+        return np.zeros((H, W, 3), np.float32)
+    a = min(min(t / 0.8, 1.0), min((dur - t) / 1.6, 1.0))
+    if a <= 0.01:
+        return np.zeros((H, W, 3), np.float32)
+    pal = T.get_palette("default")
+    ov, d = _text_layer(W, H)
+    cx = W / 2.0
+    f_song = T.pick_font("serif", "cjk")(int(W * 0.068))
+    f_role = T.pick_font("tech_light", "cjk")(int(W * 0.026))
+    f_name = T.pick_font("tech", "cjk")(int(W * 0.036))
+
+    def ctr(y, s_, f, fill):
+        if not s_ or f is None:
+            return
+        bb = d.textbbox((0, 0), s_, font=f)
+        d.text((cx - (bb[2] - bb[0]) / 2 - bb[0], y), s_, font=f, fill=fill)
+
+    top = H * 0.16
+    ctr(top, meta.get("song"), f_song, int(255 * a))
+    y = top + (f_song.size if f_song else 0) * 1.95
+    step = max(52.0, H * 0.049)
+    credits = meta.get("credits") or []
+    for i, (role, name) in enumerate(credits):
+        ai = min(max((t - 0.4 - i * 0.35) / 0.7, 0.0), 1.0) * a
+        if ai <= 0.01:
+            continue
+        yy = y + i * step
+        ctr(yy, role, f_role, int(235 * ai))
+        ctr(yy + (f_role.size if f_role else 0) * 1.05, name, f_name, int(255 * ai))
+    y2 = y + len(credits) * step + H * 0.026
+    for i, key in enumerate(("studio", "album")):
+        if meta.get(key):
+            ctr(y2 + i * H * 0.032, meta[key], f_role, int(210 * a))
+    mask = np.asarray(ov, np.float32) / 255.0
+    # 深色衬底：文字区一块柔和暗幕（亮底上也读得清）
+    ys, xs = np.nonzero(mask > 0.08)
+    out = np.zeros((H, W, 3), np.float32)
+    if len(ys):
+        y0, y1 = max(0, ys.min() - 40), min(H, ys.max() + 40)
+        plate = np.zeros((H, W), np.float32)
+        plate[y0:y1, int(W * 0.11):int(W * 0.89)] = 1.0
+        pm = T.blur(plate, 26.0)
+        out = out * (1.0 - pm[:, :, None] * 0.82)
+    out = out + _mask_to_rgb(mask, W, H, pal["paper"], pal["accent"], pal, gain=1.0)
+    return np.clip(out * a, 0, 1)
+
+
+def _corner_tag(t, W, H, meta):
+    """左上角常驻小字（专辑 · 歌名），极淡、缓慢呼吸。"""
+    import numpy as np
+
+    import mv_tex as T
+    label = " · ".join(x for x in (meta.get("album"), meta.get("song")) if x)
+    if not label:
+        return np.zeros((H, W, 3), np.float32)
+    pal = T.get_palette("default")
+    ov, d = _text_layer(W, H)
+    f = T.pick_font("tech_light", "cjk")(int(W * 0.0165))
+    if f is None:
+        return np.zeros((H, W, 3), np.float32)
+    x, y = int(W * 0.032), int(H * 0.028)
+    d.text((x, y), label, font=f, fill=105)
+    mask = np.asarray(ov, np.float32) / 255.0
+    breath = 0.90 + 0.10 * math.sin(t * 0.9)
+    return np.repeat(mask[:, :, None], 3, axis=2) * T.hexr(pal["steel"])[None, None, :] * breath
+
+
+def compose_frame(fi, ctx):
+    """合成第 fi 帧（核心）：场景动画 → 转场 → 片头/片尾卡 → 字幕 → 角标。"""
+    import numpy as np
+
+    import mv_scene
+    W, H, FPS = int(ctx["w"]), int(ctx["h"]), int(ctx["fps"])
+    total = float(ctx["total"])
+    shots = ctx["shots"]
+    lines = ctx["lines"]
+    pal_name = ctx.get("palette") or "default"
+    t = fi / float(FPS)
+    s = shot_at(shots, t)
+    if not s:
+        return np.zeros((H, W, 3), np.float32)
+    fn = mv_scene.SCENES.get(s.get("scene") or "flow") or mv_scene.SCENES["flow"]
+    sc = dict(s.get("ctx") or {})
+    sc["palette"] = pal_name
+    sc["lyric"] = s.get("lyric_ref", "")
+    img = fn(H, W, t, sc)
+
+    trans = float(ctx.get("transition") or 0.0)
+    idx = _shot_pos(shots, s)
+    lt = t - s["t_start"]
+    if trans > 0 and idx > 0 and lt < trans:
+        p = shots[idx - 1]
+        pfn = mv_scene.SCENES.get(p.get("scene") or "flow") or mv_scene.SCENES["flow"]
+        pc = dict(p.get("ctx") or {})
+        pc["palette"] = pal_name
+        pc["lyric"] = p.get("lyric_ref", "")
+        prev = pfn(H, W, s["t_start"], pc)
+        k = max(0.0, min(1.0, lt / trans))
+        img = np.clip(prev * (1 - k) + img * k, 0, 1)
+
+    meta = ctx.get("meta") or {}
+    td = float(ctx.get("title_dur") or 0.0)
+    ed = float(ctx.get("end_dur") or 0.0)
+    tail = total - ed
+    if td > 0 and t < td:
+        tc = _title_card(t, W, H, td, meta)
+        if np.any(tc):
+            img = np.clip(img * 0.42 + tc, 0, 1)
+    if ed > 0 and t >= tail:
+        ec = _end_card(t - tail, W, H, ed, meta)
+        if np.any(ec):
+            img = np.clip(img * 0.62 + ec * 0.92, 0, 1)
+    if lines and t < tail - 0.4:
+        cur = _lyric_index(lines, t)
+        if cur >= 0:
+            lay = _draw_lyrics(lines, W, H, t, cur, pal_name)
+            if np.any(lay):
+                img = np.clip(img + lay * 0.95, 0, 1)
+    if td <= t < tail:
+        img = np.clip(img + _corner_tag(t, W, H, meta), 0, 1)
+    return np.clip(img, 0, 1)
+
+
+# ── GPU 融合调色 pass（实测划算才用；不可用自动回退 CPU）──────────────────
+def fused_grade(img, use_gpu=False, bloom=0.22):
+    """bloom + grade + 高光压缩，一条链完成。
+
+    实测教训：bloom 过曝会把结构冲掉（死白 6.85%）→ 高光阈值只取真正过亮区
+    （>0.72）、不做放大、bloom 收窄，末段做 `highlight_rolloff` 保住亮部。
+    """
+    import numpy as np
+
+    import mv_tex as T
+    a = np.clip(np.asarray(img, np.float32), 0, 1)
+    out = None
+    if use_gpu:
+        try:
+            import gpu_accel
+            if gpu_accel.available():
+                out = gpu_accel.bloom(a, threshold=0.72, sigma=9.0, intensity=float(bloom))
+        except Exception:  # noqa: BLE001
+            out = None
+    if out is None:
+        lum0 = (0.299 * a[:, :, 0] + 0.587 * a[:, :, 1] + 0.114 * a[:, :, 2])[:, :, None]
+        hi = np.clip((lum0 - 0.72) / 0.28, 0, 1)
+        glow = T.blur(a * hi, 9.0)
+        out = np.clip(a + glow * float(bloom), 0, 1)
+    lum = (0.299 * out[:, :, 0] + 0.587 * out[:, :, 1] + 0.114 * out[:, :, 2])[:, :, None]
+    out = lum + (out - lum) * 1.10
+    out = out * 1.02 + 0.004
+    out = T.highlight_rolloff(out, 0.80)
+    return np.clip(out, 0, 1).astype(np.float32)
+
+
+def _gpu_ok():
+    try:
+        import gpu_accel
+        return bool(gpu_accel.available())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _resolve_gpu(gpu):
+    g = str(gpu if gpu is not None else "auto").strip().lower()
+    if g in ("0", "false", "no", "off", "cpu", "none"):
+        return False
+    if g in ("1", "true", "yes", "on", "gpu"):
+        return _gpu_ok()
+    return _gpu_ok()
+
+
+def render_chunk(f0, f1, out_dir, quality, ctx, use_gpu):
+    """worker：渲染 [f0,f1) 写 JPEG（已存在则跳过 —— 断点续跑）。"""
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    try:
+        import cv2
+        cv2.setNumThreads(1)
+    except Exception:  # noqa: BLE001
+        pass
+    import mv_tex
+    n = 0
+    for fi in range(int(f0), int(f1)):
+        fp = os.path.join(out_dir, f"{fi:06d}.jpg")
+        if os.path.exists(fp):
+            n += 1
+            continue
+        img = compose_frame(fi, ctx)
+        if use_gpu:
+            img = fused_grade(img, True)
+        if not mv_tex.imwrite_safe(fp, img, int(quality)):
+            raise RuntimeError(f"写帧失败：{fp}")
+        n += 1
+    return n
+
+
+def _count_frames(d):
+    try:
+        return len([f for f in os.listdir(d) if f.endswith(".jpg")])
+    except OSError:
+        return 0
+
+
+def render_movie(shots, lines, out_dir, w=1080, h=1920, fps=30, duration=None,
+                 palette="default", title="", artist="", credits="", album="",
+                 producer="", studio="", transition=DEFAULT_TRANSITION,
+                 title_dur=DEFAULT_TITLE_DUR, end_dur=DEFAULT_END_DUR,
+                 procs=None, chunk=60, quality=93, gpu="auto", on_progress=None):
+    """多进程分块渲染全片帧序列（断点续跑 + 可选 GPU 融合 pass）。
+
+    返回 {frames_dir, n_frames, rendered, new, seconds, fps, workers, use_gpu, errors}。
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    ctx = build_render_ctx(shots, lines, w, h, fps, duration, palette,
+                           title, artist, credits, album, producer, studio,
+                           transition, title_dur, end_dur)
+    total = ctx["total"]
+    n_frames = int(round(total * fps))
+    out_dir = os.path.abspath(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    if n_frames <= 0:
+        return {"frames_dir": out_dir, "n_frames": 0, "rendered": 0, "new": 0,
+                "seconds": 0.0, "fps": 0.0, "workers": 0, "use_gpu": False,
+                "errors": ["时长为 0，无可渲染帧"]}
+    use_gpu = _resolve_gpu(gpu)
+    workers = max(1, int(procs or (os.cpu_count() or 4)))
+    blocks = [(i, min(i + max(1, int(chunk)), n_frames)) for i in range(0, n_frames, max(1, int(chunk)))]
+    have0 = _count_frames(out_dir)
+    t0 = time.perf_counter()
+    errors = []
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(render_chunk, a, b, out_dir, quality, ctx, use_gpu): (a, b)
+                for a, b in blocks}
+        for done, fu in enumerate(as_completed(futs), 1):
+            try:
+                fu.result()
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{type(e).__name__}: {e}")
+            if on_progress:
+                cur = _count_frames(out_dir)
+                on_progress(cur, n_frames, time.perf_counter() - t0, done, len(blocks))
+    cur = _count_frames(out_dir)
+    el = time.perf_counter() - t0
+    return {"frames_dir": out_dir, "n_frames": n_frames, "rendered": cur,
+            "new": cur - have0, "seconds": round(el, 1),
+            "fps": round((cur - have0) / max(el, 1e-6), 2), "workers": workers,
+            "use_gpu": use_gpu, "errors": errors}
+
+
+def encode_video(frames_dir, out, fps=30, audio="", encoder="libx264", crf=18):
+    """帧序列 + 音轨 → mp4（ffmpeg）。返回 (ok, detail)。"""
+    import subprocess
+    pat = os.path.join(frames_dir, "%06d.jpg")
+    if not os.path.isdir(frames_dir) or _count_frames(frames_dir) == 0:
+        return False, "帧目录为空"
+    out = str(out)
+    if not out.lower().endswith(".mp4"):
+        out += ".mp4"
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+           "-framerate", str(int(fps)), "-i", pat]
+    has_audio = bool(str(audio or "").strip()) and os.path.isfile(str(audio))
+    if has_audio:
+        cmd += ["-i", str(audio), "-map", "0:v:0", "-map", "1:a:0", "-shortest"]
+    cmd += ["-c:v", str(encoder)]
+    if str(encoder) == "libx264":
+        cmd += ["-preset", "medium", "-crf", str(int(crf)), "-pix_fmt", "yuv420p"]
+    elif "amf" in str(encoder) or "nvenc" in str(encoder) or "qsv" in str(encoder):
+        cmd += ["-quality", "quality", "-rc", "cqp", "-qp_i", str(int(crf)),
+                "-qp_p", str(int(crf)), "-pix_fmt", "yuv420p"]
+    else:
+        cmd += ["-crf", str(int(crf)), "-pix_fmt", "yuv420p"]
+    if has_audio:
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
+    cmd += ["-movflags", "+faststart", out]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+    if r.returncode != 0:
+        return False, (r.stderr or r.stdout or "")[-800:]
+    return (os.path.isfile(out) and os.path.getsize(out) > 0), out
+
+
+def preview_frames(shots, lines, out_dir, times=None, w=1080, h=1920, fps=30,
+                   duration=None, palette="default", title="", artist="", credits="",
+                   album="", transition=DEFAULT_TRANSITION, title_dur=DEFAULT_TITLE_DUR,
+                   end_dur=DEFAULT_END_DUR, n=8):
+    """抽样渲染预览帧到 out_dir（供视觉复核），返回 [(t, path), ...]。"""
+    import mv_tex
+    ctx = build_render_ctx(shots, lines, w, h, fps, duration, palette,
+                           title, artist, credits, album, "", "", transition, title_dur, end_dur)
+    total = ctx["total"]
+    os.makedirs(out_dir, exist_ok=True)
+    if times is None:
+        times = []
+        if total > 0:
+            for i in range(max(1, int(n))):
+                times.append(round(total * (i + 0.5) / max(1, int(n)), 3))
+    out = []
+    for t in times:
+        fi = int(round(float(t) * fps))
+        img = compose_frame(fi, ctx)
+        p = os.path.join(out_dir, f"p{int(float(t) * 10):05d}.jpg")
+        if mv_tex.imwrite_safe(p, img, 92):
+            out.append((round(float(t), 3), p))
+    return out, ctx
+
+
+def render_job(cfg):
+    """一次完整作业：渲染帧序列 + 合成 mp4。cfg 为可 JSON 序列化的字典。
+
+    字段：shots/lines/frames_dir/out/w/h/fps/duration/palette/title/artist/credits/
+    album/producer/studio/transition/title_dur/end_dur/procs/chunk/quality/gpu/
+    audio/encoder/crf。返回结果字典（供后台 runner 与同步路径共用）。
+    """
+    shots = cfg.get("shots") or []
+    lines = cfg.get("lines") or []
+    frames_dir = cfg["frames_dir"]
+    res = render_movie(
+        shots, lines, frames_dir,
+        w=int(cfg.get("w", 1080)), h=int(cfg.get("h", 1920)), fps=int(cfg.get("fps", 30)),
+        duration=cfg.get("duration"), palette=cfg.get("palette", "default"),
+        title=cfg.get("title", ""), artist=cfg.get("artist", ""), credits=cfg.get("credits", ""),
+        album=cfg.get("album", ""), producer=cfg.get("producer", ""), studio=cfg.get("studio", ""),
+        transition=float(cfg.get("transition", DEFAULT_TRANSITION)),
+        title_dur=float(cfg.get("title_dur", DEFAULT_TITLE_DUR)),
+        end_dur=float(cfg.get("end_dur", DEFAULT_END_DUR)),
+        procs=cfg.get("procs"), chunk=int(cfg.get("chunk", 60)),
+        quality=int(cfg.get("quality", 93)), gpu=cfg.get("gpu", "auto"))
+    ok, detail = encode_video(frames_dir, cfg["out"], fps=int(cfg.get("fps", 30)),
+                              audio=cfg.get("audio", ""), encoder=cfg.get("encoder", "libx264"),
+                              crf=int(cfg.get("crf", 18)))
+    return {"render": res, "encode_ok": bool(ok), "out": detail if ok else "",
+            "encode_error": "" if ok else str(detail)}
+
+
+_RUNNER_SRC = '''"""鲸语 MV 后台渲染 runner（由 mv_produce 自动生成，请勿手改）。"""
+import json
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = {root!r}
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+
+def main():
+    with open(os.path.join(HERE, "config.json"), encoding="utf-8") as f:
+        cfg = json.load(f)
+    import mv_engine as me
+    try:
+        res = me.render_job(cfg)
+    except Exception as e:  # noqa: BLE001
+        res = {{"render": {{}}, "encode_ok": False, "out": "", "encode_error": f"{{type(e).__name__}}: {{e}}"}}
+    with open(os.path.join(HERE, "result.json"), "w", encoding="utf-8") as f:
+        json.dump(res, f, ensure_ascii=False, indent=1)
+    print(json.dumps({{"ok": res.get("encode_ok"), "out": res.get("out")}}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def write_runner(workdir, cfg, project_root=None):
+    """把渲染作业写成可后台执行的 runner（config.json + run_mv.py）。
+
+    用于「预计 >1 分钟」的长渲染：由 start_process 后台启动，断点续跑 + 轮询进度。
+    返回 (runner_path, config_path)。
+    """
+    os.makedirs(workdir, exist_ok=True)
+    cfg_path = os.path.join(workdir, "config.json")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=1)
+    root = project_root or os.path.dirname(os.path.abspath(__file__))
+    runner = os.path.join(workdir, "run_mv.py")
+    with open(runner, "w", encoding="utf-8") as f:
+        f.write(_RUNNER_SRC.format(root=root))
+    return runner, cfg_path
+
+
+def dynamic_check(shots, lines, w=1080, h=1920, fps=30, duration=None, palette="default",
+                  transition=DEFAULT_TRANSITION, title_dur=DEFAULT_TITLE_DUR,
+                  end_dur=DEFAULT_END_DUR, per_shot=6, step=0.2):
+    """对每个镜头**镜内**采样连续帧，做动感三重判据（避开交叉转场）。返回结果列表。
+
+    实测教训：采样点跨镜头边界会把换镜跳变误判为动态异常 → 起点加转场余量。
+    """
+    import mv_qc
+    ctx = build_render_ctx(shots, lines, w, h, fps, duration, palette,
+                           "", "", "", "", "", "", transition, title_dur, end_dur)
+    res = []
+    guard = float(transition) + 0.1
+    per_shot = max(3, int(per_shot))
+    for s in shots:
+        dur = float(s["t_end"]) - float(s["t_start"])
+        usable = dur - guard - 0.05
+        if usable < 0.35:
+            continue
+        step_eff = min(float(step), usable / max(1, per_shot - 1))
+        stride = max(1, int(round(step_eff * fps)))
+        f0 = int(round((float(s["t_start"]) + guard) * fps))
+        frames = [compose_frame(f0 + k * stride, ctx) for k in range(per_shot)]
+        v = mv_qc.assert_dynamic(frames)
+        v["shot"] = s.get("index", 0)
+        v["scene"] = s.get("scene", "")
+        v["t"] = round(f0 / float(fps), 2)
+        res.append(v)
+    return res

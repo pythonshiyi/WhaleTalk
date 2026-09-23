@@ -489,32 +489,47 @@ def _mv_palette(style):
 
 
 def _mv_native_available():
-    try:
-        import librosa  # noqa: F401
+    """原生引擎是否可用：只要求 mv_engine + 渲染/质检模块（numpy/Pillow）。
 
+    **不强制 librosa**——mv_engine 自带无 librosa 的回退（ffmpeg 解码 + RMS 近似），
+    装了 librosa 则更准。ffmpeg 缺失时会在 analyze 阶段如实报错，而非静默失败。
+    """
+    try:
         import mv_engine  # noqa: F401
+        import mv_qc  # noqa: F401
+        import mv_scene  # noqa: F401
+        import mv_tex  # noqa: F401
         return True
     except Exception:  # noqa: BLE001
         return False
 
 
 def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
-                offline, resolution, fps, timeout, engine_model, effect="kenburns", transition=0.0):
+                offline, resolution, fps, timeout, engine_model, effect="kenburns", transition=0.0,
+                title="", artist="", credits="", album="", producer="", studio="",
+                procs=0, crf=18, encoder="libx264", background=True, frames_dir="", sample=8):
     """原生引擎路径（不依赖外部 MV 程序）。返回报告文本；不可用返回 None。
 
-    action: plan / storyboard / render。分析 + 声学歌词对轴 + 卡点分镜全部本地完成。
+    action: plan / storyboard / compose / render / preview / qc / status。
+    分析 + 声学歌词对轴 + 卡点分镜 + 逐帧动画渲染全部本地完成。
     """
     try:
         import mv_engine as me
+        import mv_qc
+        import mv_tex
     except Exception:  # noqa: BLE001
         return None
-    text = _mv_lyrics_text(lyrics)
-    analysis = me.analyze(audio_abs)
-    dur = float(analysis.get("duration") or 0.0)
-    lines = me.align_lyrics(audio_abs, text, model=engine_model) if text else []
-    shots = me.build_shots(dur, analysis.get("beats") or [], lines)
-    if not shots:
-        return "错误：原生分镜为空（音频时长异常？）"
+    # qc / status 只针对已渲染帧，不依赖音频
+    if action in ("qc", "status"):
+        analysis, dur, lines, shots = {}, 0.0, [], []
+    else:
+        text = _mv_lyrics_text(lyrics)
+        analysis = me.analyze(audio_abs)
+        dur = float(analysis.get("duration") or 0.0)
+        lines = me.align_lyrics(audio_abs, text, model=engine_model) if text else []
+        shots = me.build_shots(dur, analysis.get("beats") or [], lines)
+        if not shots:
+            return "错误：原生分镜为空（音频时长异常？）"
 
     if action == "plan":
         hit = sum(1 for ln in lines if ln.get("start") is not None)
@@ -580,50 +595,139 @@ def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
               "时长": f"{dur:.2f}s", "图片": n, "风格": _mv_palette(style)}
         return _mv_report("compose", ev, checks)
 
-    # render：PIL 确定性帧 + 原生歌词 SRT + ffmpeg 合成
-    frames_dir = os.path.join(permissions.WORKSPACE_DIR or os.path.dirname(audio_abs),
-                              "video", f"mvnative_{datetime.now():%Y%m%d_%H%M%S}")
+    # 作品信息（片头/片尾卡）：缺省从音频文件名推导歌名
     _stem = os.path.splitext(os.path.basename(audio_abs))[0]
-    _title = re.sub(r"^\d+_[0-9a-fA-F]+_", "", _stem) or _stem
+    song_title = str(title or "").strip() or (re.sub(r"^\d+_[0-9a-fA-F]+_", "", _stem) or _stem)
+    meta = dict(title=song_title, artist=str(artist or ""), credits=str(credits or ""),
+                album=str(album or ""), producer=str(producer or ""), studio=str(studio or ""))
     # 分辨率解析与 _mv_compose 口径一致（x/×/* 且不区分大小写），避免非法值抛异常或倒挂
     _rm = re.match(r"^(\d{2,5})\s*[x×*]\s*(\d{2,5})$", str(resolution or "").strip().lower())
     _rw, _rh = (int(_rm.group(1)), int(_rm.group(2))) if _rm else (1080, 1920)
-    frames = me.render_frames(shots, frames_dir, palette=_mv_palette(style),
-                              w=_rw, h=_rh, title=_title)
-    if not frames:
-        return "错误：原生帧渲染失败（PIL 缺失？）"
-    srt_path = os.path.join(frames_dir, "lyrics.srt")
-    if lines:
-        me.build_srt(lines, srt_path)
+    _fps = clamp_int(fps, 30, lo=1, hi=120)
+    base_video = os.path.join(permissions.WORKSPACE_DIR or os.path.dirname(audio_abs), "video")
+
+    # 字体预检（开渲前暴露缺字形，绝不静默糊字）
+    _texts = [song_title, artist, credits, album, producer, studio] + [ln.get("text", "") for ln in lines]
+    font_warn = mv_tex.preflight_fonts(_texts)
+
+    if action == "preview":
+        prev_dir = os.path.join(base_video, f"mvprev_{datetime.now():%Y%m%d_%H%M%S}")
+        pv, _ctx = me.preview_frames(shots, lines, prev_dir, w=_rw, h=_rh, fps=_fps, duration=dur,
+                                     palette=_mv_palette(style), transition=float(transition or 0.0),
+                                     title=song_title, artist=meta["artist"], credits=meta["credits"],
+                                     album=meta["album"],
+                                     n=clamp_int(sample, 8, lo=1, hi=40))
+        if not pv:
+            return "错误：预览帧渲染失败（Pillow / mv_scene 缺失？）"
+        imgs = [mv_tex.imread_safe(p) for _t, p in pv]
+        imgs = [x for x in imgs if x is not None]
+        qc = mv_qc.qc_frames(imgs) if imgs else {"ok": False, "error": "预览帧读取失败"}
+        dyn = me.dynamic_check(shots, lines, w=_rw, h=_rh, fps=_fps, duration=dur,
+                               palette=_mv_palette(style), transition=float(transition or 0.0))
+        npass = sum(1 for x in dyn if x["ok"])
+        checks = [("预览帧落盘", bool(pv), f"{len(pv)} 张"),
+                  ("画面风格 QC", bool(qc.get("ok")),
+                   f"霓虹 {qc.get('neon_ratio')} / 死白 {qc.get('dead_white')} / 边缘 {qc.get('edge_density')}"),
+                  ("动感自检（镜内采样）", (not dyn) or npass == len(dyn),
+                   f"{npass}/{len(dyn)} PASS" if dyn else "无足够长镜头可采样")]
+        ev = {"引擎": "native（自建·逐帧）", "预览目录": prev_dir, "BPM": analysis.get("bpm"),
+              "时长": f"{dur:.2f}s", "分镜": len(shots), "分辨率": f"{_rw}x{_rh}@{_fps}fps"}
+        extra = [f"· 镜头 {x['shot']}（{x['scene']}）diff={x['avg_diff']} corr={x['corr']} "
+                 f"{'PASS' if x['ok'] else 'FAIL ' + x['reason']}" for x in dyn[:8]]
+        extra += [f"· 字体告警：{w}" for w in font_warn]
+        return _mv_report("preview", ev, checks, extra=extra)
+
+    if action == "qc":
+        fd = permissions.resolve(frames_dir) if str(frames_dir or "").strip() else ""
+        if not fd or not os.path.isdir(fd):
+            return "错误：qc 需要 frames_dir（已渲染帧目录）"
+        qc = mv_qc.qc_frame_files(fd, n_sample=40)
+        if qc.get("error"):
+            return f"错误：{qc['error']}"
+        checks = [("帧可读", qc.get("n", 0) > 0, f"{qc.get('n', 0)} 抽样 / 共 {qc.get('total_frames')}"),
+                  ("霓虹饱和", bool(qc.get("PASS_neon")), str(qc.get("neon_ratio"))),
+                  ("结构边缘密度", bool(qc.get("PASS_edge")), str(qc.get("edge_density"))),
+                  ("对比度", bool(qc.get("PASS_std")), str(qc.get("std"))),
+                  ("死白占比<1%", bool(qc.get("PASS_dead_white")), f"{qc.get('dead_white')}")]
+        return _mv_report("qc", {"帧目录": fd,
+                                 "冷暗底": f"lum={qc.get('mean_lum')} 冷偏置={qc.get('cold_bias')}"}, checks)
+
+    if action == "status":
+        fd = permissions.resolve(frames_dir) if str(frames_dir or "").strip() else ""
+        if not fd or not os.path.isdir(fd):
+            return "错误：status 需要 frames_dir（渲染帧目录）"
+        n = len([f for f in os.listdir(fd) if f.endswith(".jpg")])
+        if dur > 0:
+            want = int(round(dur * _fps))
+            pct = (n / want * 100) if want else 0.0
+            prog = f"{n}/{want}（{pct:.1f}%）"
+        else:
+            prog = f"{n} 帧（未提供音频，无法计算总帧数）"
+        return (f"[AI MV · status]\n· 帧目录：{fd}\n· 进度：{prog}\n"
+                "· 说明：后台渲染中可反复查询；完成后用 action=qc 复核或查看成片。")
+
+    # ── render：逐帧动画 → 多进程分块落盘（断点续跑）→ ffmpeg 合成 ──
+    _stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fd = permissions.resolve(frames_dir) if str(frames_dir or "").strip() else ""
+    if not fd:
+        fd = os.path.join(base_video, f"mvnative_{_stamp}")
     out_mp4 = str(output or "").strip()
     if not out_mp4:
-        out_mp4 = os.path.join(os.path.dirname(frames_dir), f"mv_{datetime.now():%Y%m%d_%H%M%S}.mp4")
+        out_mp4 = os.path.join(base_video, f"mv_{_stamp}.mp4")
     if not out_mp4.lower().endswith(".mp4"):
-        out_mp4 += ".mp4"  # 无扩展名会让 ffmpeg 无法推断容器而失败
-    mates = [f["path"] for f in frames]
-    durs = [s["duration"] for s in shots]
-    # transition 默认 0（硬切）：交叉转场按重叠缩短总长，会破坏「成片时长=歌曲时长」；可显式传入
-    res, note, err = _mv_compose(mates, out_mp4, durations=durs, resolution=str(resolution),
-                                 fps=int(fps), effect=str(effect or "kenburns"),
-                                 transition=float(transition or 0.0),
-                                 audio=audio_abs, subtitle=(srt_path if lines else ""),
-                                 workdir=frames_dir)
-    if err:
-        return f"错误：原生合成失败：{err}"
-    final = out_mp4 if str(out_mp4).lower().endswith(".mp4") else out_mp4 + ".mp4"
-    produced = os.path.isfile(final) and os.path.getsize(final) > 0
-    if not produced:
-        return f"错误：原生合成未产出成片（{final}）"
-    checks = [("终片存在且非空", produced, f"{os.path.getsize(final) / 1048576:.2f} MB"),
-              ("镜头数=分镜数", len(frames) == len(shots), f"{len(frames)} 帧")]
-    checks += me.verify_shots(shots, dur, lines)
-    vd = _ff_media_duration(final)
-    if vd and dur:
-        checks.append(("成片时长≈音频", abs(vd - dur) <= 1.0, f"{vd:.2f}s / {dur:.2f}s"))
-    ev = {"引擎": "native（自建）", "成片": final, "BPM": analysis.get("bpm"),
-          "时长": f"{dur:.2f}s", "分镜": len(shots),
-          "歌词句": sum(1 for ln in lines if ln.get("start") is not None), "调色": _mv_palette(style)}
-    return _mv_report("render", ev, checks)
+        out_mp4 += ".mp4"
+    cfg = {"shots": shots,
+           "lines": [{"text": ln["text"], "start": ln["start"], "end": ln["end"]} for ln in lines],
+           "frames_dir": fd, "out": out_mp4, "w": _rw, "h": _rh, "fps": _fps, "duration": dur,
+           "palette": _mv_palette(style), "transition": float(transition or 0.0),
+           "audio": audio_abs, "procs": (clamp_int(procs, 0, lo=0, hi=64) or None),
+           "chunk": 60, "quality": 93, "gpu": "auto", "crf": clamp_int(crf, 18, lo=0, hi=51),
+           "encoder": str(encoder or "libx264"), **meta}
+
+    if background:
+        try:
+            from agent_tools.tool_files import start_process
+            runner, _cfg_path = me.write_runner(fd, cfg)
+            pname = f"mvrender_{_stamp}"
+            r = start_process(f'"{sys.executable}" "{runner}"', name=pname, cwd=fd)
+            # 只有确认启动成功才报后台；任何拒绝/失败一律回退同步，绝不谎报已启动
+            if "已启动后台进程" in str(r):
+                return ("[AI MV · render]\n· 模式：后台渲染（长任务，预计可能 >1 分钟）\n"
+                        f"· 进程名：{pname}\n· 帧目录：{fd}\n· 成片目标：{out_mp4}\n"
+                        f"· 启动结果：{str(r)[:200]}\n"
+                        "· 轮询：list_processes 查看是否仍在运行；"
+                        f"或 mv_produce(action=\"status\", frames_dir=\"{fd}\") 看帧进度。\n"
+                        "· 断点续跑：重跑自动跳过已有帧；完成后 result.json 落盘。\n"
+                        "判定：已后台启动，**产物尚未就绪** —— 完成前不得宣称已出片。")
+        except Exception:  # noqa: BLE001
+            background = False
+
+    # 同步渲染（短片段；长任务默认走上面的后台通道）
+    res = me.render_job(cfg)
+    rr = res.get("render") or {}
+    final = res.get("out") or ""
+    produced = bool(res.get("encode_ok")) and os.path.isfile(final) and os.path.getsize(final) > 0
+    checks = [("帧序列完整", rr.get("rendered") == rr.get("n_frames"),
+               f"{rr.get('rendered')}/{rr.get('n_frames')}"),
+              ("终片存在且非空", produced,
+               f"{os.path.getsize(final) / 1048576:.2f} MB" if produced
+               else (res.get("encode_error") or "缺失"))]
+    if produced and dur:
+        vd = _ff_media_duration(final)
+        if vd:
+            checks.append(("成片时长≈音频", abs(vd - dur) <= 1.0, f"{vd:.2f}s / {dur:.2f}s"))
+    qc = mv_qc.qc_frame_files(fd, n_sample=24)
+    if not qc.get("error"):
+        checks.append(("画面风格 QC", bool(qc.get("ok")),
+                       f"霓虹 {qc.get('neon_ratio')} / 死白 {qc.get('dead_white')}"))
+    ev = {"引擎": "native（自建·逐帧）", "成片": final, "帧目录": fd, "BPM": analysis.get("bpm"),
+          "时长": f"{dur:.2f}s", "分镜": len(shots), "帧数": rr.get("n_frames"),
+          "渲染": f"{rr.get('seconds')}s @ {rr.get('fps')}fps × {rr.get('workers')} 进程",
+          "GPU": rr.get("use_gpu"), "调色": _mv_palette(style)}
+    extra = [f"· 字体告警：{w}" for w in font_warn]
+    if rr.get("errors"):
+        extra.append("· 渲染错误：" + "；".join(str(e) for e in rr["errors"][:3]))
+    return _mv_report("render", ev, checks, extra=extra)
 
 
 def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, timeout, style):
@@ -659,11 +763,11 @@ def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, time
             "type": "function",
             "function": {
                 "name": "mv_produce",
-                "description": "音乐 MV 能力：输入音频（可选歌词），可完成 音频分析(BPM/节拍/段落) · 歌词声学对轴 · 卡点分镜 · 画面生成/合成。action=plan(分析+分镜+对齐证据) / storyboard(可喂 mv_compose 的分镜包) / compose(分镜→mv_compose 出图合成) / render(直接出片) / styles(列风格包)。engine=native(默认，鲸语自建引擎，零外部依赖) 或 external(可选同机外部 AI MV 程序，自动探测/可设 mv_home)。可调 style/resolution/fps/effect/transition/offline/whisper_model；render 可 images_dir 供图或 generate_images 出图。返回含**实测自检**字段（产物是否落盘、时长是否一致、镜头是否覆盖全曲、歌词是否落片内）——请据此判断是否达成，未达成时如实说明、不要声称完成。",
+                "description": "音乐 MV 能力：输入音频（可选歌词），可完成 音频分析(BPM/节拍/段落) · 歌词声学对轴 · 卡点分镜 · 逐帧动画渲染 · 成片合成。action=plan(分析+分镜+对齐证据) / storyboard(可喂 mv_compose 的分镜包) / compose(分镜→mv_compose 出图合成) / render(逐帧动画出片) / preview(抽样预览帧+动感/风格自检，快) / qc(对已渲染帧做客观质量自检) / status(查后台渲染进度) / styles(列风格包)。engine=native(默认，鲸语自建引擎，零外部依赖) 或 external(可选同机外部 AI MV 程序)。render 逐帧渲染**默认后台执行**（长任务，start_process），断点续跑；短片段可 background=false 同步出片。可传 title/artist/album/credits 生成片头片尾署名卡。返回含**实测自检**字段（产物是否落盘、时长是否一致、帧是否完整、动感/风格 QC）——请据此判断是否达成，未达成时如实说明、不要声称完成。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["plan", "storyboard", "compose", "render", "styles"], "description": "plan=分镜计划(快) / storyboard=出 mv_compose 分镜包 / compose=分镜→mv_compose 出图合成 / render=直接出片 / styles=列风格包"},
+                        "action": {"type": "string", "enum": ["plan", "storyboard", "compose", "render", "preview", "qc", "status", "styles"], "description": "plan=分镜计划(快) / storyboard=出 mv_compose 分镜包 / compose=分镜→mv_compose 出图合成 / render=逐帧动画出片(默认后台) / preview=抽样预览+自检(快) / qc=对已渲染帧客观质检 / status=查后台渲染进度 / styles=列风格包"},
                         "engine": {"type": "string", "enum": ["native", "external"], "description": "native=鲸语自建引擎（默认，本地音频分析+声学歌词对轴+卡点分镜+确定性帧，不依赖外部程序）；external=调用可选的外部 AI MV 程序"},
                         "whisper_model": {"type": "string", "description": "可选：声学歌词对轴用的 whisper 模型 tiny/base/small/medium（默认 small，越大越准越慢）"},
                         "audio": {"type": "string", "description": "歌曲音频路径（wav/mp3，ffmpeg 可解码）"},
@@ -680,6 +784,18 @@ def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, time
                         "transition": {"type": "number", "description": "可选：镜头间交叉淡化秒数（0=硬切；>0 会按重叠缩短总长），默认 0"},
                         "timeout": {"type": "integer", "description": "可选：超时秒数，默认 1800（render 出片较慢）"},
                         "mv_home": {"type": "string", "description": "可选：AI MV 程序目录（默认自动探测 / 环境变量 AI_MV_HOME）"},
+                        "title": {"type": "string", "description": "可选：歌名（片头大字/角标/片尾；缺省从音频文件名推导）"},
+                        "artist": {"type": "string", "description": "可选：演唱（片头/片尾署名，如「演唱：某某」）"},
+                        "album": {"type": "string", "description": "可选：专辑名（片头/角标，如《AI眼里的中国风》）"},
+                        "producer": {"type": "string", "description": "可选：制作人（片头/片尾署名）"},
+                        "studio": {"type": "string", "description": "可选：出品（片头/片尾署名）"},
+                        "credits": {"type": "string", "description": "可选：片尾制作名单，每行「角色|姓名」，如：作词|鲸语\\n作曲|鲸语"},
+                        "frames_dir": {"type": "string", "description": "可选：渲染帧目录（render 续渲/指定输出；qc/status 必填）"},
+                        "background": {"type": "boolean", "description": "可选：render 是否后台执行（默认 true，长任务用 start_process + 断点续跑）；短片段可 false 同步出片"},
+                        "procs": {"type": "integer", "description": "可选：渲染进程数（默认 CPU 核数）"},
+                        "crf": {"type": "integer", "description": "可选：H.264 质量 0-51（越小越清晰，默认 18）"},
+                        "encoder": {"type": "string", "description": "可选：视频编码器（默认 libx264；可 h264_amf/h264_nvenc/h264_qsv 硬件编码）"},
+                        "sample": {"type": "integer", "description": "可选：preview 抽样帧数，默认 8"},
                     },
                     "required": ["action"],
                 },
@@ -693,11 +809,13 @@ def _mv_do_render(root, py, audio_abs, ly_args, offline_flag, offline, out, time
 def mv_produce(action="plan", audio="", lyrics="", style="citypop_night_v1", out="",
                output="", images_dir="", offline=True, generate_images=False,
                resolution="1080x1920", fps=30, effect="kenburns", transition=0.0,
-               timeout=1800, mv_home="", engine="native", whisper_model="small"):
+               timeout=1800, mv_home="", engine="native", whisper_model="small",
+               title="", artist="", album="", producer="", studio="", credits="",
+               frames_dir="", background=True, procs=0, crf=18, encoder="libx264", sample=8):
     """音频+歌词 → 卡点对词分镜/成片。
 
     默认走**鲸语自建原生引擎**（mv_engine：本地音频分析 + 声学歌词对轴 + 卡点分镜 +
-    确定性帧 + ffmpeg 合成），不依赖任何外部 MV 程序；engine=external 时才调用可选外部程序。
+    逐帧动画渲染 + ffmpeg 合成），不依赖任何外部 MV 程序；engine=external 时才调用可选外部程序。
     """
     act = str(action or "plan").strip().lower()
     timeout = clamp_int(timeout, 1800, lo=60, hi=36000)
@@ -710,13 +828,21 @@ def mv_produce(action="plan", audio="", lyrics="", style="citypop_night_v1", out
                 "- citypop_night_v1（城市夜景/霓虹）\n"
                 "- qinghua（青花/国风）\n"
                 "（engine=native 无需任何外部 MV 程序）")
-    if native_eng and act in ("plan", "storyboard", "compose", "render") and _mv_native_available():
+    if native_eng and act in ("qc", "status") and _mv_native_available():
+        native = _mv_native(act, "", lyrics, style, out, output, images_dir,
+                            offline, resolution, fps, timeout, str(whisper_model or "small"),
+                            effect, transition, title, artist, credits, album, producer, studio,
+                            procs, crf, encoder, background, frames_dir, sample)
+        if native is not None:
+            return native
+    if native_eng and act in ("plan", "storyboard", "compose", "render", "preview") and _mv_native_available():
         audio_abs = _mv_resolve_audio(audio)
         if not audio_abs:
             return f"错误：音频文件不存在或未提供：{audio}"
         native = _mv_native(act, audio_abs, lyrics, style, out, output, images_dir,
                             offline, resolution, fps, timeout, str(whisper_model or "small"),
-                            effect, transition)
+                            effect, transition, title, artist, credits, album, producer, studio,
+                            procs, crf, encoder, background, frames_dir, sample)
         if native is not None:
             return native
 
@@ -737,7 +863,8 @@ def mv_produce(action="plan", audio="", lyrics="", style="citypop_night_v1", out
         return f"[AI MV · styles] 可用风格包：\n{(out_s or '').strip()}\n（项目：{root}）"
 
     if act not in ("plan", "storyboard", "compose", "render"):
-        return "错误：action 需为 plan / storyboard / compose / render / styles"
+        return ("错误：action 需为 plan / storyboard / compose / render / styles"
+                "（preview / qc / status 需 engine=native）")
 
     audio_abs = _mv_resolve_audio(audio)
     if not audio_abs:

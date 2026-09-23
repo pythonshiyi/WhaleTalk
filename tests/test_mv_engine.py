@@ -115,3 +115,65 @@ def test_assign_lines_monotonic_no_collapse():
     assert out[0]["start"] >= 26.0 - 1e-6
     assert out[-1]["end"] <= 60.0 + 1e-6
 
+
+# ── 逐帧动画渲染管线（compose_frame / render_movie / 断点续跑）─────────────
+def _lines():
+    return [{"text": "山河为砚", "start": 1.0, "end": 3.0, "index": 0},
+            {"text": "眼里有光", "start": 4.0, "end": 6.0, "index": 1}]
+
+
+def test_build_shots_assigns_scene():
+    shots = me.build_shots(10.0, [i * 0.5 for i in range(1, 19)], lines=_lines())
+    assert all("scene" in s for s in shots)
+    assert any(s["scene"] for s in shots)
+
+
+def test_compose_frame_contract():
+    import numpy as np
+    shots = me.build_shots(8.0, [i * 0.5 for i in range(1, 15)], lines=_lines())
+    ctx = me.build_render_ctx(shots, _lines(), w=96, h=64, fps=10, duration=8.0,
+                              title="测试歌", artist="演唱：AI", credits="作词|AI")
+    img = me.compose_frame(20, ctx)
+    assert img.shape == (64, 96, 3) and img.dtype == np.float32
+    assert img.min() >= 0 and img.max() <= 1.0 + 1e-6
+    assert np.allclose(img, me.compose_frame(20, ctx)), "同帧须确定"
+
+
+def test_render_chunk_resume(tmp_path):
+    shots = me.build_shots(4.0, [i * 0.5 for i in range(1, 9)], lines=_lines())
+    ctx = me.build_render_ctx(shots, _lines(), w=64, h=48, fps=5, duration=4.0)
+    d = str(tmp_path)
+    n = me.render_chunk(0, 10, d, 90, ctx, False)
+    assert n == 10 and me._count_frames(d) == 10
+    # 已存在帧应被跳过（断点续跑）
+    assert me.render_chunk(0, 10, d, 90, ctx, False) == 10
+    assert me._count_frames(d) == 10
+
+
+def test_render_movie_resume(tmp_path):
+    shots = me.build_shots(3.0, [i * 0.5 for i in range(1, 7)], lines=_lines())
+    d = str(tmp_path / "frames")
+    res = me.render_movie(shots, _lines(), d, w=64, h=48, fps=5, duration=3.0,
+                          procs=1, chunk=8, gpu="off")
+    assert res["n_frames"] == 15 and res["rendered"] == 15
+    assert not res["errors"]
+    res2 = me.render_movie(shots, _lines(), d, w=64, h=48, fps=5, duration=3.0,
+                           procs=1, chunk=8, gpu="off")
+    assert res2["new"] == 0 and res2["rendered"] == 15
+
+
+def test_dynamic_check_reports(tmp_path):
+    shots = me.build_shots(10.0, [i * 0.5 for i in range(1, 19)], lines=_lines())
+    res = me.dynamic_check(shots, _lines(), w=96, h=64, fps=10, duration=10.0,
+                           per_shot=6, step=0.2)
+    assert res, "应有镜内采样结果"
+    assert all("ok" in r and "scene" in r for r in res)
+
+
+def test_preview_frames_writes(tmp_path):
+    shots = me.build_shots(6.0, [i * 0.5 for i in range(1, 11)], lines=_lines())
+    out, ctx = me.preview_frames(shots, _lines(), str(tmp_path / "prev"), n=4,
+                                 w=64, h=48, fps=10, duration=6.0)
+    assert out and all(os.path.isfile(p) for _t, p in out)
+    assert ctx["total"] == 6.0
+

@@ -1,5 +1,6 @@
 import React from "react";
 import BrainBlock from "./BrainBlock.jsx";
+import BrainGrant from "./BrainGrant.jsx";
 import BrainSearch from "./BrainSearch.jsx";
 import BrainInsights from "./BrainInsights.jsx";
 import { MemoryPage } from "./Pages.jsx";
@@ -43,7 +44,7 @@ export default function BrainPage() {
         onKeyDown={(e) => {
           if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
           e.preventDefault();
-          const tabs = ["cockpit", "memory"];
+          const tabs = ["cockpit", "memory", "grant"];
           const i = tabs.indexOf(tabRef.current);
           const next = (i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
           go(tabs[next]);
@@ -57,12 +58,18 @@ export default function BrainPage() {
           className={`brain-tab ${tab === "memory" ? "on" : ""}`} onClick={() => go("memory")}>
           <Icon name="book" size={15} /> 记忆库
         </button>
+        <button role="tab" id="brain-tab-grant" aria-selected={tab === "grant"} aria-controls="brain-panel-grant"
+          className={`brain-tab ${tab === "grant" ? "on" : ""}`} onClick={() => go("grant")}>
+          <Icon name="lock" size={15} /> 授权
+        </button>
       </div>
 
       <div className="brain-page-body">
         {tab === "cockpit"
           ? <div role="tabpanel" id="brain-panel-cockpit" aria-labelledby="brain-tab-cockpit"><BrainBlock /></div>
-          : <div role="tabpanel" id="brain-panel-memory" aria-labelledby="brain-tab-memory"><MemoryPage embedded /></div>}
+          : tab === "memory"
+            ? <div role="tabpanel" id="brain-panel-memory" aria-labelledby="brain-tab-memory"><MemoryPage embedded /></div>
+            : <div role="tabpanel" id="brain-panel-grant" aria-labelledby="brain-tab-grant"><BrainGrant /></div>}
       </div>
     </div>
   );
