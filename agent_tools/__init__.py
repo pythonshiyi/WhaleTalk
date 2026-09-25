@@ -30,6 +30,7 @@ from .tool_files import *  # noqa: F401,F403  # 📁 文件与进程
 from .tool_code import *  # noqa: F401,F403  # 💻 编程与执行
 from .tool_web import *  # noqa: F401,F403  # 🌐 浏览器与网页
 from .tool_codegen import *  # noqa: F401,F403  # 🎨 代码生图（image_codegen）
+from .tool_community import *  # noqa: F401,F403  # 🧠 鲸群社区（自主进社区 / 永久保存）
 
 __all__ = [
     "get_date",
@@ -197,4 +198,8 @@ __all__ = [
     'sprite_sheet',
     'make_gif',
     'image_hybrid',
+    'community_post',
+    'community_save',
+    'community_status',
+    'community_cycle',
 ]

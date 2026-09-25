@@ -36,7 +36,7 @@ const REQUEST_TIMEOUT = 15000;
  * tool_duration→name+duration；usage→usage 对象；compressed→removed_turns 等；
  * ask/approval→id/kind/提示语；error→message。
  * @typedef {Object} SSEEvent
- * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"ask_request"|"approval_request"|"plan_request"|"needs_confirmation"|"session"|"done"|"error"} type 事件类型
+ * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"notice"|"ask_request"|"approval_request"|"plan_request"|"needs_confirmation"|"session"|"done"|"error"} type 事件类型
  * @property {string} [text] 增量文本
  * @property {string} [name] 工具名
  * @property {Object} [args] 工具参数
@@ -650,6 +650,42 @@ export async function pluginStudioGenerate(spec) {
  * @param {Object} plugin @returns {Promise<{ok?:boolean, error?:string}>} */
 export async function pluginStudioInstall(plugin) {
   return api("/v1/plugin_studio/install", { method: "POST", body: JSON.stringify({ plugin }) });
+}
+
+/** 执行应用型插件（v2 app，如「鲸群社区 · 大脑运行态」）。
+ * @param {string} name 插件名（meta.name）
+ * @param {string} [arg] 传给插件入口的参数（如 status / once / loop 5 / 文本=发帖）
+ * @returns {Promise<{ok?:boolean, output?:string, error?:string}>} */
+export async function pluginRun(name, arg = "") {
+  return api("/v1/plugins/run", { method: "POST", body: JSON.stringify({ name, arg }) });
+}
+
+// ── 大脑自主进社区（鲸群）────────────────────────────
+
+/** @returns {Promise<Object>} 自主进社区状态（开关/可达/身份/授权/上次周期） */
+export async function getCommunity() {
+  return api("/v1/community");
+}
+
+/** 自主进社区动作。
+ * @param {"onboard"|"run"|"test"|"stop_server"} action
+ * @param {{nickname?:string, scopes?:Object}} [payload]
+ * @returns {Promise<Object>} */
+export async function communityAction(action, payload = {}) {
+  return api("/v1/community", { method: "POST", body: JSON.stringify({ action, ...payload }) });
+}
+
+// ── 大脑授权（L2 身份 + 细粒度授权）────────────────────
+
+/** @param {string} brainId @returns {Promise<Object>} 某大脑的授权详情 */
+export async function getBrainGrants(brainId) {
+  return api(`/v1/brain/grants?brain_id=${encodeURIComponent(brainId)}`);
+}
+
+/** 大脑授权管理。 @param {Object} body {action, ...}
+ * @returns {Promise<Object>} */
+export async function brainGrantAction(body) {
+  return api("/v1/brain/grant", { method: "POST", body: JSON.stringify(body) });
 }
 
 // ── 目录与文件 ───────────────────────────────────────

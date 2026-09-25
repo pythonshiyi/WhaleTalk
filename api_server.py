@@ -475,6 +475,8 @@ _TOOL_DOMAIN = {
     "knowledge_search": "记忆与知识", "delete_memory": "记忆与知识",
     "update_memory": "记忆与知识", "self_profile": "记忆与知识",
     "failure_memory": "记忆与知识",
+    "community_post": "记忆与知识", "community_save": "记忆与知识",
+    "community_status": "记忆与知识", "community_cycle": "记忆与知识",
     "ask_user": "AI 与智能", "request_permission": "AI 与智能",
     "run_wechat_writer": "AI 与智能", "publish_draft": "AI 与智能",
     "subagent_run": "AI 与智能", "team_run": "AI 与智能",
@@ -1063,6 +1065,8 @@ def _status():
         "degrade": _degrade_brief(),
         # 出网摘要（P1-A）：入网有 SSRF 底线，出网同样要看得见；明细走 GET /v1/context
         "egress": _egress_brief(),
+        # 自主进社区摘要（鲸群）：开关 / 密钥 / 上次周期结果（零 IO）
+        "community": _community_brief(),
     }
 
 
@@ -1089,6 +1093,30 @@ def _degrade_brief():
         return {"count": s.get("count", 0), "critical": s.get("critical", 0)}
     except Exception:
         return {"count": 0, "critical": 0}
+
+
+def _community_brief():
+    """状态栏用的自主进社区摘要（零 IO：仅读配置缓存 + 内存态最近周期结果）。
+
+    刻意不在这里探测可达性/调用社区站——状态栏高频轮询，网络探测走 GET /v1/community。
+    """
+    try:
+        import community_client as cc
+        import config_utils
+        cfg = config_utils.load_config()
+        lc = cc.last_result()
+        res = lc.get("result") or {}
+        return {
+            "enabled": bool(cfg.get("brain_community_enabled")),
+            "has_key": bool(cc.resolve_key(cfg)),
+            "last_at": lc.get("at"),
+            "last_ok": res.get("ok"),
+            "last_error": res.get("error"),
+            "name": res.get("name") or "",
+        }
+    except Exception:
+        return {"enabled": False, "has_key": False, "last_at": None,
+                "last_ok": None, "last_error": None, "name": ""}
 
 
 def _trust_state():
@@ -4266,6 +4294,51 @@ def _brain_guard_tick(now):
     except Exception:
         logger.exception("大脑守护心跳/快照失败")
 
+_BRAIN_COMMUNITY_THREAD = None
+_BRAIN_COMMUNITY_LAST_RUN = None  # 上次周期时间戳（进程内）
+_BRAIN_COMMUNITY_FAILS = 0        # 连续失败次数（用于指数退避）
+
+
+def _brain_community_loop():
+    """鲸语大脑自主进社区：**独立工作线程**（不占用调度循环；失败指数退避）。
+
+    默认关闭（config.brain_community_enabled）。每 15s 醒来判断是否到期；周期内可能
+    含网络请求与动作间隔 sleep，放在独立线程避免拖慢定时任务/守护心跳/进程看门狗。
+    关闭时复位计时与退避，重新开启即立刻跑一次。
+    """
+    global _BRAIN_COMMUNITY_LAST_RUN, _BRAIN_COMMUNITY_FAILS
+    while True:
+        try:
+            import config_utils
+            cfg = config_utils.load_config()
+            if not bool(cfg.get("brain_community_enabled", False)):
+                _BRAIN_COMMUNITY_LAST_RUN = None
+                _BRAIN_COMMUNITY_FAILS = 0
+                time.sleep(15)
+                continue
+            try:
+                interval = max(1, int(cfg.get("brain_community_interval_min", 30) or 30))
+            except (TypeError, ValueError):
+                interval = 30
+            now = time.time()
+            if _BRAIN_COMMUNITY_LAST_RUN is not None:
+                backoff = min(2 ** _BRAIN_COMMUNITY_FAILS, 6)  # 1→2→4→6 倍间隔
+                if now - _BRAIN_COMMUNITY_LAST_RUN < interval * 60 * backoff:
+                    time.sleep(15)
+                    continue
+            _BRAIN_COMMUNITY_LAST_RUN = now  # 先占位：失败也等退避后的下一个周期
+            import community_client
+            result = community_client.run_cycle(cfg=cfg, log=lambda *a: None)
+            if result.get("ok"):
+                _BRAIN_COMMUNITY_FAILS = 0
+                logger.info("大脑自主进社区周期完成：%s", result)
+            else:
+                _BRAIN_COMMUNITY_FAILS = min(_BRAIN_COMMUNITY_FAILS + 1, 8)
+                logger.warning("大脑自主进社区周期跳过：%s", result.get("error"))
+        except Exception:
+            logger.exception("大脑自主进社区线程异常")
+        time.sleep(15)
+
 
 def _scheduler_loop():
     """定时任务调度线程（30s 轮询）。"""
@@ -7397,6 +7470,9 @@ class _Handler(BaseHTTPRequestHandler):
             "failures": items[:100],
             "stats": stores.failure_stats(FAILURES_PATH),
             "dashboard": stores.failure_dashboard(FAILURES_PATH),
+            # 观测层：失败结构化诊断（按工具/按错误类型/常见误传参数），
+            # 供「自主」栏目与可靠性优化读数据——不新增端点，复用本端点。
+            "diagnosis": stores.failure_diagnosis_summary(FAILURES_PATH),
             "active_path": FAILURES_PATH,
             "archive_path": FAILURES_ARCHIVE_PATH,
         })
@@ -7734,6 +7810,16 @@ class _Handler(BaseHTTPRequestHandler):
     @_get_route("/v1/plugin_market")
     def _g_v1_plugin_market(self):
         self._json(200, _plugin_market())
+
+
+    @_get_route("/v1/community")
+    def _g_v1_community(self):
+        """大脑自主进社区状态：开关 / 可达性 / 身份 / 授权 / 上次周期结果。"""
+        try:
+            import community_client
+            self._json(200, community_client.status())
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
 
 
     @_get_route(("pre", "/v1/plugins/", ""))
@@ -8516,6 +8602,87 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid json or body too large"})
             return
         self._json(200, _plugin_market_install(body))
+
+
+    @_post_route("/v1/plugins/run")
+    def _p_v1_plugins_run(self):
+        """执行应用型插件（.wtplugin v2 `app`）。body: {name, arg}。
+
+        只执行**用户已安装且启用**的插件（与现有插件体系同信任级）；执行器
+        `plugin_app.run_plugin` 按文件加载、不污染 sys.path。鉴权由 do_POST 统一前置。
+        """
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        name = str(body.get("name") or "")
+        arg = str(body.get("arg") or "")
+        try:
+            import plugin_app
+            import plugins as plugins_mod
+            paths = _plugin_paths()
+            target = next(
+                (p for p in plugins_mod.list_plugins(paths["plugins_dir"])
+                 if (p.get("meta") or {}).get("name") == name and p.get("enabled", True)),
+                None,
+            )
+            if target is None:
+                self._json(404, {"ok": False, "error": "未找到已启用的该插件"})
+                return
+            if not (target.get("contents") or {}).get("app"):
+                self._json(400, {"ok": False, "error": "该插件不是应用型"})
+                return
+            out = plugin_app.run_plugin(target, paths["plugins_dir"], arg)
+            self._json(200, {"ok": True, "output": out})
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
+
+    @_post_route("/v1/community")
+    def _p_v1_community(self):
+        """大脑自主进社区管理。body: {action: onboard|run|test|stop_server, ...}
+
+        onboard：握手 → 建脑身份 → 授予默认 scope → **密钥 DPAPI 加密落配置并打开开关**；
+                 明文密钥绝不回传前端。
+        run：立即跑一个自主周期。test：探测连通性与身份。stop_server：停掉本进程拉起的社区站。
+        """
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        action = str(body.get("action") or "").strip()
+        try:
+            import community_client as cc
+            import config_utils
+            if action == "onboard":
+                result = cc.onboard(nickname=str(body.get("nickname") or "").strip(),
+                                    scopes=body.get("scopes"))
+                if result.get("ok") and result.get("brain_key"):
+                    cfg = config_utils.mutable_config()
+                    cfg["brain_community_brain_key"] = result["brain_key"]
+                    cfg["brain_community_enabled"] = True
+                    config_utils.save_config(cfg)
+                    self._json(200, {"ok": True, "brain_id": result.get("brain_id"),
+                                     "name": result.get("name"), "scopes": result.get("scopes"),
+                                     "note": "大脑密钥已加密保存，自主进社区已开启。"})
+                else:
+                    self._json(200 if result.get("ok") else 400, result)
+                return
+            if action == "run":
+                self._json(200, cc.run_cycle(cfg=config_utils.load_config(), log=lambda *a: None))
+                return
+            if action == "test":
+                st = cc.status()
+                self._json(200, {"ok": bool(st.get("reachable")), **st})
+                return
+            if action == "stop_server":
+                cc.stop_server()
+                self._json(200, {"ok": True})
+                return
+            self._json(400, {"ok": False,
+                             "error": f"未知动作：{action or '(空)'}；可用：onboard/run/test/stop_server"})
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
 
 
     @_post_route("/v1/profiles")
@@ -9748,7 +9915,7 @@ def start_server(port=8745, token=""):
     - 可降级：旧会话迁移 / 进程看门狗 / 入站 webhook / IM 轮询 / 权限与快照 /
       workflow 发送通道——失败仅损失对应外围能力，记录明确影响后继续启动。
     """
-    global _SERVER, _THREAD, _TOKEN, _PORT, _SCHEDULER_THREAD
+    global _SERVER, _THREAD, _TOKEN, _PORT, _SCHEDULER_THREAD, _BRAIN_COMMUNITY_THREAD
     if _SERVER is not None:
         return _PORT, _TOKEN, None
     import secrets
@@ -9769,6 +9936,35 @@ def start_server(port=8745, token=""):
     except Exception as e:
         logger.error("dc 运行时装配失败，拒绝启动：%s", e)
         return None, "", f"dc 运行时装配失败: {e}"
+    # ── 必须失败：先绑定端口（fail-fast）──
+    # 关键顺序修复：此前先启动调度/社区循环/看门狗/入站（各有副作用——调度器可能
+    # 触发定时任务、社区循环会发网络请求），最后才 bind；一旦端口被占/非法，bind 失败
+    # 直接 return，却**不回滚已启动的后台线程** → 启动失败仍跑调度，留下半初始化状态。
+    # 现在把 bind 提到所有副作用之前：绑不上就立刻返回，绝不产生任何后台行为。
+    token = (token or "").strip() or ("wt_" + secrets.token_hex(16))
+    _TOKEN = token
+    _PORT = int(port or 8745)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", _PORT), _Handler)
+    except (OSError, OverflowError, ValueError) as e:
+        # 可操作错误：端口被占/被保留/非法是最常见的启动失败，给出明确原因与解决办法。
+        detail = str(e)
+        if getattr(e, "errno", None) in (10048, 48) or "10048" in detail or "in use" in detail.lower():
+            msg = (f"端口 {_PORT} 已被其他程序占用。请关闭占用该端口的程序，"
+                   f"或用 --port 指定其他端口（如 python web_app.py --port {_PORT + 1}）后重试。")
+        elif getattr(e, "errno", None) in (10013, 13) or "10013" in detail:
+            msg = (f"端口 {_PORT} 被系统保留或无权限绑定（Windows 常见于被 Hyper-V/WSL/"
+                   f"保留的端口段）。可用 --port 换一个端口（如 python web_app.py --port {_PORT + 1}）后重试。")
+        elif isinstance(e, (OverflowError, ValueError)) or "0-65535" in detail:
+            msg = f"端口号非法：{_PORT}（应在 0-65535 之间）。请用 --port 指定合法端口。"
+        else:
+            msg = f"本地端口绑定失败（{_PORT}）：{detail}"
+        logger.error("API 绑定失败，拒绝启动：%s", msg)
+        return None, "", msg
+    except Exception as e:
+        logger.error("API 服务创建失败，拒绝启动：%s", e)
+        return None, "", f"API 服务创建失败: {e}"
+    _SERVER = server
     # ── 可降级：外围能力逐项初始化，失败只损失对应能力 ──
     try:
         n = _migrate_legacy_profiles()
@@ -9785,6 +9981,9 @@ def start_server(port=8745, token=""):
     if _SCHEDULER_THREAD is None:
         _SCHEDULER_THREAD = threading.Thread(target=_scheduler_loop, daemon=True)
         _SCHEDULER_THREAD.start()
+    if _BRAIN_COMMUNITY_THREAD is None:
+        _BRAIN_COMMUNITY_THREAD = threading.Thread(target=_brain_community_loop, daemon=True)
+        _BRAIN_COMMUNITY_THREAD.start()
     try:
         _start_process_watchdog()
     except Exception:
@@ -9858,14 +10057,7 @@ def start_server(port=8745, token=""):
         _dcw.set_send_callback(_send_to_headless)
     except Exception:
         logger.warning("workflow 发送通道接线失败（可降级）：run_workflow 投递不可用")
-    token = (token or "").strip() or ("wt_" + secrets.token_hex(16))
-    _TOKEN = token
-    _PORT = int(port or 8745)
-    try:
-        server = ThreadingHTTPServer(("127.0.0.1", _PORT), _Handler)
-    except Exception as e:
-        return None, "", str(e)
-    _SERVER = server
+    # 端口已在副作用之前完成绑定（见上方 fail-fast 块）；此处只需启动 serve_forever。
     _THREAD = threading.Thread(target=server.serve_forever, daemon=True)
     _THREAD.start()
     logger.info("本地 API 服务已启动：http://127.0.0.1:%s", _PORT)
@@ -9886,6 +10078,12 @@ def stop_server():
         import brain_api
         if brain_api.brain_status(with_context=False) is not None:
             brain_api.brain_action("heartbeat", {"thought": "服务停止，记忆已落盘"})
+    except Exception:
+        pass
+    # 自主进社区：停止本进程自动拉起的社区站（不触碰用户自己启动的实例）
+    try:
+        import community_client
+        community_client.stop_server()
     except Exception:
         pass
     # 入站 webhook 接收端（独立端口）：随服务优雅关闭并复位句柄。否则端口在进程

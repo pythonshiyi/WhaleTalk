@@ -85,14 +85,14 @@ def test_active_client_is_thread_local():
         dc.set_active_client(old)
 
 
-def test_loop_guard_recovers_instead_of_silent_stop(monkeypatch):
-    """重复调用命中防护时应「拦截 + 回灌换策略提示」继续，而不是静默 return True 结束。"""
+def test_loop_guard_reminds_instead_of_blocking(monkeypatch):
+    """重复调用命中阈值时应「照常执行 + 尾部附提醒」继续，而不是拦截或静默 return True。"""
     client = dc.DeepSeekClient(api_key="sk-test", base_url=dc.DEFAULT_BASE_URL)
     rounds = [
         [_tool_call_chunk("get_date", "{}", "t1")],
         [_tool_call_chunk("get_date", "{}", "t2")],
-        [_tool_call_chunk("get_date", "{}", "t3")],  # 连续第 3 轮相同 → 命中防护、拦截
-        [_text_chunk("已换策略完成")],                # 模型纠正后正常收尾
+        [_tool_call_chunk("get_date", "{}", "t3")],  # 连续第 3 轮相同 → 命中提醒、不拦截
+        [_text_chunk("已换策略完成")],                # 模型收尾
     ]
     calls = {"n": 0}
 
@@ -109,9 +109,11 @@ def test_loop_guard_recovers_instead_of_silent_stop(monkeypatch):
         on_content=lambda _t: None,
         on_loop_guard=lambda name, n: guard.append((name, n)),
     )
-    assert ok is True, "防护命中后应继续让模型换策略，而不是静默结束"
+    assert ok is True, "提醒后应继续让模型收尾，而不是静默结束"
     assert guard and guard[0][0] == "get_date"
-    assert calls["n"] == 4, "拦截后应再发起一轮（共 4 轮），而非直接终止"
-    assert any("本轮未执行" in str(m.get("content") or "") for m in msgs), \
-        "拦截应以工具结果回灌给模型，说明为何未执行"
+    assert calls["n"] == 4, "只提醒不拦截：工具照常执行并继续，共 4 轮"
+    # 提醒以工具结果形式回灌（不是拦截、不产生「未执行」）
+    joined = "\n".join(str(m.get("content") or "") for m in msgs)
+    assert "第 3 次以相同参数调用" in joined, "应以工具结果附一句重复调用提醒"
+    assert "本轮未执行" not in joined, "新策略不拦截，不应再出现「本轮未执行」"
 

@@ -27,6 +27,7 @@ export function withAttachRefs(text, files) {
 export function buildMessageChain(msgs, { includeTools = true } = {}) {
   const out = [];
   for (const m of msgs) {
+    if (m.local) continue; // 本地提示消息（如插件执行结果）：仅 UI 展示，绝不送模型
     if (m.role === "user") {
       const um = { role: "user", content: withAttachRefs(unwrapLongText(m.text || ""), m.files) };
       if (m.images && m.images.length) um.images = m.images;

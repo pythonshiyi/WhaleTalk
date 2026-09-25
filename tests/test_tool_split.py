@@ -152,13 +152,15 @@ ALL_SPLIT_TOOLS = [
     "rpa_scroll", "rpa_screenshot", "screen_find_click", "vision_loop",
     "tts_save", "tts_speak", "tts_stop", "speech_to_text",
     "voice_chat_loop", "image_generate", "qrcode", "media_ffmpeg", "team_run",
+    "community_post", "community_save", "community_status", "community_cycle",
 ]
 
-BATCH_SIZES = [19, 13, 15, 17, 14, 10, 11, 18]
+BATCH_SIZES = [19, 13, 15, 17, 14, 10, 11, 18, 4]
 BATCH_MODULES = [
     "agent_tools.tool_docs", "agent_tools.tool_web", "agent_tools.tool_code",
     "agent_tools.tool_files", "agent_tools.tool_brain", "agent_tools.tool_msg",
     "agent_tools.tool_system", "agent_tools.tool_desktop",
+    "agent_tools.tool_community",
 ]
 BATCH_RANGES = []
 _b = 0
@@ -195,9 +197,9 @@ def test_all_split_tools_module_ownership():
 
 def test_all_split_tools_in_all_six_layers():
     names = [t["function"]["name"] for t in dc.TOOLS]
-    # 163（162 + hardware_accel）→ 165（+ lyric_align / mv_credits_card，MV 增强）
-    assert len(names) == 165, "工具总数应为 165（163 + lyric_align + mv_credits_card），实际 %d" % len(names)
-    assert len(dc._TOOL_ORDER) == 165, "顺序表必须与工具数一致"
+    # 163（162 + hardware_accel）→ 165（+ lyric_align / mv_credits_card）→ 169（+ 鲸群社区 4 工具）
+    assert len(names) == 169, "工具总数应为 169，实际 %d" % len(names)
+    assert len(dc._TOOL_ORDER) == 169, "顺序表必须与工具数一致"
     assert set(dc.TOOL_CALL_MAP) == set(dc._TOOL_ORDER), "CALL_MAP 键与 ORDER 必须一一对应"
     for n in _uniq(ALL_SPLIT_TOOLS):
         assert n in names, "%s 必须仍在 TOOLS 列表" % n

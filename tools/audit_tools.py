@@ -105,7 +105,19 @@ ERROR_KINDS = {
 # warn：描述质量提示（描述过短/过长/含依赖门槛语），需人工甄别，不拦截 CI。
 # 实现别名不在此列：登记进 KNOWN_ALIASES 即豁免（有意为之，静默接受），
 # 未登记的 schema↔实现名差异一律按 error「实现名不一致」拦截（--strict 可挡）。
-WARN_KINDS = {"描述过短", "描述偏长（仅可读性提示）", "可疑表述"}
+WARN_KINDS = {"描述过短", "描述偏长（仅可读性提示）", "可疑表述", "参数命名易误传"}
+
+# 易误传的参数命名（有据可查：模型常按通用直觉传别的名字，见 failures.json）：
+# 例如 read_file 的 start_line/max_lines 常被写成 offset/limit；pip_install 的
+# package 常被写成 packages。执行器已能容错（别名映射 + 丢弃多余键，见
+# deepseek_client._align_tool_args），但**直觉命名才是根治**——新工具应尽量避免。
+# 仅对「本可更直觉」的参数名提示，不拦截（老工具改名会破坏兼容）。
+_IDIOMATIC_HINTS = {
+    "start_line": "offset", "max_lines": "limit", "max_items": "limit",
+    "old": "old_string", "new": "new_string", "package": "packages",
+    "keyword": "query", "text": "content", "workdir": "cwd",
+    "logfile": "log_file", "type": "category",
+}
 
 # 已知且无害的实现别名：schema 名与实现函数名不同，但函数确实存在（非缺陷）。
 # 登记后审计静默接受（不再产生 warn）；新增别名时在此登记，避免每次审计都产生噪声。
@@ -238,6 +250,11 @@ def main(argv=None):
                 flag(name, "签名有参数schema无", f"函数参数 {missing} 未在 schema 暴露")
             if extra and sig_names:
                 flag(name, "schema有参数签名无", f"schema 参数 {extra} 函数签名无")
+        # 参数命名易误传（warn）：本可更直觉的命名，模型常按通用直觉传别的名字。
+        for pn in sp:
+            if pn in _IDIOMATIC_HINTS:
+                flag(name, "参数命名易误传",
+                     f"参数 {pn} 常被模型误写为 {_IDIOMATIC_HINTS[pn]}（执行器已容错，但直觉命名更稳）")
 
     # 覆盖检查
     group_members = set()

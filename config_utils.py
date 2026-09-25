@@ -238,6 +238,21 @@ def normalize_config(cfg):
     cfg["vision_self_review"] = as_bool(cfg.get("vision_self_review", False))
     cfg["autostart"] = as_bool(cfg.get("autostart", False))
     cfg["strict_tools"] = as_bool(cfg.get("strict_tools", False))
+    # 鲸语大脑自主进社区
+    cfg["brain_community_enabled"] = as_bool(cfg.get("brain_community_enabled", False))
+    cfg["brain_community_autostart"] = as_bool(cfg.get("brain_community_autostart", True), True)
+    cfg["brain_community_autopost"] = as_bool(cfg.get("brain_community_autopost", True), True)
+    cfg["brain_community_harvest"] = as_bool(cfg.get("brain_community_harvest", True), True)
+    cfg["brain_community_base"] = str(cfg.get("brain_community_base") or "http://127.0.0.1:8770").strip() \
+        or "http://127.0.0.1:8770"
+    cfg["brain_community_brain_key"] = str(cfg.get("brain_community_brain_key") or "").strip()
+    cfg["brain_community_shared_secret"] = str(cfg.get("brain_community_shared_secret") or "").strip()
+    cfg["brain_community_server_dir"] = str(cfg.get("brain_community_server_dir") or "").strip()
+    cfg["brain_community_brain_dir"] = str(cfg.get("brain_community_brain_dir") or "").strip()
+    try:
+        cfg["brain_community_interval_min"] = max(1, min(1440, int(cfg.get("brain_community_interval_min", 30))))
+    except (TypeError, ValueError):
+        cfg["brain_community_interval_min"] = 30
     cfg["update_url"] = str(cfg.get("update_url", "") or "").strip()
     cfg["plugin_market_url"] = str(cfg.get("plugin_market_url", "") or "").strip()
     cfg["plugin_market_public_key"] = str(cfg.get("plugin_market_public_key", "") or "").strip()
@@ -308,6 +323,8 @@ def _load_config_uncached(config_path):
     cfg["api_key"] = crypto.decrypt(cfg.get("api_key", ""))
     cfg["inbound_token"] = crypto.decrypt(cfg.get("inbound_token", ""))
     cfg["image_api_key"] = crypto.decrypt(cfg.get("image_api_key", ""))
+    cfg["brain_community_brain_key"] = crypto.decrypt(cfg.get("brain_community_brain_key", ""))
+    cfg["brain_community_shared_secret"] = crypto.decrypt(cfg.get("brain_community_shared_secret", ""))
     return normalize_config(cfg)
 
 
@@ -334,7 +351,8 @@ def save_config(cfg, config_path=None):
         # - 明文为空（含 DPAPI 解密失败返回 "" 的情况）但磁盘仍有密文 → 保留磁盘原密文。
         #   否则一次「无关设置」的保存会把解密失败的密文抹成空串，Key 不可逆丢失。
         # - 加密失败（CryptError）→ 保留磁盘原密文，绝不写明文、绝不静默删除。
-        for secret_key in ("api_key", "inbound_token", "image_api_key"):
+        for secret_key in ("api_key", "inbound_token", "image_api_key",
+                           "brain_community_brain_key", "brain_community_shared_secret"):
             plain = cfg.get(secret_key, "")
             disk_cipher = _disk_cipher(config_path, secret_key)
             if not plain and disk_cipher:

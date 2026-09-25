@@ -1,5 +1,6 @@
 import React from "react";
 import * as api from "../api.js";
+import { confirmDialog } from "../dialog.js";
 
 /**
  * BrainGrant —— 「授权」Tab：为大脑签发身份、逐项勾选授权、随时撤回。
@@ -29,7 +30,7 @@ export default function BrainGrant() {
 
   const loadBrains = React.useCallback(async () => {
     try {
-      const r = await api.post("/v1/brain/grant", { action: "list" });
+      const r = await api.brainGrantAction({ action: "list" });
       if (!r || r.ok === false) throw new Error((r && r.error) || "读取大脑列表失败");
       const list = r.brains || [];
       setBrains(list);
@@ -40,7 +41,7 @@ export default function BrainGrant() {
   const loadGrant = React.useCallback(async (bid) => {
     if (!bid) { setGrant(null); setScopes([]); return; }
     try {
-      const r = await api.get(`/v1/brain/grants?brain_id=${encodeURIComponent(bid)}`);
+      const r = await api.getBrainGrants(bid);
       if (!r || r.ok === false) throw new Error((r && r.error) || "读取授权失败");
       setGrant(r.grant || null);
       setScopes(r.all_scopes || []);
@@ -53,7 +54,7 @@ export default function BrainGrant() {
   const act = async (body, after) => {
     setBusy(true);
     try {
-      const r = await api.post("/v1/brain/grant", body);
+      const r = await api.brainGrantAction(body);
       if (!r || r.ok === false) throw new Error((r && r.error) || "操作失败");
       flash("操作成功");
       if (after) after(r);
@@ -87,7 +88,7 @@ export default function BrainGrant() {
 
   const revoke = async () => {
     if (!activeId) return;
-    if (!window.confirm("撤回后，这个大脑将立即失去全部权限。确认撤回？")) return;
+    if (!(await confirmDialog("撤回后，这个大脑将立即失去全部权限。确认撤回？"))) return;
     await act({ action: "revoke", brain_id: activeId }, (r) => {
       setGrant(r.grant);
       setScopes((ss) => ss.map((s) => Object.assign({}, s, { on: false })));
@@ -96,7 +97,7 @@ export default function BrainGrant() {
 
   const rotate = async () => {
     if (!activeId) return;
-    if (!window.confirm("轮换密钥后，旧钥匙立即失效。确认？")) return;
+    if (!(await confirmDialog("轮换密钥后，旧钥匙立即失效。确认？"))) return;
     const r = await act({ action: "rotate", brain_id: activeId });
     if (r) setNewKey(r.brain_key);
   };

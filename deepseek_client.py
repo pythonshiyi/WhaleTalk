@@ -3464,6 +3464,126 @@ def _parse_tool_args(raw_args):
     raise ValueError(f"参数非合法 JSON：{str(raw_args)[:200]}")
 
 
+# ── 工具参数对齐（容错）───────────────────────────────────────────────────
+# 现象（有据可查的真实失败）：模型常按「通用直觉」传参，与工具签名不一致——
+#   read_file: 传 offset/limit，签名是 start_line/max_lines
+#   edit_file: 传 old_string/new_string/search/target，签名是 old/new
+#   run_command: 传 cwd/background（签名只有 command）
+#   pip_install: 传 packages（签名是 package）；read_memory: 传 query（签名是 keyword）
+# 旧行为是 `fn(**args)` 直接 TypeError → 整次调用硬失败，浪费一整轮（模型还得重试，可能再错）。
+# 这里在调用前用签名对齐：① 常见别名自动映射；② 丢弃签名不接受的多余键；③ 尽力救回缺的必填。
+# 契约：**不改变工具语义**——只做「把模型想表达的参数翻译成签名认识的名字」，
+# 绝不臆造值；无法对齐的多余键如实丢弃并回执给模型（让它知道被忽略了）。
+_TOOL_ARG_ALIASES = {
+    # 分页/范围（最普遍）
+    "offset": ("start_line", "start", "begin", "from"),
+    "limit": ("max_lines", "max_items", "count", "max_results", "top_k"),
+    "line_start": ("start_line",),
+    "line_end": ("end_line",),
+    "max_length": ("max_lines",),
+    "start": ("start_line",),
+    # 文本编辑
+    "old_string": ("old", "old_text", "search", "find", "target"),
+    "new_string": ("new", "new_text", "replace", "replacement"),
+    "old_text": ("old",),
+    "new_text": ("new",),
+    "search": ("old", "keyword", "query"),
+    "replace": ("new",),
+    # 命令/进程
+    "cwd": ("workdir", "working_dir"),
+    "cmd": ("command",),
+    "background": ("run_in_background",),
+    "log_file": ("logfile",),
+    # 安装/记忆/其它
+    "packages": ("package", "name"),
+    "query": ("keyword", "q", "text"),
+    "q": ("keyword",),
+    "category": ("type",),
+    "content": ("text", "body"),
+    "task": ("name", "title"),
+    "summary": ("content", "text"),
+    "title": ("name", "text"),
+}
+
+
+def _align_tool_args(fn, args):
+    """把模型给的 args 对齐到 fn 的签名。
+
+    返回 (aligned, ignored, notes)：
+      - aligned: 可直接 `fn(**aligned)` 的 dict（只含签名接受的键）；
+      - ignored: 被丢弃的多余键名列表（供回执）；
+      - notes:   人类可读的对齐说明（别名映射 / 救回必填），供结果尾部追加，空则不追加。
+
+    纯函数、无副作用；签名取不到时原样返回（不误伤）。
+    """
+    import inspect
+    if not isinstance(args, dict) or fn is None:
+        return dict(args or {}), [], ""
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return dict(args), [], ""
+    params = sig.parameters
+    accepts_kwargs = any(p.kind == p.VAR_KEYWORD for p in params.values())
+    known = {n for n, p in params.items()
+             if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
+    if accepts_kwargs:
+        return dict(args), [], ""  # 工具本就接受 **kwargs，无需对齐
+
+    aligned = {}
+    notes = []
+    consumed = set()
+    # 1) 精确命中优先
+    for k, v in args.items():
+        if k in known:
+            aligned[k] = v
+            consumed.add(k)
+    # 2) 别名字段映射到单一缺失的目标参数（不覆盖已给的）
+    for k, v in args.items():
+        if k in consumed:
+            continue
+        for target in _TOOL_ARG_ALIASES.get(k, ()):
+            if target in known and target not in aligned:
+                aligned[target] = v
+                consumed.add(k)
+                notes.append(f"{k}→{target}")
+                break
+    # 3) 剩余键：能对上的都对了，剩下的是签名不接受的多余键 → 丢弃并记录
+    ignored = [k for k in args if k not in consumed]
+
+    # 4) 缺必填的尽力救回：required 参数没有值，但模型给了明显同义的键（已在上面处理过，
+    #    这里只做「大小写/下划线」等轻量归一，例如 startLine→start_line）
+    def _norm(s):
+        return re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+    norm_map = {_norm(n): n for n in known}
+    for k, v in list(args.items()):
+        if k in consumed:
+            continue
+        tgt = norm_map.get(_norm(k))
+        if tgt and tgt not in aligned:
+            aligned[tgt] = v
+            consumed.add(k)
+            notes.append(f"{k}→{tgt}")
+    ignored = [k for k in args if k not in consumed]
+    return aligned, ignored, "、".join(notes)
+
+
+def _missing_required(fn, aligned):
+    """返回缺的必填参数名列表（无签名信息则空）。"""
+    import inspect
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return []
+    out = []
+    for n, p in sig.parameters.items():
+        if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY) and p.default is p.empty \
+                and n not in aligned and p.kind != p.VAR_KEYWORD and p.kind != p.VAR_POSITIONAL:
+            out.append(n)
+    return out
+
+
 def _parse_scroll(target):
     """解析滚动目标：'向上3' / '向下 5' / '3' → pyautogui 正负次数。"""
     t = str(target or "").strip()
@@ -3699,6 +3819,8 @@ _TOOL_ORDER = [
     'hardware_accel',
     # MV 增强（mvrender 底座补齐）：歌词真值对齐 + 片头片尾字幕卡
     'lyric_align', 'mv_credits_card',
+    # 鲸群社区：大脑主动进社区 / 永久保存资料
+    'community_post', 'community_save', 'community_status', 'community_cycle',
 ]
 
 _GROUP_ORDER = [
@@ -3752,6 +3874,7 @@ _HINT_ORDER = [
     ('硬件', 'gpu', '显卡', '加速', '性能', 'benchmark', '显存', '利用率'),
     ('歌词对齐', '对轴', '字幕时间轴', 'lrc', '歌词匹配', '歌词卡点'),
     ('片头片尾', '制作人字幕', '片尾名单', '署名', '专辑信息', '角标'),
+    ('社区', '发帖到社区', '社区发帖', '发到社区', '社区动态', '进社区', '鲸群', '社区记忆'),
 ]
 
 TOOLS = build_tool_list(_TOOL_ORDER)
@@ -3779,9 +3902,11 @@ def _env_int(name, default):
 
 MAX_TOOL_ROUNDS = _env_int("MAX_TOOL_ROUNDS", 100)          # 0 = 不限轮数
 MAX_EMPTY_RETRIES = _env_int("MAX_EMPTY_RETRIES", 1)
-MAX_SAME_TOOL_REPEATS = _env_int("MAX_SAME_TOOL_REPEATS", 3)  # 0 = 关闭重复防护
-# 循环防护累计命中上限：命中先「拦截本轮 + 回灌换策略提示」让模型自我纠正，
-# 达到该上限才真正终止（<=0 = 不设上限，仅纠正不停）。
+# 循环「提醒」阈值：相同参数连续调用达到该轮数时，在工具结果尾部附一句轻量提示
+# （请模型自查是否空转）。**不再拦截、不再终止**——判断权交给模型。0 = 关闭提醒。
+MAX_SAME_TOOL_REPEATS = _env_int("MAX_SAME_TOOL_REPEATS", 3)
+# 兼容保留（已废弃，无实际作用）：原「循环防护累计命中上限」，用于达到该次数后终止生成。
+# 现改为纯提醒、不终止，故该开关不再有任何行为；保留仅为避免旧配置报错。
 MAX_LOOP_GUARD_TRIPS = _env_int("MAX_LOOP_GUARD_TRIPS", 3)
 MAX_PLAN_REJECTIONS = _env_int("MAX_PLAN_REJECTIONS", 3)      # 0 = 不限
 _RESULT_INTO_CONTEXT_MAX = _env_int("RESULT_INTO_CONTEXT_MAX", 40000)  # 0 = 不落盘/不截断
@@ -5100,9 +5225,14 @@ class DeepSeekClient:
                     work[-1].pop("tool_calls", None)
                     return False
 
-                # 循环防护：按整轮 (name, args) 签名连续重复判定，命中则整轮终止。
-                # 用整轮签名而非单个 last_tool_key——旧实现下 [A,B]→[A,B] 这类多工具
-                # 重复轮永远触发不了防护（相邻 key 总不同）。
+                # 循环「提示」（原为循环「防护」）：按整轮 (name, args) 签名连续重复判定。
+                #
+                # 立场变更（按用户要求）：**不再拦截、不再终止**。现代模型以相同参数重复调用
+                # 通常有理由（轮询进程/重试网络/等待文件生成/分页推进），命令式硬阻断会打断
+                # 合理节奏、误伤正常流程。改为：仅在检测到连续重复时，把一句**提醒**附加在
+                # 本轮工具结果尾部，让模型自己判断是否真的在空转——判断权交回模型，
+                # 系统不做裁决、不拦执行。
+                # 用整轮签名而非单个 last_tool_key：多工具重复轮（[A,B]→[A,B]）也能识别。
                 guarded = False
                 round_sig = tuple(
                     (tc["name"], (tc["args"] or "").strip()) for tc in tool_calls
@@ -5114,41 +5244,26 @@ class DeepSeekClient:
                     last_round_sig = round_sig
                 if round_sig is not None and MAX_SAME_TOOL_REPEATS and MAX_SAME_TOOL_REPEATS > 0 and same_repeats >= MAX_SAME_TOOL_REPEATS:
                     guarded = True
+                loop_notice = ""
                 if guarded:
                     guard_name = "+".join(tc["name"] for tc in tool_calls[:3]) or "(未知)"
                     guard_trips += 1
                     _reps = same_repeats
-                    _give_up = MAX_LOOP_GUARD_TRIPS > 0 and guard_trips >= MAX_LOOP_GUARD_TRIPS
-                    logger.warning(
-                        "工具循环防护：%s 连续 %s 轮相同调用（累计第 %s 次），本轮拦截%s",
-                        guard_name, _reps, guard_trips, "并终止" if _give_up else "，转交模型换策略",
+                    logger.info(
+                        "工具循环提醒：%s 连续 %s 轮相同调用（第 %s 次提示，不拦截）",
+                        guard_name, _reps, guard_trips,
                     )
-                    # 不直接结束：把「已拦截 + 请换策略」作为工具结果回灌，给模型一次
-                    # 自我纠正的机会。此前直接 return True——任务被静默腰斩，且还上报
-                    # 成功，用户完全看不出原因（on_loop_guard 此前也无人接线）。
-                    _blocked_hint = (
-                        f"本轮未执行：检测到你连续 {_reps} 轮以相同参数调用「{guard_name}」。"
-                        "相同调用不会产生新结果，请勿重复。先分析上一步为何没有进展/失败，"
-                        "改用不同参数或不同工具；若确实无法推进，直接向用户说明卡点、不要空转。"
+                    # 只提醒、不拦截：提醒文字会附加到本轮各工具结果末尾（见下方执行后）。
+                    # 若模型确实在推进（如轮询），它会忽略这句；若真在空转，它据此自查。
+                    loop_notice = (
+                        f"\n（提示：这是第 {_reps} 次以相同参数调用「{guard_name}」。"
+                        "若你在轮询/重试/等待进展，请继续；若确无新信息，可考虑换参数或换策略。）"
                     )
-                    for tc in tool_calls:
-                        work.append(
-                            {"role": "tool", "tool_call_id": tc["id"], "content": _blocked_hint}
-                        )
-                    # 重置重复计数：若模型再以相同参数调用，重新累计至下一次拦截
+                    if on_loop_guard:
+                        on_loop_guard(guard_name, _reps)
+                    # 重置重复计数：若模型再以相同参数调用，重新累计至下一次提示
                     last_round_sig = None
                     same_repeats = 0
-                    if not _give_up:
-                        if on_loop_guard:
-                            on_loop_guard(guard_name, _reps)
-                        continue
-                    logger.warning("工具循环防护累计 %s 次，终止本轮生成", guard_trips)
-                    if on_truncated:
-                        on_truncated(
-                            f"检测到「{guard_name}」反复以相同参数调用已达 {guard_trips} 次，"
-                            "已终止以避免空转。任务可能尚未完成，请换一种思路或补充指令后继续。"
-                        )
-                    return False
 
                 custom_map = {
                     t["function"]["name"]: t for t in (custom_tools or [])
@@ -5241,7 +5356,15 @@ class DeepSeekClient:
                         else:
                             try:
                                 args = _parse_tool_args(raw_args)
-                                result = fn(**args)
+                                # 参数对齐（容错）：别名映射 + 丢弃签名外多余键 + 缺必填提示。
+                                # 旧的 `fn(**args)` 遇到模型误传的参数名会硬报 TypeError，整轮作废；
+                                # 这里事前对齐，把「可救的」救回、把「多余的」如实忽略并回执。
+                                aligned, ignored, notes = _align_tool_args(fn, args)
+                                missing = _missing_required(fn, aligned)
+                                if missing:
+                                    raise TypeError(
+                                        f"缺少必填参数 {missing}，收到的参数: {args}")
+                                result = fn(**aligned)
                                 # 结构化结果归一为可读文本：dict/list 用 JSON(保留中文)，
                                 # 其余非 str(int/bool/None) 转 str——避免 dict 结果漏到前端
                                 # SSE 成对象，UI 渲染成 "[object Object]"（get_status 等曾触发）。
@@ -5253,6 +5376,14 @@ class DeepSeekClient:
                                             result = str(result)
                                     else:
                                         result = str(result)
+                                # 对齐回执（仅当确有别名映射/忽略项时追加，让模型知道发生了什么）
+                                if notes or ignored:
+                                    extra = []
+                                    if notes:
+                                        extra.append(f"参数已对齐：{notes}")
+                                    if ignored:
+                                        extra.append(f"忽略的多余参数：{ignored}")
+                                    result = f"{result}\n（{'；'.join(extra)}）"
                             except (json.JSONDecodeError, ValueError) as e:
                                 result = (
                                     f"工具参数解析失败: {e}，原始参数: {raw_args!r}，请修正参数格式后重试"
@@ -5398,6 +5529,10 @@ class DeepSeekClient:
                                     text = text + "\n\n【AI 自审】\n" + review
                             except Exception:
                                 logger.exception("视觉自审失败: %s", img_path)
+                    # 循环「提醒」（不拦截）：本轮检测到重复调用时，把一句轻量提示附在
+                    # 结果尾部，让模型自行判断是否空转（判断权归模型，系统不裁决）。
+                    if loop_notice and isinstance(text, str):
+                        text = text + loop_notice
                     work.append(
                         {"role": "tool", "tool_call_id": tc["id"], "content": text}
                     )

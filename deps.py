@@ -392,6 +392,31 @@ def install_optional(dep, on_line=None):
     return ok
 
 
+OFFICIAL_PYPI = "https://pypi.org/simple"
+
+
+def pip_install_from(spec, mirror=None, on_line=None, python=None):
+    """用指定镜像源安装单个规格（供自愈换源重试）。mirror=None 用默认源。"""
+    pkgs = [p for p in str(spec).split() if p.strip()]
+    if not pkgs:
+        return False
+    guard_pip_proxy(on_line)
+    exe = python or sys.executable
+    base = [exe, "-m", "pip", "install"] + pkgs + [
+        "-i", (mirror or PIP_MIRROR), "--timeout", "20", "--retries", "2",
+        "--disable-pip-version-check", "--no-warn-script-location",
+    ]
+    try:
+        rc = run_verbose(base, on_line, timeout=PIP_INSTALL_TIMEOUT) if on_line else \
+            subprocess.run(base, capture_output=True, text=True,
+                           timeout=(PIP_INSTALL_TIMEOUT or None), errors="replace").returncode
+    except Exception as e:  # noqa: BLE001
+        if on_line:
+            on_line(f"[{spec}] 换源安装异常: {e}")
+        return False
+    return rc == 0
+
+
 def install_by_key(key, on_line=None):
     """按 import 名或能力名从 HEAVY_DEPS 找到并安装，返回 (ok, dep)。"""
     for d in HEAVY_DEPS:

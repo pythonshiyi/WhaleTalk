@@ -4,7 +4,7 @@
 """
 
 # 应用版本号（统一来源：deepseek_client / backup 引用此处）
-VERSION = "3.16.15"
+VERSION = "3.16.16"
 
 # 统一模型能力说明（v3.10.0）：DeepSeek 已把「快速模式 / 专家模式 / 识图模式」
 # 合并为统一的智能模式——V4.1 Flash 原生多模态，自行判断任务复杂度并在检测到
@@ -147,7 +147,12 @@ TASK_QUALITY_GUIDE = (
     "开工就要用 start_process 后台启动，再用 list_processes / get_status 轮询进度；"
     "不要用 run_python / run_command 同步干等——run_python 同步上限 60s、run_command 默认 120s，"
     "超时会把整个进程树 kill 掉，连带脚本内的多进程/进程池一起被杀（表现为 BrokenProcessPool），"
-    "切成小块重试也救不回来。"
+    "切成小块重试也救不回来。\n"
+    "[工具参数规范]\n"
+    "21. 工具参数必须严格按每个工具的 schema 传：参数名要与定义完全一致（如 read_file 用 "
+    "path/start_line/max_lines，不是 offset/limit；edit_file 用 old/new，不是 old_string/new_string；"
+    "pip_install 用 package，不是 packages）。多传的键会被忽略、常见别名会被自动纠正，"
+    "但依赖纠正会丢信息、也慢——按 schema 写名字才是正确做法。"
 )
 
 # 内置指令库（只读模板：可在指令库栏目「复制到我的指令」后自由修改）
@@ -346,4 +351,15 @@ DEFAULT_CONFIG = {
     "agent_mail_enabled": False,  # Agent Mail（agently-cli）集成开关；默认关闭，不配置不影响使用
     "agent_mail_cli": "agently-cli",  # agently-cli 可执行文件（或绝对路径）
     "process_max_idle_seconds": 3600,  # 后台子进程空闲清理阈值（无输出超过该秒数才清理；有持续输出的长任务不清理，默认 1 小时）
+    # 鲸群社区（**可选实验场，非鲸语功能**：独立实验代码见 experiments/鲸群实验场/；默认全关）
+    "brain_community_enabled": False,       # 进社区总开关（默认关；未开不产生任何外发）
+    "brain_community_base": "http://127.0.0.1:8770",  # 社区站地址
+    "brain_community_brain_key": "",        # 大脑密钥（敏感：DPAPI 加密）
+    "brain_community_shared_secret": "",    # 部署级握手密钥（敏感：DPAPI 加密；空=自动读社区站 config.json）
+    "brain_community_interval_min": 30,     # 自主周期（分钟）
+    "brain_community_autostart": True,      # 检测不到社区站时自动拉起 server.py
+    "brain_community_server_dir": "",       # 社区站目录（空=自动探测 experiments/鲸群实验场）
+    "brain_community_brain_dir": "",        # 本地大脑目录（空=源码同级 brain/）
+    "brain_community_autopost": True,       # 自主循环是否把本机新记忆归档发帖（永久保存）
+    "brain_community_harvest": True,        # 是否把公海经历回灌本地大脑记忆
 }

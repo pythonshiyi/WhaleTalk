@@ -36,6 +36,7 @@ from shared import (  # D4: 参数校验辅助
     TOOL_RESULT_FAIL_PREFIXES,
     clamp_int,
     find_code_placeholder,
+    format_process_result,
 )
 from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 
@@ -223,13 +224,10 @@ def run_python(code):
                 f"（list_processes 查进度 / stop_process 停止）。"
             )
         permissions.audit("run_python", "python <script>", f"{len(text)} 字符, rc={rc}")
-        if rc not in (0, None):
-            body = out_data.strip() or "（无输出）"
-            return (f"错误：脚本以退出码 {rc} 结束（执行失败，非正常完成）\n{body}\n"
-                    f"[工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}]")
-        if not out_data.strip():
-            return f"执行成功（无输出），工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}"
-        return out_data + f"\n[工作目录：{permissions.WORKSPACE_DIR or '（当前目录）'}]"
+        # 语义化报告（同 run_command）：非零退出不一律判"错误"，避免误导与污染失败记忆。
+        return format_process_result(
+            rc, out_data, kind="脚本",
+            workspace=(permissions.WORKSPACE_DIR or None))
     except Exception as e:
         return f"错误：{e}"
     finally:
@@ -277,12 +275,11 @@ def run_command(command):
             return (f"错误：命令超时（>{timeout} 秒，进程树已终止）。长任务请改用 start_process 后台启动，"
                     f"再用 list_processes 查进度 / stop_process 停止。")
         permissions.audit("run_command", cmd[:200], f"rc={rc}")
-        if rc not in (0, None):
-            body = out_data.strip() or "（无输出）"
-            return f"错误：命令以退出码 {rc} 结束（执行失败）\n{body}"
-        if not out_data.strip():
-            return f"执行成功（无输出），退出码 {rc}"
-        return f"退出码 {rc}\n{out_data}"
+        # 语义化报告：非零退出不一定是"执行失败"（ruff/pytest/grep/diff 用非零表示
+        # "发现问题"）；一律报"错误："既误导模型，又污染失败记忆。详见 shared.format_process_result。
+        return format_process_result(
+            rc, out_data, kind="命令",
+            workspace=(_dc.WORKING_DIR or permissions.WORKSPACE_DIR or None))
     except Exception as e:
         return f"错误：{e}"
 
@@ -652,6 +649,16 @@ def dev_plan(action, title=None, goal=None, steps=None, step_index=None, path=No
     plan_path = os.path.join(base, ".whaletalk_plan.json")
     act = (action or "").strip().lower()
 
+    def _write_plan(plan):
+        """原子写计划（自动建父目录）。
+
+        此前用裸 open(...,'w')：当 base 目录不存在时抛 FileNotFoundError，
+        整个工具以「工具执行失败: [Errno 2] …」硬崩（真实失败记录见 failures.json）。
+        改用 _dc._atomic_write（内部 os.makedirs(dirname, exist_ok=True)）后，
+        目录缺失自动补建，与 write_file 的健壮性一致。
+        """
+        return _dc._atomic_write(plan_path, json.dumps(plan, ensure_ascii=False, indent=2))
+
     def load():
         try:
             with open(plan_path, encoding="utf-8") as f:
@@ -670,8 +677,10 @@ def dev_plan(action, title=None, goal=None, steps=None, step_index=None, path=No
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }
-        with open(plan_path, "w", encoding="utf-8") as f:
-            json.dump(plan, f, ensure_ascii=False, indent=2)
+        try:
+            _write_plan(plan)
+        except Exception as e:
+            return f"错误：无法写入开发计划到 {plan_path}：{e}"
         return f"已初始化开发计划「{plan['title']}」（{len(plan['steps'])} 步）\n" + _plan_text(plan)
 
     if act == "show":
@@ -692,8 +701,10 @@ def dev_plan(action, title=None, goal=None, steps=None, step_index=None, path=No
             return f"错误：step_index 越界（0~{len(plan['steps']) - 1}）"
         plan["steps"][idx]["done"] = True
         plan["updated_at"] = datetime.now().isoformat(timespec="seconds")
-        with open(plan_path, "w", encoding="utf-8") as f:
-            json.dump(plan, f, ensure_ascii=False, indent=2)
+        try:
+            _write_plan(plan)
+        except Exception as e:
+            return f"错误：无法写入开发计划到 {plan_path}：{e}"
         return _plan_text(plan)
 
     if act == "clear":

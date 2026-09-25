@@ -1,7 +1,7 @@
 import React from "react";
 import { createPortal } from "react-dom";
 import Message from "./Message.jsx";
-import { findToolCard, makePatchLast, trimHistory } from "../msgUpdates.js";
+import { capLiveWindow, findToolCard, makePatchLast, trimHistory } from "../msgUpdates.js";
 import Composer from "./Composer.jsx";
 import SessionList from "./SessionList.jsx";
 import ContextPanel from "./ContextPanel.jsx";
@@ -40,6 +40,7 @@ const PRODUCT_PATH_KEYS = ["path", "output", "file", "filename", "dst", "dest", 
 function toSaveMessages(msgs) {
   const out = [];
   for (const m of msgs || []) {
+    if (m.local) continue; // 本地提示消息（插件执行结果等）：仅 UI 展示，不落盘、不进模型
     if (m.role === "user") {
       const um = { role: "user", content: unwrapLongText(m.text || "") };
       // 附件与正文分开存储：content 保持纯文本（回显不乱），images/files 供重载回显 +
@@ -1050,6 +1051,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const VIRT_WINDOW = 60;
   const VIRT_LOAD = 40;
   const VIRT_EST_H = 90; // 未渲染条目的估算高度（px），用于顶部占位
+  // 活动消息窗口上界（回合数）：状态里实际保留多少回合；更早的整回合丢弃
+  // （已完整落盘，重开会话可查看）。防止 msgs 数组随会话长度无限增长。
+  const MAX_LIVE_TURNS = 40;
   const [renderStart, setRenderStart] = React.useState(0);
   const atBottomRef = React.useRef(true);
   const topSentinelRef = React.useRef(null);
@@ -1281,6 +1285,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       } catch (e) { silentWarn(e, "ChatPage"); }
     };
     saveChatFinished();
+    // 长会话内存上界（在**保存之后**执行，确保完整历史已落盘）：只保留最近
+    // MAX_LIVE_TURNS 个回合的活动消息。窗口化渲染不回收消息对象，单轮长任务的
+    // 上百条 tool 结果会一直驻留内存（实测某会话 820 条 / 1MB JSON）——这里做上界。
+    // 只 slice 不改对象，保持 memo 引用语义；被裁掉的旧回合仍可重开会话查看。
+    if (msgsRef.current && msgsRef.current.length) {
+      const { msgs: capped, dropped } = capLiveWindow(msgsRef.current, { maxTurns: MAX_LIVE_TURNS });
+      if (dropped > 0) setMsgs(capped);
+    }
   };
 
   const onSend = async (text, attachments = []) => {
@@ -1346,6 +1358,20 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   };
 
   const nowTime = () => nowClock();
+
+  // 应用型插件执行结果：作为本地消息展示（local 标记——不落盘、不进模型历史）。
+  // 关键：流式生成期间助手消息必须始终位于列表末尾（makePatchLast / currentMsg 等
+  // 热路径都依赖 `m.length-1`），故此时把本地消息插在流式消息**之前**，绝不追加到末尾。
+  const onPluginRun = (text) => {
+    const out = String(text || "").trim();
+    if (!out) return;
+    setMsgs((m) => {
+      const localMsg = { role: "assistant", text: out, time: nowTime(), local: true };
+      const last = m[m.length - 1];
+      if (last && last.streaming) return [...m.slice(0, -1), localMsg, last];
+      return [...m, localMsg];
+    });
+  };
 
   const onInjectFile = async (path) => {
     try {
@@ -2076,7 +2102,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
           )}
 
           <div className="composer-dock" ref={composerDockRef}>
-            <Composer ref={composerRef} busy={busy} onSend={onSend} onStop={onStop} isTask={isTask} />
+            <Composer ref={composerRef} busy={busy} onSend={onSend} onStop={onStop} isTask={isTask} onPluginRun={onPluginRun} />
           </div>
         </div>
 

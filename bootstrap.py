@@ -211,6 +211,36 @@ def _install(python, req_files, on_line, installer="pip", offline=False, wheel_d
     return ok
 
 
+# ── 依赖自愈（安装失败后的换源重试 + 安装后校验）──────────────────────
+# 真实故障：`bootstrap.py run` 此前**丢弃 `_install` 的返回值**，无论安装成败都直接
+# 启动；网络/镜像/代理导致部分包失败时，用户拿到一个坏环境却只在滚动日志里看到一句
+# 警告。这里补上「安装后校验 → 换源自愈 → 仍缺则明确报错」，把失败变成可处理的状态。
+def _selfheal_deps(python, on_line, offline=False):
+    """安装后校验核心依赖；缺失则换官方源重试。返回仍缺失的包名列表（空=已齐全）。
+
+    - `_missing_in` 用目标解释器探测（importlib.find_spec），只信实际可导入；
+    - 探测本身失败（返回 None）时**不误报**：返回 [] 并把不可判定留给调用方提示；
+    - offline 模式不做换源（无网），直接返回缺失项。
+    """
+    import deps
+    missing = _missing_in(python)
+    if not missing:  # None（无法探测）或 []（齐全）都视为"无明确缺失"
+        return []
+    if offline:
+        return missing
+    print(f"[引导] 校验发现 {len(missing)} 项核心依赖仍缺失，尝试换官方源自愈…")
+    still = []
+    for name in missing:
+        if on_line:
+            on_line(f"[自愈] 换源重试 {name}")
+        ok = deps.pip_install_from(name, mirror=deps.OFFICIAL_PYPI, on_line=on_line, python=python)
+        if not ok:
+            still.append(name)
+    # 换源后再校验一次（只信实际可导入）
+    after = _missing_in(python)
+    return after if after is not None else still
+
+
 def _missing_in(python):
     """用目标解释器探测核心依赖缺失项；探测失败返回 None。"""
     code = (
@@ -542,8 +572,25 @@ def main(argv=None):
         reqs = [os.path.join(BASE_DIR, "requirements.txt")]
         if args.dev:
             reqs.append(os.path.join(BASE_DIR, "requirements-dev.txt"))
-        _install(target, reqs, lambda s: print("    " + s, flush=True),
-                 installer=installer, offline=args.offline, wheel_dir=args.wheel_dir)
+        on_line = lambda s: print("    " + s, flush=True)  # noqa: E731
+        install_ok = _install(target, reqs, on_line,
+                              installer=installer, offline=args.offline, wheel_dir=args.wheel_dir)
+        # 安装后校验 + 自愈：不信任 _install 的返回，改用「实际能否 import」探测——
+        # 把「网络/镜像导致部分失败」变成明确可处理的状态，而不是带着坏环境启动。
+        still = _selfheal_deps(target, on_line, offline=args.offline)
+        if still:
+            print(f"[引导] ❌ 核心依赖仍缺失 {len(still)} 项：{', '.join(still)}")
+            print("       程序可在缺件下启动，但相关能力不可用。请检查网络/代理后：")
+            print("         1) 重跑：python bootstrap.py")
+            print("         2) 换源：python bootstrap.py --mirror https://pypi.org/simple")
+            print("         3) 程序内『设置 → 可选能力』逐项重试")
+            if action == "run" and not install_ok:
+                # 连核心都装不上时，继续启动往往只会得到"打不开/功能坏"，明确拦下更诚实；
+                # 但保留 --skip-install 作为显式绕过（调试/离线自带依赖场景）。
+                print("[引导] 已跳过启动（加 --skip-install 可强制以当前环境启动调试）")
+                return 2
+        elif action == "run":
+            print("[引导] ✅ 核心依赖校验通过")
 
     if action == "doctor":
         return _doctor(target, args)

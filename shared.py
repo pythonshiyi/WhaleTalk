@@ -400,6 +400,70 @@ TOOL_RESULT_FAIL_PREFIXES = (
     "未能", "未识别", "未听到", "未检测到", "未能定位",
 )
 
+# ── 进程退出码的「语义」判定（run_python / run_command 共用）──────────────
+# 问题（真实失败记录）：run_command 此前把**任何非零退出码**都报成
+# `错误：命令以退出码 N 结束（执行失败）`。但很多命令用非零退出表达**正常语义**：
+#   ruff / pytest / grep / diff / git diff --exit-code 等，非零 = "发现了问题"，
+# 命令本身跑得好好的。一律报「错误」既误导模型（以为工具坏了、改道重试），
+# 又因前缀命中 TOOL_RESULT_FAIL_PREFIXES 而污染失败记忆与自动消解。
+#
+# 这里给出统一口径：
+#   - 有可识别输出 → 命令**跑起来了**，按「退出码 N」中性报告（不冠「错误：」），
+#     让模型读输出自行判断；这既符合 Unix 惯例，也不再污染失败记账。
+#   - 空输出 **且** 非零退出 → 才可能是真失败（命令不存在/路径错/语法错），
+#     给中性前缀 + 可操作诊断（而不是干巴巴的「（无输出）」）。
+# 全角/半角冒号都接受，调用方用 startswith 判定。
+_EXIT_SEMANTIC_PREFIX = "命令退出码"
+
+
+def is_tool_failure(result):
+    """统一判定工具结果是否算「失败」（供失败记忆 / 自动消解 / 记账）。
+
+    与旧逻辑一致：命中 TOOL_RESULT_FAIL_PREFIXES 即失败。集中一处便于演进。
+    """
+    s = str(result or "").lstrip()
+    return any(s.startswith(p) for p in TOOL_RESULT_FAIL_PREFIXES)
+
+
+def format_process_result(rc, output, *, kind="命令", workspace=None, timeout=None):
+    """把子进程执行结果格式化为给模型看的文本（语义化，避免误报失败）。
+
+    kind: "命令"（run_command）/ "脚本"（run_python）。
+    返回文本规则：
+      - 成功空输出        → "执行成功（无输出），退出码 0"
+      - 成功有输出        → "退出码 0\\n<输出>"
+      - 非零 + 有输出     → "命令退出码 N（命令已执行；非零常表示「发现了问题」，请读输出判断）\\n<输出>"
+      - 非零 + 空输出     → "命令退出码 N 且无输出（可能未真正执行）" + 可操作诊断
+    workspace 非空时附工作目录；timeout 非空时提示超时设置。
+    """
+    body = str(output or "").strip()
+    suffix = f"\n[工作目录：{workspace or '（当前目录）'}]" if workspace else ""
+    if rc in (0, None):
+        if not body:
+            return f"执行成功（无输出），退出码 {rc}{suffix}"
+        return f"退出码 {rc}\n{body}{suffix}"
+    if body:
+        return (f"{_EXIT_SEMANTIC_PREFIX} {rc}（{kind}已执行；非零退出常表示「发现了问题」"
+                f"——如 ruff/pytest/grep/diff，请读输出判断，未必是执行失败）\n{body}{suffix}")
+    if kind == "脚本":
+        # 脚本非零退出且无输出：多半是脚本自身调用 sys.exit(非0) 或异常被吞；
+        # 不能说"没真正执行"（脚本确实跑了），只提示核对用途。
+        return (f"{_EXIT_SEMANTIC_PREFIX} {rc}（脚本已执行但无输出；若脚本本应打印结果，"
+                f"请检查是否提前 sys.exit、异常被 try 吞掉、或 stdout 未 flush）{suffix}")
+    hints = [
+        f"{_EXIT_SEMANTIC_PREFIX} {rc} 且**无输出**：{kind}很可能没有真正执行成功。",
+        "常见原因与处置：",
+        "  · 命令/程序不存在或不在 PATH（如 Windows 无 tail/head/sed、无 ls 的 -l 风格）"
+        "→ 改用跨平台写法或本机存在的命令；",
+        "  · 路径不存在或含未转义空格/中文 → 用引号包裹完整路径；",
+        "  · shell 语法差异（Windows 是 cmd，不是 bash）：&&/|| 可用，"
+        "但 $VAR、反引号、单引号语义不同；",
+        "  · 依赖缺失 / 编码问题 → 先跑该命令的 --version 确认可用。",
+        "若确实需要查看原因，可先 `python -c \"import shutil;print(shutil.which('<程序名>'))\"` 确认程序是否存在。",
+    ]
+    return "\n".join(hints) + suffix
+
+
 # 长任务自动打点（G15）：工具链够长就自动落一个断点，别让结论只活在对话里
 # （崩溃/断电即失）。阈值内不写盘，避免每步都做 IO。
 AUTO_CHECKPOINT_TOOLS = 8    # 链长达到该值后开始自动打点

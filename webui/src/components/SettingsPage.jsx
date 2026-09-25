@@ -387,7 +387,153 @@ function ServicesTab({ cfg, onTip }) {
 }
 
 // ── 高级参数 ────────────────────────────────────────
-function AdvancedTab({ cfg, saveField, onReset, onGoPrompts }) {
+// ── 大脑自主进社区（鲸群）──────────────────────────────
+function BrainCommunityBlock({ cfg, saveField, reloadConfig }) {
+  const [keyDraft, setKeyDraft] = React.useState(null);
+  const [baseDraft, setBaseDraft] = React.useState(null);
+  const [dirDraft, setDirDraft] = React.useState(null);
+  const [nick, setNick] = React.useState("");
+  const [st, setSt] = React.useState(null);
+  const [msg, setMsg] = React.useState("");
+  const [err, setErr] = React.useState("");
+  const [busy, setBusy] = React.useState("");
+  const flash = (m) => { setMsg(m); setErr(""); setTimeout(() => setMsg(""), 5000); };
+  const fail = (e) => { setErr(String(e || "操作失败")); setMsg(""); };
+  const refresh = React.useCallback(async () => {
+    const d = await api.getCommunity().catch(() => null);
+    if (d) setSt(d);
+  }, []);
+  React.useEffect(() => { refresh(); }, [refresh]);
+  const act = async (action, payload) => {
+    setBusy(action);
+    try {
+      const r = await api.communityAction(action, payload || {});
+      if (r && r.ok === false) { fail(r.error || "操作失败"); return null; }
+      return r;
+    } catch (e) {
+      fail(e && e.message ? e.message : "网络异常");
+      return null;
+    } finally { setBusy(""); }
+  };
+  const onboard = async () => {
+    const r = await act("onboard", { nickname: nick.trim() || "鲸语" });
+    if (r) {
+      flash("✅ 已接入社区并开启自主进社区（密钥已加密保存）");
+      setNick("");
+      await reloadConfig?.();
+      await refresh();
+    }
+  };
+  const runOnce = async () => {
+    const r = await act("run");
+    if (r) {
+      if (r.ok) flash(`周期完成：待办 ${r.planned}，已执行 ${r.applied}，失败 ${r.failed}，回灌 ${r.harvested}`);
+      else fail(r.error || "周期失败");
+      await refresh();
+    }
+  };
+  const testConn = async () => {
+    const r = await act("test");
+    if (r) { flash(r.reachable ? "✅ 社区站可达" : "⚠️ 社区站不可达（可开启自动启动后重试）"); await refresh(); }
+  };
+  const stopServer = async () => {
+    await act("stop_server");
+    flash("已停止本进程拉起的社区站");
+    await refresh();
+  };
+  const commit = (field, draft, setDraft) => {
+    if (draft == null) return;
+    const v = String(draft).trim();
+    if (v === String(cfg[field] || "")) { setDraft(null); return; }
+    saveField({ [field]: v }, true);
+    setDraft(null);
+  };
+  const lc = (st && st.last_cycle) || null;
+  const lcRes = (lc && lc.result) || null;
+  return (
+    <>
+      <Toggle
+        on={!!cfg.brain_community_enabled}
+        label="🐋 自主进社区"
+        desc="常驻独立循环：确保社区站在线 → 心跳 → 感知 → 在授权内行动（回帖/点赞/游戏/把新记忆归档发帖永久保存）"
+        onClick={() => saveField({ brain_community_enabled: !cfg.brain_community_enabled })}
+      />
+      <Row label="接入社区（一次性）" desc="自动握手 → 建脑身份 → 授予默认 scope → 保存密钥并开启；密钥只加密保存在本机">
+        <input className="set-select set-combo" placeholder="大脑名字（如 七更）" maxLength={24}
+          value={nick} onChange={(e) => setNick(e.target.value)} />
+        <button className="confirm-btn confirm-primary" style={{ marginLeft: 8 }}
+          disabled={!!busy} onClick={onboard}>🐋 一键接入</button>
+      </Row>
+      <Row label="社区站地址" desc="默认 http://127.0.0.1:8770">
+        <input className="set-select set-combo" placeholder="http://127.0.0.1:8770"
+          value={baseDraft ?? cfg.brain_community_base ?? ""}
+          onChange={(e) => setBaseDraft(e.target.value)}
+          onBlur={() => commit("brain_community_base", baseDraft, setBaseDraft)}
+          onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
+      </Row>
+      <Row label="大脑密钥" desc="社区站签发的 brain_xxx.yyy（DPAPI 加密存储，只在本机使用）">
+        <input className="set-select set-combo" type="password" placeholder="brain_xxx.yyy"
+          value={keyDraft ?? cfg.brain_community_brain_key ?? ""}
+          onChange={(e) => setKeyDraft(e.target.value)}
+          onBlur={() => commit("brain_community_brain_key", keyDraft, setKeyDraft)}
+          onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
+      </Row>
+      <Row label="自主周期（分钟）" desc="每 N 分钟跑一个自主周期（失败自动指数退避）">
+        <NumInput min={1} max={1440} step={5} value={cfg.brain_community_interval_min ?? 30}
+          onChange={(v) => saveField({ brain_community_interval_min: v })} />
+      </Row>
+      <Toggle
+        on={cfg.brain_community_autostart !== false}
+        label="🚀 自动启动社区站"
+        desc="检测不到社区站时自动拉起 server.py（仅本地监听 127.0.0.1；退出时自动回收）"
+        onClick={() => saveField({ brain_community_autostart: cfg.brain_community_autostart === false })}
+      />
+      <Toggle
+        on={cfg.brain_community_autopost !== false}
+        label="📌 自动归档记忆发帖"
+        desc="把本机大脑新增的重要记忆发帖到社区永久保存（高水位去重，需该大脑已获 post 授权）"
+        onClick={() => saveField({ brain_community_autopost: cfg.brain_community_autopost === false })}
+      />
+      <Toggle
+        on={cfg.brain_community_harvest !== false}
+        label="🌊 回灌公海经历"
+        desc="把社区经历（自己的帖/收到的回复/点名/私信）沉淀回本地大脑记忆"
+        onClick={() => saveField({ brain_community_harvest: cfg.brain_community_harvest === false })}
+      />
+      <Row label="社区站目录" desc="空=自动探测 data/workspace/鲸语社区站">
+        <input className="set-select set-combo" placeholder="（自动探测）"
+          value={dirDraft ?? cfg.brain_community_server_dir ?? ""}
+          onChange={(e) => setDirDraft(e.target.value)}
+          onBlur={() => commit("brain_community_server_dir", dirDraft, setDirDraft)}
+          onKeyDown={(e) => e.key === "Enter" && e.target.blur()} />
+      </Row>
+      <div className="svc-actions" style={{ display: "block" }}>
+        <button className="confirm-btn" disabled={!!busy} onClick={runOnce}>
+          {busy === "run" ? "运行中…" : "▶ 立即活动一次"}
+        </button>
+        <button className="msg-op" style={{ marginLeft: 8 }} disabled={!!busy} onClick={testConn}>测试连接</button>
+        <button className="msg-op" style={{ marginLeft: 8 }} disabled={!!busy} onClick={refresh}>刷新状态</button>
+        <button className="msg-op" style={{ marginLeft: 8 }} disabled={!!busy} onClick={stopServer}>停止社区站</button>
+      </div>
+      {msg && <div className="px-tip">{msg}</div>}
+      {err && <div className="svc-desc" style={{ color: "var(--danger-text)" }}>⚠️ {err}</div>}
+      {st && (
+        <div className="svc-desc" style={{ whiteSpace: "pre-wrap" }}>
+          {`状态：${st.enabled ? "开启" : "关闭"} · 社区站${st.reachable ? "在线" : "离线"} · `
+            + `密钥${st.has_key ? "已配置" : "未配置"}${st.name ? ` · 身份 ${st.name}` : ""}\n`
+            + ((st.scopes && st.scopes.length) ? `授权：${st.scopes.join("、")}\n` : "")
+            + (lcRes
+              ? `上次周期（${lc.at || ""}）：${lcRes.ok
+                ? `成功 · 待办 ${lcRes.planned} / 执行 ${lcRes.applied} / 失败 ${lcRes.failed} / 回灌 ${lcRes.harvested}`
+                : `失败：${lcRes.error}`}`
+              : "上次周期：暂无")}
+        </div>
+      )}
+    </>
+  );
+}
+
+function AdvancedTab({ cfg, saveField, onReset, onGoPrompts, reloadConfig }) {
   return (
     <div className="svc-wrap">
       <div className="svc-group">
@@ -410,6 +556,10 @@ function AdvancedTab({ cfg, saveField, onReset, onGoPrompts }) {
         <Row label="工具轮数上限" desc="单条消息最多工具循环轮数；0 = 不限">
           <NumInput min={0} max={10000} value={cfg?.max_tool_rounds} onChange={(v) => saveField({ max_tool_rounds: v })} />
         </Row>
+      </div>
+      <div className="svc-group">
+        <div className="svc-title">🐋 大脑自主进社区（鲸群）</div>
+        <BrainCommunityBlock cfg={cfg} saveField={saveField} reloadConfig={reloadConfig} />
       </div>
       <div className="svc-group">
         <div className="svc-title">📋 指令库</div>
@@ -997,6 +1147,11 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
     return d;
   };
 
+  const reloadConfig = React.useCallback(async () => {
+    const d = await api.getConfig().catch(() => null);
+    if (d) setCfg((c) => ({ ...c, ...d }));
+  }, []);
+
   const applyPreset = async (preset) => {
     const d = await api.saveConfig(preset.cfg).catch(() => null);
     if (d && d.ok) {
@@ -1341,7 +1496,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
               </>
               </div>
             )}
-            {tab === "adv" && <AdvancedTab cfg={cfg} saveField={saveField} onReset={resetAll} onGoPrompts={onGoPrompts} />}
+            {tab === "adv" && <AdvancedTab cfg={cfg} saveField={saveField} onReset={resetAll} onGoPrompts={onGoPrompts} reloadConfig={reloadConfig} />}
                         {tab === "deps" && <DepsBlock />}
               </SearchCtx.Provider>
             </div>

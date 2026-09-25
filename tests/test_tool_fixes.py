@@ -8,6 +8,7 @@ if REPO not in sys.path:
 
 import api_server  # noqa: E402  （先于 agent_tools 导入，遵守导入顺序契约）
 import db_utils  # noqa: E402
+import shared  # noqa: E402
 
 
 def test_readonly_rejects_explain_analyze():
@@ -43,9 +44,13 @@ def test_nearest_size_uses_valid_dall_e_sizes():
 
 
 def test_run_python_nonzero_exit_is_error():
+    """非零退出：语义化报告（命令已执行，非零常表示「发现了问题」），
+    不再一律冠「错误：」——避免误导模型 + 污染失败记忆。详见 shared.format_process_result。"""
     from agent_tools import tool_code as tcode
     out = tcode.run_python("import sys; sys.exit(3)")
-    assert out.startswith("错误") and "3" in out
+    assert "3" in out
+    assert not out.startswith("错误"), "非零退出不应一律判为失败"
+    assert not shared.is_tool_failure(out)
 
 
 def test_detect_utf32_before_utf16(tmp_path):

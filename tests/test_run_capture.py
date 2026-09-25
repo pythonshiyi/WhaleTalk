@@ -78,7 +78,8 @@ def test_capture_respects_cwd():
 
 def test_run_python_success():
     r = run_python("print(1+1)")
-    assert r.startswith("2")
+    # 语义化前缀：成功也带「退出码 0」，正文紧随其后
+    assert r.startswith("退出码 0") and "2" in r
 
 
 def test_run_python_no_output():

@@ -33,14 +33,14 @@ function fmtSize(n) {
 const MAX_UPLOAD_BYTES = 48 * 1024 * 1024;
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|ico|avif|svg)$/i;
 
-export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask = true }, ref) {
+export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask = true, onPluginRun }, ref) {
   const [text, setText] = React.useState("");
   const [cmdOpen, setCmdOpen] = React.useState(false);   // 统一命令菜单（指令/命令/插件）
   const [slashQuery, setSlashQuery] = React.useState("");  // 输入 /xxx 时的命令过滤词
   const [focused, setFocused] = React.useState(false);
   const [dirOpen, setDirOpen] = React.useState(false);
   const [prompts, setPrompts] = React.useState([]);
-  const [pluginTriggers, setPluginTriggers] = React.useState([]);
+  const [pluginApps, setPluginApps] = React.useState([]);  // 应用型插件 [{trigger, name, desc}]
   const [dirs, setDirs] = React.useState(null);
   const [attachments, setAttachments] = React.useState([]);
   const [uploading, setUploading] = React.useState(0);
@@ -160,12 +160,12 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
       kind: "cmd", key: `c:${s.cmd}`, label: s.cmd, sub: s.desc,
       run: () => { setText(s.cmd === "/clear" ? "" : s.text); setCmdOpen(false); setSlashQuery(""); taRef.current?.focus(); },
     })),
-    ...pluginTriggers.map((s) => ({
-      kind: "plugin", key: `g:${s}`, label: s, sub: "插件应用",
-      run: () => { setText(s + " "); setCmdOpen(false); taRef.current?.focus(); },
+    ...pluginApps.map((s) => ({
+      kind: "plugin", key: `g:${s.trigger}`, label: s.trigger, sub: s.desc || "插件应用",
+      run: () => { setText(s.trigger + " "); setCmdOpen(false); setSlashQuery(""); taRef.current?.focus(); },
     })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ]), [slashPrompts, slashCmds, pluginTriggers, text]);
+  ]), [slashPrompts, slashCmds, pluginApps, text]);
 
   // 按类型分组渲染（键盘导航仍用扁平 slashItems 的全局下标）
   const cmdGroups = React.useMemo(() => {
@@ -229,7 +229,14 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     let alive = true;
     api.getPrompts().then((p) => { if (alive) p && setPrompts(p); }).catch(() => {});
     api.getDirs().then((d) => { if (alive) d && setDirs(d); }).catch(() => {});
-    api.getContext().then((c) => { if (alive) c && c.tools && setPluginTriggers([]); }).catch(() => {});
+    // 应用型插件（kind=应用型）：取启用项的触发词，供输入框 `/触发词 参数` 直接执行
+    api.getPlugins().then((r) => {
+      if (!alive || !r) return;
+      const apps = (r.installed || [])
+        .filter((p) => p && p.kind === "应用型" && p.enabled !== false && p.trigger)
+        .map((p) => ({ trigger: String(p.trigger), name: p.name, desc: p.description || "插件应用" }));
+      setPluginApps(apps);
+    }).catch(() => {});
     return () => { alive = false; };
   }, []);
 
@@ -323,10 +330,39 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
     list.forEach(uploadOne);
   };
 
+  // 应用型插件执行：命中触发词（如 `/鲸群 loop 5`）时在本机执行，输出交给上层展示。
+  // 触发词后面必须是行尾或空白，避免 `/鲸群X` 被误当命中。
+  const matchPluginApp = (v) => pluginApps.find((a) => {
+    if (!v.startsWith(a.trigger)) return false;
+    return v.length === a.trigger.length || /\s/.test(v.charAt(a.trigger.length));
+  }) || null;
+
+  const runPluginApp = async (app, arg) => {
+    setText("");
+    setCmdOpen(false);
+    setSlashQuery("");
+    toast(`🐋 正在运行插件「${app.name}」…`);
+    let out;
+    try {
+      const r = await api.pluginRun(app.name, arg);
+      out = r && r.ok ? String(r.output || "") : `插件执行失败：${(r && r.error) || "未知错误"}`;
+    } catch (e) {
+      out = `插件执行失败：${e && e.message ? e.message : "未知错误"}`;
+    }
+    if (onPluginRun) onPluginRun(out);
+    else setText(out);
+  };
+
   const submit = () => {
     const v = text.trim();
     // 允许「只发附件不发文字」：只要有图片/文件即可发送
     if (!v && attachments.length === 0) return;
+    // 应用型插件触发词命中：本机执行插件，输出作为本地消息展示，不进模型历史
+    const app = matchPluginApp(v);
+    if (app) {
+      runPluginApp(app, v.slice(app.trigger.length).trim());
+      return;
+    }
     // 发送即打断：busy 时先停止当前生成，挂入待发队列——待 busy 回落后再发出
     if (busy) {
       onStop && onStop();

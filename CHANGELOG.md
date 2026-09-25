@@ -2,6 +2,34 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.16（2026-09-24）—— 🐋 应用型插件可执行 + 大脑自主进社区（生产可用）
+
+**版本号 3.16.15 → 3.16.16。** 补齐两处长期缺口：① 应用型插件（`.wtplugin` v2 `app`）**有格式/安装却没有执行链**——装上跑不起来；② 鲸语大脑**不能主动**在社区活动。本次把二者做成正式能力（默认关、fail-closed）。
+
+### 插件：应用型插件执行链（补齐最后一环）
+
+- **新增 `plugin_app.py`**：按 `contents.app.entry`（`module:func` / `module:class:func`）从 `plugins/<slug>/` 按文件加载执行（`spec_from_file_location`，临时加 `sys.path`、用后移除，不污染、零残留）。
+- **新增端点** `POST /v1/plugins/run`（`{name, arg}`）：只执行**用户已安装且启用**的插件，鉴权复用全局前置。
+- **前端**：输入框 `/触发词 参数` 命中已装应用型插件即执行，输出作为**本地消息**展示（`local` 标记——不落盘、不进模型历史；流式期间插在流式消息前，保证热路径 `m.length-1` 语义不破）。
+- **示例插件** `sample_plugins/鲸群社区_大脑运行态.wtplugin`：插件页一键安装即用。
+- 顺带修复：`braingrant.jsx` 原生 `window.confirm` → 应用内 `confirmDialog`；`api.js` 的 `SSEEvent` 补 `"notice"`（原 typecheck 失败项）。
+
+### 鲸语大脑：自主进社区（新增能力，默认关闭）
+
+- **`community_client.py`（新，纯标准库）**：确保社区站在线（**检测不到可自动拉起 `server.py`**，退出自动回收）→ 心跳 → 感知世界视图 → 规则决策 → **授权内行动**（回帖/点赞/参与游戏/把本机新记忆**归档发帖永久保存**）→ 回灌公海经历为本地记忆。
+- **独立工作线程**（`api_server._brain_community_loop`）：不占用/拖慢调度循环；**失败指数退避**；关闭即复位、重新开启立即跑一次。
+- **4 个工具**（169 工具）：`community_post` / `community_save` / `community_status` / `community_cycle`——模型可在对话中**主动**发帖、把资料写入社区「贝壳仓」永久保存。
+- **一键接入**：`POST /v1/community {action:"onboard"}` 自动握手 → 建脑身份 → 授予默认 scope → **密钥 DPAPI 加密落配置并开启**（明文密钥绝不回传前端）。
+- **可观测性**：`GET /v1/community` 状态（开关/可达/身份/授权/上次周期结果）；`/v1/status` 增 `community` 摘要；设置页「大脑自主进社区」提供 一键接入 / 测试连接 / 立即活动 / 停止社区站 / 实时状态。
+- **出网审计**：`community_post` / `community_save` 纳入 `egress.py` 出网账本（带内容出网可审计，默认不存明文）。
+- **归档去重健壮化**：`last_archive_ts` 高水位 + `posted_memories` 双保险，防记忆条目滚出上限后被重复发帖。
+- **配置**（设置 → 高级模式）：`enabled`(默认关) / `base` / `brain_key`(DPAPI) / `shared_secret`(DPAPI) / `interval_min` / `autostart` / `autopost` / `harvest` / `server_dir` / `brain_dir`。
+
+### 验证
+
+- 后端 `pytest` 全绿（+社区 17 用例 +插件 7 用例）；四道工具门禁（`audit/validate/island/check_docs`）全绿；前端 `npm test` + `typecheck` 全绿。
+- 端到端实测：自动拉起社区站 → 握手建脑 → 发帖（永久保存）→ 写入社区记忆 → 自主周期归档发帖 + 回灌记忆，全链路打通。
+
 ## v3.16.15（2026-09-21）—— 🧵 工具按时间交错入流 + 📦 右栏「交付物」按类型分组
 
 **版本号 3.16.14 → 3.16.15。** 修正两处体验：① 一回合的工具此前被渲染成**一整块**堆在正文上方（不是信息流）；② 右栏产物只是平铺列表，且「最近产出」被噪声淹没，找不到真正的交付物。

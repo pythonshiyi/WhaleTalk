@@ -49,6 +49,43 @@ function msgChars(m) {
   return n;
 }
 
+// 活动消息窗口（长会话内存上界）：只保留最近若干「回合」的完整消息，
+// 更早的整回合直接丢弃——它们仍完整落盘（后端会话文件），需要时可重开会话查看。
+//
+// 为什么需要：窗口化渲染（VIRT_WINDOW）只约束 DOM 节点，**不回收消息对象**；
+// 一次自主长任务单轮就能累积上百条 tool 结果（实测某会话 820 条 / 1MB JSON，
+// 其中一条 assistant 含 123 个 tool_calls）。msgs 数组无上界 → 越用越占内存。
+//
+// 规则（与 trimHistory 同源，但这里是「状态里实际保留多少」，不是「送给模型多少」）：
+//   1. 只在 user 消息（回合起点）处切；
+//   2. 至少保留 maxTurns 个完整回合（不足则全保留）；
+//   3. 正在流式的最后一条必须保留；
+//   4. 绝不修改对象内容（只做 slice），不破坏引用相等的 memo 语义。
+//
+// 返回 { msgs, dropped }：dropped>0 表示发生了截断（调用方可据此提示/标记）。
+export function capLiveWindow(msgs, { maxTurns = 40 } = {}) {
+  const arr = Array.isArray(msgs) ? msgs : [];
+  if (maxTurns <= 0 || arr.length === 0) return { msgs: arr, dropped: 0 };
+  // 从后往前数回合起点（user）
+  let turns = 0;
+  let start = 0;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (arr[i] && arr[i].role === "user") {
+      turns += 1;
+      if (turns > maxTurns) {
+        start = i + 1;
+        break;
+      }
+    }
+  }
+  // start 必须落在 user 上（若因边界落在中途，向前找到最近的 user 起点）
+  if (start > 0) {
+    while (start < arr.length && arr[start] && arr[start].role !== "user") start++;
+  }
+  if (start <= 0) return { msgs: arr, dropped: 0 };
+  return { msgs: arr.slice(start), dropped: start };
+}
+
 // 历史裁剪：按「回合边界」截断，绝不从助手/工具片段中间切断。
 //
 // 背景（本次修复的根因）：任务模式下一轮可能产生几十上百条 tool 结果，

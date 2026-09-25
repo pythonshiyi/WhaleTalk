@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 技术文档（Web 版 · v3.16.15）
+# 鲸语 WhaleTalk 技术文档（Web 版 · v3.16.16）
 
 本文档面向后续维护/开发的 AI 智能体，描述 Web 架构（v3.0+）下的系统结构、数据流、核心约定与踩坑记录。符号名为准，行号随代码演化漂移，本文档不承诺行号。
 
@@ -26,12 +26,12 @@ DeepSeek 已把全部模型升级为**单一原生多模态模型**，本产品�
 - 回归：`tests/test_gateway_compat.py`。
 
 - 品牌：鲸语 WhaleTalk（独立产品，与 DeepSeek 官方无关联）。对外展示一律使用品牌名，技术描述可写"基于 DeepSeek API"。
-- **版本单一源**：`config_defaults.VERSION`（当前 3.16.15）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
+- **版本单一源**：`config_defaults.VERSION`（当前 3.16.16）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
 - 入口形态：**纯 Web + 托盘常驻**。浏览器是唯一界面；无 pywebview 原生窗口（desktop.py 已废弃）。
 
 ## 1. 项目概览
 
-Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、165 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、鲸语大脑（跨会话灵魂）、插件体系（.wtplugin v2）、公众号自动写作。
+Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、169 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、鲸语大脑（跨会话灵魂）、插件体系（.wtplugin v2）、公众号自动写作。
 
 - 运行时：Python 3.9+（开发 3.12），核心依赖仅 `openai` / `httpx`，其余全部可选（缺失自动降级提示）
 - API 层：标准库 `http.server.ThreadingHTTPServer`（**无 Flask/无框架**）
@@ -42,8 +42,8 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 ```
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
-├── api_server.py           # 本地 HTTP API（REST + SSE，104+ /v1 端点）
-├── deepseek_client.py      # 能力引擎：DeepSeekClient + 165 工具 + smart_tools（5,574 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
+├── api_server.py           # 本地 HTTP API（REST + SSE，106+ /v1 端点）
+├── deepseek_client.py      # 能力引擎：DeepSeekClient + 169 工具 + smart_tools（5,574 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
 ├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop/mv/codegen 共 13 模块 163 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
 ├── security.py             # SSRF 防护（云元数据永远拦截）

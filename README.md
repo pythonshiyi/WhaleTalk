@@ -8,7 +8,7 @@
 
 > Windows 本地优先的 AI 桌面智能体 · 本地 API + React 界面 + 系统托盘常驻 · 只接入统一模型 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**
 
-**鲸语 WhaleTalk** 不止是聊天窗口：它能**看屏幕、听语音、动键鼠**，调用 **165 项 Agent 工具**完成真实任务，并把每次经验沉淀为长期记忆——越用越懂你。数据只在本机流转，浏览器即界面，开箱即用。
+**鲸语 WhaleTalk** 不止是聊天窗口：它能**看屏幕、听语音、动键鼠**，调用 **169 项 Agent 工具**完成真实任务，并把每次经验沉淀为长期记忆——越用越懂你。数据只在本机流转，浏览器即界面，开箱即用。
 
 > 🌐 官网：<https://whaletalk.top/>　·　📦 更新记录：[CHANGELOG.md](CHANGELOG.md)
 
@@ -46,11 +46,11 @@
 
 ---
 
-## ⚡ 能力总览（165 工具）
+## ⚡ 能力总览（169 工具）
 
-全部 165 项工具由 `@tool()` 装饰器统一声明（单一事实源），分为 11 个能力组。智能模式下不一次性注入全部 schema，而是常驻「能力地图」+ 关键词预激活 + `activate_tools` 按需点菜，兼顾成本与命中率。
+全部 169 项工具由 `@tool()` 装饰器统一声明（单一事实源），分为 11 个能力组。智能模式下不一次性注入全部 schema，而是常驻「能力地图」+ 关键词预激活 + `activate_tools` 按需点菜，兼顾成本与命中率。
 
-### Agent 工具链（165 项）
+### Agent 工具链（169 项）
 
 | 能力组 | 代表工具 |
 |---|---|
@@ -102,6 +102,7 @@
 - **跨躯体迁移**：`export-key` / `import-key` 迁移仪式，新机器导入密钥后解开全部快照。
 - **分支合并**：快照带血缘，`merge` 自动定位共同祖先做 LCA 三路合并（记忆按 id 行级智能合并，永不整文件冲突）。
 - **学习闭环**：对话中写的记忆自动同步进大脑；`consolidate` 睡眠巩固；对话自动注入身份 / 断点 / 目标 / 自我认知 / 记忆。
+- **进社区（🐋 鲸群 · 可选实验，非鲸语功能）**：鲸语主体是**本地优先、数据不出本机**。旁边另存一个**独立实验场** [experiments/鲸群实验场](experiments/鲸群实验场/README.md)——用来验证「本地 AI 能否有自己的社会关系」。鲸语主程序只保留一根**默认关闭**的「绳」（设置 → 高级模式可开，未配置即不外发），不宣传为功能。**当前冻结**（重启条件见实验场 README）。
 
 常用命令（项目根目录）：
 
@@ -133,7 +134,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 ├───────────────────────────────────────────────────────────────┤
 │                    deepseek_client.py                         │
 │   统一模型客户端（thinking/多模态/tool/压缩/缓存）+ smart_tools │
-│   六层工具注册表（@tool 单一源 · 165 工具）                    │
+│   六层工具注册表（@tool 单一源 · 169 工具）                    │
 ├───────────────────────────────────────────────────────────────┤
 │  agent_tools/（13 个工具域模块） · toolkit.py（声明/注册）     │
 │  横切收口：context_providers · tool_hooks · degrade · egress · │
@@ -145,7 +146,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：165 工具（11 组）· 102 个 `/v1` 路由 · 后端 90 个 pytest 文件 / 896 用例 · 前端 21 个 node 套件。
+- **规模**：169 工具（11 组）· 106 个 `/v1` 路由 · 后端 99 个 pytest 文件 / 972 用例 · 前端 21 个 node 套件。
 
 ---
 
@@ -191,7 +192,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 安全模型为「**默认自由 + 用户黑名单 + 程序内置底线 + 硬限额**」四层：
 
-- **默认自由**：默认任务模式零审批、零白名单，AI 可调用全部 165 项工具；`run_python` / `run_command` 等同本机直接执行（无沙箱）。
+- **默认自由**：默认任务模式零审批、零白名单，AI 可调用全部 169 项工具；`run_python` / `run_command` 等同本机直接执行（无沙箱）。
 - **黑名单**：唯一限制来源——用户在权限页添加 shell 命令 / 文件路径 / 网络主机黑名单；`blocklist_enabled` 可一键全放行。
 - **程序内置底线（两条）**：
   1. **网络 SSRF 硬底线**——私网段 / 链路本地（含云元数据）/ 保留段一律拦截，域名先做 DNS 解析防重绑定；回环默认放行，可加严。
@@ -205,7 +206,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 ## 🕘 更新与版本
 
-- **版本单一源**：`config_defaults.VERSION`（当前 **3.16.15**），最新变更见 [CHANGELOG.md](CHANGELOG.md)。
+- **版本单一源**：`config_defaults.VERSION`（当前 **3.16.16**），最新变更见 [CHANGELOG.md](CHANGELOG.md)。
 - **更新源**：GitHub Releases（`api.github.com/repos/pythonshiyi/WhaleTalk/releases/latest`，可自定义 `update_url`）。
 - **更新方式**：应用内「关于 → 检查更新」自动检测；更新包支持 Ed25519 签名 + SHA-256 校验；更新前自动备份，可一键回滚。
 - **兼容性**：旧配置自动迁移，旧数据目录无缝升级。
@@ -230,9 +231,9 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 ## English Introduction
 
-**WhaleTalk v3.16.15** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
+**WhaleTalk v3.16.16** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
 
-- **Capabilities**: **165 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
+- **Capabilities**: **169 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
 - **Self-evolution**: proposal branches, failure-pattern lifecycle, success-pattern reuse — merging stays in your hands.
 - **Security**: default-open permission model, user blocklist as the only restriction source, plus an SSRF hard floor and a trust kernel that makes edits to authorization code declarable, visible, and reversible.
 - **Stack**: Python 3.9+ · React 19 (Vite 8) · local HTTP API (openai / httpx) · Windows 10/11.

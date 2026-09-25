@@ -5,7 +5,7 @@
 // 重渲染。现统一走 msgUpdates.js 的不可变更新。
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { findLastToolCard, findToolCard, makePatchLast, trimHistory } from "../src/msgUpdates.js";
+import { findLastToolCard, findToolCard, makePatchLast, trimHistory, capLiveWindow } from "../src/msgUpdates.js";
 
 // 最小 updateMsgs 替身：同步执行变换并记录，模拟 ChatPage 的 setMsgs + 实时镜像
 function makeUpdateMsgs() {
@@ -190,5 +190,65 @@ describe("trimHistory 回合边界裁剪（防长任务失忆）", () => {
     const out = trimHistory(chain, { maxMessages: 1, maxChars: 1 });
     assert.equal(out[0].role, "user");
     assert.ok(out.length > 1);
+  });
+});
+
+// ── capLiveWindow：长会话活动消息上界（只在回合边界切，不改对象）──
+describe("capLiveWindow 活动消息上界", () => {
+  const mk = (n) => {
+    // n 个回合，每回合 1 user + 1 assistant
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      out.push({ role: "user", text: "u" + i });
+      out.push({ role: "assistant", text: "a" + i });
+    }
+    return out;
+  };
+
+  it("回合数未超上限时原样返回（dropped=0）", () => {
+    const arr = mk(3);
+    const r = capLiveWindow(arr, { maxTurns: 10 });
+    assert.equal(r.dropped, 0);
+    assert.equal(r.msgs, arr, "未超限应返回同一引用");
+  });
+
+  it("超上限只保留最近 N 回合，且从 user 开始", () => {
+    const arr = mk(10);
+    const r = capLiveWindow(arr, { maxTurns: 3 });
+    assert.ok(r.dropped > 0);
+    assert.equal(r.msgs[0].role, "user", "必须从回合起点开始");
+    assert.equal(r.msgs.length, 6, "3 回合 × 2 条");
+    assert.equal(r.msgs[0].text, "u7");
+    assert.equal(r.msgs[r.msgs.length - 1].text, "a9");
+  });
+
+  it("保留正文对象引用不变（不破坏 memo）", () => {
+    const arr = mk(5);
+    const r = capLiveWindow(arr, { maxTurns: 2 });
+    const last = arr[arr.length - 1];
+    assert.equal(r.msgs[r.msgs.length - 1], last, "同一对象引用");
+  });
+
+  it("空数组 / maxTurns<=0 安全", () => {
+    assert.deepEqual(capLiveWindow([], { maxTurns: 3 }), { msgs: [], dropped: 0 });
+    const arr = mk(5);
+    assert.equal(capLiveWindow(arr, { maxTurns: 0 }).dropped, 0);
+  });
+
+  it("工具密集的单回合不会被腰斩（同回合内多条 tool 全保留）", () => {
+    const mkHeavy = () => {
+      const out = [];
+      for (let t = 0; t < 5; t++) {
+        out.push({ role: "user", text: "u" + t });
+        out.push({ role: "assistant", text: "a" + t, tools: [] });
+        for (let k = 0; k < 30; k++) out.push({ role: "tool", content: "r" + k });
+      }
+      return out;
+    };
+    const arr = mkHeavy();
+    const r = capLiveWindow(arr, { maxTurns: 1 });
+    assert.equal(r.msgs[0].role, "user");
+    // 最后一回合：1 user + 1 assistant + 30 tool = 32 条
+    assert.equal(r.msgs.length, 32);
   });
 });

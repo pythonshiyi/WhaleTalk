@@ -109,6 +109,9 @@ ACTION_TOOLS = (
     "rpa_scroll",
     "screen_find_click",
     "vision_loop",
+    "community_post",
+    "community_save",
+    "community_cycle",
 )
 
 

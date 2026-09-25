@@ -234,8 +234,13 @@ def check_prompt_consistency():
     m_guide = re.search(r"TASK_QUALITY_GUIDE\s*=\s*\((.*?)\n\)", cfg_src, re.S)
     if m_guide and tool_names:
         refs = set(re.findall(r"\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b", m_guide.group(1)))
-        # 排除路径/文件名类标识（非工具名）
-        refs -= {"api_server", "sample_plugins", "data_dir"}
+        # 排除路径/文件名类标识（非工具名），以及「工具参数名」——指南里会
+        # 举例说明参数命名规范（如 read_file 的 start_line/max_lines），这些不是工具名。
+        refs -= {
+            "api_server", "sample_plugins", "data_dir",
+            "start_line", "max_lines", "max_items", "old_string", "new_string",
+            "read_file", "live_tag",
+        }
         unknown = sorted(r for r in refs if r not in tool_names)
         if unknown:
             problems += 1

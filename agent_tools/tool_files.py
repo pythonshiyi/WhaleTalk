@@ -517,6 +517,9 @@ def list_dir(path):
         return reason
     p = permissions.resolve(path)
     if not os.path.isdir(p):
+        # 精确错误：路径是文件时明确区分，帮模型自我纠正（真实失败记录：误传文件路径）
+        if os.path.isfile(p):
+            return f"错误：{p} 是文件，不是目录；若要查看内容请用 read_file。"
         return f"错误：目录不存在：{p}"
     # scandir 惰性迭代 + islice：百万条目目录不再全量 listdir（1-2s + 数百 MB 内存）
     import itertools
@@ -672,6 +675,12 @@ def search_local(path, query, max_results=20):
         return reason
     p = permissions.resolve(path)
     if not os.path.isdir(p):
+        # 精确错误：路径存在但是文件时，明确告知——模型常把文件当成目录传进来
+        # （真实失败记录：search_local 收到 api_server.py / xxx.jsx），
+        # 笼统说「目录不存在」会让模型反复重试同一个错。
+        if os.path.isfile(p):
+            return (f"错误：{p} 是一个文件，不是目录。search_local 检索的是**目录**下的文本内容；"
+                    f"若要读单个文件请用 read_file，若要找文件名请用 find_images/search_local 的父目录。")
         return f"错误：目录不存在：{p}"
     try:
         limit = clamp_int(max_results, 20, lo=1, hi=200)

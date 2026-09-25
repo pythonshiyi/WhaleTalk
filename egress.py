@@ -88,6 +88,12 @@ EGRESS_SPECS = {
         "only_methods_not": ("GET", "HEAD", "OPTIONS"),
         "read_only_if_no_payload": True,
     },
+    "community_post": {
+        "channel": "community", "target": ("board",), "payload": ("title", "content"),
+    },
+    "community_save": {
+        "channel": "community", "target": ("tags",), "payload": ("text",),
+    },
 }
 
 

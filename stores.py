@@ -171,6 +171,7 @@ def normalize_failure(item):
     tool = str(item.get("tool") or "?")
     err = str(item.get("error") or "")[:FAILURE_ERR_CAP]
     ts = str(item.get("last_ts") or item.get("ts") or "")
+    diag = item.get("diagnosis")
     out = {
         "fingerprint": str(item.get("fingerprint") or failure_fingerprint(tool, err)),
         "tool": tool,
@@ -183,8 +184,90 @@ def normalize_failure(item):
         "resolved_ts": item.get("resolved_ts"),
         "resolved_by": item.get("resolved_by"),
         "note": item.get("note"),
+        # 观测层（可选）：错误分类 + 参数误用；旧数据无此字段时按需现算一次
+        "diagnosis": diag if isinstance(diag, dict) else diagnose_failure(err),
     }
     return out
+
+
+# ── 失败诊断（观测层）──────────────────────────────────────────────────
+# 目标：让失败记录从「失败了什么」升级为「模型错在哪、怎么错的」——
+# 供持续观测（哪些工具高频失败、哪类错、常见误传），让后续可靠性优化有数据支撑。
+# 设计：**只加信息，不改指纹与生命周期语义**；分类纯文本判定、无副作用、不抛异常。
+_DIAG_PATTERNS = (
+    # (分类, 正则, 说明)
+    ("arg_mismatch", re.compile(r"unexpected keyword argument|missing \d+ required positional|"
+                                r"工具参数|received unexpected|got an unexpected"), "参数名/必填不匹配"),
+    ("exit_nonzero", re.compile(r"以退出码\s*\d+|退出码\s*\d+|exit(?:ed)? (?:code|status)|command exited"), "命令非零退出"),
+    ("timeout", re.compile(r"超时|timed? ?out|TimeoutExpired"), "执行超时"),
+    ("memory", re.compile(r"内存超限|memory|MemoryError"), "内存超限"),
+    ("not_found", re.compile(r"不是内部或外部命令|not found|No such file|找不到|does not exist|"
+                             r"不存在|未被识别"), "命令/路径/依赖不存在"),
+    ("network", re.compile(r"ConnectError|Connection|HTTP|SSLError|超时连接|拒绝连接|SSL"), "网络/接口错误"),
+    ("permission", re.compile(r"权限拒绝|Permission denied|Access is denied|denied"), "权限拒绝"),
+    ("syntax", re.compile(r"SyntaxError|IndentationError|invalid syntax|语法"), "语法错误"),
+    ("runtime", re.compile(r"Traceback|Exception|Error:"), "运行期异常"),
+)
+_DIAG_ARG_RE = re.compile(r"unexpected keyword argument '([^']+)'")
+_DIAG_MISSING_RE = re.compile(r"missing \d+ required positional argument[s]?: (.+)")
+
+
+def diagnose_failure(error, extra=None):
+    """把失败文本归类为结构化诊断（观测用）。**永不抛出**。
+
+    返回 {kind, label, misused_args, summary}；extra 可带执行层采集的信息
+    （如参数对齐时被丢弃/被映射的键），有则并入。
+    """
+    err = str(error or "")
+    kind, label = "unknown", "未分类"
+    for k, rx, lab in _DIAG_PATTERNS:
+        if rx.search(err):
+            kind, label = k, lab
+            break
+    misused = sorted(set(_DIAG_ARG_RE.findall(err)))
+    if not misused:
+        m = _DIAG_MISSING_RE.search(err)
+        if m:
+            misused = [m.group(1).strip()[:80]]
+    out = {
+        "kind": kind,
+        "label": label,
+        "misused_args": misused[:8],
+        "summary": err.splitlines()[0][:120] if err else "",
+    }
+    if isinstance(extra, dict):
+        for key in ("ignored_args", "aliased_args", "received_args"):
+            v = extra.get(key)
+            if v:
+                out[key] = list(v)[:8] if isinstance(v, (list, tuple, set)) else v
+    return out
+
+
+def failure_diagnosis_summary(path):
+    """跨条目汇总诊断（供 /v1 接口观测）：按工具、按错误类型、常见误传。返回 dict。"""
+    from collections import Counter
+    try:
+        items = [x for x in (normalize_failure(i) for i in load_failures(path)) if x]
+    except Exception:
+        items = []
+    by_tool = Counter()
+    by_kind = Counter()
+    misused = Counter()
+    for it in items:
+        d = it.get("diagnosis") or {}
+        w = int(it.get("hits") or 1)
+        by_tool[str(it.get("tool") or "?")] += w
+        by_kind[str(d.get("kind") or "unknown")] += w
+        for a in d.get("misused_args") or []:
+            misused[str(a)] += w
+    return {
+        "total_failures": sum(by_tool.values()),
+        "unresolved": len([it for it in items if not it.get("resolved")]),
+        "by_tool": by_tool.most_common(20),
+        "by_kind": by_kind.most_common(20),
+        "misused_args": misused.most_common(20),
+    }
+
 
 
 @_locked
@@ -216,6 +299,8 @@ def record_failures(path, new_items, max_failures=None, archive_path=None, now=N
                 old["resolved_ts"] = None
                 old["resolved_by"] = None
                 old["ok_streak"] = 0  # 复发清零：连续成功计数重新起算
+                # 观测层：刷新诊断（分类可能因错误文本变化而变），并入本次采集的参数误用
+                old["diagnosis"] = diagnose_failure(err, raw.get("diagnosis"))
             else:
                 entry = {
                     "fingerprint": fp,
@@ -229,6 +314,7 @@ def record_failures(path, new_items, max_failures=None, archive_path=None, now=N
                     "resolved_ts": None,
                     "resolved_by": None,
                     "note": None,
+                    "diagnosis": diagnose_failure(err, raw.get("diagnosis")),
                 }
                 items.append(entry)
                 index[fp] = entry
