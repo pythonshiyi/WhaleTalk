@@ -201,6 +201,11 @@ _LONG_TOOL_NAMES = frozenset({
     "download_file",
     "media_ffmpeg",
     "mv_compose",
+    "mv_produce",
+    "lyric_align",
+    "mv_credits_card",
+    "image_codegen",
+    "self_evolve",
     "run_python",
     "run_command",
     "browser_navigate",
@@ -3915,7 +3920,8 @@ _RESULT_INTO_CONTEXT_MAX = _env_int("RESULT_INTO_CONTEXT_MAX", 40000)  # 0 = 不
 _STOP_TOOL_GRACE_S = 1.5
 # 工具执行总超时（秒）：防止个别无内部超时的工具把整轮生成永久卡死。
 # 超时后聊天继续（该工具结果如实标记超时），worker 由工具自带超时最终释放。
-_TOOL_TOTAL_TIMEOUT = 300
+# WHALETALK_TOOL_TOTAL_TIMEOUT 可调（如长 MV 渲染/大构建）；<=0 表示不限。
+_TOOL_TOTAL_TIMEOUT = _env_int("TOOL_TOTAL_TIMEOUT", 300)
 
 
 def _interrupted_result(name):
@@ -4489,6 +4495,9 @@ def _emit_tool_cb(cb, *args):
     只按名字配对时 read_file 等连续同名调用会把结果串到相邻卡片。旧回调只声明
     到 duration/result，首次调用会在参数绑定阶段抛 TypeError（无副作用），
     去掉末尾 id 重试即可，保证向后兼容。
+
+    回调属 UI/记账侧，**任何异常都不得中断生成主流程**（此前只吞 TypeError，
+    回调抛其它异常会冒泡出 chat() → 整轮「生成中断」）。统一吞掉并留日志。
     """
     if cb is None:
         return
@@ -4496,9 +4505,29 @@ def _emit_tool_cb(cb, *args):
         cb(*args)
     except TypeError:
         if len(args) > 1:
-            cb(*args[:-1])
+            try:
+                cb(*args[:-1])
+            except Exception:
+                logger.exception("工具回调执行失败（已忽略，不影响生成）")
         else:
-            raise
+            logger.exception("工具回调执行失败（已忽略，不影响生成）")
+    except Exception:
+        logger.exception("工具回调执行失败（已忽略，不影响生成）")
+
+
+def _safe_cb(cb, *args, default=None):
+    """调用非工具类回调（进度/用量/计划/询问等）：异常绝不影响生成主流程。
+
+    与 `_emit_tool_cb` 的区别：本函数需要返回值（如 on_plan/on_ask/on_approval），
+    故由调用方经 `default=` 指定回调失败时的兜底返回值。
+    """
+    if cb is None:
+        return default
+    try:
+        return cb(*args)
+    except Exception:
+        logger.exception("回调执行失败（已忽略，不影响生成）")
+        return default
 
 
 class DeepSeekClient:
@@ -5010,19 +5039,19 @@ class DeepSeekClient:
                     # 已有部分增量送达 UI：不再重试（避免已显示内容重复），
                     # 明确告知本轮未正常完成（finish_reason=aborted 语义）
                     if on_truncated:
-                        on_truncated("网络中断：本轮回复不完整")
+                        _safe_cb(on_truncated, "网络中断：本轮回复不完整")
                     _emit_metrics(interrupted=True)  # 断线：下发部分统计
                     return False
                 round_usage = {}
                 if stream_usage is not None:
                     round_usage = self._usage_dict(stream_usage)
                     if on_usage:
-                        on_usage(round_usage)  # 单轮增量（用量统计按增量落盘，防重复计数）
+                        _safe_cb(on_usage, round_usage)  # 单轮增量（用量统计按增量落盘，防重复计数）
                 elif getattr(response, "usage", None):
                     # 兼容旧版 openai SDK（Stream 对象自带聚合 usage）
                     round_usage = self._usage_dict(response.usage)
                     if on_usage:
-                        on_usage(round_usage)
+                        _safe_cb(on_usage, round_usage)
 
                 # ── 计时聚合（供前端显示 TTFT / 输出速率 / 输入输出）──
                 # 累加所有 LLM 轮次：completion 求和，gen_ms 为各轮「首字→末字」之和
@@ -5052,7 +5081,7 @@ class DeepSeekClient:
                         continue
                     logger.warning("空响应重试已达上限，按失败返回（不写入空历史）")
                     if on_truncated:
-                        on_truncated("模型连续返回空响应，本轮生成失败")
+                        _safe_cb(on_truncated, "模型连续返回空响应，本轮生成失败")
                     _emit_metrics(interrupted=True)
                     return False
                 # 本轮有内容 → 重置空响应预算（此前全轮共享，早期间歇性空响应会耗尽额度，
@@ -5101,7 +5130,7 @@ class DeepSeekClient:
                     # finish_reason=length：输出达 max_tokens 上限被截断，
                     # 任务/回复未完成——此前静默返回 True 导致 UI 误报「任务完成」
                     if finish_reason == "length" and on_truncated:
-                        on_truncated("输出已达上限（max_tokens）被截断，回复不完整")
+                        _safe_cb(on_truncated, "输出已达上限（max_tokens）被截断，回复不完整")
                     if json_output and content.strip():
                         # JSON 输出自校验：解析失败自动修正重试一次
                         # （官方说明 JSON 输出有概率返回非法内容，这是应用层可救回的部分）
@@ -5111,7 +5140,7 @@ class DeepSeekClient:
                             if not json_retried:
                                 json_retried = True
                                 if on_truncated:
-                                    on_truncated("JSON 输出解析失败，正在自动修正重试")
+                                    _safe_cb(on_truncated, "JSON 输出解析失败，正在自动修正重试")
                                 if work and work[-1].get("role") == "assistant":
                                     work.pop()  # 移除刚追加的半截 assistant 消息
                                 work.append(
@@ -5132,7 +5161,8 @@ class DeepSeekClient:
                 if finish_reason == "length" and on_truncated:
                     # 有工具调用但输出被 max_tokens 截断：参数很可能是不完整的 JSON
                     # （表现为「工具参数解析失败」）。明确告知，避免模型误以为只是格式写错。
-                    on_truncated(
+                    _safe_cb(
+                        on_truncated,
                         "工具调用参数可能因输出上限（max_tokens）被截断——"
                         "请拆分内容分次写入，或改用 write_file 分块写大文件"
                     )
@@ -5141,7 +5171,7 @@ class DeepSeekClient:
                 ):
                     work[-1].pop("tool_calls", None)
                     if on_truncated and not (stop_event and stop_event.is_set()):
-                        on_truncated("工具调用流被截断，本轮工具未执行")
+                        _safe_cb(on_truncated, "工具调用流被截断，本轮工具未执行")
                     return False
 
                 if smart_avail:
@@ -5183,8 +5213,11 @@ class DeepSeekClient:
                         _index_shown = True
 
                 if on_plan is not None:
-                    res = on_plan(
-                        [(tc["name"], (tc["args"] or "")[:300]) for tc in tool_calls]
+                    # 计划确认回调属 UI 侧：异常时兜底放行（default=True），不因确认框故障卡死任务
+                    res = _safe_cb(
+                        on_plan,
+                        [(tc["name"], (tc["args"] or "")[:300]) for tc in tool_calls],
+                        default=True,
                     )
                     if isinstance(res, (list, tuple)) and len(res) >= 2:
                         ok_plan, reason_plan = res[0], res[1]
@@ -5260,7 +5293,7 @@ class DeepSeekClient:
                         "若你在轮询/重试/等待进展，请继续；若确无新信息，可考虑换参数或换策略。）"
                     )
                     if on_loop_guard:
-                        on_loop_guard(guard_name, _reps)
+                        _safe_cb(on_loop_guard, guard_name, _reps)
                     # 重置重复计数：若模型再以相同参数调用，重新累计至下一次提示
                     last_round_sig = None
                     same_repeats = 0
@@ -5316,7 +5349,10 @@ class DeepSeekClient:
                         if not prompt:
                             prompt = "请提供需要用户回答的问题"
                         if on_ask is not None:
-                            result = on_ask(prompt, options, multi)
+                            result = _safe_cb(
+                                on_ask, prompt, options, multi,
+                                default="错误：询问用户失败（交互回调异常），请改用其他方式继续",
+                            )
                             args = {"prompt": prompt}
                             if options:
                                 args["options"] = options
@@ -5334,7 +5370,10 @@ class DeepSeekClient:
                         pvalue = str(pargs.get("value") or "") if isinstance(pargs, dict) else ""
                         args = {"action_type": atype, "value": pvalue}
                         if on_request_permission is not None:
-                            ok_rp, msg_rp = on_request_permission(atype, pvalue)
+                            ok_rp, msg_rp = _safe_cb(
+                                on_request_permission, atype, pvalue,
+                                default=(True, "回调异常，默认放行（黑名单模式）"),
+                            )
                             if ok_rp:
                                 result = f"已放行（黑名单模式默认通过，无需授权）：{msg_rp}"
                             else:
@@ -5350,7 +5389,9 @@ class DeepSeekClient:
                     else:
                         approved = True
                         if on_approval is not None:
-                            approved, reason_a = on_approval(name, raw_args)
+                            approved, reason_a = _safe_cb(
+                                on_approval, name, raw_args, default=(True, "")
+                            )
                         if not approved:
                             result = reason_a or "权限拒绝：未获批准"
                         else:
@@ -5409,6 +5450,7 @@ class DeepSeekClient:
                     tc for tc in tool_calls if tc["name"] not in ("ask_user", "request_permission")
                 ]
                 exec_results = {}
+                name_by_id = {tc["id"]: tc["name"] for tc in tool_calls}
                 pending = set()  # 并行工具 future 集合；无并行工具时保持空，避免下方 if pending 触发 UnboundLocalError
                 if parallel_tools:
                     futs = {
@@ -5416,7 +5458,10 @@ class DeepSeekClient:
                         for tc in parallel_tools
                     }
                     pending = set(futs.values())
-                    deadline = time.monotonic() + _TOOL_TOTAL_TIMEOUT
+                    # <=0 = 不限总时长（长任务）：用无穷大 deadline，避免立即被判超时
+                    deadline = (time.monotonic() + _TOOL_TOTAL_TIMEOUT
+                                if _TOOL_TOTAL_TIMEOUT and _TOOL_TOTAL_TIMEOUT > 0
+                                else float("inf"))
                     while pending and time.monotonic() < deadline:
                         if stop_event and stop_event.is_set():
                             # 停止感知：给已提交工具短宽限期，副作用已发生的工具
@@ -5429,14 +5474,7 @@ class DeepSeekClient:
                                     name, args, result, duration = f.result()
                                 except Exception as e:
                                     name, args, result, duration = (
-                                        next(
-                                            (
-                                                t["name"]
-                                                for k2, t in futs.items()
-                                                if futs[k2] is f
-                                            ),
-                                            "?",
-                                        ),
+                                        name_by_id.get(tcid, "?"),
                                         {},
                                         f"工具执行异常: {e}",
                                         None,
@@ -5458,9 +5496,7 @@ class DeepSeekClient:
                             except Exception as e:
                                 # execute_tool 有 try 之外的副作用回调（on_approval 等），
                                 # 单个工具异常不得中断整轮（否则留下悬空 tool_calls）。
-                                name = next(
-                                    (t["name"] for k2, t in futs.items() if futs[k2] is f), "?"
-                                )
+                                name = name_by_id.get(tcid, "?")
                                 args, result, duration = {}, f"工具执行异常: {e}", None
                             exec_results[tcid] = (name, args, result, duration)
                             # 完成即回调 UI：快的工具不再被慢的拖到最后一齐出现
@@ -5472,7 +5508,7 @@ class DeepSeekClient:
                 if pending:
                     for f in list(pending):
                         tcid = next((k for k, v in futs.items() if v is f), "?")
-                        nm = next((t["name"] for k2, t in futs.items() if futs[k2] is f), "?")
+                        nm = name_by_id.get(tcid, "?")
                         exec_results[tcid] = (nm, {}, f"工具执行超时（超过 {_TOOL_TOTAL_TIMEOUT // 60} 分钟），已放弃等待", None)
                         if on_tool:
                             _emit_tool_cb(on_tool, nm, {}, exec_results[tcid][2], tcid)
@@ -5483,7 +5519,13 @@ class DeepSeekClient:
                         # 避免模型重试；也避免停止后仍弹出 ask/审批框。
                         exec_results[tc["id"]] = (tc["name"], {}, "工具未执行（已停止生成）", None)
                         continue
-                    name, args, result, duration = execute_tool(tc)
+                    # 串行工具（ask_user / request_permission）同样不得因单次异常中断整轮生成
+                    try:
+                        name, args, result, duration = execute_tool(tc)
+                    except Exception as e:
+                        logger.exception("串行工具执行异常: %s", tc.get("name"))
+                        name, args, result, duration = (
+                            tc["name"], {}, f"工具执行异常: {e}", None)
                     exec_results[tc["id"]] = (name, args, result, duration)
                     if on_tool:
                         _emit_tool_cb(on_tool, name, args, result, tc["id"])
@@ -5538,7 +5580,8 @@ class DeepSeekClient:
                     )
             # for 循环自然结束 = 工具轮数耗尽（任务可能未完成）：告知 UI
             if on_truncated:
-                on_truncated(
+                _safe_cb(
+                    on_truncated,
                     f"工具调用轮数已达上限（{rounds} 轮），若任务未完成请追加指令继续"
                 )
             return True
@@ -5635,11 +5678,11 @@ class DeepSeekClient:
                 if reasoning_part:
                     reasoning += reasoning_part
                     if on_reasoning:
-                        on_reasoning(reasoning_part)
+                        _safe_cb(on_reasoning, reasoning_part)
                 if delta.content:
                     content += delta.content
                     if on_content:
-                        on_content(delta.content)
+                        _safe_cb(on_content, delta.content)
                 if reasoning_part or delta.content:
                     now = time.perf_counter()
                     if first_ts is None:
