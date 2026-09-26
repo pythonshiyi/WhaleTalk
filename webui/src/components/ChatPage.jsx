@@ -2114,12 +2114,12 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         {auxOpen && !auxPop && <div className="drawer-scrim scrim-aux" onClick={() => setAuxOpen(false)} />}
         {auxOpen && !auxPop && (
           <AuxPanel onClose={() => setAuxOpen(false)} onInjectFile={onInjectFile} activity={liveActivity}
-            products={liveProducts}
+            products={liveProducts} sessionId={activeId}
             tab={auxTab} onTabChange={setAuxTab} onPopout={() => setAuxPop(true)} />
         )}
         {auxOpen && auxPop && popoutEl && createPortal(
           <AuxPanel onClose={() => { setAuxPop(false); setAuxOpen(false); }} onInjectFile={onInjectFile} activity={liveActivity}
-            products={liveProducts}
+            products={liveProducts} sessionId={activeId}
             tab={auxTab} onTabChange={setAuxTab} onPopout={() => setAuxPop(false)} inPopout />,
           popoutEl
         )}

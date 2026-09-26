@@ -1388,14 +1388,19 @@ def _fmt_size(n):
         return ""
 
 
-def _files():
-    """文件与产物：最近产物(带元数据) + 工作区顶层条目 + 收藏列表。"""
+def _files(session_id=None):
+    """文件与产物：最近产物(带元数据) + 工作区顶层条目 + 收藏列表。
+
+    传 `session_id` 时「最近产物」只列该会话产出（随会话切换）；工作区条目与收藏
+    始终全局。
+    """
     import stores
-    recent_paths = stores.load_recent(RECENT_PATH)[-30:]
     active_dir = _status()["active_dir"]
-    recent = []
-    for p in reversed(recent_paths):  # 新→旧
-        recent.append(_file_meta(p, base=active_dir))
+    if session_id is not None:
+        recent_paths = _session_product_paths(session_id)  # 已是新→旧（空会话 → 空）
+    else:
+        recent_paths = list(reversed(stores.load_recent(RECENT_PATH)[-30:]))  # 新→旧
+    recent = [_file_meta(p, base=active_dir) for p in recent_paths]
     favs = stores.load_favs(FAV_PATH)
     fav_meta = []
     fav_set = set()
@@ -3357,28 +3362,119 @@ def _deliverable_type(name):
     return "other"
 
 
-def _deliverables():
-    """交付物清单：最近产出中**真实存在**的文件，规范化去重、补齐类型/大小/时间，按时间倒序。
+# 会话产物提取：与前端 `liveProducts` 的口径一致（只取路径类参数，不整坨 JSON）
+_SESSION_PRODUCT_ARG_KEYS = ("path", "output", "file", "filename", "dst", "dest", "target", "dir", "out")
+_SESSION_PRODUCTS_CACHE = {}
+_SESSION_PRODUCTS_CACHE_LOCK = threading.Lock()
 
-    跨会话（recent_outputs.json），供右栏「交付物」按类型分组/排序展示。
-    """
-    import stores
-    out = []
-    seen = set()
-    for p in reversed(stores.load_recent(RECENT_PATH)[-120:]):  # 新→旧
+
+def _collect_product_paths(text, out, seen):
+    """从一段文本里提取「真实存在的产物文件」绝对路径，追加进 out（按出现顺序去重）。"""
+    import shared as _shared
+    for mm in _shared.PATH_RE.finditer(str(text or "")):
         try:
-            np = os.path.normpath(str(p))
+            np = os.path.normpath(mm.group(0).strip())
         except Exception:
+            continue
+        if not os.path.isfile(np) or _is_system_path(np):
             continue
         key = os.path.normcase(np)
         if key in seen:
             continue
         seen.add(key)
-        if not os.path.isfile(np) or _is_system_path(np):
+        out.append(np)
+
+
+def _session_product_paths(sid):
+    """按会话提取产物路径（新→旧，已去重、剔除系统路径与目录）。
+
+    来源：assistant 正文 + 工具结果 + 工具调用参数中的路径键——使右栏「交付物 /
+    最近产出」可随会话切换（含历史会话）。找不到会话返回空列表。
+    按「路径 + mtime_ns + size」缓存解析结果：长会话轮询不重复扫描整份会话文件。
+    """
+    name = _valid_name(sid, 128)
+    if not name:
+        return []
+    path = os.path.join(SESSIONS_DIR, f"{name}.json")
+    try:
+        st = os.stat(path)
+        ckey = (st.st_mtime_ns, st.st_size)
+    except Exception:
+        return []
+    with _SESSION_PRODUCTS_CACHE_LOCK:
+        cached = _SESSION_PRODUCTS_CACHE.get(path)
+        if cached and cached[0] == ckey:
+            return list(cached[1])
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    out = []
+    seen = set()
+    for m in reversed(data.get("messages") or []):  # 新→旧
+        if not isinstance(m, dict):
             continue
-        m = _file_meta(np)
-        m["type"] = _deliverable_type(m.get("name") or np)
-        out.append(m)
+        role = m.get("role")
+        if role == "assistant":
+            _collect_product_paths(m.get("content"), out, seen)
+            for tc in (m.get("tool_calls") or []):
+                if not isinstance(tc, dict):
+                    continue
+                try:
+                    args = json.loads((tc.get("function") or {}).get("arguments") or "{}")
+                except Exception:
+                    args = {}
+                if not isinstance(args, dict):
+                    continue
+                for k in _SESSION_PRODUCT_ARG_KEYS:
+                    if args.get(k):
+                        _collect_product_paths(str(args[k]), out, seen)
+                if isinstance(args.get("paths"), list):
+                    for pth in args["paths"]:
+                        _collect_product_paths(str(pth), out, seen)
+                if isinstance(args.get("code"), str):
+                    _collect_product_paths(args["code"], out, seen)
+        elif role == "tool":
+            _collect_product_paths(m.get("content"), out, seen)
+    with _SESSION_PRODUCTS_CACHE_LOCK:
+        if len(_SESSION_PRODUCTS_CACHE) >= 48:
+            _SESSION_PRODUCTS_CACHE.clear()
+        _SESSION_PRODUCTS_CACHE[path] = (ckey, out)
+    return list(out)
+
+
+def _deliverable_meta(np):
+    m = _file_meta(np)
+    m["type"] = _deliverable_type(m.get("name") or np)
+    return m
+
+
+def _deliverables(session_id=None):
+    """交付物清单：**真实存在**的文件，规范化去重、补齐类型/大小/时间，按时间倒序。
+
+    不传 `session_id`：跨会话（recent_outputs.json），兼容旧行为；
+    传 `session_id`：只列该会话产出，供右栏「交付物」随会话切换。
+    """
+    import stores
+    if session_id is not None:
+        paths = _session_product_paths(session_id)
+    else:
+        paths = []
+        seen = set()
+        for p in reversed(stores.load_recent(RECENT_PATH)[-120:]):  # 新→旧
+            try:
+                np = os.path.normpath(str(p))
+            except Exception:
+                continue
+            key = os.path.normcase(np)
+            if key in seen:
+                continue
+            seen.add(key)
+            if not os.path.isfile(np) or _is_system_path(np):
+                continue
+            paths.append(np)
+    out = [_deliverable_meta(np) for np in paths]
     out.sort(key=lambda x: (x.get("mtime") or 0), reverse=True)
     return {"items": out}
 
@@ -7539,7 +7635,7 @@ class _Handler(BaseHTTPRequestHandler):
     @_get_route(("qpath", "/v1/files"))
     def _g_v1_files(self):
         import urllib.parse
-        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query, keep_blank_values=True)
         if qs.get("dir"):
             data, err = _list_dir(qs["dir"][0])
             if err:
@@ -7547,12 +7643,18 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._json(200, data)
         else:
-            self._json(200, _files())
+            # session 参数：让「最近产物」随会话切换（工作区条目/收藏仍全局）
+            # 传 `?session=`（空值）表示「无会话」→ 产物列表为空；缺省才回退全局
+            sid = (qs.get("session") or [None])[0]
+            self._json(200, _files(session_id=sid))
 
 
-    @_get_route("/v1/deliverables")
+    @_get_route(("qpath", "/v1/deliverables"))
     def _g_v1_deliverables(self):
-        self._json(200, _deliverables())
+        import urllib.parse
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query, keep_blank_values=True)
+        sid = (qs.get("session") or [None])[0]
+        self._json(200, _deliverables(session_id=sid))
 
 
     @_get_route(("qpath", "/v1/files/search"))

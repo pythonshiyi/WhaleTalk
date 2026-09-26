@@ -150,7 +150,7 @@ function sortEntries(list, key, dir) {
   });
 }
 
-function FilesTab({ onInject, active, onBadge }) {
+function FilesTab({ onInject, active, onBadge, sessionId }) {
   const [roots, setRoots] = React.useState(null);
   const [expanded, setExpanded] = React.useState({});
   const [children, setChildren] = React.useState({});
@@ -177,7 +177,8 @@ function FilesTab({ onInject, active, onBadge }) {
 
   const load = React.useCallback(async (showLoading) => {
     try {
-      const d = await api.listFiles();
+      // 「最近产物」随会话切换（工作区条目 / 收藏仍为全局）
+      const d = await api.listFiles(undefined, sessionId);
       if (d) {
         setRoots(d);
         const m = {};
@@ -188,7 +189,10 @@ function FilesTab({ onInject, active, onBadge }) {
     } catch {
       if (showLoading) setErr("文件列表加载失败：后端未连接");
     }
-  }, []);
+  }, [sessionId]);
+
+  // 切换会话：清掉展开态并立即刷新（最近产物是会话级）
+  React.useEffect(() => { setExpanded({}); setChildren({}); load(false); }, [sessionId, load]);
 
   useVisiblePolling(() => load(false), 8000, active);
 
@@ -1409,7 +1413,7 @@ export function DeliverablesSection({ products, items, onGoFiles, onInject }) {
 }
 
 
-function ActivityTab({ activity, products, onGoFiles, onInject, active }) {
+function ActivityTab({ activity, products, onGoFiles, onInject, active, sessionId }) {
   const [fullResult, setFullResult] = React.useState({});
   const [copied, setCopied] = React.useState("");
   const [expanded, setExpanded] = React.useState(null);
@@ -1427,8 +1431,16 @@ function ActivityTab({ activity, products, onGoFiles, onInject, active }) {
     api.getContext().then((d) => d && setEvCtx(d)).catch(() => {});
     api.getStatus().then((d) => d && setEvSt(d)).catch(() => {});
     api.getFailures().then((d) => d && setEvFail(d)).catch(() => {});
-    api.getDeliverables().then((d) => d && setDlvItems(d.items || [])).catch(() => {});
+    api.getDeliverables(sessionId).then((d) => d && setDlvItems(d.items || [])).catch(() => {});
   }, 10000, active);
+
+  // 切换会话：交付物随会话切换（历史会话显示其自身产出）
+  React.useEffect(() => {
+    let alive = true;
+    if (!sessionId) { setDlvItems([]); return undefined; }
+    api.getDeliverables(sessionId).then((d) => { if (alive) setDlvItems((d && d.items) || []); }).catch(() => {});
+    return () => { alive = false; };
+  }, [sessionId]);
 
   const degradations = (evCtx && evCtx.degradations) || [];
   const egressSum = (evSt && evSt.egress) || (evCtx && evCtx.egress && evCtx.egress.summary) || null;
@@ -1670,13 +1682,15 @@ const TABS = [
   { id: "procs", icon: "terminal", label: "进程" },
 ];
 
-export default function AuxPanel({ onClose, onInjectFile, activity, products, tab, onTabChange, onPopout, inPopout }) {
+export default function AuxPanel({ onClose, onInjectFile, activity, products, sessionId, tab, onTabChange, onPopout, inPopout }) {
   const isControlled = tab != null && typeof onTabChange === "function";
   const [internalTab, setInternalTab] = React.useState("params");
   const curTab = isControlled ? tab : internalTab;
   const setCurTab = isControlled ? onTabChange : setInternalTab;
 
   const [badges, setBadges] = React.useState({});
+  // 归一为字符串：null（新对话尚未分配 id）→ ""，表示「无会话」→ 产物为空
+  const sid = sessionId == null ? "" : sessionId;
   const onBadge = React.useCallback((id, val) => {
     setBadges((b) => (b[id] === val ? b : { ...b, [id]: val }));
   }, []);
@@ -1799,13 +1813,13 @@ export default function AuxPanel({ onClose, onInjectFile, activity, products, ta
       </div>
       <div className="aux-body">
         <div role="tabpanel" id="auxpane-activity" aria-labelledby="auxtab-activity" className="aux-pane" hidden={curTab !== "activity"}>
-          <ActivityTab activity={activity} products={products || []} onGoFiles={() => selectTab("files")} onInject={onInjectFile} active={curTab === "activity"} />
+          <ActivityTab activity={activity} products={products || []} onGoFiles={() => selectTab("files")} onInject={onInjectFile} active={curTab === "activity"} sessionId={sid} />
         </div>
         <div role="tabpanel" id="auxpane-params" aria-labelledby="auxtab-params" className="aux-pane" hidden={curTab !== "params"}>
           <ParamsTab active={curTab === "params"} />
         </div>
         <div role="tabpanel" id="auxpane-files" aria-labelledby="auxtab-files" className="aux-pane" hidden={curTab !== "files"}>
-          <FilesTab onInject={onInjectFile} active={curTab === "files"} onBadge={onBadge} />
+          <FilesTab onInject={onInjectFile} active={curTab === "files"} onBadge={onBadge} sessionId={sid} />
         </div>
         <div role="tabpanel" id="auxpane-procs" aria-labelledby="auxtab-procs" className="aux-pane" hidden={curTab !== "procs"}>
           <ProcessesTab active={curTab === "procs"} onBadge={onBadge} />

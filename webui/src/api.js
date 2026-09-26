@@ -800,10 +800,12 @@ export async function getFailures() {
 }
 
 /**
- * 交付物清单（跨会话·最近产出，规范化去重 + 类型/大小/时间）。
+ * 交付物清单（规范化去重 + 类型/大小/时间）。
+ * @param {string} [sessionId] 传入时只列该会话产出，缺省为跨会话最近产出
  * @returns {Promise<{items:Array<{path:string,name:string,type:string,size_label?:string,mtime?:number,mtime_label?:string}>}>}
  */
-export async function getDeliverables() {
+export async function getDeliverables(sessionId) {
+  if (sessionId != null) return api(`/v1/deliverables?session=${encodeURIComponent(sessionId)}`);
   return api("/v1/deliverables");
 }
 /**
@@ -1005,9 +1007,12 @@ export async function installMany(keys, handlers) {
 // ── 文件系统（树/产物操作）────────────────────────────
 
 /** @param {string} [dir] 指定目录时列子目录，缺省返回根/最近产物
+ * @param {string} [sessionId] 缺省根视图时「最近产物」只列该会话产出
  * @returns {Promise<any>} 后端文件树原始结构 */
-export async function listFiles(dir) {
-  return api(dir ? `/v1/files?dir=${encodeURIComponent(dir)}` : "/v1/files");
+export async function listFiles(dir, sessionId) {
+  if (dir) return api(`/v1/files?dir=${encodeURIComponent(dir)}`);
+  if (sessionId != null) return api(`/v1/files?session=${encodeURIComponent(sessionId)}`);
+  return api("/v1/files");
 }
 
 /** @param {string} path @returns {Promise<any>} 用系统程序打开 */
