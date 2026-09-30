@@ -120,12 +120,27 @@ class _ChatJob:
 
 
 def _chat_jobs_gc():
-    """回收已完成且超过 TTL 的作业（防内存增长）。"""
+    """回收已完成且超过 TTL 的作业（防内存增长）。
+
+    两道判据（第二道为兜底，防 job 永久滞留）：
+    1. 正常路径：已 finish 且超过 `_CHAT_JOB_TTL`。
+    2. 兜底路径：状态仍是 "running" 但承载它的线程**已死**——说明线程在
+       `finish()` 之前异常退出（见 `_run_chat_job_thread` 的 finally 兜底）。
+       这类作业原本永远不满足 `status != "running"` 而无法回收，且会让同
+       `stream_id` 的后续请求无限等待。线程已死则回放缓冲毫无意义，直接回收；
+       `_handle_chat_stream` 找不到旧作业会新建一个，语义正确。
+    """
     now = time.time()
     with _CHAT_JOBS_LOCK:
         for k, j in list(_CHAT_JOBS.items()):
             if j.status != "running" and j.finished and (now - j.finished) > _CHAT_JOB_TTL:
                 _CHAT_JOBS.pop(k, None)
+                continue
+            if j.status == "running":
+                th = getattr(j, "thread", None)
+                if th is not None and not th.is_alive():
+                    logger.warning("回收僵尸聊天作业（线程已死但状态仍为 running）: %s", k)
+                    _CHAT_JOBS.pop(k, None)
 
 
 _APPROVAL_LOCK = threading.Lock()
@@ -2706,9 +2721,13 @@ _NAME_BAD_CHARS = ("/", "\\", "\x00", "\r", "\n")
 def _valid_name(raw, limit=120):
     """路径片段消毒（P2-1）：合法返回清洗后的名字，非法返回 None。
 
-    用于「把 URL 片段当注册表键」的端点（工具名 / 插件名 / 进化分支名）。这些
     下游都是按名字查注册表、**不直接拼路径**，因此不存在真实穿越；此处做统一入口
     校验：拒绝路径穿越与控制字符、限制长度，避免异常查表与日志注入。
+
+    实际调用方（经 `_Handler._safe_name` 包装）是**路径片段型**端点：
+    插件名 / 工具名 / 进化分支名 / plugin_studio 等。
+    会话 id **不走这里**——它有自己的 `_valid_sid`，白名单更窄（只允许
+    `[0-9a-zA-Z_-]`），因为要直接拼成 `<sid>.json` 文件名。
     """
     s = str(raw or "").strip()
     if not s or len(s) > limit:
@@ -2716,6 +2735,22 @@ def _valid_name(raw, limit=120):
     if any(ch in s for ch in _NAME_BAD_CHARS) or ".." in s:
         return None
     return s
+
+
+# 会话 id 白名单：文件名安全字符（与历史实现实际产出的字符集一致）。
+# 用 fullmatch **拒绝**而不是 sub **剥除**——剥除会让不同 id 塌缩成同一文件名，
+# 造成跨会话覆盖/删除（详见 `_Handler._safe_sid` 的说明）。
+_SID_RE = re.compile(r"[0-9a-zA-Z_-]{1,64}")
+
+
+def _valid_sid(sid):
+    """会话 id 校验：合法返回原 id，非法返回 None（拒绝而非改写）。
+
+    与 `_valid_name` 同为「合法返回 / 非法 None」契约，调用方负责在 None 时
+    回 400，绝不退化成某个默认 id 后落盘（那正是数据丢失的根源）。
+    """
+    s = str(sid or "")
+    return s if _SID_RE.fullmatch(s) else None
 
 
 def _sanitize_error_text(s, limit=200):
@@ -7049,8 +7084,19 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ── 会话读取 ─────────────────────────────────
     def _safe_sid(self, sid):
-        import re
-        return re.sub(r"[^0-9a-zA-Z_-]", "", str(sid or ""))[:64]
+        """会话 id 消毒：合法返回 id，非法返回 None（**拒绝**而非静默改写）。
+
+        历史 bug（数据丢失）：原实现 `re.sub(r"[^0-9a-zA-Z_-]", "", sid)[:64]`
+        把非法字符**剥掉**，于是不同的客户端 id 会塌缩到同一个文件——
+        `"sess.1"` 与 `"sess 1"` 都变成 `"sess1"`，`"my session"` 与
+        `"mysession"` 都变成 `"mysession"`；`[:64]` 截断还让任意「前 64 位相同」
+        的 id 互相碰撞。后果是**跨会话覆盖与跨会话删除**：写 A 会话的正文会被
+        B 会话的保存覆盖，删除 B 会连带删掉 A 的历史。
+        正确语义是「非法即拒绝」：调用方拿到 None 应回 400，绝不落盘。
+        （路径穿越本身不会发生——剥字符顺带吃掉了 `/` `\\`——所以这是数据完整性
+        问题，不是目录穿越问题。）
+        """
+        return _valid_sid(sid)
 
     def _safe_name(self, raw, limit=120):
         """路径片段消毒（P2-1）：非法返回 None。逻辑见模块级 `_valid_name`。"""
@@ -7065,7 +7111,10 @@ class _Handler(BaseHTTPRequestHandler):
         return metas[:200]
 
     def _load_session_messages(self, sid):
-        path = os.path.join(SESSIONS_DIR, f"{self._safe_sid(sid)}.json")
+        sid = self._safe_sid(sid)
+        if not sid:
+            return None                     # 非法 id → 视为「无此会话」，绝不拼 "None.json"
+        path = os.path.join(SESSIONS_DIR, f"{sid}.json")
         if not os.path.exists(path):
             return None
         try:
@@ -7313,7 +7362,14 @@ class _Handler(BaseHTTPRequestHandler):
                 if cleaned_segs:
                     item["segs"] = cleaned_segs
             clean.append(item)
-        sid = self._safe_sid(str(body.get("id") or ""))
+        raw_sid = str(body.get("id") or "").strip()
+        sid = self._safe_sid(raw_sid)
+        if raw_sid and not sid:
+            # 客户端**显式给了 id 但非法**：必须拒绝，不能静默换一个新 id。
+            # 旧实现在这里剥字符后继续用，导致两个不同 id 塌缩到同一文件，
+            # 互相覆盖对方的历史（数据丢失）；静默改新 id 同样会让前端以为
+            # 存到了自己指定的 id 上（后续按该 id 读回为空）。
+            return None, "会话 id 非法（仅允许字母/数字/下划线/连字符，最长 64）"
         if not sid:
             sid = hex(int(time.time() * 1000))[2:] + secrets_token(4)
         path = os.path.join(SESSIONS_DIR, f"{sid}.json")
@@ -9538,6 +9594,10 @@ class _Handler(BaseHTTPRequestHandler):
             quiet_mode=quiet_mode,
             deps={
                 "task_quality_guide": config_defaults.TASK_QUALITY_GUIDE,
+                # 分层任务纪律（v3.16.17）：按本轮 user 消息判定编码/长任务，按需追加规范。
+                # 传函数而非常量：装配时才知道 messages，且属性可被测试打桩。
+                "task_guide_builder": config_defaults.build_task_guide,
+                "tools_on": not pure_chat,
                 "default_prompt": config_defaults.DEFAULT_SYSTEM_PROMPT,
                 "dialog_prompt": config_defaults.DIALOG_SYSTEM_PROMPT,
                 "data_dir": DATA_DIR,
@@ -9826,6 +9886,17 @@ class _Handler(BaseHTTPRequestHandler):
                         _STREAM_STOPS.pop(k, None)
             _end_job_state()
             job.trim_if_unused()
+            # 兜底收口（防 stream_id 永久卡死）：`finish()` 只在 except 分支与
+            # 正常分支调用，若线程体内抛出 **BaseException**（SystemExit /
+            # KeyboardInterrupt，或解释器关闭时的异常）会越过 `except Exception`
+            # → 作业永远停在 status="running"、finished=None，而 `_chat_jobs_gc`
+            # 的条件 `status != "running"` 使其**永不可回收**；更严重的是
+            # `_handle_chat_stream` 会把同 stream_id 的后续请求当作订阅该作业，
+            # `_stream_job_to_client` 见到 running 就无限 cond.wait → 该会话
+            # 之后每次重发都永久挂起（无输出、无错误）。
+            # `finish()` 自身幂等（内部判 status=="running" 才改），故这里重复
+            # 调用安全；正常路径已 finish 时此调用只刷新 finished 时间戳无副作用。
+            job.finish("error" if job.status == "running" else job.status)
 
     def _stream_job_to_client(self, job):
         """把作业事件流推送给当前 HTTP 订阅者。
@@ -9919,8 +9990,7 @@ class _SessionStore:
 
     @staticmethod
     def _safe_sid(sid):
-        import re
-        return re.sub(r"[^0-9a-zA-Z_-]", "", str(sid or ""))[:64]
+        return _valid_sid(sid)
 
 
 def _save_session_detached(body):

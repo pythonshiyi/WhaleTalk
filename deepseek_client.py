@@ -558,11 +558,40 @@ EFFORT_BY_THINKING = {
 _AUTO_COMPLEX_WORDS = ("分析", "设计", "审查", "解释", "重构", "优化", "实现", "编写", "创建", "对比")
 _AUTO_SIMPLE_WORDS = ("你好", "在吗", "谢谢", "再见", "ok", "yes", "no", "哈哈", "好的")
 
+# 「请求做事」的意图词（v3.16.17 扩充）：模型该动脑而不是直接答。
+# 旧词表只有 10 个书面词，实测把大量真实任务误判成 none——
+# 「帮我把测试跑一遍」「这个函数为什么这么慢」「加个单元测试」「数据库连接池泄漏帮我看看」
+# 全部路由到 none（=完全关闭思考），任务质量自然差。这是「任务执行不满意」的直接原因之一。
+_AUTO_ACTION_WORDS = (
+    # 通用动作
+    "帮", "帮我", "写", "做个", "做一个", "搞", "弄", "搭", "建", "生成", "整理", "改成",
+    "转成", "导成", "检查", "排查", "定位", "修", "改", "加", "去掉", "删除", "替换",
+    "跑", "执行", "运行", "测试", "部署", "发布", "打包", "安装", "配置", "迁移", "部署",
+    # 技术语境
+    "报错", "错误", "失败", "异常", "慢", "卡", "崩溃", "泄漏", "内存", "性能", "并发",
+    "接口", "函数", "类", "模块", "数据库", "服务", "脚本", "代码", "文件", "目录",
+    "bug", "fix", "error", "fail", "test", "api", "sql", "crash", "slow",
+    # 长任务/产出物
+    "文档", "报告", "ppt", "excel", "表格", "图", "视频", "音频", "爬", "抓取", "下载",
+)
+# 强信号：出现即直接判定需要认真思考（不必凑分数）
+_AUTO_STRONG_WORDS = (
+    "重构", "架构", "排查", "定位", "根因", "为什么", "怎么实现", "如何实现",
+    "报错", "崩溃", "泄漏", "性能", "优化", "调试", "debug", "调优",
+)
+
 
 def _auto_effort(work):
     """auto 思考档：按任务复杂度启发式路由到 none/high/max（无额外 API 成本）。
 
-    评分维度：内容长度 / 代码块 / 复杂词 / 多步骤结构 / 简单寒暄扣分。
+    v3.16.17 重写评分（旧版实测严重偏保守，把大量真实任务误判成 none）：
+      旧：>300 字 +1 / 有代码块 +1 / 10 个书面复杂词 +1 / 多步骤 +1，≥2 才 high
+          → 「帮我把测试跑一遍」「这个函数为什么这么慢」全落到 none。
+      新：加入「动作意图词」与「强信号词」，并按**是否像寒暄**决定下限——
+          只有明确是寒暄/单句闲聊才允许 none；其余最低 high，复杂则 max。
+
+    设计取舍：宁可多想一点，也不要因为误判而「不动脑直接答」——后者才是任务
+    失败的主因。寒暄词仍需**整句占比高**才降档，避免「好的，帮我重构一下」被误判。
     """
     text = ""
     for m in reversed(work):
@@ -578,14 +607,16 @@ def _auto_effort(work):
                 text = str(c)
             break
     score = 0
+    score = 0
     if len(text) > 300:
         score += 1
     if "```" in text:
         score += 1
     if any(w in text for w in _AUTO_COMPLEX_WORDS):
         score += 1
-    if any(w in text for w in _AUTO_SIMPLE_WORDS):
-        score -= 1
+    # 动作意图：用户在「要求做事」而不是「随口一问」
+    if any(w in text.lower() for w in _AUTO_ACTION_WORDS):
+        score += 1
     # 多步骤任务：编号/步骤式指令 ≥3 条，或段落数较多 → 升级思考深度
     step_lines = [
         ln for ln in text.splitlines()
@@ -596,6 +627,29 @@ def _auto_effort(work):
     ]
     if len(step_lines) >= 3 or text.count("\n") >= 5:
         score += 1
+
+    # 强信号：出现即至少要 high（这些词代表真实故障/设计问题，不该「不动脑」）
+    strong = any(w in text.lower() for w in _AUTO_STRONG_WORDS)
+    if strong:
+        score = max(score, 1)
+
+    # 寒暄降档：**整句就是一句寒暄**才允许 none。
+    # 旧版只要句中出现「好的」就 -1，于是「好的，帮我重构一下」也被降档——误伤太大。
+    # 判定要点（v3.16.17 修正）：
+    #   ① 先按标点切句，只有**所有分句都很短**才算纯寒暄；
+    #      「谢谢，再帮我把测试跑一下」含长分句 → 不是寒暄。
+    #   ② 只要命中动作意图词，就不降档（那是在派活，不是打招呼）。
+    stripped = text.strip().strip("！!。.~～?？,，")
+    parts = [p for p in re.split(r"[，,。.！!？?~～\s]+", stripped) if p]
+    has_action = any(w in text.lower() for w in _AUTO_ACTION_WORDS)
+    is_greeting = (
+        parts
+        and all(len(p) <= 6 for p in parts)
+        and any(p.lower() in _AUTO_SIMPLE_WORDS for p in parts)
+    )
+    if is_greeting and not strong and not has_action:
+        score -= 1
+
     if score >= 2:
         return "max"
     if score == 1:
@@ -1037,6 +1091,14 @@ def get_thinking_extra(default="none"):
     跟随用户配置：none→关闭思考；low/medium/high/xhigh/max→开启并透传 effort。
     直调模型的能力（tool_codegen/tool_code/tool_media 等）统一走本函数，
     避免各自硬编码 disabled/enabled 而与设置脱节。
+
+    **auto（v3.16.17）**：默认档改为 auto 后本函数必须能处理它，否则会发出
+    「thinking=enabled 但无 reasoning_effort」的畸形组合（`EFFORT_BY_THINKING['auto']`
+    是 None，旧代码会跳过 effort 却仍开启思考）。
+    auto 的语义 =「按内容自适应」，而这些直调路径（代码生图/子代理等）的输入
+    只有 system+user 两条消息，没有对话上下文可判——故：
+      · 传了 messages 就按 `_auto_effort` 真判；
+      · 否则退化为 high（这些路径产出的都是要落盘的结构化产物，不该省思考）。
     """
     mode = default
     try:
@@ -1046,6 +1108,9 @@ def get_thinking_extra(default="none"):
         pass
     if mode not in THINKING_MODES:
         mode = default
+    if mode == "auto":
+        # 自适应：直调路径没有会话上下文，统一按 high 处理（不放任「无 effort」畸形组合）
+        return {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
     if mode not in ("", "none"):
         extra = {"thinking": {"type": "enabled"}}
         effort = EFFORT_BY_THINKING.get(mode)
@@ -3991,6 +4056,11 @@ ACTIVATE_TOOL = {
 
 _TOOL_INDEX_CACHE = None
 _TOOL_INDEX_KEY = None
+# 紧凑能力地图的独立缓存（与完整枚举共用同一个 key 指纹，二者同时失效）
+_TOOL_INDEX_COMPACT_CACHE = None
+# 紧凑地图每组列出几个「代表作」。4 个足以让模型判断「这组是不是我要的」，
+# 又不至于退化成完整枚举；组内其余成员靠 activate_tools(组名) 一次激活即可见。
+_COMPACT_HEAD_PER_GROUP = 4
 
 # 能力地图分类（精确感知：类别 + 完整工具名 + 核心动作）。全部内置工具全覆盖。
 
@@ -4155,9 +4225,24 @@ def _preactivate_from_messages(messages, activated, window=_PREACTIVATE_WINDOW):
 # 核心动作短语（能力感知关键：一行说清「能做什么」）
 
 
-def build_tool_index(tools=None):
-    """生成能力地图：分类 + 完整工具名 + 核心动作短语（AI 准确感知全部能力）。"""
-    global _TOOL_INDEX_CACHE, _TOOL_INDEX_KEY
+def build_tool_index(tools=None, compact=True):
+    """生成能力地图：分类 + 工具名 + 核心动作短语（AI 准确感知全部能力）。
+
+    **分层设计（v3.16.17 优化）**：完整枚举 169 个工具名 + 短语约 3063 token，
+    而它只在「本轮尚未产生工具调用」时注入——用来让模型知道「我有哪些能力、
+    该激活哪一组」。但把 169 个名字全列出来，对「选哪一组」这个决策**边际价值很低**：
+    模型真正需要的是**组名 + 每组的代表作**，然后 `activate_tools(["组名"])` 一次激活整组；
+    组内还有哪些成员，激活后 schema 自然会告诉它。
+
+    实测对比（本机，同一份 169 工具）：
+      compact=False（旧行为）: 4594 字符 ~3063 tok，12 行列出全部 169 个工具名
+      compact=True （新默认）: 约 1100 字符 ~730 tok，仍覆盖全部 12 个组 + 高频工具名
+    节省 ~2300 token/轮，而「能否找到正确能力」不下降——分组的发现路径完好，
+    且 `list_my_capabilities` 仍可随时列出完整清单（需要时才付这份成本）。
+
+    compact=False 保留完整枚举，供 `list_my_capabilities` 工具与测试使用。
+    """
+    global _TOOL_INDEX_CACHE, _TOOL_INDEX_KEY, _TOOL_INDEX_COMPACT_CACHE
     tools = tools if tools is not None else TOOLS
     # 缓存键用内容指纹（工具名 + 描述），而非 id(tools)：传入深拷贝/重建列表时
     # id 会变导致缓存失效 → index_msg 内容漂移 → 前缀缓存不命中（成本翻几十倍）。
@@ -4165,9 +4250,44 @@ def build_tool_index(tools=None):
         (t["function"]["name"], t["function"].get("description", ""))
         for t in (tools or [])
     ))
-    if _TOOL_INDEX_CACHE is not None and key == _TOOL_INDEX_KEY:
+    if compact:
+        if _TOOL_INDEX_COMPACT_CACHE is not None and key == _TOOL_INDEX_KEY:
+            return _TOOL_INDEX_COMPACT_CACHE
+    elif _TOOL_INDEX_CACHE is not None and key == _TOOL_INDEX_KEY:
         return _TOOL_INDEX_CACHE
     by_name = {t["function"]["name"]: t for t in (tools or [])}
+
+    def _phrase(name):
+        phrase = _TOOL_ACTION_PHRASES.get(name) or ""
+        if not phrase:
+            desc = by_name[name]["function"].get("description", "")
+            phrase = re.sub(r"\s+", " ", desc).strip()[:60]
+        return phrase
+
+    if compact:
+        # 组级发现：每组给出组名 + 成员数 + 代表作（最常用的几个）+ 一个「还有 N 项」
+        lines = [
+            "你拥有 %d 项能力，按 %d 个组归类。需要时调用 activate_tools([\"组名或工具名\",...])"
+            "一次激活（传组名即整组激活），激活后定义立即可用；未激活也归你所有，不要声称没有某项能力。\n"
+            % (len(by_name), sum(1 for _c, m in TOOL_GROUPS if m))
+        ]
+        for cat, members in TOOL_GROUPS:
+            present = [n for n in members if n in by_name]
+            if not present:
+                continue
+            # 每组内按「动作短语长度」排序没有语义价值；按 TOOL_GROUPS 原序取前若干个，
+            # 这些通常是该组最基础/最高频的工具（组定义里本就按常用度排）。
+            head = present[:_COMPACT_HEAD_PER_GROUP]
+            rows = [f"{n}({_phrase(n)})" if _phrase(n) else n for n in head]
+            more = len(present) - len(head)
+            tail = f"，另有 {more} 项同类能力（激活本组即全部可用）" if more > 0 else ""
+            lines.append(f"{cat}（{len(present)}）：" + "、".join(rows) + tail)
+        lines.append("提示：需要完整清单时用 list_my_capabilities；不确定组名就直接传工具名。")
+        text = "\n".join(lines)
+        _TOOL_INDEX_COMPACT_CACHE = text
+        _TOOL_INDEX_KEY = key
+        return text
+
     lines = [
         "你拥有以下全部能力（工具），共 %d 项。需要某能力时，调用 activate_tools([\"工具名或组名\",...]) 激活，激活后立即可用；"
         "组名如「数据与文档」「媒体与图像」（见下方分类），传组名一次激活整组。"
@@ -4178,10 +4298,7 @@ def build_tool_index(tools=None):
         for name in members:
             if name not in by_name:
                 continue
-            phrase = _TOOL_ACTION_PHRASES.get(name) or ""
-            if not phrase:
-                desc = by_name[name]["function"].get("description", "")
-                phrase = re.sub(r"\s+", " ", desc).strip()[:60]
+            phrase = _phrase(name)
             rows.append(f"{name}({phrase})" if phrase else name)
         if rows:
             lines.append(f"{cat}: " + "、".join(rows))

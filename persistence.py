@@ -47,12 +47,37 @@ def _replace_with_retry(tmp, path):
     return False
 
 
+def _fsync_dir(d):
+    """对目录本身 fsync（POSIX：让 rename 的目录项落盘）。Windows 上不支持则跳过。"""
+    if os.name == "nt":
+        return
+    try:
+        dfd = os.open(d or ".", os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dfd)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(dfd)
+        except OSError:
+            pass
+
+
 def atomic_json_write(path, data, indent=1, compact=False):
-    """原子写 JSON（唯一临时文件 + os.replace），失败返回 False。
+    """原子写 JSON（唯一临时文件 + fsync + os.replace），失败返回 False。
 
     compact=True 使用紧凑分隔符（快照/会话等大文件体积减半，读写更快）。
     并发安全：同一路径的写入进程内串行化 + os.replace 瞬时失败重试——
     Windows 上并发替换同一目标会抛 WinError 5（实测 17% 失败率）。
+
+    **持久性（durability）**：os.replace 只保证「相对并发读者原子」，不保证数据
+    真的落盘——`json.dump` 的内容可能仍在内核页缓存里，此时断电/硬重启会出现
+    「目录项已更新、数据块未写」→ 文件变成 0 字节或截断（正是本模块注释里要防的
+    「进程被杀」场景，只是断电比杀进程更狠）。故写完先 `flush()` + `os.fsync()`
+    再 replace，POSIX 上再 fsync 父目录。代价是一次同步 I/O，只在落盘路径上。
     """
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -67,9 +92,13 @@ def atomic_json_write(path, data, indent=1, compact=False):
                     json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
                 else:
                     json.dump(data, f, ensure_ascii=False, indent=indent)
+                # 先落数据再替换：保证 replace 发生时数据已在磁盘上
+                f.flush()
+                os.fsync(f.fileno())
             # 同一路径串行化后再替换：避免进程内并发撞车（不同路径互不阻塞）
             with _path_lock(path):
                 _replace_with_retry(tmp, path)
+            _fsync_dir(os.path.dirname(path))
             return True
         finally:
             # replace 成功则 tmp 已不存在；写入异常或 replace 失败（跨盘/被占用）时清理，

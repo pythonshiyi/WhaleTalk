@@ -438,6 +438,13 @@ def format_process_result(rc, output, *, kind="命令", workspace=None, timeout=
     """
     body = str(output or "").strip()
     suffix = f"\n[工作目录：{workspace or '（当前目录）'}]" if workspace else ""
+    # timeout 非空时附超时提示：该形参此前存在、docstring 也写了，但函数体从未
+    # 使用（死参数）→ 模型看不到本轮命令的超时上限，长任务容易误判成卡死/失败。
+    if timeout:
+        try:
+            suffix += f"\n[超时上限：{int(float(timeout))}s（超时会终止进程树并如实报超时）]"
+        except (TypeError, ValueError):
+            pass
     if rc in (0, None):
         if not body:
             return f"执行成功（无输出），退出码 {rc}{suffix}"

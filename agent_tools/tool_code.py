@@ -227,7 +227,8 @@ def run_python(code):
         # 语义化报告（同 run_command）：非零退出不一律判"错误"，避免误导与污染失败记忆。
         return format_process_result(
             rc, out_data, kind="脚本",
-            workspace=(permissions.WORKSPACE_DIR or None))
+            workspace=(permissions.WORKSPACE_DIR or None),
+            timeout=RUN_PY_TIMEOUT)
     except Exception as e:
         return f"错误：{e}"
     finally:
@@ -279,7 +280,8 @@ def run_command(command):
         # "发现问题"）；一律报"错误："既误导模型，又污染失败记忆。详见 shared.format_process_result。
         return format_process_result(
             rc, out_data, kind="命令",
-            workspace=(_dc.WORKING_DIR or permissions.WORKSPACE_DIR or None))
+            workspace=(_dc.WORKING_DIR or permissions.WORKSPACE_DIR or None),
+            timeout=timeout)
     except Exception as e:
         return f"错误：{e}"
 

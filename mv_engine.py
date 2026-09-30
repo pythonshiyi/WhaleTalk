@@ -34,6 +34,8 @@ import time
 
 # 进程内临时文件登记 + 退出清理（如音频解码中间 wav），避免 %TEMP% 持续堆积
 _TEMP_FILES = set()
+# ffmpeg 可执行路径缓存（"ffmpeg" 兜底表示未找到，见 _ffmpeg_bin）
+_FFMPEG_BIN_CACHE = None
 
 
 def _cleanup_temp_files():
@@ -117,6 +119,37 @@ def analyze(audio, sr=22050, hop_length=512):
             "sr": e_sr, "energy": energy}
 
 
+def _ffmpeg_bin():
+    """ffmpeg 可执行路径：PATH → imageio-ffmpeg 内置二进制 → "ffmpeg" 兜底。
+
+    真实缺陷（本机实测）：本项目**不在 PATH 上放 ffmpeg**，而是经
+    `requirements.txt` 的 `imageio-ffmpeg` 随包携带（`deepseek_client.py` 早已用
+    `imageio_ffmpeg.get_ffmpeg_exe()` 解析）。但 mv_engine 的两处调用点写的是裸
+    `"ffmpeg"`，于是：
+      · `_ffmpeg_decode_wav` 静默失败 → `analyze()` 返回 duration=0 → 分镜为空
+        （表现为「音频时长异常」，音频分析整条链失效）；
+      · `encode_video` 抛 `[WinError 2] 系统找不到指定的文件` → **成片永远导不出来**。
+    统一走本函数解析，与项目其余部分口径一致。
+    """
+    global _FFMPEG_BIN_CACHE
+    if _FFMPEG_BIN_CACHE is not None:
+        return _FFMPEG_BIN_CACHE
+    cand = ""
+    try:
+        import shutil as _sh
+        cand = _sh.which("ffmpeg") or ""
+    except Exception:  # noqa: BLE001
+        cand = ""
+    if not cand:
+        try:
+            import imageio_ffmpeg
+            cand = imageio_ffmpeg.get_ffmpeg_exe() or ""
+        except Exception:  # noqa: BLE001
+            cand = ""
+    _FFMPEG_BIN_CACHE = cand or "ffmpeg"
+    return _FFMPEG_BIN_CACHE
+
+
 def _load_mono(audio, sr):
     try:
         import librosa
@@ -142,7 +175,7 @@ def _ffmpeg_decode_wav(audio, sr):
     os.close(fd)
     _TEMP_FILES.add(out)
     try:
-        subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(audio),
+        subprocess.run([_ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(audio),
                         "-ac", "1", "-ar", str(sr), out], capture_output=True, timeout=300,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return out if os.path.isfile(out) and os.path.getsize(out) > 44 else ""
@@ -1328,7 +1361,7 @@ def encode_video(frames_dir, out, fps=30, audio="", encoder="libx264", crf=18):
     out = str(out)
     if not out.lower().endswith(".mp4"):
         out += ".mp4"
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+    cmd = [_ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error",
            "-framerate", str(int(fps)), "-i", pat]
     has_audio = bool(str(audio or "").strip()) and os.path.isfile(str(audio))
     if has_audio:

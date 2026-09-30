@@ -89,8 +89,13 @@ def main():
     block = []
     # 六层构建产物（TOOLS/TOOL_GROUPS/_TOOL_ACTION_PHRASES）预置自 rebuild_layers，
     # 不进入 exec block（其赋值是 build_* 调用，直接 exec 会 NameError）
-    block += get_assign_nodes(src, tree, ["_TOOL_INDEX_CACHE", "_TOOL_INDEX_KEY", "ACTIVATE_TOOL",
-                                          "_GROUP_NAMES_TEXT"])
+    block += get_assign_nodes(src, tree, ["_TOOL_INDEX_CACHE", "_TOOL_INDEX_KEY",
+                                          # v3.16.17 紧凑能力地图引入的两个模块级量：
+                                          # 独立 exec 时 build_tool_index 会引用它们，
+                                          # 不预置就会 NameError（本门禁真实拦到过）。
+                                          "_TOOL_INDEX_COMPACT_CACHE",
+                                          "_COMPACT_HEAD_PER_GROUP",
+                                          "ACTIVATE_TOOL", "_GROUP_NAMES_TEXT"])
     block += get_assign_nodes(src, tree, ["_TOOL_GROUP_NAME_MAP"])
     block += get_func_src(src, tree, ["build_tool_index", "_normalize_desc",
                                       "normalize_tool_schema",

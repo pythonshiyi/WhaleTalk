@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 
 import permissions
@@ -30,6 +31,15 @@ from agent_tools.tool_desktop import (
 )
 from shared import clamp_float, clamp_int
 from toolkit import tool
+
+
+class _MvTimeout(Exception):
+    """native 同步渲染超过用户给定 timeout 时抛出（由进度回调触发）。
+
+    用异常（而非返回码）中断是因为 `render_movie` 内部是多进程分块渲染，
+    只能在其 `on_progress` 回调点检查截止时间；抛异常能让已完成的帧保留、
+    未完成的块自然停下，符合「断点续跑」的既有语义。
+    """
 
 
 def _mv_ts(t):
@@ -504,6 +514,38 @@ def _mv_native_available():
         return False
 
 
+def _render_job_with_progress(me, cfg):
+    """调 `mv_engine.render_job`，并把 `cfg["on_progress"]` 透传给 `render_movie`。
+
+    `render_job(cfg)` 本身**不接受** on_progress 出参（签名固定为 `(cfg)`），而
+    `render_movie(...)` 有 `on_progress` 形参。为了让 native 同步路径能守超时上限，
+    这里把 render_job 的内部两步显式展开（与 `mv_engine.render_job` 逐字段一致），
+    唯一差异是把 on_progress 传下去。配置字典本身仍保持可 JSON 序列化（回调不进 cfg）。
+    """
+    on_progress = cfg.pop("on_progress", None)
+    shots = cfg.get("shots") or []
+    lines = cfg.get("lines") or []
+    frames_dir = cfg["frames_dir"]
+    res = me.render_movie(
+        shots, lines, frames_dir,
+        w=int(cfg.get("w", 1080)), h=int(cfg.get("h", 1920)), fps=int(cfg.get("fps", 30)),
+        duration=cfg.get("duration"), palette=cfg.get("palette", "default"),
+        title=cfg.get("title", ""), artist=cfg.get("artist", ""), credits=cfg.get("credits", ""),
+        album=cfg.get("album", ""), producer=cfg.get("producer", ""), studio=cfg.get("studio", ""),
+        transition=float(cfg.get("transition", me.DEFAULT_TRANSITION)),
+        title_dur=float(cfg.get("title_dur", me.DEFAULT_TITLE_DUR)),
+        end_dur=float(cfg.get("end_dur", me.DEFAULT_END_DUR)),
+        procs=cfg.get("procs"), chunk=int(cfg.get("chunk", 60)),
+        quality=int(cfg.get("quality", 93)), gpu=cfg.get("gpu", "auto"),
+        on_progress=on_progress)
+    ok, detail = me.encode_video(frames_dir, cfg["out"], fps=int(cfg.get("fps", 30)),
+                                 audio=cfg.get("audio", ""),
+                                 encoder=cfg.get("encoder", "libx264"),
+                                 crf=int(cfg.get("crf", 18)))
+    return {"render": res, "encode_ok": bool(ok), "out": detail if ok else "",
+            "encode_error": "" if ok else str(detail)}
+
+
 def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
                 offline, resolution, fps, timeout, engine_model, effect="kenburns", transition=0.0,
                 title="", artist="", credits="", album="", producer="", studio="",
@@ -512,6 +554,14 @@ def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
 
     action: plan / storyboard / compose / render / preview / qc / status。
     分析 + 声学歌词对轴 + 卡点分镜 + 逐帧动画渲染全部本地完成。
+
+    形参说明（与 `_mv_compose` 外部引擎路径保持同一调用签名，便于两路共用调度）：
+    - `out` / `offline`：**原生路径不使用**（有意保留）。`out` 由本函数按
+      `output` 自行推导（见下方 `out_mp4`），不做目录语义；`offline` 只对
+      external 引擎有意义（是否允许外部程序联网取素材），原生路径全程本地、
+      无网络访问。保留形参是为了让两路调用点位置对齐、避免参数错位——这是
+      项目历史上踩过的坑（`stop_process` 参数名错位导致模型高频调用失败）。
+    - `timeout`：**真实生效**（见下方同步渲染段的截止时间看门狗）。
     """
     try:
         import mv_engine as me
@@ -703,7 +753,32 @@ def _mv_native(action, audio_abs, lyrics, style, out, output, images_dir,
             background = False
 
     # 同步渲染（短片段；长任务默认走上面的后台通道）
-    res = me.render_job(cfg)
+    # 超时契约：`timeout` 此前是**死参数**——native 路径在进程内渲染、从未读取它，
+    # 用户传 timeout=60 也照样跑到底，与 external 路径（`_mv_run` 真把 timeout 传给
+    # subprocess）行为不一致，等于「设了超时却没生效」。这里用**进度回调**守住同一
+    # 上限：render_movie 每帧回调 on_progress，回调里检查截止时间，超时抛
+    # _MvTimeout 中止渲染并如实报错（不静默、不谎报完成）。
+    _to = 0
+    try:
+        _to = int(float(timeout or 0))
+    except (TypeError, ValueError):
+        _to = 0
+    _deadline = (time.monotonic() + _to) if _to > 0 else 0.0
+
+    def _on_progress(*_a, **_kw):
+        # render_movie 以 5 个位置参调用：on_progress(cur, n_frames, elapsed, done, n_blocks)
+        if _deadline and time.monotonic() > _deadline:
+            raise _MvTimeout()
+
+    _cfg = dict(cfg)
+    _cfg["on_progress"] = _on_progress if _to > 0 else None
+    try:
+        res = _render_job_with_progress(me, _cfg)
+    except _MvTimeout:
+        return (f"错误：原生渲染超时（>{_to}s，已中止）。\n"
+                f"· 已落盘的帧保留在 {fd}（断点续跑：重跑会自动跳过已有帧）。\n"
+                f"· 长任务请调大 timeout，或改用 background=true 后台渲染"
+                f"（list_processes 查进度 / mv_produce(action=\"status\") 看帧进度）。")
     rr = res.get("render") or {}
     final = res.get("out") or ""
     produced = bool(res.get("encode_ok")) and os.path.isfile(final) and os.path.getsize(final) > 0

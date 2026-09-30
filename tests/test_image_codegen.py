@@ -162,16 +162,65 @@ def _capturing_client(content="", reasoning=""):
 
 
 def test_call_disables_thinking_and_budgets_output():
-    """回归：思考模型默认开推理，_call 必须显式关思考并给足输出预算。
+    """回归：思考模型默认开推理，_call 必须给足输出预算，避免推理吃满导致空 content。
 
-    否则推理吃满 max_tokens → content 为空 → image_codegen 误报
-    「模型未返回可用 HTML 源码」（线上 404/4 连败的真实根因）。
+    否则 image_codegen 会误报「模型未返回可用 HTML 源码」（线上 404/4 连败的真实根因）。
+
+    v3.16.17 更新：默认思考档由 none 改为 auto（自适应）。此路径跟设置走
+    `_dc.get_thinking_extra()`，故断言改为「extra_body 合法」而不是硬编码 disabled：
+      · none        → thinking=disabled
+      · auto/其它档 → thinking=enabled 且**必须带 reasoning_effort**
+        （旧代码在 auto 下会漏掉 effort，发出畸形组合）
+    预算断言（本用例的核心）保持不变。
     """
     client, seen = _capturing_client(content="```html\n<html>ok</html>\n```")
     out = tg._call(client, "s", "u")
     assert out.startswith("```html")
-    assert seen["extra_body"]["thinking"]["type"] == "disabled"
+    extra = seen["extra_body"]
+    thinking = extra["thinking"]["type"]
+    assert thinking in ("enabled", "disabled"), f"非法 thinking 值: {thinking!r}"
+    if thinking == "enabled":
+        # 开启思考就必须给出 effort，否则是「开了却不给预算」的畸形组合
+        assert extra.get("reasoning_effort") in ("low", "high", "max"), \
+            f"thinking=enabled 但 reasoning_effort 非法/缺失: {extra!r}"
     assert int(seen["max_tokens"]) >= 6000
+
+
+def test_get_thinking_extra_never_emits_enabled_without_effort(monkeypatch):
+    """`get_thinking_extra` 对每一个思考档都必须产出**合法**的 extra_body。
+
+    回归的是 v3.16.17 引入并修掉的问题：默认档改为 auto 后，旧实现落到
+    「mode 不在 ('', 'none')」分支 → thinking=enabled，但
+    `EFFORT_BY_THINKING['auto']` 是 None → 跳过 effort → 发出
+    「enabled 但无 effort」的畸形组合。
+    """
+    import deepseek_client as _dc
+
+    class _Cfg:
+        def __init__(self, mode):
+            self._m = mode
+
+        def get(self, k, d=None):
+            return self._m if k == "thinking" else d
+
+    class _CU:
+        def __init__(self, mode):
+            self._mode = mode
+
+        def load_config(self):
+            return _Cfg(self._mode)
+
+    for mode in ("none", "low", "medium", "high", "xhigh", "max", "auto"):
+        monkeypatch.setitem(sys.modules, "config_utils", _CU(mode))
+        extra = _dc.get_thinking_extra()
+        t = extra["thinking"]["type"]
+        assert t in ("enabled", "disabled"), f"{mode}: 非法 thinking {t!r}"
+        if t == "enabled":
+            assert extra.get("reasoning_effort") in ("low", "high", "max"), \
+                f"{mode}: thinking=enabled 缺 reasoning_effort -> {extra!r}"
+        else:
+            assert "reasoning_effort" not in extra, \
+                f"{mode}: 关闭思考不应带 effort -> {extra!r}"
 
 
 def test_call_falls_back_to_reasoning_content():

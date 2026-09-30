@@ -6,9 +6,83 @@ from __future__ import annotations
 
 import math
 
-import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+# ── 可选加速后端（缺失不影响正确性）────────────────────────────────────
+# cv2 是**可选**依赖：`resize` / `GaussianBlur` 在缺失时回退到 numpy / PIL。
+# 此前是 `import cv2` 硬导入，导致 `import mvrender.core.vis`（经
+# `core.transition`、`core.lyrics` 被 lowres 渲染链间接依赖）在未装 opencv
+# 的环境直接 ImportError。与 `core.camera` / `core.sparse` 保持同一约定。
+try:  # pragma: no cover - 取决于环境是否装 cv2
+    import cv2 as _cv2
+except Exception:  # noqa: BLE001
+    _cv2 = None
+
+
+def has_cv2() -> bool:
+    """cv2 加速后端是否可用（与 mv_tex.has_cv2 同义）。"""
+    return _cv2 is not None
+
+
+def _resize(a: np.ndarray, w: int, h: int, interp: str = "cubic") -> np.ndarray:
+    """缩放（cv2 → PIL 逐级回退）。interp: 'cubic' | 'linear' | 'nearest'。"""
+    a = np.asarray(a, np.float32)
+    if _cv2 is not None:
+        flag = {"cubic": _cv2.INTER_CUBIC, "linear": _cv2.INTER_LINEAR,
+                "nearest": _cv2.INTER_NEAREST}[interp]
+        return _cv2.resize(a, (int(w), int(h)), interpolation=flag)
+    from PIL import Image as _I
+    resample = {"cubic": _I.BICUBIC, "linear": _I.BILINEAR,
+                "nearest": _I.NEAREST}[interp]
+    if a.ndim == 2:
+        return np.asarray(_I.fromarray(a, mode="F").resize((int(w), int(h)), resample),
+                          np.float32)
+    chans = [_I.fromarray(a[:, :, c], mode="F").resize((int(w), int(h)), resample)
+             for c in range(a.shape[2])]
+    return np.stack([np.asarray(c, np.float32) for c in chans], axis=2)
+
+
+def _gaussian_kernel(sigma: float) -> np.ndarray:
+    """一维高斯核（半径 3σ，与 cv2 的 ksize=0 自动推导一致）。"""
+    r = max(1, int(round(3.0 * float(sigma))))
+    x = np.arange(-r, r + 1, dtype=np.float64)
+    k = np.exp(-(x * x) / (2.0 * float(sigma) ** 2))
+    return (k / k.sum()).astype(np.float32)
+
+
+def _gaussian_blur_np(a: np.ndarray, sigma: float) -> np.ndarray:
+    """可分离高斯模糊（numpy 回退，边界 reflect-101，对齐 cv2 默认行为）。"""
+    k = _gaussian_kernel(sigma)
+    r = len(k) // 2
+    single = a.ndim == 2
+    x = a[:, :, None] if single else a
+    # 水平
+    pad = np.pad(x, ((0, 0), (r, r), (0, 0)), mode="reflect")
+    acc = np.zeros_like(x, np.float32)
+    for i, kv in enumerate(k):
+        acc += pad[:, i:i + x.shape[1], :] * kv
+    # 垂直
+    pad = np.pad(acc, ((r, r), (0, 0), (0, 0)), mode="reflect")
+    out = np.zeros_like(acc, np.float32)
+    for i, kv in enumerate(k):
+        out += pad[i:i + acc.shape[0], :, :] * kv
+    return out[:, :, 0] if single else out
+
+
+def _gaussian_blur(a: np.ndarray, sigma: float) -> np.ndarray:
+    """高斯模糊（cv2 → numpy 可分离回退）。
+
+    注意：**不能**用 `PIL ImageFilter.GaussianBlur` 回退——PIL 拒绝 mode "F"
+    （float32）图像，抛 `ValueError: image has wrong mode`（实测）。故回退走
+    numpy 可分离卷积，数值与 cv2 的 reflect-101 边界一致。
+    """
+    if sigma <= 0:
+        return np.asarray(a, np.float32)
+    a = np.asarray(a, np.float32)
+    if _cv2 is not None:
+        return _cv2.GaussianBlur(a, (0, 0), float(sigma))
+    return _gaussian_blur_np(a, float(sigma))
 
 
 def C(x, scale=1.0):
@@ -64,12 +138,12 @@ def value_noise(h, w, seed=0, octaves=5, base=6, gain=0.55, blur=1.2):
     for o in range(octaves):
         res = int(base * (2 ** o))
         g = rng.random((res + 1, res + 1)).astype(np.float32)
-        acc += cv2.resize(g, (w, h), interpolation=cv2.INTER_CUBIC) * amp
+        acc += _resize(g, w, h, "cubic") * amp
         tot += amp
         amp *= gain
     acc /= max(tot, 1e-6)
     if blur > 0:
-        acc = cv2.GaussianBlur(acc, (0, 0), blur)
+        acc = _gaussian_blur(acc, blur)
     if len(_NOISE_CACHE) < 80:
         _NOISE_CACHE[key] = acc
     return acc
@@ -85,7 +159,7 @@ def voronoi_cells(h, w, n=24, seed=1, step=8):
     d1 = np.take_along_axis(d, idx[:, :, 0:1], axis=2)[:, :, 0]
     d2 = np.take_along_axis(d, idx[:, :, 1:2], axis=2)[:, :, 0]
     edge = np.clip((d2 - d1) / 6.0, 0, 1)
-    return 1.0 - cv2.resize(edge, (w, h), interpolation=cv2.INTER_LINEAR), pts
+    return 1.0 - _resize(edge, w, h, "linear"), pts
 
 
 # ── 文字 ────────────────────────────────────────────────────────────
