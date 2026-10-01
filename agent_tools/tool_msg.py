@@ -12,8 +12,10 @@ from datetime import datetime
 
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 import permissions
+# 注意：`_TELEGRAM_OFFSET` 游标**故意不在此处值绑定**——值绑定只会拿到本模块的副本，
+# 写回不生效（见本文件 telegram 轮询处 `_dc._TELEGRAM_OFFSET = max_id` 的说明），
+# 读写一律走 `_dc._TELEGRAM_OFFSET`。
 from deepseek_client import (
-    _TELEGRAM_OFFSET,
     _agent_mail_run,
     _agent_mail_tip,
     _decrypt_secret,

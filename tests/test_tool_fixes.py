@@ -6,7 +6,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-import api_server  # noqa: E402  （先于 agent_tools 导入，遵守导入顺序契约）
+import api_server  # noqa: E402,F401  （先于 agent_tools 导入，遵守导入顺序契约；本身不被直接引用）
 import db_utils  # noqa: E402
 import shared  # noqa: E402
 

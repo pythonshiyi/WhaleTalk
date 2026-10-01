@@ -182,6 +182,41 @@ function PlanBlock({ plan, tools }) {
   );
 }
 
+// ── 多智能体流水线步骤面板 ──────────────────────────
+// team_run 的结果尾部带 `__TEAM_JSON__{...}` 结构化段（见 agent_tools/tool_desktop.py）。
+// 这里把它解析成步骤条，避免用户直接看到原始 JSON；解析失败则静默降级为纯文本。
+function TeamRunSteps({ result }) {
+  const steps = React.useMemo(() => {
+    if (!result) return null;
+    const m = String(result).match(/__TEAM_JSON__(\{.*\})/);
+    if (!m) return null;
+    try {
+      const d = JSON.parse(m[1]);
+      return Array.isArray(d.team_steps) && d.team_steps.length ? d.team_steps : null;
+    } catch (e) {
+      return null;
+    }
+  }, [result]);
+  if (!steps) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div className="sd-lbl">🧩 多智能体流水线</div>
+      <ol style={{ margin: "4px 0 0", paddingLeft: 20, fontSize: "var(--fs-xs)" }}>
+        {steps.map((s, i) => (
+          <li key={i} style={{ marginBottom: 6 }}>
+            <b>[{s.role}]</b> {s.task}
+            {s.output && (
+              <div style={{ opacity: .85, whiteSpace: "pre-wrap", margin: "3px 0" }}>
+                {String(s.output).slice(0, 300)}
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 // ── 单个步骤 ─────────────────────────────────────────
 function Step({ t, index }) {
   const status = t.status === "failed" ? "fail" : t.status === "running" ? "run" : "done";
@@ -213,10 +248,14 @@ function Step({ t, index }) {
       {open && (
         <div className="step-detail">
           {argsText !== "{}" && <div className="sd-args"><span className="sd-lbl">参数</span>{argsText}</div>}
-          {result && <div className="sd-result"><span className="sd-lbl">结果</span>{result}</div>}
+          {result && <div className="sd-result">
+            <span className="sd-lbl">结果</span>
+            {String(result).replace(/__TEAM_JSON__\{.*\}/, "").trim()}
+            <TeamRunSteps result={result} />
+          </div>}
           {!result && status === "run" && <div className="sd-result"><span className="sd-lbl">结果</span>等待中…</div>}
           <div className="sd-ops">
-            <button className="msg-op" onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(`# ${t.tool}\n参数：${argsText}\n结果：\n${result}`).catch(() => {}); }}>复制</button>
+            <button className="msg-op" onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(`# ${t.tool}\n参数：${argsText}\n结果：\n${String(result).replace(/__TEAM_JSON__\{.*\}/, "").trim()}`).catch(() => {}); }}>复制</button>
           </div>
         </div>
       )}

@@ -3,6 +3,8 @@ import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
 import ToolTest from "./ToolTest.jsx";
 import EmptyState from "./EmptyState.jsx";
+import PixelDocViewer from "./PixelDocViewer.jsx";
+import { EditableTable, DocxEditable, TextDocPreview } from "./OfficePreview.jsx";
 import { SkeletonPage } from "./Skeleton.jsx";
 import { Icon } from "./icons.jsx";
 import { confirmDialog } from "../dialog.js";
@@ -807,6 +809,7 @@ export function TasksPage() {
 export function FilesPage() {
   const [files, setFiles] = React.useState(null);
   const [err, setErr] = React.useState("");
+  const [sel, setSel] = React.useState(null);   // 当前预览的文件绝对路径
   React.useEffect(() => {
     let alive = true;
     (async () => {
@@ -823,6 +826,9 @@ export function FilesPage() {
       alive = false;
     };
   }, []);
+  const ext = sel ? (sel.match(/\.[^.\\/]+$/) || [""])[0].toLowerCase() : "";
+  const PIXEL_EXTS = [".pdf", ".docx", ".pptx"];
+  const OFFICE_EXTS = [".xlsx", ".xls", ".docx", ".pptx", ".pdf", ".csv"];
   return (
     <div className="page">
       <div className="page-head">
@@ -833,7 +839,14 @@ export function FilesPage() {
       <div className="files-list">
         {err && <div className="empty-tip is-err">{err}</div>}
         {(files ? files.recent || [] : []).map((r, i) => (
-          <div className="files-row" key={i}>📦 {r}</div>
+          <div className="files-row" key={i}>
+            <button
+              type="button"
+              className="files-open"
+              onClick={() => setSel(r)}
+              title="点击预览"
+            >📦 {r}</button>
+          </div>
         ))}
         {!err && files && (files.recent || []).length === 0 && (
           <EmptyState icon="package" title="还没有产物" hint="工具生成的文件会自动出现在这里。" compact />
@@ -841,15 +854,107 @@ export function FilesPage() {
       </div>
       <div className="wb-card-title" style={{ marginTop: 16 }}>工作区（{files?.entries?.length || 0} 项）</div>
       <div className="files-list">
-        {(files?.entries || []).map((e, i) => (
-          <div className="files-row" key={i}>
-            <span>{e.is_dir ? "📁" : "📄"} {e.name}</span>
-            <span className="files-meta">{e.is_dir ? "目录" : `${e.size} B`} · {e.mtime}</span>
-          </div>
-        ))}
+        {(files?.entries || []).map((e, i) => {
+          const full = `${files.active_dir}\\${e.name}`;
+          return (
+            <div className="files-row" key={i}>
+              {e.is_dir ? (
+                <span>📁 {e.name}</span>
+              ) : (
+                <button
+                  type="button"
+                  className="files-open"
+                  onClick={() => setSel(full)}
+                  title="点击预览"
+                >📄 {e.name}</button>
+              )}
+              <span className="files-meta">{e.is_dir ? "目录" : `${e.size} B`} · {e.mtime}</span>
+            </div>
+          );
+        })}
       </div>
+      {sel && (
+        <div className="wb-card" style={{ marginTop: 16 }}>
+          <div className="wb-card-title">
+            <Icon name="package" size={14} /> 预览：{sel.split(/[\\/]/).pop()}
+            <button type="button" className="btn-mini" style={{ marginLeft: 8 }}
+              onClick={() => setSel(null)}>关闭</button>
+            <button type="button" className="btn-mini" style={{ marginLeft: 6 }}
+              onClick={() => api.openFile(sel).catch(() => null)}>用本机程序打开</button>
+          </div>
+          {PIXEL_EXTS.includes(ext) ? (
+            <PixelDocViewer path={sel} ext={ext} />
+          ) : OFFICE_EXTS.includes(ext) ? (
+            <OfficeFilePreview path={sel} />
+          ) : (
+            <TextFilePreview path={sel} />
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+/** Office 产物预览：走 /v1/files/preview 取结构化内容，xlsx/Word 支持就地编辑回写。 */
+function OfficeFilePreview({ path }) {
+  const [state, setState] = React.useState({ status: "loading", data: null, err: "" });
+  React.useEffect(() => {
+    let alive = true;
+    setState({ status: "loading", data: null, err: "" });
+    (async () => {
+      const d = await api.previewFile(path).catch(() => null);
+      if (!alive) return;
+      if (!d || d.error) {
+        setState({ status: "err", data: null, err: (d && d.error) || "无法读取预览" });
+        return;
+      }
+      setState({ status: "ok", data: d, err: "" });
+    })();
+    return () => { alive = false; };
+  }, [path]);
+  if (state.status === "loading") {
+    return <div style={{ opacity: .7, fontSize: "var(--fs-xs)" }}>正在加载预览…</div>;
+  }
+  if (state.status === "err") {
+    return <div style={{ opacity: .8, fontSize: "var(--fs-xs)", color: "var(--danger-text)" }}>⚠ {state.err}</div>;
+  }
+  const d = state.data || {};
+  if (d.xlsx && Array.isArray(d.header)) {
+    return <EditableTable path={path} name={d.name} header={d.header} rows={d.rows || []} total={d.total || 0} />;
+  }
+  if (d.docx && typeof d.content === "string") {
+    return <DocxEditable path={path} name={d.name} content={d.content} />;
+  }
+  return <TextDocPreview data={d} />;
+}
+
+/** 文本类产物预览：拉原文按纯文本展示（超长截断，避免长文件卡 UI）。 */
+function TextFilePreview({ path }) {
+  const [state, setState] = React.useState({ status: "loading", text: "", err: "" });
+  React.useEffect(() => {
+    let alive = true;
+    setState({ status: "loading", text: "", err: "" });
+    (async () => {
+      const r = await api.fetchFileBlob(path).catch(() => null);
+      if (!alive) return;
+      if (!r || !r.ok || !r.blob) {
+        setState({ status: "err", text: "", err: (r && r.error) || "无法读取文件" });
+        return;
+      }
+      const raw = await r.blob.text();
+      if (!alive) return;
+      const MAX = 200000;
+      setState({
+        status: "ok",
+        text: raw.length > MAX ? raw.slice(0, MAX) + `\n\n…（已截断，全文 ${raw.length} 字符）` : raw,
+        err: "",
+      });
+    })();
+    return () => { alive = false; };
+  }, [path]);
+  if (state.status === "loading") return <div style={{ opacity: .7, fontSize: "var(--fs-xs)" }}>正在加载…</div>;
+  if (state.status === "err") return <div style={{ opacity: .8, fontSize: "var(--fs-xs)", color: "var(--danger-text)" }}>⚠ {state.err}</div>;
+  return <pre className="file-preview-pre">{state.text}</pre>;
 }
 
 // ── 自我进化 ──────────────────────────────────────

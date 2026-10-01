@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.16）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.17）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,11 +17,13 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.16`）。
-- **能力规模（`tools/check_docs.py` 实测口径，2026-09）**：**169 个 Agent 工具**（11 组）、
-  **106 个 `/v1` 路由**、**92 个 pytest 文件 / 920 用例 + 21 个前端 node 套件**、
-  源码约 **7.2 万行**（根目录 3.3 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万；
-  主力为 `api_server.py` 9,364 / `deepseek_client.py` 5,574 / `brainkit.py` 2,865）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.17`）。
+- **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
+  **106 个 `/v1` 路由**、**106 个 pytest 文件 / 1032 用例 + 22 个前端 node 套件**、
+  源码约 **7.6 万行**（根目录 3.5 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万；
+  主力为 `api_server.py` 10,351 / `deepseek_client.py` 5,927 / `brainkit.py` 2,865）。
+  > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
+  > 下面的行数会随迭代漂移，**以该命令输出为准**。
 - **三层架构**：`web_app.py`（入口）→ `api_server.py`（本地 API）→
   `deepseek_client.py`（能力引擎：`DeepSeekClient` + 169 工具 + smart_tools 按需调取）。
 - **安全模型**：**默认自由**（零审批、零白名单），唯一程序内置两条底线 = **网络 SSRF 硬底线**
@@ -45,8 +47,9 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试（改完代码必跑）──
-python -m pytest -q                      # 后端回归（92 个文件 / 920 用例；CI 同款）
-cd webui && npm test                     # 前端 21 个 node 套件（解析器/渲染器/工具函数）
+python -m pytest -q                      # 后端回归（106 个文件 / 1032 用例；CI 同款）
+cd webui && npm test                     # 前端 22 个 node 套件（runner 自动发现 tests/*.test.mjs）
+cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
 cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typedef 与后端字段对齐门禁）
 
 # ── 工具系统四道门禁（改工具必跑）──
@@ -57,8 +60,8 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（169 �
 ```
 
 > **CI**：`.github/workflows/ci.yml` 含 4 个 job——`check`（ruff 关键规则 `E9,F63,F7,F82` +
-> 入口 `py_compile`）、`test-backend`（`pytest -q`）、`gate-tools`（上面四道门禁）、`webui`
->（npm ci + build + `npm test`）。全在 `windows-latest` 上跑。
+> 入口 `py_compile`）、`test-backend`（`pytest -q` + `check_docs`）、`gate-tools`（上面四道门禁）、
+> `webui`（npm ci + build + `npm test`，自动发现全部 22 个套件）。全在 `windows-latest` 上跑。
 
 ---
 
@@ -68,9 +71,9 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（169 �
 
 | 层 | 模块 | 一句话职责 |
 |---|---|---|
-| **入口** | `web_app.py`（925 行） | 唯一启动入口：参数解析 → 依赖自检/自动安装 → 桌面+开始菜单快捷方式 → WebUI 自动构建 → 单实例探测 → 起 API → 开浏览器 → 托盘常驻 |
-| **API 层** | `api_server.py`（9,364 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**102 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
-| **能力引擎** | `deepseek_client.py`（5,574 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步。**工具实现已迁出至 `agent_tools/`** |
+| **入口** | `web_app.py`（989 行） | 唯一启动入口：参数解析 → 依赖自检/自动安装 → 桌面+开始菜单快捷方式 → WebUI 自动构建 → 单实例探测 → 起 API → 开浏览器 → 托盘常驻 |
+| **API 层** | `api_server.py`（10,351 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**106 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
+| **能力引擎** | `deepseek_client.py`（5,927 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步。**工具实现已迁出至 `agent_tools/`** |
 | **工具声明** | `toolkit.py`（269 行） | **`@tool()` 装饰器 + 注册表 + 六层构建函数**——工具系统单一事实源（见 §6.1） |
 | **钩子管线** | `tool_hooks.py`（344 行） | 横切关注点收口：pre/post 钩子表 + `wrap()` 包装器；在 `@tool()` **注册处**统一包装执行体，任何调用路径都逃不掉钩子（P0-1） |
 | **上下文装配** | `context_providers.py`（456 行） | 把「往系统提示塞什么」变成 Provider 表（name/priority/budget/critical/enabled/provide），统一排序限预算记回执（P0-2） |
@@ -151,7 +154,8 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（169 �
 | `src/components/Pages.jsx`（1,384） | 栏目路由聚合（工作台/能力/记忆/权限/文件/进化/系统 + 插件/设置） |
 | `src/components/AuxPanel.jsx`（933） | 控制台侧栏（文件/进程/参数/活动四标签，可见感知轮询） |
 | `src/components/{Brain*,PromptsPage,AutonomyPage,PluginsPage}.jsx` | 大脑 / 指令库 / 自主 / 插件栏目 |
-| `src/components/{Message,ToolCard,Composer,SessionList,ContextPanel,Sidebar,StatusBar}.jsx` | 消息/工具卡/输入/会话列表/上下文/侧栏/状态条 |
+| `src/components/{Message,Composer,SessionList,ContextPanel,Sidebar,StatusBar}.jsx` | 消息（含工具步骤条 + `team_run` 流水线解析）/ 输入 / 会话列表 / 上下文 / 侧栏 / 状态条 |
+| `src/components/PixelDocViewer.jsx` / `OfficePreview.jsx` | **产物预览**（均由 `FilesPage` 点击文件触发）：前者像素级渲染 pdf/docx/pptx；后者取 `/v1/files/preview` 做 xlsx/Word **就地编辑回写** |
 | `src/mdParser.js` / `mdInline.js` / `mdHighlight.js` / `mdMath.js` / `longTextUtil.js` | **Markdown 渲染管线**（纯数据 AST，零依赖、流式安全；对应 node 单测） |
 | `src/msgUpdates.js` | 流式热路径不可变更新（`makePatchLast`/`findLastToolCard` 纯函数，配合 `Message` 的 `React.memo`） |
 | `src/ttsUtil.js` | TTS 合成 + 朗读 + barge-in |
@@ -166,11 +170,12 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（169 �
 | 路径 | 职责 |
 |---|---|
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
-| `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本、`_restore_proposals.py`（从会话救回被误删提案） |
+| `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 92 个 pytest 文件 / 920 用例 |
-| `webui/tests/` | 前端 node 测试 20 个 + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建） |
-| `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库） |
+| `tests/` | 后端回归 106 个 pytest 文件 / 1032 用例 |
+| `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
+| `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
+| `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
 
 ---
 
@@ -244,7 +249,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（169 �
 **杂项**：`GET /health` · `POST /v1/cleanup`
 
 > 权威清单以 `api_server.py` 的 `_GET_ROUTES`/`_POST_ROUTES` 为准；`tools/check_docs.py`
-> 用 AST 实测数量（当前 98）。
+> 用 AST 实测数量（当前 106，且已被门禁锁定——改写此段请勿破坏该口径）。
 
 ### 4.4 SSE 事件协议（POST /v1/chat/stream）
 
@@ -529,6 +534,39 @@ def my_tool(...): ...
     空结果必须如实说明原因（G21）。
 18. **记忆相似度不可用作废判据**：实测 0.556（应作废）vs 0.600（绝不能作废）——作废只认显式 key，
     相似度仅用于冲突提示（有回归测试锁死）。
+19. **测试文件存在 ≠ 测试被跑**：前端曾用手写 `node a.mjs && node b.mjs && …` 链，两起套件
+    （`extractProducts` / `segmentNotes`）躺在 `tests/` 却不在 runner 里，**含 1 个真实失败断言
+    长期没被门禁发现**——`extractProducts` 的盘符正则会把 URL 里的 scheme 当盘符，
+    `http://x/a.png` 提取出伪路径 `p://x/a.png`、`https://cdn.example.com/img/photo.png`
+    提取出 `s://cdn…`，污染会话产物列表。**修法：runner 改为自动发现（`webui/runTests.mjs`），
+    新增套件零配置即进 CI，不可能再漏**；正则加前缀断言 `(?<![A-Za-z0-9])`。
+    教训：**跑测器本身要有「发现」语义**，手写清单迟早与目录漂移。
+20. **文档里的规模数字是漂移重灾区**：工具域模块数（13→14）、`deepseek_client.py` 行数
+    （5,574→5,927）、测试规模（92 文件/920 用例→106/1032）、`/v1` 路由数（同页 98/102/106 三种写法）
+    都曾在 README/TECH_NOTES/MODULES/AI 指南中互相矛盾。**`tools/check_docs.py` 已把这些口径
+    全部纳入门禁**（含工具域模块数、AI 指南的测试数与路由数、**文档相对链接存活性**）。
+    改文档规模数字后**必须跑该门禁**，不要手改两处忘第三处。
+21. **引用 `.gitignore` 内路径的文档链接必然 404**：`experiments/鲸群实验场/` 被剥离且不入库，
+    README 却长期链过去。引用不入库路径时**只描述、不链接**（`check_docs.py` 的坏链检查兜底）。
+22. **「写完了」≠「接上了」——本轮一次性踩中三处**。前端组件/后端模块可以**完整实现、有测试、
+    有后端接口，却没有任何调用点**，等于功能不存在，且编译器/测试/门禁全都不会报错
+    （没人 import 的死文件不参与构建，自然也不会失败）：
+    - `OfficePreview.jsx`（247 行，含 xlsx/Word 就地编辑回写）无人渲染 —— 后端
+      `/v1/files/preview` 与 `xlsx_edit`/`docx_edit` 工具一应俱全，UI 却只把文件名当纯文本列出。
+    - `ToolCard.jsx` 里的 `team_run` 流水线解析无人渲染 —— 后端仍在输出 `__TEAM_JSON__`，
+      用户看到的是原始 JSON 而非步骤条。
+    - `mcp_client.py`（195 行，5 个公开函数，有 5 个用例）无人调用 —— 它读
+      `config_utils.load_config()["mcp_servers"]`，而**该键根本不在 `DEFAULT_CONFIG` 里**，
+      所以即便被调用也永远拿到空列表。
+    **对策**：① 判断「死代码」不能只看有没有测试——要看有没有**调用点**；
+    ② 新增「能力型」模块时，同步交付：调用点 + 配置键 + 文档索引；
+    ③ 删除前先用「反向引用扫描」（本轮用的 `_orphan_scan.py` 思路）确认是**彻底无人引用**，
+    还是**丢了调用点**——后者要接线，不是删除。
+23. **测试/门禁存在「存在性盲区」**：本轮发现的三类「看起来有、其实没生效」——
+    套件躺在目录里但不在 runner 里（§19）、`island_check.py` 不带 `--strict` 时**恒返回 0**
+    却被 CI 当作门禁（现已改 `--strict`）、文档没人链接（孤儿文档）。
+    **共同点**：机制「存在」不等于机制「生效」；凡是门禁/跑测/索引，都要有一条
+    **断言它会失败**的反证测试。
 
 ---
 
@@ -542,7 +580,7 @@ def my_tool(...): ...
 
 ---
 
-## 14. 测试资产速查（tests/，92 个 pytest 文件 / 920 用例）
+## 14. 测试资产速查（tests/，106 个 pytest 文件 / 1032 用例）
 
 按领域分组（文件名即内容）：
 
@@ -583,11 +621,38 @@ def my_tool(...): ...
 | 改鲸群实验（⚠️ 可选·非功能） | `community_client.py`（客户端/绳）+ `agent_tools/tool_community.py`（工具）+ `api_server`（调度/端点）+ 实验本体 `experiments/鲸群实验场/`（独立、不入库） |
 | 改前端页面 | `webui/src/components/*.jsx` + `api.js` |
 | 改 Markdown 渲染 | `webui/src/mdParser.js`/`mdInline.js`/`mdHighlight.js`/`longTextUtil.js` + `Markdown.jsx` |
+| 加前端测试 | `webui/tests/<名字>.test.mjs`（`npm test` 自动发现，**无需改任何配置**） |
 | 改公众号写作 | `wechat_writer/`（main.run_once 全流程） |
+| 改插件体系 | `plugins.py`（装载/校验/零残留卸载）+ `plugin_app.py`（v2 app 执行）+ [插件开发指南](插件开发指南.md) |
+| 改界面样式/主题 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) + `webui/src/theme.css` |
 | 改配置结构 | `config_defaults.py`（默认值）+ `config_utils.py`（规范化/钳制） |
 | 改 CI / 门禁 | `.github/workflows/ci.yml` + `tools/*.py` |
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 920 用例 / 版本 3.16.16）
+## 16. 文档地图（本仓库有哪几份文档、什么时候读）
+
+**先读本文件**（§1 跑起来 → §2 目录地图 → §15 定位索引）。其余按需：
+
+| 文档 | 什么时候读 |
+|---|---|
+| [AI_PROJECT_GUIDE.md](AI_PROJECT_GUIDE.md)（本文件） | 刚接手：跑通 + 建立全局认知 |
+| [../TECH_NOTES.md](../TECH_NOTES.md) | 改架构前的设计取舍与历史踩坑 |
+| [../MODULES.md](../MODULES.md) | 查「某个文件负责什么」的逐模块清单 |
+| [配置与上限.md](配置与上限.md) | 调上限/开关（全部 `WHALETALK_*` 环境变量速查） |
+| [插件开发指南.md](插件开发指南.md) | 写 `.wtplugin` 插件（五种形态 + 校验规则 + 工坊） |
+| [信任内核.md](信任内核.md) | 改 `permissions`/`security`/`crypto`/`snapshot` 前必读 |
+| [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | 改前端样式：令牌体系与一致性铁律 |
+| [出网账本与记忆门面.md](出网账本与记忆门面.md) | 新增出网能力 / 改记忆写入路径 |
+| [架构收口-P0.md](架构收口-P0.md) | 理解 `context_providers`/`degrade`/`tool_hooks` 三个接缝的设计动机 |
+| [../CHANGELOG.md](../CHANGELOG.md) | 查「某个能力是哪个版本引入的、为什么」 |
+| [../CONTRIBUTING.md](../CONTRIBUTING.md) / [../SECURITY.md](../SECURITY.md) | 提交纪律 / 安全模型与漏洞上报 |
+
+> **文档维护纪律**：新增文档必须挂进本表（或 README 的文档表）——
+> `tools/check_docs.py` 会检查文档内相对链接的存活性，但**孤儿文档**（没人引用）
+> 只能靠这条纪律避免。历史教训：`插件开发指南.md`（296 行）曾长期零引用。
+
+---
+
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1032 用例 / 版本 3.16.17）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

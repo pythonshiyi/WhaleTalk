@@ -5,7 +5,6 @@
 
 覆盖：分类判定 / 误传参数提取 / 旧数据兼容（读时补默认）/ 汇总统计。
 """
-import json
 import sys
 from pathlib import Path
 

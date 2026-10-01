@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 技术文档（Web 版 · v3.16.16）
+# 鲸语 WhaleTalk 技术文档（Web 版 · v3.16.17）
 
 本文档面向后续维护/开发的 AI 智能体，描述 Web 架构（v3.0+）下的系统结构、数据流、核心约定与踩坑记录。符号名为准，行号随代码演化漂移，本文档不承诺行号。
 
@@ -26,7 +26,7 @@ DeepSeek 已把全部模型升级为**单一原生多模态模型**，本产品�
 - 回归：`tests/test_gateway_compat.py`。
 
 - 品牌：鲸语 WhaleTalk（独立产品，与 DeepSeek 官方无关联）。对外展示一律使用品牌名，技术描述可写"基于 DeepSeek API"。
-- **版本单一源**：`config_defaults.VERSION`（当前 3.16.16）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
+- **版本单一源**：`config_defaults.VERSION`（当前 3.16.17）。备份产物 `WhaleTalk_v{version}_*.zip`；打包产物 `WhaleTalk.exe`。README/SECURITY 的版本表述须与该常量一致。
 - 入口形态：**纯 Web + 托盘常驻**。浏览器是唯一界面；无 pywebview 原生窗口（desktop.py 已废弃）。
 
 ## 1. 项目概览
@@ -43,8 +43,8 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
 ├── api_server.py           # 本地 HTTP API（REST + SSE，106+ /v1 端点）
-├── deepseek_client.py      # 能力引擎：DeepSeekClient + 169 工具 + smart_tools（5,574 行；P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
-├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop/mv/codegen 共 13 模块 163 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
+├── deepseek_client.py      # 能力引擎：DeepSeekClient + 169 工具 + smart_tools（P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
+├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop/mv/codegen/community 共 14 模块 167 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
 ├── security.py             # SSRF 防护（云元数据永远拦截）
 ├── crypto.py               # API Key DPAPI 加密（fail-closed）
@@ -321,9 +321,9 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 ## 19. 演进建议
 
-1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**已完成（v3.8.3 收官，现 13 域模块 163 工具）**：tool_basic 2 / tool_data 2 / tool_media 10 / tool_docs 30 / tool_web 14 / tool_code 15 / tool_files 21 / tool_brain 15 / tool_msg 10 / tool_system 16 / tool_desktop 18 / tool_mv 4 / tool_codegen 6，另主模块 `register_tool()` 注册 ask_user / request_permission 2 个特殊工具（合计 165），主文件 13,115 → **5,574 行**，工具定义清零（AST 断言）；关键经验：① 域模块对运行时注入配置（WORKING_DIR/KV_CACHE_DIR/MEMORY_FILE/EVOLUTIONS_DIR 等 36 个）不可值绑定 import，须 `import deepseek_client as _dc` 动态访问，否则 main/测试注入失效；② `fetch_blocked` 因保留字冲突实现名 `_run_fetch_blocked`，audit/migrate 门禁内置别名映射；③ 每批迁移后跑 pytest + 四门禁 + 前端套件，`test_tool_split.py` 覆盖全量 re-export/归属/六层
+1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**已完成（v3.8.3 起步，v3.16.17 现 14 域模块 167 工具）**：tool_basic 2 / tool_data 2 / tool_media 10 / tool_docs 30 / tool_web 14 / tool_code 15 / tool_files 21 / tool_brain 15 / tool_msg 10 / tool_system 16 / tool_desktop 18 / tool_mv 4 / tool_codegen 6 / tool_community 4，另主模块 `register_tool()` 注册 ask_user / request_permission 2 个特殊工具（合计 169），主文件 13,115 → **5,927 行**，工具定义清零（AST 断言）；关键经验：① 域模块对运行时注入配置（WORKING_DIR/KV_CACHE_DIR/MEMORY_FILE/EVOLUTIONS_DIR 等 36 个）不可值绑定 import，须 `import deepseek_client as _dc` 动态访问，否则 main/测试注入失效；② `fetch_blocked` 因保留字冲突实现名 `_run_fetch_blocked`，audit/migrate 门禁内置别名映射；③ 每批迁移后跑 pytest + 四门禁 + 前端套件，`test_tool_split.py` 覆盖全量 re-export/归属/六层
 2. `@tool()` 装饰器统一六层声明（消除手工漂移）
-3. ~~补齐 pytest 测试资产并接入 CI~~ 已完成（v3.8.3 起 CI 跑 `pytest tests/`，现 852 用例 + 前端 20 套件 + 四道门禁）；下一步是**按领域扩充分子级 pytest 用例**（工具/权限/存储执行路径，当前覆盖集中在注册表与进化闸）
+3. ~~补齐 pytest 测试资产并接入 CI~~ 已完成（v3.8.3 起 CI 跑 `pytest tests/`，现 1032 用例 + 前端 24 套件 + 四道门禁）；下一步是**按领域扩充分子级 pytest 用例**（工具/权限/存储执行路径，当前覆盖集中在注册表与进化闸）
 4. 进化闭环补门禁：`self_evolve` 合并前强制跑 audit/validate/测试；进化账本（效果回流）；评审 AI 前置
 5. 插件签名密钥分发与轮换流程；市场索引自动更新提醒
 

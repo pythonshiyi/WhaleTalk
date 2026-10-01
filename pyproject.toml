@@ -1,3 +1,12 @@
+[project]
+name = "whaletalk"
+description = "鲸语 WhaleTalk · Windows 本地优先的 AI 桌面智能体"
+# 版本号的单一事实源是 config_defaults.VERSION（不在此重复声明，避免两处漂移）。
+# 本表只声明 Python 版本下限，用于让 pip 在过低解释器上明确拒绝安装。
+# 与 [tool.ruff] target-version / [tool.mypy] python_version 三者必须保持一致；
+# README 的「Python 3.9+」要求由本字段兜底（此前无任何字段声明，pip 不会拦截低版本）。
+requires-python = ">=3.9"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # 禁用 pytest-asyncio 插件：它与部分 pytest 版本组合会在收集阶段抛

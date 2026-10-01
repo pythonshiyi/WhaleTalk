@@ -1,18 +1,16 @@
 """提示词相关修复回归（压缩保留系统提示 / 微信配置 / 技能脱敏 / 选题编号）。"""
 import os
 import sys
-import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-import api_server  # noqa: E402  （先于 agent_tools 导入，遵守导入顺序契约）
+import api_server  # noqa: E402,F401  （先于 agent_tools 导入，遵守导入顺序契约；本身不被直接引用）
 
 
 def test_compress_keeps_system_prompt(monkeypatch, tmp_path):
     """压缩按 user 切轮时，基础 system 提示词必须固定保留（长会话不丢人格/指令）。"""
-    import config_utils
     monkeypatch.setattr(api_server, "ARCHIVES_DIR", str(tmp_path))
     monkeypatch.setattr(api_server, "_context_size", lambda msgs: (10**9, 10**9))
 

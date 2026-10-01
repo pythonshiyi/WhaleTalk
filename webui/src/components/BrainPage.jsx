@@ -1,6 +1,6 @@
 import React from "react";
 import BrainBlock from "./BrainBlock.jsx";
-import BrainGrant from "./BrainGrant.jsx";
+import BrainGrant from "./braingrant.jsx";
 import BrainSearch from "./BrainSearch.jsx";
 import BrainInsights from "./BrainInsights.jsx";
 import { MemoryPage } from "./Pages.jsx";

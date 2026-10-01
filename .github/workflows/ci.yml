@@ -61,8 +61,8 @@ jobs:
         run: python tools/audit_tools.py --strict
       - name: Tool full-chain validation
         run: python tools/validate_tools.py
-      - name: Island check (nine-layer reconciliation)
-        run: python tools/island_check.py
+      - name: Island check (ten-layer reconciliation, gap-gated)
+        run: python tools/island_check.py --strict
 
   webui:
     runs-on: windows-latest

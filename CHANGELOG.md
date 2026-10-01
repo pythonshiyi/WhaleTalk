@@ -2,6 +2,86 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.17（2026-10-01）—— 🧩 修复「写了没接上」的隐藏缺陷 + 门禁加固
+
+**版本号 3.16.16 → 3.16.17。** 本轮为**修复与加固**版本，不新增产品能力：把三个
+「完整实现 + 有测试 + 有后端接口，却没有任何调用点」的功能接回去，并修掉三处
+「机制存在但不生效」的门禁/可移植性缺陷。
+
+### 修复的真实缺陷
+
+- **三个功能此前「写了却没接上」**（编译器/测试/门禁都不会报错——没人 import 就不进构建）：
+  - **产物预览**：`OfficePreview.jsx`（247 行，xlsx/Word **就地编辑回写**）与
+    `PixelDocViewer.jsx`（84 行，pdf/docx/pptx 像素级渲染）零调用点，而后端
+    `/v1/files/preview`、`/v1/files/raw`、`xlsx_edit`/`docx_edit` 工具一应俱全。
+    用户实际只能看到文件名列表、无法预览任何产物。现由 `FilesPage` 点击文件即预览。
+  - **`team_run` 流水线展示**：后端仍在输出 `__TEAM_JSON__{...}`，但唯一解析它的
+    `ToolCard.jsx` 已无调用点，用户看到的是原始 JSON。现由 `Message.jsx` 的 `Step`
+    内联解析为步骤条，并从展示与「复制」内容中剥离该 JSON 尾巴。
+  - **`mcp_client.py`（195 行 / 5 个公开函数 / 5 个用例）永远拿不到配置**：它读取
+    `config_utils.load_config()["mcp_servers"]`，而**该键从未存在于 `DEFAULT_CONFIG`**，
+    即便被调用也永远返回空列表。已补配置键（默认 `[]` = 不连接任何外部 server）。
+- **CI 的孤岛门禁此前永远为绿**：`island_check.py` 仅在带 `--strict` 时「有缺口返回 1」，
+  CI 却调用时不带该参数 → 门禁恒返回 0，形同虚设。已改为 `--strict`（当前实测无缺口）。
+- **大小写可移植性 bug**：`BrainPage.jsx` 以 `./BrainGrant.jsx` 导入，而磁盘/git 上的真实
+  文件名是 `braingrant.jsx`。Windows 大小写不敏感所以本地正常，**Linux/macOS 上会直接构建失败**。
+- **`webui/src/extractProducts.js` URL 误报为产物路径**：盘符正则 `[A-Za-z]:[\\/]` 会把 URL 的
+  scheme 当盘符——`http://x/a.png` 提取出伪路径 `p://x/a.png`、
+  `https://cdn.example.com/img/photo.png` 提取出 `s://cdn.example.com/img/photo.png`，
+  污染右栏「本会话产物」列表。修法：正则加前缀断言 `(?<![A-Za-z0-9])`。
+  **该缺陷此前一直躲过 CI**——对应的 `extractProducts.test.mjs` 从未被 runner 执行（见下）。
+
+### 结构性修复：前端套件「存在即被跑」
+
+- **`webui/runTests.mjs`（新增）**：前端跑测器改为**自动发现** `tests/*.test.mjs`。
+  旧写法是在 `package.json` 里手写 `node a.mjs && node b.mjs && …` 长链，实测已漂移——
+  `extractProducts.test.mjs` / `segmentNotes.test.mjs` 两个套件躺在 `tests/` 却**不在任何 runner 里**，
+  其中前者带着真实失败断言长期静默。现 `npm test` 跑全部 **22 个**套件（原为 20），
+  新增套件零配置即进 CI。`test:fast` 保留（跳过重型渲染套件）。
+
+### 门禁加固（`tools/check_docs.py`）
+
+- **新增实测口径**：工具域模块数（`agent_tools/tool_*.py` = 14）、前端 node 套件数（= 22）。
+- **新增坏链检查**：文档内相对链接目标不存在即失败——`experiments/鲸群实验场/` 被剥离且
+  **在 `.gitignore` 内、不随仓库分发**，README 却长期链过去（点开即 404），本轮已改为纯描述。
+- **新增孤儿文档检查**：`docs/*.md` 必须至少被一份文档引用。`插件开发指南.md`（296 行）曾长期
+  **零引用**——内容正确但没人找得到。已挂进 README 文档表，并给 AI 指南新增「§16 文档地图」。
+- **新增孤儿组件检查**：`webui/src/**/*.jsx` 必须被引用（本轮三个死组件正是靠此类扫描发现）。
+- **新增 runner 不变式**：`webui/package.json` 的 `test`/`test:fast` 必须指向自动发现式 runner，
+  防止有人改回手写清单再漏跑套件。
+- 扩面：README/AI 指南的前端套件数、AI 指南的测试文件数与 `/v1` 路由数（该页曾同时出现 98/102/106
+  三种写法）全部纳入核对。
+- 新增规则均做过**反证测试**：临时把文档数字改回旧值 / 把 runner 改回手写链 / 造一个无人引用的
+  组件与文档，门禁确实转红。
+
+### 优化与清理
+
+- **删除确认为「彻底无人引用」的死代码**：`ToolCard.jsx` / `WelcomePage.jsx`（模式选择页已被
+  应用内切换取代）+ 其专属的 17 条孤儿 CSS 规则。判断依据是**反向引用扫描**，严格区分
+  「丢了调用点」（接线）与「从未被需要」（删除）——上面三个功能属于前者。
+- **`pyproject.toml` 补 `requires-python = ">=3.9"`**：README 的「Python 3.9+」此前**没有任何
+  字段兜底**，pip 不会拦截低版本解释器。与 `[tool.ruff] target-version`、`[tool.mypy]
+  python_version` 三者现已一致（以 `feature_version=(3,9)` 解析全部 247 个 .py 零失败）。
+- **清理 10 处未使用导入**（ruff F401 归零）：含 6 处生产代码。其中 `_TELEGRAM_OFFSET` 属
+  **误导性导入**——该游标必须经 `_dc._TELEGRAM_OFFSET` 读写（值绑定只拿到副本、写回不生效），
+  已补注释说明；`tests/` 中两处 `import api_server` 是**导入顺序契约**所需，保留并显式豁免。
+- **规模数字全线对齐实测**（此前四处互相矛盾）：工具域模块数 13 → **14**；
+  `deepseek_client.py` 5,574 → **5,927** 行；`api_server.py` 9,364 → **10,351** 行；
+  测试 92 文件/920 用例 → **106 文件/1032 用例**；前端套件 21 → **22**；
+  AI 指南 `/v1` 路由数 98/102 → **106**。
+- **删除幽灵声明**：CHANGELOG 曾称 `sample_plugins/鲸群社区_大脑运行态.wtplugin`「一键安装即用」，
+  该插件**并不存在**（且已随社区实验冻结）——改为如实说明，实际 `sample_plugins/` 为 10 个示例。
+- **`.gitignore` / `community_client.py` / `config_defaults.py`**：补注「`experiments/` 不入库、
+  全新检出不存在的目录属预期、相关能力自动保持关闭」，避免后来者误判为缺失文件。
+- **`mcp_client.py` 补进 MODULES.md**（此前完全缺席）。
+
+### 验证
+
+- 后端 `pytest` 全绿（**1032 passed**）；四道工具门禁全绿（`audit` 169 工具 error 0 /
+  `validate` / `island --strict` / `check_docs`）；ruff 关键规则 + 入口 `py_compile` 通过；
+  `bootstrap.py check` 通过。
+- 前端 `npm test` **22/22 通过**（含本轮修好的 2 个套件）、`npm run typecheck` 通过、`npm run build` 通过。
+
 ## v3.16.16（2026-09-24）—— 🐋 应用型插件可执行 + 大脑自主进社区（生产可用）
 
 **版本号 3.16.15 → 3.16.16。** 补齐两处长期缺口：① 应用型插件（`.wtplugin` v2 `app`）**有格式/安装却没有执行链**——装上跑不起来；② 鲸语大脑**不能主动**在社区活动。本次把二者做成正式能力（默认关、fail-closed）。
@@ -11,7 +91,7 @@
 - **新增 `plugin_app.py`**：按 `contents.app.entry`（`module:func` / `module:class:func`）从 `plugins/<slug>/` 按文件加载执行（`spec_from_file_location`，临时加 `sys.path`、用后移除，不污染、零残留）。
 - **新增端点** `POST /v1/plugins/run`（`{name, arg}`）：只执行**用户已安装且启用**的插件，鉴权复用全局前置。
 - **前端**：输入框 `/触发词 参数` 命中已装应用型插件即执行，输出作为**本地消息**展示（`local` 标记——不落盘、不进模型历史；流式期间插在流式消息前，保证热路径 `m.length-1` 语义不破）。
-- **示例插件** `sample_plugins/鲸群社区_大脑运行态.wtplugin`：插件页一键安装即用。
+- **示例插件**：该功能随鲸群实验一并冻结，原计划的 `sample_plugins/鲸群社区_大脑运行态.wtplugin` **未随仓库分发**（社区站本体在 `.gitignore` 的 `experiments/` 下）。当前 `sample_plugins/` 为 10 个与社区无关的示例插件。
 - 顺带修复：`braingrant.jsx` 原生 `window.confirm` → 应用内 `confirmDialog`；`api.js` 的 `SSEEvent` 补 `"notice"`（原 typecheck 失败项）。
 
 ### 鲸语大脑：自主进社区（新增能力，默认关闭）

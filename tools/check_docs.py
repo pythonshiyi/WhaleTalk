@@ -22,6 +22,8 @@ CONTRIB = REPO_ROOT / "CONTRIBUTING.md"
 README = REPO_ROOT / "README.md"
 TECH = REPO_ROOT / "TECH_NOTES.md"
 MODULES = REPO_ROOT / "MODULES.md"
+AI_GUIDE = REPO_ROOT / "docs" / "AI_PROJECT_GUIDE.md"
+CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 
 
 # ── 输出编码加固 ───────────────────────────────────────────────────
@@ -107,6 +109,20 @@ def count_endpoints():
     return len(paths)
 
 
+def count_tool_modules():
+    """工具域模块数（agent_tools/tool_*.py）。
+
+    只数 `tool_*.py`（不含 `__init__.py`）——与文档「N 个工具域模块」的口径一致：
+    `__init__.py` 是聚合入口，不承载工具定义。
+    """
+    return len(sorted((REPO_ROOT / "agent_tools").glob("tool_*.py")))
+
+
+def count_webui_suites():
+    """前端 node 套件数（webui/tests/*.test.mjs）。"""
+    return len(sorted((REPO_ROOT / "webui" / "tests").glob("*.test.mjs")))
+
+
 def count_test_files():
     """后端自举回归测试文件数（tests/test_*.py）。"""
     return len(sorted((REPO_ROOT / "tests").glob("test_*.py")))
@@ -163,6 +179,17 @@ CLAIMS = [
     (README, r"(\d+)\s*用例",           "pytest_cases", "测试用例数"),
     (MODULES, r"(\d+)\s*个 pytest 文件", "pytest_files", "测试文件数"),
     (MODULES, r"(\d+)\s*用例",           "pytest_cases", "测试用例数"),
+    # ── 2026-10 补盲：上一轮实测发现的两类漂移（此前完全在门禁之外）──
+    # ① 工具域模块数：README 写「13 个工具域模块」而 agent_tools/ 已有 14 个 def 模块
+    #    （tool_community.py 加入后无人更新）；TECH_NOTES 目录树同理。
+    (README,   r"agent_tools/（(\d+) 个工具域模块）", "tool_modules", "工具域模块数(README 架构图)"),
+    (AI_GUIDE, r"(\d+) 个模块共 \d+ 工具",            "tool_modules", "工具域模块数(AI 指南)"),
+    # ② AI 指南内的测试规模与路由数：与 README/MODULES 同类，但当时只有后两者入库
+    (AI_GUIDE, r"(\d+)\s*个文件 / (\d+) 用例",        "pytest_files", "测试文件数(AI 指南)"),
+    (AI_GUIDE, r"\*\*(\d+) 个 `/v1` 路由\*\*",        "endpoints",    "/v1 路由数(AI 指南加粗式)"),
+    # ③ 前端 node 套件数：README 曾写「21 个」而实际 22 个（且其中 2 个从未被 runner 跑到）
+    (README,   r"前端\s*(\d+)\s*个 node 套件",         "webui_suites", "前端 node 套件数(README)"),
+    (AI_GUIDE, r"\+ (\d+) 个前端 node 套件",           "webui_suites", "前端 node 套件数(AI 指南)"),
 ]
 
 # ── 文本断言：文档不应再包含的过期表述 ──
@@ -184,7 +211,135 @@ STALE_TEXT = [
     (CONTRIB, "沙箱补 ast 校验",      "run_python 无沙箱；示例提交信息已过时"),
     (TECH, "沙箱 Python：AST 静态检查", "run_python 无沙箱（等同本机 python -c）"),
     (TECH, "zip 炸弹防护",            "无对应代码（已随白名单时代移除）"),
+    # ── 2026-10 补盲：本轮实测修掉的具体漂移，加护栏防回潮 ──
+    (TECH, "共 13 模块 163 工具",      "agent_tools/ 现为 14 模块 167 工具（tool_community 加入后未更新）"),
+    (README, "agent_tools/（13 个工具域模块）", "agent_tools/ 现为 14 个工具域模块"),
+    (MODULES, "主文件 13,115 → 5,574 行", "deepseek_client.py 已增长，行数须以源码实测为准"),
 ]
+
+
+def check_doc_orphans():
+    """孤儿文档检查：docs/*.md 必须至少被一份其它文档引用。
+
+    背景：`插件开发指南.md`（296 行，描述 .wtplugin v2 完整协议）曾长期**零引用**——
+    内容是对的，但没人能找到它，等于不存在。坏链检查只覆盖「链到不存在的文件」，
+    反向的「文件没人链」是盲区。本检查把「新增文档必须挂进索引」这条纪律变成门禁。
+    返回问题条数。
+    """
+    docs_dir = REPO_ROOT / "docs"
+    candidates = sorted(docs_dir.glob("*.md"))
+    # 索引来源：仓库内全部 markdown（README / AI 指南 / 其它 docs / CHANGELOG 等）
+    sources = [p for p in REPO_ROOT.glob("*.md")] + candidates
+    problems = 0
+    for doc in candidates:
+        name = doc.name
+        referenced = False
+        for src in sources:
+            if src.name == name:
+                continue
+            try:
+                if name in src.read_text(encoding="utf-8"):
+                    referenced = True
+                    break
+            except Exception:  # noqa: BLE001 - 读不到就跳过，不因单文件失败中断门禁
+                continue
+        if not referenced:
+            problems += 1
+            print(f"[孤儿文档] docs/{name} 未被任何文档引用"
+                  f"——请挂进 README 文档表或 docs/AI_PROJECT_GUIDE.md 的文档地图")
+    return problems
+
+
+def check_frontend_orphan_components():
+    """前端组件「写了就要接上」：webui/src 下的 .jsx 必须被其它文件引用。
+
+    背景（2026-10）：一次性发现三处「完整实现 + 有后端接口，却零调用点」——
+    `OfficePreview.jsx`（247 行，xlsx/Word 就地编辑）、`PixelDocViewer.jsx`、
+    以及 `ToolCard.jsx` 里的 `team_run` 流水线解析。这类死代码**不会让构建或测试失败**
+    （没人 import 就不进 bundle），只能靠引用扫描发现。
+    注意：本检查只覆盖 `.jsx` **组件**——纯 `.js` 工具模块允许仅被测试引用。
+    返回问题条数。
+    """
+    src = REPO_ROOT / "webui" / "src"
+    if not src.is_dir():
+        return 0
+    candidates = [p for p in src.rglob("*.jsx") if p.name != "main.jsx"]
+    # 收集全部可能含 import 说明符的文本
+    blobs = {}
+    for p in list(src.rglob("*")) + list((REPO_ROOT / "webui" / "tests").glob("*.mjs")):
+        if p.is_file() and p.suffix in (".js", ".jsx", ".mjs"):
+            blobs[p] = p.read_text(encoding="utf-8", errors="replace")
+    problems = 0
+    for f in sorted(candidates):
+        stem = f.stem
+        pat = re.compile(r"""['"][^'"]*(?:/|^)""" + re.escape(stem) + r"""(?:\.jsx?)?['"]""")
+        hit = any(pat.search(t) for p, t in blobs.items() if p != f)
+        if not hit:
+            problems += 1
+            print(f"[孤儿组件] webui/src/{f.relative_to(src).as_posix()} 无任何 import"
+                  f"——要么补调用点，要么删除（死组件不会让构建/测试失败）")
+    return problems
+
+
+def check_webui_runner_discovers_all():
+    """前端套件「存在即被跑」不变式：runTests.mjs 必须自动发现全部 *.test.mjs。
+
+    背景：2026-10 实测发现 `extractProducts.test.mjs` / `segmentNotes.test.mjs`
+    躺在 `webui/tests/` 却不在当时手写的 `npm test` 链里——`extractProducts` 因此
+    带着一个**真实的失败断言**（URL 被误当盘符路径）长期躲过 CI。runner 已改为
+    读目录自动发现；本检查确保这个语义不被改回手写清单。返回问题条数。
+    """
+    runner = REPO_ROOT / "webui" / "runTests.mjs"
+    if not runner.exists():
+        print("[缺失] webui/runTests.mjs 不存在——前端套件跑测器缺失，"
+              "tests/*.test.mjs 将无人执行")
+        return 1
+    src = runner.read_text(encoding="utf-8")
+    if "readdirSync" not in src or "test.mjs" not in src:
+        print("[退化] webui/runTests.mjs 不再是「自动发现」式 runner"
+              "（应 readdirSync 扫描 tests/*.test.mjs）——手写清单会漏跑套件")
+        return 1
+    # package.json 必须把 test 指给 runner，而不是内联手写链
+    pkg = REPO_ROOT / "webui" / "package.json"
+    try:
+        import json
+        scripts = json.loads(pkg.read_text(encoding="utf-8")).get("scripts", {})
+    except Exception as exc:  # noqa: BLE001
+        print(f"[错误] 无法解析 webui/package.json：{exc}")
+        return 1
+    problems = 0
+    for key in ("test", "test:fast"):
+        cmd = str(scripts.get(key, ""))
+        if "runTests.mjs" not in cmd:
+            problems += 1
+            print(f"[不一致] webui/package.json 的 `{key}` 未指向 runTests.mjs：{cmd[:60]}")
+    return problems
+
+
+def check_broken_links():
+    """文档内相对链接的存活性校验。
+
+    背景：`experiments/鲸群实验场/` 实验本体被剥离出主程序且**不在本仓库中**，
+    但 README 仍指向它 —— 读者点开即 404。这类「引用了不存在的路径」在
+    纯数字门禁之外，此前没有任何检查。返回问题条数。
+    """
+    docs = [README, MODULES, TECH, CONTRIB, SECURITY, CHANGELOG, AI_GUIDE]
+    docs += sorted((REPO_ROOT / "docs").glob("*.md"))
+    problems = 0
+    seen = set()
+    for d in docs:
+        if not d.exists() or d in seen:
+            continue
+        seen.add(d)
+        text = d.read_text(encoding="utf-8")
+        for m in re.finditer(r"\[[^\]]*\]\(([^)\s#]+)(?:#[^)]*)?\)", text):
+            target = m.group(1)
+            if target.startswith(("http://", "https://", "mailto:", "#")):
+                continue
+            if not (d.parent / target).exists():
+                problems += 1
+                print(f"[坏链] {d.relative_to(REPO_ROOT).as_posix()} → {target}（目标不存在）")
+    return problems
 
 
 def check_prompt_consistency():
@@ -278,10 +433,14 @@ def main(argv=None):
         "version": read_version(),
         "pytest_files": count_test_files(),
         "pytest_cases": count_test_cases(),
+        "tool_modules": count_tool_modules(),
+        "webui_suites": count_webui_suites(),
     }
     print(f"实测: 工具 {expected['tools']} · /v1 路由 {expected['endpoints']} · "
+          f"工具域模块 {expected['tool_modules']} · "
           f"版本 {expected['version']} · 测试 {expected['pytest_files']} 文件 / "
-          f"{expected['pytest_cases'] if expected['pytest_cases'] is not None else '?'} 用例")
+          f"{expected['pytest_cases'] if expected['pytest_cases'] is not None else '?'} 用例 · "
+          f"前端 {expected['webui_suites']} 套件")
 
     problems = 0
     for path, pattern, key, label in CLAIMS:
@@ -318,6 +477,18 @@ def main(argv=None):
 
     # ── 提示词一致性（上下文规模 / 指令库条数 / 写死的能力数 / 引用工具名）──
     problems += check_prompt_consistency()
+
+    # ── 文档相对链接存活性（引用了不存在/已剥离的路径）──
+    problems += check_broken_links()
+
+    # ── 前端套件「存在即被跑」不变式 ──
+    problems += check_webui_runner_discovers_all()
+
+    # ── 孤儿文档（docs/*.md 没人引用 = 找不到 = 等于不存在）──
+    problems += check_doc_orphans()
+
+    # ── 前端孤儿组件（写了但没接上 = 功能不存在，且构建/测试不会报错）──
+    problems += check_frontend_orphan_components()
 
     # ── SECURITY 支持版本表与单一版本源对齐 ──
     # 表行形如 "| 3.9.x（main 分支） | ✅ 积极维护 |"：主版本号从源码 VERSION 推导。

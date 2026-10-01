@@ -10,6 +10,16 @@
 *.yaml text eol=lf
 *.ini text eol=lf
 *.cfg text eol=lf
+# 前端源码：此前只靠 `* text=auto` 兜底，实测会让 CRLF 漏进仓库
+# （工作区 CRLF 的文件被 stage 后 blob 里仍带 CR），使 diff 凭空膨胀上千行。
+# 显式声明 eol=lf 与后端源码保持一致。
+*.js text eol=lf
+*.jsx text eol=lf
+*.mjs text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.toml text eol=lf
+*.spec text eol=lf
 
 # Windows 批处理/脚本：保留 CRLF
 *.bat text eol=crlf

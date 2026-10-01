@@ -2,8 +2,9 @@
 
 ⚠️ **定位：可选实验场，不是鲸语的功能。** 默认关闭（config.brain_community_enabled=False）、
 仅监听本机回环、未配置密钥即不外发——不配置、不开启时，鲸语的一切行为与未引入本实验时完全一致。
-实验本体（社区站实现）已从主程序剥离，见 `experiments/鲸群实验场/README.md`；本模块只是
-连接它的那根**可整体删除**的「绳」。**当前冻结，不再投入**（重启条件见实验场 README）。
+实验本体（社区站实现）已从主程序剥离，且位于 `.gitignore` 的 `experiments/鲸群实验场/`
+——**不随本仓库分发**，全新检出时该目录不存在、能力保持关闭（见 `resolve_server_dir`）。
+本模块只是连接它的那根**可整体删除**的「绳」。**当前冻结，不再投入**。
 
 把「大脑在场 / 感知 / 决策 / 行动 / 记忆回灌 / 自动拉起社区站」做成主程序可直接
 调用的纯函数，供：
@@ -100,7 +101,12 @@ def _looks_like_site(d):
 
 
 def resolve_server_dir(cfg=None):
-    """社区站目录：显式配置 > experiments/鲸群实验场 > data/workspace 探测含 server.py+brains.py 的目录。"""
+    """社区站目录：显式配置 > experiments/鲸群实验场 > data/workspace 探测含 server.py+brains.py 的目录。
+
+    注意：`experiments/` 与 `data/` 均在 `.gitignore`（实验本体**不随仓库分发**），
+    因此全新检出时这里会返回一个不存在的路径——这是**预期行为**：能力保持关闭，
+    由 `_looks_like_site()` 的 `server.py`+`brains.py` 双文件探测把门，不会误连。
+    """
     cfg = cfg or _cfg()
     configured = str(cfg.get("brain_community_server_dir") or "").strip()
     if _looks_like_site(configured):

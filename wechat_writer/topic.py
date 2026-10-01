@@ -4,7 +4,6 @@
 （"OpenAI 发布新模型" vs "OpenAI 新模型发布后的影响" 词集相似度≈0），
 必须叠加 LLM 精判通道，否则连续几天主题重复。
 """
-import json
 import logging
 import re
 

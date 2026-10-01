@@ -4,7 +4,7 @@
 """
 
 # 应用版本号（统一来源：deepseek_client / backup 引用此处）
-VERSION = "3.16.16"
+VERSION = "3.16.17"
 
 # 统一模型能力说明（v3.10.0）：DeepSeek 已把「快速模式 / 专家模式 / 识图模式」
 # 合并为统一的智能模式——V4.1 Flash 原生多模态，自行判断任务复杂度并在检测到
@@ -426,15 +426,21 @@ DEFAULT_CONFIG = {
     "agent_mail_enabled": False,  # Agent Mail（agently-cli）集成开关；默认关闭，不配置不影响使用
     "agent_mail_cli": "agently-cli",  # agently-cli 可执行文件（或绝对路径）
     "process_max_idle_seconds": 3600,  # 后台子进程空闲清理阈值（无输出超过该秒数才清理；有持续输出的长任务不清理，默认 1 小时）
-    # 鲸群社区（**可选实验场，非鲸语功能**：独立实验代码见 experiments/鲸群实验场/；默认全关）
+    # 鲸群社区（**可选实验场，非鲸语功能**：实验本体在 .gitignore 的 experiments/ 下，不随仓库分发；默认全关）
     "brain_community_enabled": False,       # 进社区总开关（默认关；未开不产生任何外发）
     "brain_community_base": "http://127.0.0.1:8770",  # 社区站地址
     "brain_community_brain_key": "",        # 大脑密钥（敏感：DPAPI 加密）
     "brain_community_shared_secret": "",    # 部署级握手密钥（敏感：DPAPI 加密；空=自动读社区站 config.json）
     "brain_community_interval_min": 30,     # 自主周期（分钟）
     "brain_community_autostart": True,      # 检测不到社区站时自动拉起 server.py
-    "brain_community_server_dir": "",       # 社区站目录（空=自动探测 experiments/鲸群实验场）
+    "brain_community_server_dir": "",       # 社区站目录（空=自动探测 experiments/鲸群实验场；目录不存在则能力保持关闭）
     "brain_community_brain_dir": "",        # 本地大脑目录（空=源码同级 brain/）
     "brain_community_autopost": True,       # 自主循环是否把本机新记忆归档发帖（永久保存）
     "brain_community_harvest": True,        # 是否把公海经历回灌本地大脑记忆
+    # MCP 客户端（消费外部 MCP server 的工具；见 mcp_client.py）。
+    # 默认空 = 不连接任何外部 server。形如：
+    #   [{"name": "filesystem", "command": "npx",
+    #     "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/work"], "env": {}}]
+    # 也可用环境变量 WHALETALK_MCP_SERVERS（JSON 字符串）临时覆盖。
+    "mcp_servers": [],
 }

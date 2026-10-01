@@ -10,7 +10,9 @@ evolutions/
 .whaletalk/
 screenshots/
 
-# ===== 实验场（独立实验代码，不入主版本；详见 experiments/鲸群实验场/README.md）=====
+# ===== 实验场（独立实验代码，不入主版本，**不随仓库分发**）=====
+# 主程序侧只保留可整体删除的「绳」（community_client.py / tool_community.py，默认关）；
+# 全新检出时该目录不存在属预期，相关能力自动保持关闭（见 community_client.resolve_server_dir）。
 experiments/
 
 # ===== 本地配置（用户自定义，不入库） =====
