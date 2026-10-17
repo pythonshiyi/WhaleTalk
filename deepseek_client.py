@@ -1514,19 +1514,32 @@ SEARCH_ENGINE_TIMEOUT = {"bing": 6, "so360": 6, "duckduckgo": 4}
 
 
 def _search_bing(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until=""):
+    # 【修复】直连 cn.bing.com，不要 www.bing.com。
+    # www.bing.com/search 对无 cookie/国内出口的请求必返 302 → cn.bing.com，而模块级
+    # `_http_client()` 是 follow_redirects=False（这是防 SSRF 的全局设计，逐跳校验后
+    # 才允许跟随），于是 `raise_for_status()` 在 302 上每请求必抛 HTTPStatusError。
+    # 结果：Bing 引擎长期 100% 失败 → 多引擎聚合静默退化为只剩 360（加密跳转、无摘要），
+    # 「多引擎」名存实亡。直接请求跳转后的落地域名即可，无需放宽全局重定向策略。
     url = (
-        f"https://www.bing.com/search?q={quote(query)}"
+        f"https://cn.bing.com/search?q={quote(query)}"
         f"&count={num}&first={offset + 1}&setlang=zh-CN"
     )
     # 时间范围过滤（Bing filters 语法：ex1:"起..止"，可只给一端）
     if since or until:
         daterange = f"{since}..{until}" if since and until else f"{since or ''}..{until or ''}"
         url += f"&filters=ex1:%22{daterange}%22"
-    resp = _http_client().get(
-        url,
-        headers={"User-Agent": _SEARCH_UA, "Accept-Language": "zh-CN,zh;q=0.9"},
-        timeout=SEARCH_ENGINE_TIMEOUT.get("bing", SEARCH_TIMEOUT),
-    )
+    _hdrs = {"User-Agent": _SEARCH_UA, "Accept-Language": "zh-CN,zh;q=0.9"}
+    _to = SEARCH_ENGINE_TIMEOUT.get("bing", SEARCH_TIMEOUT)
+    resp = _http_client().get(url, headers=_hdrs, timeout=_to)
+    # 兜底：cn.bing.com 在个别条件下仍可能下发一次同域跳转。只手工跟随到
+    # cn.bing.com（或相对路径），绝不跟随跨域——否则等于绕过逐跳 SSRF 校验。
+    if resp.is_redirect:
+        loc = str(resp.headers.get("location") or "")
+        if loc.startswith("/"):
+            loc = "https://cn.bing.com" + loc
+        if not loc.startswith("https://cn.bing.com/"):
+            raise RuntimeError(f"bing 跳转到非预期域，已拒绝跟随：{loc[:120]}")
+        resp = _http_client().get(loc, headers=_hdrs, timeout=_to)
     resp.raise_for_status()
     results = []
     for m in _BING_RESULT_RE.finditer(resp.text):
