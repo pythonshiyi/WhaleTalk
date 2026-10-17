@@ -46,14 +46,15 @@ python web_app.py --server               # 仅 API 服务（终端常驻，调�
 python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
-# ── 测试（改完代码必跑）──
-python -m pytest -q                      # 后端回归（109 个文件 / 1060 用例；CI 同款）
+# ── 测试 ──
+python -m pytest -q                      # 后端全量（109 个文件 / 1060 用例，约 73s；CI 同款，见下方「分级验证」）
+python -m pytest tests/test_registry.py -q    # 只跑相关文件：日常改动的正确姿势（1–3s）
 cd webui && npm test                     # 前端 22 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
 cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typedef 与后端字段对齐门禁）
 
 # ── 工具系统四道门禁（改工具必跑）──
-python tools/audit_tools.py --strict     # 六层一致性审计（error 级门禁，可入 CI）
+python tools/audit_tools.py --strict     # 六层一致性审计（error 级门禁，可入 CI；单跑约 1.2s）
 python tools/validate_tools.py           # smart_tools 全链路回归（描述无损等）
 python tools/island_check.py --strict    # 十层孤岛对账（工具可达性，含 __all__ re-export）
 python tools/check_docs.py               # 文档数字 vs 源码实测（169 工具 / 106 路由 / 版本）
@@ -62,6 +63,27 @@ python tools/check_silent_except.py      # 静默吞异常基线差分（只拦�
 # ── 出问题时的第一动作：导诊断包（不需要你翻日志）──
 python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 UI「设置 → 诊断」
 ```
+
+### 1.1 分级验证（重要：不要每次都跑全量）
+
+**全量一次约 2 分钟**（1060 用例 73s + 五道门禁 + 前端 22 套件），而**最小相关集通常只有 1–3 秒**。
+日常改动按改动面选最小的一档，绿了就继续；**全量留给里程碑节点**，判定标准是「影响面」而非
+「心理上的安全感」。
+
+| 改了什么 | 最小相关集 | 耗时 |
+|---|---|---|
+| 文档 / 注释 / 文案 | 不动测试；改了规模数字才跑 `check_docs.py` | ~1s |
+| 单个 `.py` 的逻辑小改 | `pytest tests/test_<对应领域>.py -q` | 2–3s |
+| 新增 / 修改工具 | `audit_tools.py --strict` + 对应域模块测试 | ~3s |
+| API 端点改动 | `pytest tests/test_api_routes.py -q` | ~3s |
+| 前端改动 | `cd webui && node runTests.mjs`（或单跑某个 `*.test.mjs`） | 单套 ~1s |
+| 跨模块 / 大重构 / 发版前 | 全量：五道门禁 + `pytest -q` + `npm test` | ~2min |
+
+- **阅读/排查/答疑类任务（不改代码）不需要跑任何测试**——先读代码，真有怀疑再定点验证。
+- **需要跑全量时先说明理由**，而不是默认就跑。接手的 AI 请把这条当作硬纪律：
+  低效的验证会直接吃掉用户的迭代时间，「跑得多」不等于「改得对」。
+- **不要在每次小改后重启服务做冒烟**——端点行为由 `test_api_routes.py` 覆盖，
+  只有验证真实端到端行为（SSE、浏览器、托盘）时才起服务，且用完即关。
 
 > **CI**：`.github/workflows/ci.yml` 含 4 个 job——`check`（ruff 关键规则 `E9,F63,F7,F82` +
 > 入口 `py_compile`）、`test-backend`（`pytest -q` + `check_docs`）、`gate-tools`（上面五道门禁）、

@@ -53,6 +53,24 @@ python tools/check_docs.py             # 文档数字 vs 源码实测
 - 工具描述要完整说清「做什么 + 关键约束」，**没有长度上限**——smart 模式不截断描述（描述是工具能力的一部分，不得为省 token 删减）；参数描述必须 100% 覆盖；数组参数必须带 `items`（缺则 API 400）
 - 当前 CI（`.github/workflows/ci.yml`）执行 ruff 关键规则 + 入口编译检查 + WebUI 构建 + `pytest tests/`（86 文件 / 852 用例）+ 工具系统四道门禁；前端另有 `npm test`（21 个 node 套件）与 `npm run typecheck`。本地改完先跑四道门禁，再 `python -m pytest -q` 与 `cd webui && npm test`。
 
+### 按改动范围分级验证（不要每次都跑全量）
+
+**全量跑一次约 2 分钟（1060 用例 73s + 四道门禁 + 前端 22 套件），而最小相关集通常只要 1–3 秒。**
+日常改动按下表选最小的一档；**全量留给里程碑节点**（大功能收尾、发版前、跨模块重构、用户明确要求），
+判断标准是「改动的影响面」，不是「心理上的安全感」。总的原则：**先跑最小相关集，绿了就走**。
+
+| 改了什么 | 最小相关集 | 耗时 |
+|---|---|---|
+| 文档 / 注释 / 文案 | 不动测试；改了规模数字才跑 `check_docs.py` | ~1s |
+| 单个 `.py` 的逻辑小改 | `pytest tests/test_<对应领域>.py -q` | 2–3s |
+| 新增 / 修改工具 | `audit_tools.py --strict` + 对应域模块测试 | ~3s |
+| API 端点改动 | `pytest tests/test_api_routes.py -q` | ~3s |
+| 前端改动 | `cd webui && node runTests.mjs`（或单跑某个 `*.test.mjs`） | 单套 ~1s |
+| 跨模块 / 大重构 / 发版前 | 全量：四道门禁 + `pytest -q` + `npm test` | ~2min |
+
+> 阅读代码、排查问题、回答问题这类**不改代码**的任务不需要跑任何测试。
+> 需要跑全量时先说明理由再跑，而不是默认就跑——「跑得多」不等于「改得对」。
+
 ## 提交信息 / Commit Messages
 
 - 类型前缀：`fix:` / `feat:` / `docs:` / `chore:` / `refactor:`
