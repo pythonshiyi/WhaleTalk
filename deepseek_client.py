@@ -2167,8 +2167,12 @@ def _evolve_lint(base, rels):
         # 基线取失败（无 git 或 ruff 基线跑挂）时退化为「全量告警都算问题」，
         # 宁可保守拦住、也不静默放行；同时在输出里明确说明降级原因。
         if baseline_note:
+            # 退化时**一律判失败**（错误：前缀会被 self_evolve 的失败标记命中）。
+            # 理由：拿不到基线就无法区分「历史告警」与「本次新增」，此时放行等于
+            # 闸门失效；宁可拦住让人工介入，也不能静默通过。
             return (
-                f"{baseline_note} 改动后共 {len(cur)} 个告警。\n"
+                f"错误：无法做基线差分——{baseline_note} "
+                f"改动后共 {len(cur)} 个告警，无法判断哪些是本次新增，故保守拦截。\n"
                 + "\n".join(
                     f"  {(it.get('location') or {}).get('row', '?')}: {it.get('code')} "
                     f"{(it.get('message') or '')[:140]}"
@@ -2191,9 +2195,12 @@ def _evolve_lint(base, rels):
             if len(_items) > _allow:
                 added.extend(_items[_allow:])
         if not added:
+            # 返回值必须以 "无问题" 开头：self_evolve 用
+            # lint_r.startswith(("无问题", "（")) 判定本层是否通过，
+            # 改文案时若前缀不符会被误判为「验证未通过」并整体回滚。
             return (
-                f"无新增问题（ruff 差分通过：改动后 {len(cur)} 个告警，"
-                "全部与基线一致）"
+                f"无问题（ruff 差分通过：改动后 {len(cur)} 个告警，"
+                "全部与基线一致，未引入新告警）"
             )
         note = "（基线取失败，已退化为全量判定）" if baseline_note else ""
         lines = [
