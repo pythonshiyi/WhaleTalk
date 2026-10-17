@@ -54,6 +54,72 @@ from toolkit import tool  # noqa: F401  # 装饰器 + 工具名 re-export
 _SQLITE_QUERY_TIMEOUT_S = 15.0
 
 
+# ── MySQL / PostgreSQL 只读查询的公共部分 ────────────────────────────
+# 两个工具此前是近乎逐行复制（相似度 0.88）：校验骨架、结果格式化、取值截断
+# 完全一致，只有驱动、默认端口、超时参数不同。把它们收拢到此处，新增一种
+# 数据库只需给出「连接参数」与「执行器」两个差异点。
+def _truncate_cells(row):
+    """把一行结果转成字符串并按单元格上限截断（三种数据库查询共用同一口径）。"""
+    cells = [str(x) if x is not None else "" for x in row]
+    if not (_TABLE_CELL_MAX and _TABLE_CELL_MAX > 0):
+        return cells
+    return [c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "") for c in cells]
+
+
+def _format_query_rows(cols, rows, limit):
+    """把结果集渲染成「表头 | 行」的纯文本（MySQL/PostgreSQL 共用，输出格式保持一致）。"""
+    lines = [" | ".join(cols)] if cols else []
+    for r in rows:
+        lines.append(" | ".join(_truncate_cells(r)))
+    extra = "" if len(rows) < limit else " [已截断]"
+    return "\n".join(lines) + extra if lines else "执行成功（无结果集）"
+
+
+def _readonly_query(kind, driver, connect, connection, sql, max_rows, setting_up=None):
+    """MySQL/PostgreSQL 只读查询的共用执行体。
+
+    kind        —— db_config.json 里的配置节名（mysql / postgres）
+    driver      —— 导入语句用的模块名，仅用于提示安装
+    connect     —— 用连接参数 dict 建立连接的工厂
+    setting_up  —— 建连后、执行前的会话设置（可失败，失败不阻断，见下）
+    """
+    try:
+        __import__(driver)
+    except ImportError:
+        return f"错误：需要 {driver}（pip install {driver}）"
+    if not str(sql or "").strip():
+        return "错误：sql 必填"
+    cfg, err = _db_conn(kind, connection)
+    if cfg is None:
+        return err
+    if not _readonly_stmt(sql):
+        return "错误：仅允许只读查询（SELECT / SHOW / DESC）"
+    limit = clamp_int(max_rows, 20, lo=1, hi=200)
+    sql = force_limit(sql, limit)  # L3: SQL 层强制 LIMIT
+    try:
+        conn = connect(cfg)
+        try:
+            cur = conn.cursor()
+            if setting_up is not None:
+                # 会话级超时设置属于尽力而为：个别托管实例（或代理）不支持该
+                # 变量时不应让整条只读查询失败——连接本身的 read_timeout /
+                # statement_timeout 已提供兜底。
+                try:
+                    setting_up(cur)
+                except Exception:  # noqa: silent-except: 会话级超时设置尽力而为，不支持也不影响查询（连接自带超时兜底）
+                    pass
+            cur.execute(str(sql))
+            cols = [d[0] for d in cur.description] if cur.description else []
+            rows = cur.fetchmany(limit)
+            return _format_query_rows(cols, rows, limit)
+        finally:
+            try:
+                conn.close()
+            except Exception:  # noqa: silent-except: 关闭连接失败无补救手段，且不影响已取回的结果
+                pass
+    except Exception as e:
+        return f"错误：{kind} 查询失败: {e}"
+
 
 @tool(
         {
@@ -78,21 +144,9 @@ _SQLITE_QUERY_TIMEOUT_S = 15.0
 )
 def database_query_mysql(connection="default", sql="", max_rows=20):
     """MySQL 只读查询（SELECT/SHOW/DESC；连接在 db_config.json 配置）。"""
-    try:
+    def _connect(cfg):
         import pymysql
-    except ImportError:
-        return "错误：需要 pymysql（pip install pymysql）"
-    if not str(sql or "").strip():
-        return "错误：sql 必填"
-    cfg, err = _db_conn("mysql", connection)
-    if cfg is None:
-        return err
-    if not _readonly_stmt(sql):
-        return "错误：仅允许只读查询（SELECT / SHOW / DESC）"
-    limit = clamp_int(max_rows, 20, lo=1, hi=200)
-    sql = force_limit(sql, limit)  # L3: SQL 层强制 LIMIT
-    try:
-        conn = pymysql.connect(
+        return pymysql.connect(
             host=str(cfg.get("host") or "127.0.0.1"),
             port=int(cfg.get("port") or 3306),
             user=str(cfg.get("user") or ""),
@@ -100,29 +154,11 @@ def database_query_mysql(connection="default", sql="", max_rows=20):
             database=str(cfg.get("database") or ""),
             charset="utf8mb4", connect_timeout=5, read_timeout=15,
         )
-        try:
-            cur = conn.cursor()
-            try:
-                cur.execute("SET SESSION max_execution_time=15000")
-            except Exception:
-                pass
-            cur.execute(str(sql))
-            cols = [d[0] for d in cur.description] if cur.description else []
-            rows = cur.fetchmany(limit)
-            lines = [" | ".join(cols)] if cols else []
-            for r in rows:
-                cells = [str(x) if x is not None else "" for x in r]
-                cells = [c if not (_TABLE_CELL_MAX and _TABLE_CELL_MAX > 0) else (c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "")) for c in cells]
-                lines.append(" | ".join(cells))
-            extra = "" if len(rows) < limit else " [已截断]"
-            return "\n".join(lines) + extra if lines else "执行成功（无结果集）"
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    except Exception as e:
-        return f"错误：MySQL 查询失败: {e}"
+
+    return _readonly_query(
+        "mysql", "pymysql", _connect, connection, sql, max_rows,
+        setting_up=lambda cur: cur.execute("SET SESSION max_execution_time=15000"),
+    )
 
 
 @tool(
@@ -148,21 +184,9 @@ def database_query_mysql(connection="default", sql="", max_rows=20):
 )
 def database_query_postgres(connection="default", sql="", max_rows=20):
     """PostgreSQL 只读查询（SELECT/SHOW/DESC；连接在 db_config.json 配置）。"""
-    try:
+    def _connect(cfg):
         import psycopg2
-    except ImportError:
-        return "错误：需要 psycopg2（pip install psycopg2）"
-    if not str(sql or "").strip():
-        return "错误：sql 必填"
-    cfg, err = _db_conn("postgres", connection)
-    if cfg is None:
-        return err
-    if not _readonly_stmt(sql):
-        return "错误：仅允许只读查询（SELECT / SHOW / DESC）"
-    limit = clamp_int(max_rows, 20, lo=1, hi=200)
-    sql = force_limit(sql, limit)  # L3: SQL 层强制 LIMIT
-    try:
-        conn = psycopg2.connect(
+        return psycopg2.connect(
             host=str(cfg.get("host") or "127.0.0.1"),
             port=int(cfg.get("port") or 5432),
             user=str(cfg.get("user") or ""),
@@ -172,25 +196,8 @@ def database_query_postgres(connection="default", sql="", max_rows=20):
             # 语句超时：只读查询最长 15 秒，防慢查询占住共享工具线程池
             options="-c statement_timeout=15000",
         )
-        try:
-            cur = conn.cursor()
-            cur.execute(str(sql))
-            cols = [d[0] for d in cur.description] if cur.description else []
-            rows = cur.fetchmany(limit)
-            lines = [" | ".join(cols)] if cols else []
-            for r in rows:
-                cells = [str(x) if x is not None else "" for x in r]
-                cells = [c if not (_TABLE_CELL_MAX and _TABLE_CELL_MAX > 0) else (c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "")) for c in cells]
-                lines.append(" | ".join(cells))
-            extra = "" if len(rows) < limit else " [已截断]"
-            return "\n".join(lines) + extra if lines else "执行成功（无结果集）"
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    except Exception as e:
-        return f"错误：PostgreSQL 查询失败: {e}"
+
+    return _readonly_query("postgres", "psycopg2", _connect, connection, sql, max_rows)
 
 
 @tool(
@@ -1234,8 +1241,7 @@ def database_query(db_path, sql, max_rows=20):
             rows = cur.fetchmany(limit)
             lines = [f"查询结果（{len(rows)} 行）:", " | ".join(str(c) for c in cols)]
             for r in rows:
-                cells = ["" if v is None else str(v) for v in r]
-                cells = [c if not (_TABLE_CELL_MAX and _TABLE_CELL_MAX > 0) else (c[:_TABLE_CELL_MAX] + ("…" if len(c) > _TABLE_CELL_MAX else "")) for c in cells]
+                cells = _truncate_cells(r)
                 lines.append(" | ".join(cells))
             if len(rows) >= limit:
                 lines.append("⚠ 已达行数上限，如需更多请缩小范围后分页查询")
