@@ -233,6 +233,8 @@ def normalize_config(cfg):
         cfg["inbound_port"] = 0
     cfg["inbound_token"] = str(cfg.get("inbound_token", "") or "").strip()
     cfg["image_api_key"] = str(cfg.get("image_api_key", "") or "").strip()
+    # 微博 Cookie（可选）：配置后 search_web 的 weibo 源才生效；未配置时该源自动跳过
+    cfg["weibo_cookie"] = str(cfg.get("weibo_cookie", "") or "").strip()
     cfg["image_base_url"] = str(cfg.get("image_base_url", "") or "").strip()
     cfg["image_model"] = str(cfg.get("image_model", "gpt-image-1")).strip() or "gpt-image-1"
     cfg["vision_self_review"] = as_bool(cfg.get("vision_self_review", False))
@@ -325,6 +327,7 @@ def _load_config_uncached(config_path):
     cfg["image_api_key"] = crypto.decrypt(cfg.get("image_api_key", ""))
     cfg["brain_community_brain_key"] = crypto.decrypt(cfg.get("brain_community_brain_key", ""))
     cfg["brain_community_shared_secret"] = crypto.decrypt(cfg.get("brain_community_shared_secret", ""))
+    cfg["weibo_cookie"] = crypto.decrypt(cfg.get("weibo_cookie", ""))
     return normalize_config(cfg)
 
 
@@ -352,7 +355,8 @@ def save_config(cfg, config_path=None):
         #   否则一次「无关设置」的保存会把解密失败的密文抹成空串，Key 不可逆丢失。
         # - 加密失败（CryptError）→ 保留磁盘原密文，绝不写明文、绝不静默删除。
         for secret_key in ("api_key", "inbound_token", "image_api_key",
-                           "brain_community_brain_key", "brain_community_shared_secret"):
+                           "brain_community_brain_key", "brain_community_shared_secret",
+                           "weibo_cookie"):
             plain = cfg.get(secret_key, "")
             disk_cipher = _disk_cipher(config_path, secret_key)
             if not plain and disk_cipher:

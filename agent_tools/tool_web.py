@@ -40,17 +40,23 @@ from deepseek_client import (
     _save_watch_state,
     _search_bing,
     _search_bilibili,
+    _search_csdn,
     _search_dedup,
     _search_drop_junk,
     _search_duckduckgo,
     _search_github,
     _search_hackernews,
     _search_healthy,
+    _search_juejin,
     _search_report,
     _search_safe,
     _search_so360,
     _search_sogou_weixin,
     _search_stackexchange,
+    _search_v2ex,
+    _search_weibo,
+    _search_weibo_hot,
+    _search_zhihu,
     _webdav_request,
     _wrap_external,
 )
@@ -242,7 +248,7 @@ def download_file(url, local_path="", expected_sha256=""):
             "type": "function",
             "function": {
                 "name": "search_web",
-                "description": "联网搜索，标题/链接/摘要多源聚合去重（默认 5 条最多 20 条）。覆盖通用网页（Bing/360），并混入专用源：GitHub 开源仓库（带 star/语言）、Stack Overflow 问答（带答案数/是否已解决）、Hacker News 技术讨论（带分数/评论数）、B 站视频（带播放量/UP）、微信公众号文章。每条结果标注来源引擎，可按出处判断可信度。site/offset 保证生效，since/until 依赖引擎支持。适合找库、查报错、找教程视频、了解技术圈观点；需要网页全文再配合 fetch_url。",
+                "description": "联网搜索，标题/链接/摘要多源聚合去重（默认 5 条最多 20 条）。覆盖通用网页（Bing/360），并混入专用源：GitHub 仓库（⭐star/语言）、Stack Overflow 问答（答案数/是否解决）、CSDN/掘金/V2EX 中文技术文章与讨论、Hacker News 技术讨论（分数/评论）、B 站视频（播放量）、微信公众号文章、微博热搜、知乎热搜词。每条结果标注来源引擎，可按出处判断可信度。site/offset 保证生效，since/until 依赖引擎支持。适合找库、查报错、找中文教程与视频、看技术圈与社媒热点；网页全文再配合 fetch_url。",
                 "parameters": {
                     "type": "object",
                     "properties": {

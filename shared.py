@@ -600,9 +600,15 @@ _SEARCH_ENGINES = (
     ("so360", 25),
     ("github", 24),
     ("stackexchange", 22),
-    ("hackernews", 20),
-    ("bilibili", 18),
-    ("sogou_weixin", 16),
+    ("csdn", 21),
+    ("juejin", 20),
+    ("v2ex", 19),
+    ("hackernews", 18),
+    ("bilibili", 17),
+    ("weibo", 15),        # 仅在配置了 weibo_cookie 时可用，否则自动跳过
+    ("weibo_hot", 14),    # 免登录的热搜榜（非关键词检索）
+    ("sogou_weixin", 13),
+    ("zhihu", 12),        # 免签名的热搜词（非关键词检索）
     ("duckduckgo", 10),
 )
 

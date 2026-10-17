@@ -71,7 +71,7 @@ def search_safe(results):
 # 实测：搜「python asyncio error」时 360 的第 1 条是 fanyi.so.com 的翻译页。
 _JUNK_URL_PATTERNS = (
     r"^https?://fanyi\.so\.com/",
-    r"^https?://(?:[a-z0-9-]+\.)*so\.com/(s\?|i\?|image|video|news|map|fanyi)",
+    r"^https?://(?:[a-z0-9-]+\.)*so\.com/(s\?|i\?|image|video|news|map|fanyi|search/)",
     r"^https?://image\.so\.com/",
     r"^https?://(www\.)?bing\.com/(images|videos|maps|news|dict)/",
     r"^https?://(www\.)?bing\.com/search",

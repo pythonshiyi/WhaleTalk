@@ -1515,6 +1515,7 @@ SEARCH_ENGINE_TIMEOUT = {
     "bing": 6, "so360": 6, "duckduckgo": 4,
     # 走公开 API 的源延迟低且稳定，给较短超时以免拖慢聚合软超时
     "github": 5, "hackernews": 5, "stackexchange": 6, "bilibili": 5, "sogou_weixin": 5,
+    "csdn": 6, "juejin": 6, "v2ex": 6, "weibo": 6, "weibo_hot": 5, "zhihu": 5,
 }
 
 
@@ -1638,11 +1639,17 @@ def _search_so360(query, num=SEARCH_MAX_RESULTS):
 
 
 def _search_github(query, num=SEARCH_MAX_RESULTS):
-    """GitHub 仓库搜索（公开 REST API，无需 token；限速 10 次/分/IP）。"""
+    """GitHub 仓库搜索（公开 REST API，无需 token；限速 10 次/分/IP）。
+
+    排序用 GitHub 的**相关度**（默认 best match），不用 sort=stars——实测
+    sort=stars 会返回「全站最热门」而非「与查询相关」的仓库：搜「pdf 转 word」
+    会给出 funNLP / 书籍收藏 / 政治资料 等无关结果。相关度排序后再用 star 数做
+    摘要展示即可。同时用 `stars:>=10` 过滤掉空壳仓库（0 star 的练手项目噪音）。
+    """
     hdrs = {"User-Agent": _SEARCH_UA, "Accept": "application/vnd.github+json"}
     resp = _http_client().get(
         "https://api.github.com/search/repositories",
-        params={"q": query, "per_page": max(1, min(num, 30)), "sort": "stars"},
+        params={"q": f"{query} stars:>=10", "per_page": max(1, min(num, 30))},
         headers=hdrs,
         timeout=SEARCH_ENGINE_TIMEOUT.get("github", SEARCH_TIMEOUT),
     )
@@ -1827,6 +1834,245 @@ def _search_sogou_weixin(query, num=SEARCH_MAX_RESULTS):
         if len(results) >= num:
             break
     return results
+
+
+# ── v3.16.22：中文技术社区源 ──────────────────────────────────────────
+# 选型依据（2026-10 实测 21 个候选）：知乎搜索 API 403（需 zse-96 签名）、
+# 豆瓣 API 403、搜狗/百度系大面积安全验证、oschina/ithome 不可达。以下三个走
+# 公开 JSON 接口且实测稳定：
+#   - sov2ex（V2EX 社区搜索，Elasticsearch 直出）：开发者真实讨论
+#   - CSDN 搜索 API：中文博客体量最大的技术内容
+#   - 掘金搜索 API：中文前端/后端技术文章，带点赞数
+_ZH_CHROME_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+
+def _search_v2ex(query, num=SEARCH_MAX_RESULTS):
+    """V2EX 社区搜索（sov2ex 公开 API）：开发者真实的技术讨论与踩坑经验。"""
+    resp = _http_client().get(
+        "https://www.sov2ex.com/api/search",
+        params={"q": query, "size": max(1, min(num, 30))},
+        headers={"User-Agent": _ZH_CHROME_UA, "Accept": "application/json"},
+        timeout=SEARCH_ENGINE_TIMEOUT.get("v2ex", SEARCH_TIMEOUT),
+    )
+    resp.raise_for_status()
+    hits = (resp.json() or {}).get("hits") or []
+    results = []
+    for h in hits[:num]:
+        src = h.get("_source") or {}
+        title = str(src.get("title") or "").strip()
+        tid = src.get("id")
+        if not title or not tid:
+            continue
+        replies = src.get("replies")
+        node = str(src.get("node_name") or src.get("node") or "").strip()
+        meta = []
+        if node:
+            meta.append(f"/{node}")
+        if isinstance(replies, int):
+            meta.append(f"{replies} 回复")
+        results.append({
+            "title": title,
+            "url": f"https://www.v2ex.com/t/{tid}",
+            "snippet": " · ".join(meta) or "V2EX 讨论",
+        })
+    return results
+
+
+def _search_csdn(query, num=SEARCH_MAX_RESULTS):
+    """CSDN 博客搜索（公开 API）：中文技术博客体量最大，适合查具体实现与踩坑。"""
+    resp = _http_client().get(
+        "https://so.csdn.net/api/v3/search",
+        params={"q": query, "t": "blog", "p": 1},
+        headers={"User-Agent": _ZH_CHROME_UA, "Referer": "https://so.csdn.net/",
+                 "Accept": "application/json"},
+        timeout=SEARCH_ENGINE_TIMEOUT.get("csdn", SEARCH_TIMEOUT),
+    )
+    resp.raise_for_status()
+    data = resp.json() or {}
+    vos = data.get("result_vos") or []
+    results = []
+    for x in vos[:num]:
+        # 标题带 <em> 高亮标签
+        title = _strip_tags(str(x.get("title") or "")).strip()
+        url = str(x.get("url") or "").split("?")[0]  # 去掉 ops_request_misc 跟踪参数
+        if not title or not url:
+            continue
+        view = x.get("view_count")
+        digg = x.get("digg")
+        meta = []
+        if view:
+            meta.append(f"阅读 {view}")
+        if digg:
+            meta.append(f"赞 {digg}")
+        snippet = " · ".join(meta)
+        if not snippet:
+            desc = _strip_tags(str(x.get("description") or x.get("digest") or "")).strip()
+            snippet = desc[:120]
+        results.append({"title": title, "url": url, "snippet": snippet})
+    return results
+
+
+def _search_juejin(query, num=SEARCH_MAX_RESULTS):
+    """掘金搜索（公开 API，POST JSON）：中文技术文章，带点赞数。"""
+    resp = _http_client().post(
+        "https://api.juejin.cn/search_api/v1/search",
+        json={"key_word": query, "id_type": 0, "cursor": "0",
+              "limit": max(1, min(num, 20)), "search_type": 0, "sort_type": 0},
+        headers={"User-Agent": _ZH_CHROME_UA, "Referer": "https://juejin.cn/",
+                 "Content-Type": "application/json", "Accept": "application/json"},
+        timeout=SEARCH_ENGINE_TIMEOUT.get("juejin", SEARCH_TIMEOUT),
+    )
+    resp.raise_for_status()
+    data = resp.json() or {}
+    if data.get("err_no") not in (0, None):
+        raise RuntimeError(f"juejin api err_no={data.get('err_no')} {data.get('err_msg') or ''}")
+    results = []
+    for item in (data.get("data") or [])[:num]:
+        model = item.get("result_model") or {}
+        info = model.get("article_info") or {}
+        title = _strip_tags(str(info.get("title") or model.get("title") or "")).strip()
+        aid = info.get("article_id") or model.get("article_id")
+        if not title or not aid:
+            continue
+        digg = info.get("digg_count")
+        results.append({
+            "title": title,
+            "url": f"https://juejin.cn/post/{aid}",
+            "snippet": (f"赞 {digg}" if digg else "掘金文章"),
+        })
+    return results
+
+
+def _search_zhihu(query, num=SEARCH_MAX_RESULTS):
+    """知乎热榜/搜索词联想（公开 API）。
+
+    注意：知乎的 **关键词搜索结果** 需要 zse-96 签名（直接请求 403），但
+    `search/top_search` 免签名可用，返回的是「当前热门搜索词」。因此本源只用于
+    「现在大家在搜什么」，不做关键词精确检索——如实按此语义返回。
+    """
+    resp = _http_client().get(
+        "https://www.zhihu.com/api/v4/search/top_search",
+        params={"q": query},
+        headers={"User-Agent": _ZH_CHROME_UA, "Referer": "https://www.zhihu.com/",
+                 "Accept": "application/json"},
+        timeout=SEARCH_ENGINE_TIMEOUT.get("zhihu", SEARCH_TIMEOUT),
+    )
+    resp.raise_for_status()
+    words = ((resp.json() or {}).get("top_search") or {}).get("words") or []
+    results = []
+    for w in words[:num]:
+        text = str(w.get("display_query") or w.get("query") or "").strip()
+        if not text:
+            continue
+        # 只保留与查询相关的热词，避免把整张热榜塞进搜索结果
+        results.append({
+            "title": text,
+            "url": f"https://www.zhihu.com/search?type=content&q={quote(text)}",
+            "snippet": "知乎热搜词",
+        })
+    return results
+
+
+def _search_weibo_hot(query, num=SEARCH_MAX_RESULTS):
+    """微博热搜榜（公开 API，免登录）。
+
+    实测（2026-10）：微博的**关键词搜索**全部要求登录态（s.weibo.com 302、
+    m.weibo.cn/api 返回 ok:-100、ajax/statuses/search 返回 ok:-100），唯有
+    `ajax/side/hotSearch` 免登录可用。所以本源给的是**全网热榜**而非关键词检索；
+    若用户在设置里配置了微博 Cookie，则由 `_search_weibo` 提供真正的关键词搜索。
+    """
+    resp = _http_client().get(
+        "https://weibo.com/ajax/side/hotSearch",
+        headers={"User-Agent": _ZH_CHROME_UA, "Referer": "https://weibo.com/",
+                 "Accept": "application/json"},
+        timeout=SEARCH_ENGINE_TIMEOUT.get("weibo_hot", SEARCH_TIMEOUT),
+    )
+    resp.raise_for_status()
+    rt = ((resp.json() or {}).get("data") or {}).get("realtime") or []
+    # 与查询的相关性：按词切分后任一 token（≥2 字符）命中热词即算相关。
+    # 用整句子串匹配永远命中不了（「python asyncio」不是任何一个热词），
+    # 会让本源退化成「往任何搜索结果里硬塞热榜」——那是有害噪音，不是帮助。
+    toks = [t for t in re.split(r"[\s/\-_:：，,]+", str(query or "").lower()) if len(t) >= 2][:6]
+    related = []
+    if toks:
+        related = [it for it in rt if any(t in str(it.get("word") or "").lower() for t in toks)]
+    # 没有相关热词 → 返回空（search_web 会跳过该源），而不是返回无关热榜
+    picked = related[:num]
+    results = []
+    for it in picked:
+        word = str(it.get("word") or "").strip()
+        if not word:
+            continue
+        num_hot = it.get("num")
+        results.append({
+            "title": word,
+            "url": f"https://s.weibo.com/weibo?q={quote('#' + word + '#')}",
+            "snippet": (f"微博热搜 · 热度 {num_hot}" if num_hot else "微博热搜"),
+        })
+    return results
+
+
+def _search_weibo(query, num=SEARCH_MAX_RESULTS):
+    """微博关键词搜索（**需要用户在设置里配置微博 Cookie**）。
+
+    无 Cookie 时直接抛「未配置」异常——search_web 会把它计为该源不可用并跳过，
+    不会影响其它源。配置位置：设置 → 网络 的微博 Cookie（config.weibo_cookie，
+    敏感字段 DPAPI 加密）。Cookie 会过期（几天到几周），过期后本源自动失效。
+    """
+    cookie = ""
+    try:
+        import config_utils
+        cookie = str(config_utils.load_config().get("weibo_cookie") or "").strip()
+    except Exception:
+        cookie = ""
+    if not cookie:
+        raise RuntimeError("weibo cookie not configured")
+    resp = _http_client().get(
+        "https://m.weibo.cn/api/container/getIndex",
+        params={"containerid": f"100103type=1&q={query}", "page_type": "searchall"},
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+            ),
+            "Referer": "https://m.weibo.cn/",
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest",
+            "MWeibo-Pwa": "1",
+            "Cookie": cookie,
+        },
+        timeout=SEARCH_ENGINE_TIMEOUT.get("weibo", SEARCH_TIMEOUT),
+    )
+    resp.raise_for_status()
+    data = resp.json() or {}
+    ok = data.get("ok")
+    if ok == -100:
+        # 登录态失效：明确抛错（健康电路冷却），而不是伪装成「无结果」
+        raise RuntimeError("weibo cookie invalid or expired")
+    cards = data.get("data", {}).get("cards") if isinstance(data.get("data"), dict) else None
+    results = []
+    for card in (cards or []):
+        if card.get("card_type") != 9:
+            continue
+        for mb in (card.get("mblog") or []) if isinstance(card.get("mblog"), list) else [card.get("mblog") or {}]:
+            if not isinstance(mb, dict):
+                continue
+            text = _strip_tags(str(mb.get("text") or "")).strip()
+            mid = mb.get("id")
+            if not text or not mid:
+                continue
+            user = ((mb.get("user") or {}).get("screen_name")) or ""
+            results.append({
+                "title": text[:60],
+                "url": f"https://m.weibo.cn/detail/{mid}",
+                "snippet": (f"{text[:120]}（@{user}）" if user else text[:140]),
+            })
+        if len(results) >= num:
+            break
+    return results[:num]
 
 
 # 引擎健康度：连续失败 3 次暂停；超时类失败给更长冷却（永久不可用 vs 偶发）

@@ -411,6 +411,10 @@ DEFAULT_CONFIG = {
     "inbound_port": 0,        # Webhook 接收端端口（0=关闭）
     "inbound_token": "",      # Webhook 接收端鉴权 token
     "image_api_key": "",      # 图片生成 API Key
+    # 微博 Cookie（可选；敏感 → DPAPI 加密）。微博**所有关键词搜索接口都要求登录态**，
+    # 配置后 search_web 的 weibo 源才生效；未配置时该源自动跳过（不影响其它源）。
+    # 唯一免登录的只有热搜榜，由独立的 weibo_hot 源提供。Cookie 通常几天~几周过期。
+    "weibo_cookie": "",
     "image_base_url": "",     # 图片生成端点（默认 = base_url）
     "image_model": "gpt-image-1",
     "vision_self_review": False,  # 视觉自审：工具产出图片后自动审图并迭代（统一模型原生多模态，能力恒可用；默认关以控成本）
