@@ -118,6 +118,7 @@ from search_utils import (  # noqa: F401  # 兼容旧访问名
     strip_tags as _strip_tags,
     decode_ddg_url as _decode_ddg_url,
     search_dedup as _search_dedup,
+    search_drop_junk as _search_drop_junk,
     search_safe as _search_safe,
 )
 import plugins as plugins_mod
@@ -1510,7 +1511,11 @@ PIP_ALLOWLIST = None
 SEARCH_TIMEOUT = 8
 # 各引擎独立超时（秒）：DDG 直连不稳定常挂起，给它更短超时，避免拖垮聚合；
 # 兜底仍用 SEARCH_TIMEOUT。压测实测 DDG 挂起 20s+，是整次搜索延迟的唯一元凶。
-SEARCH_ENGINE_TIMEOUT = {"bing": 6, "so360": 6, "duckduckgo": 4}
+SEARCH_ENGINE_TIMEOUT = {
+    "bing": 6, "so360": 6, "duckduckgo": 4,
+    # 走公开 API 的源延迟低且稳定，给较短超时以免拖慢聚合软超时
+    "github": 5, "hackernews": 5, "stackexchange": 6, "bilibili": 5, "sogou_weixin": 5,
+}
 
 
 def _search_bing(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until=""):
@@ -1593,12 +1598,22 @@ def _search_so360(query, num=SEARCH_MAX_RESULTS):
     )
     resp.raise_for_status()
     results = []
-    for m in _SO360_RESULT_RE.finditer(resp.text):
+    # 只取「自然结果」：360 把自家的功能入口（翻译 onebox / 图片聚合 / 短视频大全 /
+    # 热搜）也塞进 h3>a 结构，且排在自然结果之前。实测自然结果所在块带
+    # class="res-list"，onebox 块是 class="g-mohe"（无 res-list）——据此区分，
+    # 避免把「fastapi 教程-短视频大全」这类伪结果交给模型当网页依据。
+    _text = resp.text
+    for m in _SO360_RESULT_RE.finditer(_text):
         link, title_html = m.groups()
         if link.startswith("javascript:"):
             continue  # 置顶功能入口/推广位，非真实结果
         title = _strip_tags(title_html).strip()
         if not title:
+            continue
+        # 回溯本条目前最近的一个 <div class="...">，判定是否为自然结果块
+        _ctx = _text[max(0, m.start() - 600):m.start()]
+        _opens = re.findall(r'<div[^>]*class="([^"]*)"', _ctx)
+        if _opens and "res-list" not in _opens[-1]:
             continue
         if link.startswith("/"):
             link = "https://www.so.com" + link  # /link?m= 加密跳转补全
@@ -1606,6 +1621,208 @@ def _search_so360(query, num=SEARCH_MAX_RESULTS):
         if "/link?m=" in link:
             # 360 的加密跳转链接无法直接看出真实域名，标注以免污染域名判断
             snippet = "（360 跳转链接，真实域名未解析）"
+        results.append({"title": title, "url": link, "snippet": snippet})
+        if len(results) >= num:
+            break
+    return results
+
+
+# ── v3.16.21：新增「专用数据源」搜索引擎 ────────────────────────────────
+# 设计理由：通用网页搜索（bing/360/DDG）回答的是「有什么网页」，对「找个开源库」
+# 「这个问题有没有人踩过」「B 站有什么教程」「公众号怎么说的」这类意图召回质量很低。
+# 下面四个源走**公开 API / 结构化接口**（Json 直出，无 HTML 反爬对抗），实测：
+#   - 延迟 0.5–2s，远低于通用引擎（DDG 实测 16s 连接超时）
+#   - 结构化字段（stars / score / answers / view）可写进摘要，比网页摘要更有信息量
+# 每个函数与 _search_bing 同契约：返回 [{"title","url","snippet"}]，失败抛异常由
+# search_web 的健康电路统一记账（不在此处吞异常）。
+
+
+def _search_github(query, num=SEARCH_MAX_RESULTS):
+    """GitHub 仓库搜索（公开 REST API，无需 token；限速 10 次/分/IP）。"""
+    hdrs = {"User-Agent": _SEARCH_UA, "Accept": "application/vnd.github+json"}
+    resp = _http_client().get(
+        "https://api.github.com/search/repositories",
+        params={"q": query, "per_page": max(1, min(num, 30)), "sort": "stars"},
+        headers=hdrs,
+        timeout=SEARCH_ENGINE_TIMEOUT.get("github", SEARCH_TIMEOUT),
+    )
+    if resp.status_code == 403:
+        # GitHub 对未认证请求限速 10 次/分，超限返 403；抛出以便健康电路短暂让位
+        raise RuntimeError("github api rate limited")
+    resp.raise_for_status()
+    items = (resp.json() or {}).get("items") or []
+    results = []
+    for it in items[:num]:
+        name = str(it.get("full_name") or "").strip()
+        if not name:
+            continue
+        desc = str(it.get("description") or "").strip()
+        stars = it.get("stargazers_count") or 0
+        lang = str(it.get("language") or "").strip()
+        meta = f"⭐{stars}" + (f" · {lang}" if lang else "")
+        snippet = (f"{desc[:120]}（{meta}）" if desc else meta)
+        results.append({
+            "title": name,
+            "url": str(it.get("html_url") or ""),
+            "snippet": snippet,
+        })
+    return results
+
+
+def _search_hackernews(query, num=SEARCH_MAX_RESULTS):
+    """Hacker News 搜索（Algolia 公开 API）：技术圈讨论与观点，附分数/评论数。"""
+    resp = _http_client().get(
+        "https://hn.algolia.com/api/v1/search",
+        params={"query": query, "hitsPerPage": max(1, min(num, 30)), "tags": "story"},
+        headers={"User-Agent": _SEARCH_UA},
+        timeout=SEARCH_ENGINE_TIMEOUT.get("hackernews", SEARCH_TIMEOUT),
+    )
+    resp.raise_for_status()
+    hits = (resp.json() or {}).get("hits") or []
+    results = []
+    for h in hits[:num]:
+        title = str(h.get("title") or h.get("story_title") or "").strip()
+        if not title:
+            continue
+        oid = h.get("objectID")
+        # 讨论页比外链更能反映社区观点；无 objectID 时退回原文链接
+        url = f"https://news.ycombinator.com/item?id={oid}" if oid else str(h.get("url") or "")
+        if not url:
+            continue
+        pts, cmt = h.get("points") or 0, h.get("num_comments") or 0
+        results.append({
+            "title": title,
+            "url": url,
+            "snippet": f"▲{pts} · {cmt} 条评论",
+        })
+    return results
+
+
+def _search_stackexchange(query, num=SEARCH_MAX_RESULTS):
+    """Stack Overflow 搜索（StackExchange 公开 API）：排查编程问题的问答。"""
+    resp = _http_client().get(
+        "https://api.stackexchange.com/2.3/search/advanced",
+        params={
+            "order": "desc", "sort": "relevance", "q": query,
+            "site": "stackoverflow", "pagesize": max(1, min(num, 30)),
+            "filter": "default",
+        },
+        headers={"User-Agent": _SEARCH_UA},
+        timeout=SEARCH_ENGINE_TIMEOUT.get("stackexchange", SEARCH_TIMEOUT),
+    )
+    resp.raise_for_status()
+    items = (resp.json() or {}).get("items") or []
+    results = []
+    for it in items[:num]:
+        title = _strip_tags(str(it.get("title") or "")).strip()
+        link = str(it.get("link") or "")
+        if not title or not link:
+            continue
+        ans = it.get("answer_count") or 0
+        accepted = bool(it.get("is_answered"))
+        score = it.get("score") or 0
+        mark = "✓已解决" if accepted else "未解决"
+        results.append({
+            "title": title,
+            "url": link,
+            "snippet": f"▲{score} · {ans} 个回答 · {mark}",
+        })
+    return results
+
+
+def _search_bilibili(query, num=SEARCH_MAX_RESULTS):
+    """B 站视频搜索（公开 web 接口）：中文视频教程/评测的召回。
+
+    反爬要点（实测）：只带 UA + Referer 会返回 412 Precondition Failed。该接口
+    校验的是「浏览器上下文」的一组头（Origin/Accept/Cookie），补齐后稳定 200。
+    """
+    hdrs = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://www.bilibili.com/",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Origin": "https://www.bilibili.com",
+        # 未登录态的匿名 buvid 占位：接口据此判定为「浏览器访问」而非脚本
+        "Cookie": "buvid3=0",
+    }
+    resp = _http_client().get(
+        "https://api.bilibili.com/x/web-interface/search/type",
+        params={"search_type": "video", "keyword": query},
+        headers=hdrs,
+        timeout=SEARCH_ENGINE_TIMEOUT.get("bilibili", SEARCH_TIMEOUT),
+    )
+    resp.raise_for_status()
+    data = resp.json() or {}
+    if data.get("code") not in (0, None):
+        raise RuntimeError(f"bilibili api code={data.get('code')} {data.get('message') or ''}")
+    items = ((data.get("data") or {}).get("result")) or []
+    results = []
+    for it in items[:num]:
+        # 标题里含 <em class="keyword"> 高亮标签，需去标签
+        title = _strip_tags(str(it.get("title") or "")).strip()
+        bvid = str(it.get("bvid") or "").strip()
+        if not title or not bvid:
+            continue
+        play = it.get("play") or 0
+        author = str(it.get("author") or "").strip()
+        results.append({
+            "title": title,
+            "url": f"https://www.bilibili.com/video/{bvid}",
+            "snippet": f"播放 {play}" + (f" · UP {author}" if author else ""),
+        })
+    return results
+
+
+def _search_sogou_weixin(query, num=SEARCH_MAX_RESULTS):
+    """微信公众号文章搜索（搜狗微信）：中文自媒体/公众号内容的召回。
+
+    注意：搜狗返回的 /link?url=... 是站内跳转（真实域名不可见），与 360 的加密
+    跳转同性质——在摘要里如实标注，避免调用方误判域名。
+    """
+    resp = _http_client().get(
+        "https://weixin.sogou.com/weixin",
+        params={"type": 2, "query": query},
+        headers={
+            # 搜狗对「不像浏览器」的请求 302 到 /antispider/；补齐常规导航头可显著降低触发率
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Referer": "https://weixin.sogou.com/",
+        },
+        timeout=SEARCH_ENGINE_TIMEOUT.get("sogou_weixin", SEARCH_TIMEOUT),
+    )
+    # 反爬跳转：拿到 antispider 页说明本次被限流，抛错交给健康电路冷却，
+    # 而不是当成「没有结果」（否则会把限流误报成「该主题无公众号内容」）。
+    if resp.is_redirect or "antispider" in str(resp.headers.get("location") or ""):
+        raise RuntimeError("sogou antispider redirect")
+    resp.raise_for_status()
+    # 每条结果是 <li> 块，标题在 <h3><a ...> 内，摘要常在 <p class="txt-info">
+    blocks = re.findall(r'<li[^>]*id="sogou_vr_[^"]*"[^>]*>(.*?)</li>', resp.text, re.S)
+    if not blocks:
+        blocks = re.split(r"</li>", resp.text)
+    results = []
+    for blk in blocks:
+        m = re.search(r'<h3>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', blk, re.S)
+        if not m:
+            continue
+        link, title_html = m.groups()
+        title = _strip_tags(title_html).strip()
+        if not title:
+            continue
+        if link.startswith("/"):
+            link = "https://weixin.sogou.com" + link
+        if link.startswith("//"):
+            link = "https:" + link
+        sm = re.search(r'<p class="txt-info"[^>]*>(.*?)</p>', blk, re.S)
+        snippet = _strip_tags(sm.group(1))[:160] if sm else ""
+        # 搜狗跳转链接的真实域名不可见，如实标注（与 360 同一处理）
+        snippet = (snippet + "（搜狗跳转链接，真实域名未解析）").strip()
         results.append({"title": title, "url": link, "snippet": snippet})
         if len(results) >= num:
             break

@@ -39,12 +39,18 @@ from deepseek_client import (
     _save_rss_sources,
     _save_watch_state,
     _search_bing,
+    _search_bilibili,
     _search_dedup,
+    _search_drop_junk,
     _search_duckduckgo,
+    _search_github,
+    _search_hackernews,
     _search_healthy,
     _search_report,
     _search_safe,
     _search_so360,
+    _search_sogou_weixin,
+    _search_stackexchange,
     _webdav_request,
     _wrap_external,
 )
@@ -236,7 +242,7 @@ def download_file(url, local_path="", expected_sha256=""):
             "type": "function",
             "function": {
                 "name": "search_web",
-                "description": "联网搜索最新信息，返回标题/链接/摘要（Bing+360+DuckDuckGo 聚合去重，默认 5 条最多 20 条）；site/offset 保证生效，since/until 依赖引擎支持。适合实时新闻、最新资讯，可配合 fetch_url 抓全文",
+                "description": "联网搜索，标题/链接/摘要多源聚合去重（默认 5 条最多 20 条）。覆盖通用网页（Bing/360），并混入专用源：GitHub 开源仓库（带 star/语言）、Stack Overflow 问答（带答案数/是否已解决）、Hacker News 技术讨论（带分数/评论数）、B 站视频（带播放量/UP）、微信公众号文章。每条结果标注来源引擎，可按出处判断可信度。site/offset 保证生效，since/until 依赖引擎支持。适合找库、查报错、找教程视频、了解技术圈观点；需要网页全文再配合 fetch_url。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -256,17 +262,22 @@ def download_file(url, local_path="", expected_sha256=""):
     preactivate=(('搜索', '搜一下', '查一下', '新闻', '资讯', '最新'),),
 )
 def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site=""):
-    """联网搜索：多引擎并行聚合（bing/360/duckduckgo），支持条数/翻页/时间/站点过滤。
+    """联网搜索：多源并行聚合，支持条数/翻页/时间/站点过滤。
 
-    引擎健康度：连续失败 3 次的引擎自动暂停 10 分钟（进程内），可用引擎互补；
-    不可用/质量差的源（baidu/sogou/yandex 反爬、google 等不可达）不在注册表中。
+    源分两类（见 shared._SEARCH_ENGINES）：通用网页（bing / so360）与专用数据源
+    （github / stackexchange / hackernews / bilibili / sogou_weixin，走公开 API）。
+    聚合用**轮转**而非分段拼接——否则高产的通用引擎会占满配额，专用源永远轮不到。
+    每条结果带 source 标签，模型据此判断出处与可信度。
+
+    引擎健康度：连续失败 3 次的引擎自动暂停（普通 10 分钟 / 超时 30 分钟），
+    可用引擎互补。duckduckgo 国内长期不可达，权重最低、熔断后自动让位。
 
     Args:
         query: 搜索关键词
         num: 返回条数（1-20，默认 5）
-        offset: 翻页偏移（0 起，如 5 表示第 6-10 条；仅 Bing 支持）
-        since/until: 时间范围过滤（YYYY-MM-DD，可只给一端；DDG 仅支持 since）
-        site: 限定站点域名（如 "openai.com"，自动追加 site:）
+        offset: 翻页偏移（0 起；请求时各源已多取，聚合后统一切片）
+        since/until: 时间范围过滤（YYYY-MM-DD，可只给一端；仅 Bing 完整支持）
+        site: 限定站点域名（如 "openai.com"，自动追加 site: 并按域名硬过滤）
     """
     if not query or not str(query).strip():
         return "错误：搜索词为空"
@@ -346,8 +357,22 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
         if name not in outcomes:
             outcomes[name] = (name, [], _cf.TimeoutError("软超时"))
 
-    merged, last_err = [], None
-    for name, results, err in outcomes.values():
+    # ── 配额式聚合（v3.16.21）───────────────────────────────────────
+    # 问题：8 个源各返回 6–20 条，若简单按权重拼接，排 first 的通用网页搜索
+    # （bing/so360 动辄 10 条）会占满整个 num 配额，新增的专用源（GitHub 仓库、
+    # Stack Overflow 问答、B 站视频、公众号文章）永远轮不到展示——加了等于没加。
+    # 解法：**轮转（round-robin）**而非分段拼接。每轮从每个源各取 1 条，
+    # 权重高的排在同一轮前面。这样任何可用的源都保证进入视野，且顺序仍由权重主导。
+    # 未命中（返回 0 条）或失败的源自动跳过，不占名额。
+    _weight_of = {name: w for name, w in _SEARCH_ENGINES}
+    _ordered = sorted(
+        outcomes.values(),
+        key=lambda o: -_weight_of.get(o[0], 0),
+    )
+
+    last_err = None
+    buckets = []  # [(engine_name, [results...])]，已安全过滤 + 打来源标签
+    for name, results, err in _ordered:
         if err is not None:
             # 仅「抛错/超时」计为引擎失败；正常返回 0 条是有效结果，不能计入失败电路
             # （否则冷门查询连做 3 次就会把全部引擎判为不可用、暂停 10 分钟）。
@@ -357,7 +382,17 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
             continue
         _search_report(name, True)
         if results:
-            merged.extend(_search_safe(results))
+            # 打上来源标签：模型据此判断「这条来自 Stack Overflow 还是公众号」，
+            # 对可信度/引用判断有直接价值（此前结果看不出出处）。
+            tagged = [{**r, "source": name} for r in results]
+            buckets.append((name, _search_safe(tagged)))
+
+    merged = []
+    for _round in range(max((len(b) for _, b in buckets), default=0)):
+        for _name, bucket in buckets:
+            if _round < len(bucket):
+                merged.append(bucket[_round])
+    merged = _search_drop_junk(merged)
     merged = _search_dedup(merged)
     total_avail = len(merged)
     # site 硬过滤：搜索引擎可能忽略 site: 语法，聚合后按域名兜底保证生效
@@ -396,7 +431,9 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
             hint += "；聚合去重/站点过滤后不足）"
             lines.append(hint)
         for i, r in enumerate(merged, 1):
-            lines.append(f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}".rstrip())
+            _src = str(r.get("source") or "").strip()
+            _tag = f"[{_src}] " if _src else ""
+            lines.append(f"{i}. {_tag}{r['title']}\n   {r['url']}\n   {r['snippet']}".rstrip())
         return "\n\n".join(lines)
     # 结果为空：区分「site 过滤后无结果」vs「翻页越界」vs「引擎真失败」
     if site:

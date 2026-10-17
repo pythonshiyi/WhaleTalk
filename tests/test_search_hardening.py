@@ -73,9 +73,19 @@ def test_report_timeout_longer_cooldown():
 
 # ── 2/3/4/5：search_web 行为（mock 引擎，不联网） ───────────────────
 def _mock_engines(monkeypatch, bing=None, so360=None, ddg=None):
-    monkeypatch.setattr(tool_web, "_search_bing", lambda *a, **k: [] if bing is None else bing)
-    monkeypatch.setattr(tool_web, "_search_so360", lambda *a, **k: [] if so360 is None else so360)
-    monkeypatch.setattr(tool_web, "_search_duckduckgo", lambda *a, **k: [] if ddg is None else ddg)
+    """把**注册表里的全部引擎**替换为桩（默认空列表），确保用例完全不联网。
+
+    历史上这里只 mock 了当时仅有的 bing/so360/ddg 三个；v3.16.21 新增
+    github/stackexchange/hackernews/bilibili/sogou_weixin 后，未 mock 的引擎会
+    发起真实请求并把结果混进断言（表现为「翻页越界」用例拿到真实 GitHub 结果）。
+    改为按 DC._SEARCH_ENGINES 自动全覆盖：以后再加引擎也不会漏。
+    """
+    supplied = {"bing": bing, "so360": so360, "duckduckgo": ddg}
+    for name, _w in dc._SEARCH_ENGINES:
+        payload = supplied.get(name)
+        monkeypatch.setattr(
+            tool_web, "_search_" + name, lambda *a, _p=payload, **k: [] if _p is None else _p
+        )
     # 隔离 URL 安全校验（其对假域名做 DNS 解析，会让测试慢/抖动），聚焦聚合逻辑
     monkeypatch.setattr(tool_web, "_search_safe", lambda rs: list(rs))
 

@@ -64,3 +64,27 @@ def search_safe(results):
     """结果链接安全过滤：只保留 http(s) 公网链接（回环不放行：
     搜索结果来自外部，是 SSRF 注入源，恶意站点可注入 localhost 链接）。"""
     return [r for r in results if not _safe_url(r["url"], allow_loopback=False)]
+
+
+# 「不是搜索结果」的噪声域名/路径：搜索引擎会把自家的功能入口（翻译、词典、
+# 图片/视频聚合、站内搜索）当作第一条结果返回，模型拿到会当成真实网页。
+# 实测：搜「python asyncio error」时 360 的第 1 条是 fanyi.so.com 的翻译页。
+_JUNK_URL_PATTERNS = (
+    r"^https?://fanyi\.so\.com/",
+    r"^https?://(?:[a-z0-9-]+\.)*so\.com/(s\?|i\?|image|video|news|map|fanyi)",
+    r"^https?://image\.so\.com/",
+    r"^https?://(www\.)?bing\.com/(images|videos|maps|news|dict)/",
+    r"^https?://(www\.)?bing\.com/search",
+    r"^https?://(www\.)?baidu\.com/sf/",
+    r"^https?://(www\.)?sogou\.com/(web|pics|news)\?",
+    r"^https?://(www\.)?zhihu\.com/search",
+)
+_JUNK_URL_RE = re.compile("|".join(_JUNK_URL_PATTERNS), re.I)
+
+
+def search_drop_junk(results):
+    """剔除搜索引擎的「功能入口」类伪结果（翻译/图片/词典/站内搜索页）。
+
+    只按 URL 形态判定，不改动真实网页结果；判定不了的（如加密跳转链接）一律保留。
+    """
+    return [r for r in results if not _JUNK_URL_RE.match(str(r.get("url") or ""))]

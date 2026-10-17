@@ -585,13 +585,25 @@ SEARCH_MAX_RESULTS = _env_int("SEARCH_MAX_RESULTS", 5)
 SEARCH_SOFT_DEADLINE = 5.0
 
 # 搜索引擎注册表：(名称, 质量权重)。调用方经 globals() 动态查找 _search_<名称>；
-# 权重决定聚合输出顺序（数值大的优先展示）。bing/so360 国内稳定；duckduckgo
-# 时好时坏（健康度机制自动跳过）；baidu/sogou/yandex 反爬；google 不可达。
-
+# 权重决定聚合输出顺序（数值大的优先展示）。
+#
+# 分两类：
+#   ① 通用网页搜索：bing / so360 国内稳定；duckduckgo 国内实测长期不可达
+#      （健康度机制会在连续 3 次超时后自动跳过 30 分钟，不会拖垮整次搜索）。
+#   ② 专用数据源（v3.16.21，走公开 API，Json 直出、无需反爬对抗）：github /
+#      hackernews / stackexchange / bilibili / sogou_weixin。通用引擎回答不了
+#      「找开源库 / 这个问题别人怎么解 / 有没有视频教程 / 公众号怎么说」这类意图，
+#      专用源能直接给出结构化结果（stars / 答案数 / 播放量）。
+# baidu/sogou/yandex 反爬；google/startpage/brave/searx 国内不可达，均不注册。
 _SEARCH_ENGINES = (
-    ("bing", 3),
-    ("so360", 2),
-    ("duckduckgo", 1),
+    ("bing", 30),
+    ("so360", 25),
+    ("github", 24),
+    ("stackexchange", 22),
+    ("hackernews", 20),
+    ("bilibili", 18),
+    ("sogou_weixin", 16),
+    ("duckduckgo", 10),
 )
 
 CALL_API_MAX_BYTES = _env_int("CALL_API_MAX_BYTES", 500 * 1024)  # 响应体上限 500KB（与 fetch_url 输出对齐）
