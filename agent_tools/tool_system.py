@@ -659,10 +659,28 @@ def self_evolve(feature_name, files, project_dir=None):
     lint_r = _evolve_lint(base, applied)
     smoke_r = _evolve_smoke(base, applied)
     tests_r = _evolve_tests(base, applied)
-    compile_ok = compile_r.startswith(("编译通过", "（"))
-    lint_ok = lint_r.startswith(("无问题", "（"))
-    smoke_ok = smoke_r.startswith(("导入通过", "（"))
-    tests_ok = tests_r.startswith("（") or tests_r.startswith("全部通过")
+    # 判定改为「命中显式失败标记才算失败」，而非依赖各层成功文案的字符串前缀。
+    # 原因：此前用 startswith(("无问题","（")) 之类的前缀匹配，任一层的返回文案
+    # 一改（例如把「无问题（ruff 检查通过）」改成「无新增问题（差分通过…）」），
+    # 判定就会静默失效——四层实际全过，却被判「验证未通过」并回滚，且报错信息
+    # 里每层都显示「通过」，极难定位。改为只看「有没有明确的失败信号」。
+    _FAIL_MARKS = (
+        "错误：", "失败：", "发现问题", "新增问题", "不通过",
+        "退出码", "超时", "越界",
+    )
+
+    def _layer_ok(text):
+        t = (text or "").strip()
+        if not t:
+            return False                      # 空返回视为异常，保守判失败
+        if t.startswith("（"):                # 「（本次改动无 X，跳过）」= 合理跳过
+            return True
+        return not any(mk in t for mk in _FAIL_MARKS)
+
+    compile_ok = _layer_ok(compile_r)
+    lint_ok = _layer_ok(lint_r)
+    smoke_ok = _layer_ok(smoke_r)
+    tests_ok = _layer_ok(tests_r)
 
     if compile_ok and lint_ok and smoke_ok and tests_ok:
         _git(["add", "."])
