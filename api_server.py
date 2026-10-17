@@ -3535,6 +3535,31 @@ def _encrypt_val(v):
         return str(v)
 
 
+def _clear_secret_field(key):
+    """从 config.json 中**真正删除**一个敏感字段（连同其 DPAPI 密文）。
+
+    为什么需要它：`config_utils.save_config` 对「明文为空但磁盘仍有密文」的敏感
+    字段会保留原密文——这是为了保护 API Key 不被一次无关保存抹掉。但对**用户可
+    主动解绑**的凭据（微博 Cookie），这条保护会让「清空」静默无效。此函数直接改写
+    磁盘 JSON 把键删掉，语义明确、不可逆（仅用于用户显式点「清空」）。
+    """
+    import config_utils
+    path = getattr(config_utils, "DEFAULT_CONFIG_PATH", None)
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        data = _read_json(path, {}) or {}
+        if key not in data:
+            return False
+        data.pop(key, None)
+        _atomic_write_json(path, data)
+        logger.info("已清除敏感字段: %s", key)
+        return True
+    except Exception:
+        logger.exception("清除敏感字段失败: %s", key)
+        return False
+
+
 def _read_json(path, default):
     try:
         if os.path.exists(path):
@@ -3597,6 +3622,13 @@ def _services_get():
     out["inbound"] = {
         "port": int(cfg.get("inbound_port") or 0),
         "token": str(cfg.get("inbound_token") or ""),
+    }
+    # 搜索源凭据：微博关键词搜索必需（微博所有搜索接口都要求登录态）。
+    # 未配置时 search_web 的 weibo 源自动跳过，不影响其它源。
+    out["search"] = {
+        "weibo_cookie": str(cfg.get("weibo_cookie") or ""),
+        # 是否已保存过（供前端显示「清除」按钮；不回传密文本身）
+        "has_weibo_cookie": bool(str(cfg.get("weibo_cookie") or "").strip()),
     }
     return out
 
@@ -3677,6 +3709,21 @@ def _services_save(body):
             except (TypeError, ValueError):
                 pass
             patch["inbound_token"] = str(ib.get("token") or "").strip()
+        if isinstance(body.get("search"), dict):
+            # 微博 Cookie：敏感字段，save_config 会做 DPAPI 加密。
+            # 注意：save_config 对「明文为空但磁盘有密文」的敏感字段**保留原密文**
+            # （防止一次无关保存抹掉 API Key）。这条保护对可丢弃的 Cookie 反而是坑：
+            # 用户点「清空」会静默无效。故这里用布尔意图位显式区分：
+            #   clear_weibo_cookie=True → 真正删除（写空串并标记删除）
+            #   非空字符串            → 新值覆盖
+            #   空且未标记            → 不动（保留磁盘原值）
+            srch = body["search"]
+            if bool(srch.get("clear_weibo_cookie")):
+                # 先真正删除磁盘密文，再从内存副本里移除，避免 save_config 把它写回 ''。
+                _clear_secret_field("weibo_cookie")
+                cfg.pop("weibo_cookie", None)
+            elif str(srch.get("weibo_cookie") or "").strip():
+                patch["weibo_cookie"] = str(srch["weibo_cookie"]).strip()
         if patch:
             cfg.update(patch)
             config_utils.save_config(cfg)

@@ -1175,7 +1175,7 @@ export async function getServices() {
   return api("/v1/services");
 }
 
-/** @param {Object} svc webhooks/im/db/email/agent_mail/image/inbound 分组
+/** @param {Object} svc webhooks/im/db/email/agent_mail/image/inbound/search 分组
  * @returns {Promise<{ok?:boolean}>} */
 export async function saveServices(svc) {
   return api("/v1/services", { method: "POST", body: JSON.stringify(svc) });

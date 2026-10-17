@@ -283,6 +283,7 @@ function ServicesTab({ cfg, onTip }) {
       agent_mail: svc.agent_mail || {},
       image: svc.image || {},
       inbound: svc.inbound || {},
+      search: svc.search || {},
     }).catch(() => null);
     if (r && r.ok) onTip("外部服务已保存（敏感字段加密存储）");
     setSaving(false);
@@ -375,6 +376,31 @@ function ServicesTab({ cfg, onTip }) {
           <NumInput min={0} max={65535} value={Number(field("inbound", "port")) || 0} onChange={(v) => setField("inbound", "port", v)} />
         </Row>
         <EmRow label="鉴权 Token" group="inbound" key="token" type="password" />
+      </div>
+      <div className="svc-group">
+        <div className="svc-title">🔎 搜索源凭据</div>
+        <EmRow
+          label="微博 Cookie"
+          group="search"
+          key="weibo_cookie"
+          type="password"
+          placeholder="留空=不使用微博关键词搜索"
+          desc="微博所有关键词搜索接口都要求登录态（免登录的只有热搜，已默认可用）。填入后可让 search_web 搜到微博正文。获取：Chrome/Edge 打开 m.weibo.cn 并登录 → F12 → Network → 刷新 → 任选请求 → 复制请求头里的 Cookie 值。通常几天到几周过期，过期后自动失效（不影响其它搜索源）。"
+        />
+        {field("search", "weibo_cookie") || svc.search?.has_weibo_cookie ? (
+          <Row label="解除绑定" desc="明确移除已保存的微博 Cookie（清空输入框不会自动删除——避免误删）">
+            <button
+              className="confirm-btn"
+              onClick={() => {
+                // 置空输入框 + 打上清除意图位；保存时后端据此真正删除密文
+                setSvc((s) => ({ ...s, search: { ...(s.search || {}), weibo_cookie: "", clear_weibo_cookie: true } }));
+                onTip("已标记清除，点下方「保存外部服务」生效");
+              }}
+            >
+              🗑 清除 Cookie
+            </button>
+          </Row>
+        ) : null}
       </div>
       <div className="svc-group">
         <div className="svc-title">✈️ Agent Mail（CLI 邮件代理）</div>
