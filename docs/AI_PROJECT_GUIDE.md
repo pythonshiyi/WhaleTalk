@@ -501,13 +501,17 @@ def my_tool(...): ...
 
 ## 11. 工程实践与提交纪律（接手必读）
 
-- **行尾（提交前必读，否则一次提交凭空膨胀上千行）**：`.gitattributes` 声明 `eol=lf`
-  （`.bat`/`.ps1` 为 `crlf`），但历史 blob 是**混合**的——`api_server.py`/`deepseek_client.py`/
-  `MODULES.md`/`AutonomyPage.jsx` 存 CRLF，README/TECH_NOTES/CHANGELOG/stores/api.js 是 LF。
-  `git add` 会把 CRLF 归一成 LF → 只改几行会显示整文件差异。对策：
-  提交前 `printf '* -text\n' > .git/info/attributes` → `git add -A` → `rm -f .git/info/attributes` →
-  commit。判断"是否真有改动"用 `git diff --ignore-cr-at-eol`；暂存内容干净度用
-  `git diff --cached HEAD~1 --numstat`（别用 `--cached HEAD`）。
+- **行尾（提交前必读）**：`.gitattributes` 声明 `*.py`/`*.md` 等一律 `eol=lf`，**仓库内所有 blob
+  存的就是 LF**，从未有 CRLF 入库。Windows 上 `core.autocrlf=true` 只让**工作区副本**呈 CRLF
+  （`git ls-files --eol` 的 `w/crlf`），提交时按 `eol=lf` 自动归一——这是期望行为，**不会**膨胀差异
+  （实测：`api_server.py` 无实质改动后 `git add`，`git diff --cached --numstat` 为 0 行）。
+  - **正常 `git add` 即可，不要做任何额外步骤。**
+  - **不要用 `* -text` 覆盖 `.git/info/attributes`**：它关掉归一化，把工作区 CRLF 原始字节写进存 LF 的
+    仓库，**反而**制造整文件差异（实测 AI 指南自身：正常 add 25 行 → `-text` 后 705/683 行）。
+    旧版文档的「提交前先抑制归一化」说法**已作废**，勿再照做。
+  - 查实际状态：`git ls-files --eol <文件>`（`i/` = 仓库存储、`w/` = 工作区）；
+    判断"是否真有改动"用 `git diff --ignore-cr-at-eol`；看暂存行数用 `git diff --cached --numstat`
+    （别用 `git diff --cached HEAD`，那是跟自己的中间提交比，会误报）。
 - **git 推送**：远程 `github.com/pythonshiyi/WhaleTalk`，分支 `main`；fetch/push 都是 https，
   `credential.helper=wincred` 自动提供凭据（2026-09 实测 https 直推可用，无需 ssh）。
   核验同步用 `git ls-remote origin refs/heads/main` 与 `git rev-parse HEAD` 是否一致。

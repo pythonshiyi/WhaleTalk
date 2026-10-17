@@ -102,10 +102,16 @@ git rev-parse HEAD                       # 两者一致 = 已同步
 
 ### 行尾（提交前必读）
 
-`.gitattributes` 声明 `eol=lf`，但历史 blob 是**混合**的（`api_server.py`/`deepseek_client.py`/`MODULES.md`
-存 CRLF，README/TECH_NOTES/CHANGELOG 是 LF）。`git add` 会把 CRLF 归一成 LF，只改几行会显示整文件差异。
-对策：提交前 `printf '* -text\n' > .git/info/attributes` → `git add -A` → `rm -f .git/info/attributes` → commit；
-判断"是否真有改动"用 `git diff --ignore-cr-at-eol`。
+`.gitattributes` 声明 `*.py`/`*.md` 等一律 `eol=lf`，**仓库里所有 blob 存的就是 LF**，从未有 CRLF 入库。
+只是在 Windows 上 `core.autocrlf=true` 会让**工作区副本**是 CRLF（`git ls-files --eol` 的 `w/crlf`），
+提交时由 `eol=lf` 属性自动归一成 LF——这是**正确且期望的**行为，**不会**造成整文件差异（实测：给
+`api_server.py` 做一次无实质改动后 `git add`，`git diff --cached --numstat` 为 0 行）。
+
+- **正常 `git add` 即可**，不需要任何额外步骤。
+- **不要**用 `* -text` 覆盖 `.git/info/attributes`：那会关掉归一化，把工作区的 CRLF 原始字节塞进
+  一个存 LF 的仓库，反而制造整文件差异（实测 AI 指南：正常 add 是 25 行改动，`-text` 后变成 705/683 行）。
+- 想确认某文件的实际状态：`git ls-files --eol <文件>`——`i/` 是仓库内存储（恒为 LF）、`w/` 是工作区。
+- 判断"是否真有改动"用 `git diff --ignore-cr-at-eol`；见到莫名整文件差异先查行尾再查逻辑。
 
 ### 本地不入库产物
 
