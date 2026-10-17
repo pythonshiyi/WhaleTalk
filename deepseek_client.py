@@ -2057,36 +2057,158 @@ def _evolve_smoke(base, rels):
         return f"错误：导入冒烟执行失败: {e}"
 
 
+def _evolve_ruff_json(ruff, base, paths, stdin_content=None, stdin_rel=None):
+    """跑一次 ruff --output-format=json；返回 (解析结果|None, 原始输出, 错误说明)。
+
+    stdin_content 非空时改为「喂 stdin + --stdin-filename」模式：这样 ruff 仍以
+    项目根为 cwd、能正常发现项目 ruff 配置（实测在临时目录跑会因配置发现失败
+    而产生 227 条无关告警，项目根下仅 25 条），可用于对「改动前内容」做基线检查。
+    """
+    import json as _json
+    import tempfile as _tf
+    if stdin_content is not None:
+        args = [ruff, "check", "--output-format", "json",
+                "--stdin-filename", str(stdin_rel), "-"]
+    else:
+        args = [ruff, "check", "--output-format", "json"] + list(paths)
+    with _tf.SpooledTemporaryFile(max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace") as out:
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE if stdin_content is not None else None,
+            stdout=out, stderr=subprocess.STDOUT,
+            text=False, cwd=base,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            if stdin_content is not None:
+                try:
+                    proc.stdin.write(stdin_content)
+                    proc.stdin.close()
+                except Exception:
+                    pass
+            proc.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            return None, "", "ruff 检查超时（120 秒）"
+        out.seek(0)
+        raw_b = out.read(1 << 21)
+    raw = raw_b.decode("utf-8", "replace") if isinstance(raw_b, (bytes, bytearray)) else str(raw_b)
+    try:
+        parsed = _json.loads(raw) if raw.strip().startswith("[") else None
+    except Exception:
+        parsed = None
+    if parsed is None:
+        return None, raw[:8000], "ruff 输出无法解析为 JSON（需 ruff >= 0.1）"
+    return parsed, raw, ""
+
+
 def _evolve_lint(base, rels):
-    """只对改动文件跑 ruff（规避项目基线告警淹没，让进化聚焦改动本身）。"""
+    """只对改动文件跑 ruff，并与**基线差分**：只有「新增告警」才算问题。
+
+    修复的缺陷：旧实现对改动后的文件要求 `ruff check` 返回码为 0。但本仓库主力
+    文件自带历史告警（deepseek_client.py 基线 25 个：B023/SIM105/UP031），于是
+    任何改到该文件的进化都会被永久拦住——哪怕只改一行的合法修复也过不去，
+    自我进化链对主文件彻底失效（本次 Bing 修复正是因此被迫改走手工分支）。
+
+    现改为：
+      1. 对「改动后」的工作区内容跑 ruff（JSON）；
+      2. 用 `git show HEAD:<rel>` 取出改动前内容写入临时目录（保持相对路径结构），
+         同样跑一次 ruff，得到基线告警集合（按 code + message 去重比对）；
+      3. 只把基线中不存在的告警判为「新增」，逐条报告；无新增即通过。
+         新文件（git 中不存在）基线为空集，等价于原语义。
+
+    保留的闸门价值不变：引入了新的 lint 问题依然会被拦住；同时不再被历史包袱误杀。
+    """
     import shutil as _sh
-    py_paths = [os.path.join(base, r) for r in rels if r.endswith(".py")]
-    if not py_paths:
+    py_rels = [r for r in rels if r.endswith(".py")]
+    if not py_rels:
         return "（本次改动无 Python 文件，跳过 lint）"
     ruff = _sh.which("ruff")
     if not ruff:
         return "（本机未安装 ruff，跳过 lint）"
     try:
-        import tempfile as _tf
-        with _tf.SpooledTemporaryFile(max_size=1 << 20, mode="w+t", encoding="utf-8", errors="replace") as out:
-            proc = subprocess.Popen(
-                [ruff, "check"] + py_paths, stdout=out, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace", cwd=base,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        cur, cur_raw, cur_err = _evolve_ruff_json(ruff, base, [os.path.join(base, r) for r in py_rels])
+        if cur is None:
+            return f"错误：{cur_err}\n{cur_raw[:2000]}"
+
+        # ---- 取基线结果 ----
+        # 用 `git show HEAD:<rel>` 拿改动前内容，再以 `--stdin-filename` 交给 ruff，
+        # cwd 仍为项目根——这样 ruff 能正常发现项目 ruff 配置。
+        # （踩过的坑：把 HEAD 内容写到临时目录再检查，ruff 找不到项目配置，
+        #   同一文件会报出 227 条与本项目无关的规则告警，差分彻底失效。）
+        git_bin = _sh.which("git")
+        baseline_counts = {}   # (code, message) -> 基线中该组的出现次数
+        baseline_note = ""
+        if not git_bin:
+            baseline_note = "（本机无 git，无法取基线；按全量告警判定）"
+        else:
+            for rel in py_rels:
+                try:
+                    r = subprocess.run(
+                        [git_bin, "show", f"HEAD:{rel}"], cwd=base,
+                        capture_output=True, timeout=60,
+                    )
+                    blob = r.stdout if r.returncode == 0 else None
+                except Exception:
+                    blob = None
+                if not blob:
+                    continue  # 新文件（HEAD 中不存在）：基线不贡献任何豁免
+                bres, braw, berr = _evolve_ruff_json(
+                    ruff, base, None, stdin_content=blob, stdin_rel=rel
+                )
+                if bres is None:
+                    baseline_note = f"（基线 ruff 失败：{berr[:160]}；按全量告警判定）"
+                    baseline_counts = {}
+                    break
+                for it in bres:
+                    _k = (it.get("code"), (it.get("message") or "").strip())
+                    baseline_counts[_k] = baseline_counts.get(_k, 0) + 1
+
+        # 基线取失败（无 git 或 ruff 基线跑挂）时退化为「全量告警都算问题」，
+        # 宁可保守拦住、也不静默放行；同时在输出里明确说明降级原因。
+        if baseline_note:
+            return (
+                f"{baseline_note} 改动后共 {len(cur)} 个告警。\n"
+                + "\n".join(
+                    f"  {(it.get('location') or {}).get('row', '?')}: {it.get('code')} "
+                    f"{(it.get('message') or '')[:140]}"
+                    for it in cur[:30]
+                )
             )
-            try:
-                proc.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                _kill_tree(proc)
-                return "错误：ruff 检查超时（120 秒）"
-            out.seek(0)
-            out_data = out.read(12000)
-            out.seek(0, os.SEEK_END)
-            if out.tell() > 12000:
-                out_data += "\n[输出已截断]"
-        if proc.returncode == 0:
-            return "无问题（ruff 检查通过）"
-        return f"ruff 检查发现问题：\n{out_data}"
+
+        # 差分策略说明：**不按行号比对**。改动函数会让后续行号整体位移，
+        # 行号一比对就会把同一条历史告警全判成「新增」（实测误报 22 条）。
+        # 改为按 (规则代码, 消息文本) 分组计数：某组数量超出基线数量时，
+        # 超出的部分才算本次新增。这样「同规则多一处」能被准确识别，
+        # 而行号位移完全不影响判定。
+        cur_counts = {}
+        for it in cur:
+            _k = (it.get("code"), (it.get("message") or "").strip())
+            cur_counts.setdefault(_k, []).append(it)
+        added = []
+        for _k, _items in cur_counts.items():
+            _allow = baseline_counts.get(_k, 0)
+            if len(_items) > _allow:
+                added.extend(_items[_allow:])
+        if not added:
+            return (
+                f"无新增问题（ruff 差分通过：改动后 {len(cur)} 个告警，"
+                "全部与基线一致）"
+            )
+        note = "（基线取失败，已退化为全量判定）" if baseline_note else ""
+        lines = [
+            f"ruff 检查发现 {len(added)} 个新增问题{note}"
+            f"（另有 {len(cur) - len(added)} 个基线历史告警，不计入）："
+        ]
+        for it in added[:40]:
+            loc = it.get("location") or {}
+            lines.append(
+                f"  {loc.get('row', '?')}:{loc.get('column', '?')} "
+                f"{it.get('code', '?')} {(it.get('message') or '')[:160]}"
+            )
+        if len(added) > 40:
+            lines.append(f"  …… 其余 {len(added) - 40} 条已省略")
+        return "\n".join(lines)
     except Exception as e:
         return f"错误：ruff 执行失败: {e}"
 
