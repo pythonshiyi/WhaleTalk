@@ -185,11 +185,23 @@ CLAIMS = [
     (README,   r"agent_tools/（(\d+) 个工具域模块）", "tool_modules", "工具域模块数(README 架构图)"),
     (AI_GUIDE, r"(\d+) 个模块共 \d+ 工具",            "tool_modules", "工具域模块数(AI 指南)"),
     # ② AI 指南内的测试规模与路由数：与 README/MODULES 同类，但当时只有后两者入库
-    (AI_GUIDE, r"(\d+)\s*个文件 / (\d+) 用例",        "pytest_files", "测试文件数(AI 指南)"),
+    #    ⚠ 2026-10 修正：原写法 `(\d+)\s*个文件 / (\d+) 用例` 有**两个捕获组**，
+    #    而校验只比对 group(1)（见下主循环）——用例数因此**从未被检查**，
+    #    AI 指南的 1032 一路漂到「README/MODULES 已修正、本文件仍错」且门禁全绿。
+    #    现拆成两条单组规则；并由 CLAIM_GROUP_INVARIANT 拦住「再写出多组规则」。
+    (AI_GUIDE, r"(\d+)\s*个(?: pytest)?文件",         "pytest_files", "测试文件数(AI 指南)"),
+    (AI_GUIDE, r"/ (\d+)\s*用例",                     "pytest_cases", "测试用例数(AI 指南 / N 用例式)"),
     (AI_GUIDE, r"\*\*(\d+) 个 `/v1` 路由\*\*",        "endpoints",    "/v1 路由数(AI 指南加粗式)"),
     # ③ 前端 node 套件数：README 曾写「21 个」而实际 22 个（且其中 2 个从未被 runner 跑到）
     (README,   r"前端\s*(\d+)\s*个 node 套件",         "webui_suites", "前端 node 套件数(README)"),
     (AI_GUIDE, r"\+ (\d+) 个前端 node 套件",           "webui_suites", "前端 node 套件数(AI 指南)"),
+    # ④ 版本号：此前**完全在门禁之外**——`config_defaults.VERSION` 改了，README/AI 指南的
+    #    「当前 3.16.x」只能靠人记得手改 5 处（发版必踩）。这是「文档数字全口径」的最后一块。
+    (README,   r"当前 \*\*(\d+\.\d+\.\d+)\*\*",         "version",      "版本号(README 单一源说明)"),
+    (README,   r"\*\*WhaleTalk v(\d+\.\d+\.\d+)\*\*",   "version",      "版本号(README 英文简介)"),
+    (AI_GUIDE, r"AI 开发速查手册（v(\d+\.\d+\.\d+)）",  "version",      "版本号(AI 指南标题)"),
+    (AI_GUIDE, r"`VERSION`（当前 `(\d+\.\d+\.\d+)`）",  "version",      "版本号(AI 指南单一源说明)"),
+    (AI_GUIDE, r"/ 版本 (\d+\.\d+\.\d+)）",             "version",      "版本号(AI 指南页脚口径)"),
 ]
 
 # ── 文本断言：文档不应再包含的过期表述 ──
@@ -443,31 +455,51 @@ def main(argv=None):
           f"前端 {expected['webui_suites']} 套件")
 
     problems = 0
+
+    # ── 不变式：每条声明规则只允许一个捕获组 ──
+    # 主循环只用 group(1) 比对（`--fix` 也只替换 group(1)），多写的捕获组会被**静默忽略**。
+    # 历史教训：AI 指南曾用 `(\d+)\s*个文件 / (\d+) 用例`，用例数自入库起从未被检查，
+    # 一路漂到 1032 而门禁常绿。这类「门禁存在但不生效」必须由门禁自己拦住。
+    for _path, _pattern, _key, _label in CLAIMS:
+        _groups = re.compile(_pattern).groups
+        if _groups != 1:
+            problems += 1
+            print(f"[规则缺陷] {_path.name}:{_label} 正则含 {_groups} 个捕获组"
+                  f"（必须恰好 1 个，否则多余组永不校验）：{_pattern}")
+
     for path, pattern, key, label in CLAIMS:
         text = path.read_text(encoding="utf-8")
         exp = expected[key]
         if exp is None:
             print(f"[跳过] {path.name}:{label} — 无法实测（缺 pytest/依赖）")
             continue
+        # 声明值可为整数（计数）或字符串（版本号）；统一按字符串比较，避免 int() 抛异常。
+        want = str(exp)
+        as_str = isinstance(exp, str)
+
+        def _bad(m):
+            got = m.group(1)
+            return got != want if as_str else (not got.isdigit() or int(got) != exp)
+
         hits = list(re.finditer(pattern, text))
         if not hits:
             problems += 1
             print(f"[缺失] {path.name} 找不到声明「{label}」({pattern})")
             continue
-        diffs = [m for m in hits if int(m.group(1)) != exp]
+        diffs = [m for m in hits if _bad(m)]
         for m in diffs:
             s, e = m.start(1), m.end(1)
             problems += 1
             print(f"[不一致] {path.name}:{label} 声明 {m.group(1)}，实测 {exp}"
                   f" → {text[max(0, s - 40):e + 10].strip()}")
         if fix and diffs:
-            def repl(m):
-                if int(m.group(1)) != exp:
-                    return m.group(0).replace(m.group(1), str(exp), 1)
+            def repl(m, _want=want):
+                if _bad(m):
+                    return m.group(0).replace(m.group(1), _want, 1)
                 return m.group(0)
             new_text, _ = re.subn(pattern, repl, text)
             _write_preserving_eol(path, new_text)
-            print(f"       已修正为 {exp}（仅替换数字，不动组外文本）")
+            print(f"       已修正为 {want}（仅替换数字，不动组外文本）")
 
     for path, frag, why in STALE_TEXT:
         text = path.read_text(encoding="utf-8")

@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.17）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.18）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,9 +17,9 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.17`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.18`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **106 个 `/v1` 路由**、**106 个 pytest 文件 / 1032 用例 + 22 个前端 node 套件**、
+  **106 个 `/v1` 路由**、**106 个 pytest 文件 / 1034 用例 + 22 个前端 node 套件**、
   源码约 **7.6 万行**（根目录 3.5 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万；
   主力为 `api_server.py` 10,351 / `deepseek_client.py` 5,927 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
@@ -47,7 +47,7 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试（改完代码必跑）──
-python -m pytest -q                      # 后端回归（106 个文件 / 1032 用例；CI 同款）
+python -m pytest -q                      # 后端回归（106 个文件 / 1034 用例；CI 同款）
 cd webui && npm test                     # 前端 22 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
 cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typedef 与后端字段对齐门禁）
@@ -172,7 +172,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（169 �
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 106 个 pytest 文件 / 1032 用例 |
+| `tests/` | 后端回归 106 个 pytest 文件 / 1034 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
@@ -567,6 +567,15 @@ def my_tool(...): ...
     却被 CI 当作门禁（现已改 `--strict`）、文档没人链接（孤儿文档）。
     **共同点**：机制「存在」不等于机制「生效」；凡是门禁/跑测/索引，都要有一条
     **断言它会失败**的反证测试。
+24. **门禁规则的「正则捕获组」也是盲区之一**（v3.16.18）：`check_docs.py` 的声明规则只比对
+    `group(1)`，而 AI 指南的测试规模规则写成了 `(\d+)\s*个文件 / (\d+) 用例`——
+    **用例数那一组从入库起就没被检查**，README 已同步、AI 指南仍停在旧值也照样全绿。
+    现由「每条规则必须恰好一个捕获组」这条不变式兜底；同理**版本号**此前完全在门禁外
+    （发版靠手改 5 处），现也有 5 条规则 + `--fix` 自动同步。
+    **教训**：加规则时先问「这条规则失败长什么样」，再用反证测试确认它真的会红。
+25. **只在开发机上红的测试，比没有测试更危险**（v3.16.18）：`test_node_resolve.py` 的断言
+    在「本机 nvm + node 在 PATH」时必挂，而 CI（Linux、探测目录为空）恰好绕过该分支——
+    本地回归长期不可信。**跨平台分支要用 monkeypatch 显式走两条路径**，别让环境决定跑哪条。
 
 ---
 
@@ -580,7 +589,7 @@ def my_tool(...): ...
 
 ---
 
-## 14. 测试资产速查（tests/，106 个 pytest 文件 / 1032 用例）
+## 14. 测试资产速查（tests/，106 个 pytest 文件 / 1034 用例）
 
 按领域分组（文件名即内容）：
 
@@ -645,6 +654,7 @@ def my_tool(...): ...
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | 改前端样式：令牌体系与一致性铁律 |
 | [出网账本与记忆门面.md](出网账本与记忆门面.md) | 新增出网能力 / 改记忆写入路径 |
 | [架构收口-P0.md](架构收口-P0.md) | 理解 `context_providers`/`degrade`/`tool_hooks` 三个接缝的设计动机 |
+| [提案-修复self_evolve的lint闸门被基线告警卡死.md](提案-修复self_evolve的lint闸门被基线告警卡死.md) | 改 `self_evolve` 的 lint 闸门、或排查「四层全过仍判失败」前必读 |
 | [../CHANGELOG.md](../CHANGELOG.md) | 查「某个能力是哪个版本引入的、为什么」 |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) / [../SECURITY.md](../SECURITY.md) | 提交纪律 / 安全模型与漏洞上报 |
 
@@ -654,5 +664,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1032 用例 / 版本 3.16.17）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1034 用例 / 版本 3.16.18）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*
