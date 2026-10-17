@@ -230,13 +230,18 @@ def _provide_brain(ctx):
             sp = str(ctx.dep("self_profile")() or "")
             if sp.strip() and "为空" not in sp:
                 include_goals = False
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            # 自我认知取不到 → 目标会被重复注入（不致命，但会让大脑段与自我段内容重叠）
+            import degrade
+            degrade.degrade("context.self_profile", e,
+                            "自我认知不可用，目标段可能与大脑上下文重复", critical=False)
         try:
             mem = ctx.dep("memory_full")() or {}
             dedup = {str(f.get("text") or "") for f in (mem.get("facts") or []) if f.get("text")}
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            import degrade
+            degrade.degrade("context.memory_dedup", e,
+                            "记忆去重失效，大脑镜像可能与记忆段落重复注入", critical=False)
         kw = dict(memory_enabled=mem_on, include_goals=include_goals, dedup_texts=dedup)
         if budget <= 0:
             bc = (brain_api.brain_context(query=q, **kw) if q

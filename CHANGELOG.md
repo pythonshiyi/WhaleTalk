@@ -2,6 +2,69 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.20（2026-10-17）—— 🩺 可诊断性：诊断包 + 静默失败基线门禁
+
+**版本号 3.16.19 → 3.16.20。** 本轮不新增产品能力，补的是**排障能力**。起因是一个量化事实：
+
+| 指标 | 实测（改造前） |
+|---|---|
+| 静默吞异常（`except` 体只有 `pass`） | **393 处** |
+| `degrade()` 调用点 | **30 余处** |
+| 用户遇到「AI 变笨/工具没反应」时能拿到的东西 | **没有**——只能翻 `data/logs/` |
+
+`degrade.py`（P0-3）、`tool_trace`、出网账本三套器件早已在位，缺的是**出口**。
+
+### 新增：诊断包（`diagnostics.py` + `/v1/diagnostics`）
+
+一份 JSON 收齐七类事实：版本与平台、**与默认值不同的配置项**（凭据自动打码、长串截断）、
+降级账本（哪项能力在静默失效、累计次数、critical 标记）、最近错误日志尾部、
+工具与路由规模、可选能力可用性、数据目录占用 Top-10。
+
+- 入口三处：UI「设置 → 诊断」两个按钮（导出 / 查看摘要）、`GET /v1/diagnostics`（`?summary=1`
+  只回摘要）、`POST /v1/diagnostics`（导出到 `DATA_DIR/diagnostics/`）、CLI `python diagnostics.py --export`。
+- **永不抛出**：每段采集独立 try，失败进 `collection_errors` 而不是让整份报告崩掉（有测试锁定）。
+- **默认脱敏**：只输出与 `DEFAULT_CONFIG` 不同的键；键名含 password/token/key/secret 一律 `<redacted>`；
+  容器值只留类型与规模（有测试锁定「明文密码不出现在报告里」）。
+- 顺带接上了 `toolkit.registry_names()`——它此前是「有实现、零调用」的一员，现在负责报告工具数。
+
+### 新增：静默吞异常门禁（`tools/check_silent_except.py`）
+
+不搞「一次性全改 393 处」——多数是无害探测/清理。做法与 `self_evolve` 的 lint 闸门同源：**基线差分**。
+
+- 存量按**指纹**固化（`文件 | 函数限定名 | except 类型 | try 首句 | 同签名序号`），不按行号，
+  所以改一行不会让整份基线失效；同一函数里两处「长得一样」的静默点也能各自计数。
+- 新增 → 红灯；豁免写 `# noqa: silent-except: 原因`；修完可 `--update-baseline` 收紧。
+- `--report` 给出分类视图：资源探测/清理 138 · 可选依赖 87 · **待人工评估 168**（含 Top 模块），
+  避免「一把抓」。已接入 CI（`gate-tools`）。
+
+### 修复：9 处「失败会让用户看到假象」的静默点
+
+不追求干净，只修「失败时用户会被误导」的那些，全部补上影响描述：
+
+| 位置 | 失败时的假象 |
+|---|---|
+| `api_server._handle_chat` → `_chat_harvest` | 这轮对话没进长期记忆，用户以为它记住了（critical） |
+| `api_server` 流式作业 → `_record_tasklog` | 任务链缺失，热图/统计少一次记录 |
+| `api_server._record_tasklog` → 落盘 / `_crystallize_skills` | 任务统计重启即丢 / 成功经验不沉淀为技能 |
+| `context_providers` → self_profile / memory_full 去重 | 目标与记忆段落重复注入，占用预算 |
+| `deepseek_client` → `on_metrics` | 界面不显示本轮速度与 token |
+| `deepseek_client` → 工具开始事件 | 工具卡片不出现，界面像卡住 |
+| `deepseek_client` → `_bind_thread_client` | 并发会话可能串用网关配置 |
+
+### 测试与门禁
+
+- 新增 `tests/test_diagnostics.py`（11 例：分节齐全、单段失败不传染、凭据打码、导出落盘、
+  导出失败降级、日志尾部、指纹稳定、两个端点注册）与 `tests/test_silent_except_gate.py`
+  （6 例：抓新增、认豁免、基线覆盖、重复点各计数、仓库基线自洽、基线有序唯一）。
+- 后端 `pytest` **1060 passed**；前端 `npm test` 22/22、`npm run build` 通过；
+  五道门禁全绿（新增 `check_silent_except`）。
+- `check_docs` 口径随之更新：路由 106 → **107**（`/v1/diagnostics` 一个路径、GET+POST 两个端点）。
+
+### 遗留
+
+- 168 处「待人工评估」的静默点仍在（基线内）。**它们不会自己变好**：改到某个模块时顺手看一眼
+  `--report` 里该模块的清单，比一次性大扫除有效。
+
 ## v3.16.19（2026-10-17）—— 🔐 授权面板接管社区侧真实授权
 
 **版本号 3.16.18 → 3.16.19。** 本条修的是 v3.16.18「已知遗留」里那处**安全承诺落空**：

@@ -838,6 +838,35 @@ function ParamsTab({ active }) {
   const [customModel, setCustomModel] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [loadErr, setLoadErr] = React.useState("");
+  const [diagBusy, setDiagBusy] = React.useState(false);
+  const [diagOut, setDiagOut] = React.useState("");
+
+  const refreshDiag = async () => {
+    setDiagBusy(true);
+    try {
+      const r = await api.getDiagnosticsSummary();
+      const d = (r && r.degrade) || {};
+      const errs = typeof r?.errors_log === "number" ? r.errors_log : 0;
+      setDiagOut(`降级 ${d.count || 0} 项（关键 ${d.critical || 0}）· 工具 ${r?.tools ?? "?"} · 错误日志 ${errs} 行`);
+    } catch (e) {
+      setDiagOut(`读取失败：${e && e.message ? e.message : e}`);
+    } finally {
+      setDiagBusy(false);
+    }
+  };
+
+  const exportDiag = async () => {
+    setDiagBusy(true);
+    try {
+      const r = await api.exportDiagnostics();
+      if (!r || r.ok === false) throw new Error((r && r.error) || "导出失败");
+      setDiagOut(`已导出：${r.path}（${(r.bytes / 1024).toFixed(1)} KB）`);
+    } catch (e) {
+      setDiagOut(`导出失败：${e && e.message ? e.message : e}`);
+    } finally {
+      setDiagBusy(false);
+    }
+  };
   const [abilities, setAbilities] = React.useState(null);
   const [toolQ, setToolQ] = React.useState("");
   const [openDomains, setOpenDomains] = React.useState(() => new Set());
@@ -1161,6 +1190,22 @@ function ParamsTab({ active }) {
               {[12, 13, 14, 15, 16, 17, 18].map((n) => <option key={n} value={n}>{n}px</option>)}
             </select>
           </Field>
+        </div>
+      </Group>
+
+      <Group id="diagnostics" icon="settings" title="诊断" open={isOpen("diagnostics")} onToggle={toggleGroup} dirty={false}
+        right={<span className="px-scope px-scope-session">出问题先导出这份</span>}>
+        <div className="fx-hint" style={{ marginBottom: 10, lineHeight: 1.7 }}>
+          诊断包把「哪里坏了」收成一份 JSON：版本与平台、与默认值不同的配置项（凭据自动打码）、
+          降级账本（哪项能力在静默失效、累计多少次）、最近错误日志、工具与路由规模、
+          可选能力可用性、数据目录占用。发给别人排查前，不需要再手工翻日志。
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button className="confirm-btn" disabled={diagBusy} onClick={exportDiag}>
+            {diagBusy ? "导出中…" : "导出诊断包"}
+          </button>
+          <button className="confirm-btn" disabled={diagBusy} onClick={refreshDiag}>查看摘要</button>
+          {diagOut ? <span className="fx-hint" style={{ wordBreak: "break-all" }}>{diagOut}</span> : null}
         </div>
       </Group>
 

@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.19）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.20）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,9 +17,9 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.19`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.20`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **106 个 `/v1` 路由**、**106 个 pytest 文件 / 1043 用例 + 22 个前端 node 套件**、
+  **107 个 `/v1` 路由**、**106 个 pytest 文件 / 1060 用例 + 22 个前端 node 套件**、
   源码约 **7.6 万行**（根目录 3.5 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万；
   主力为 `api_server.py` 10,351 / `deepseek_client.py` 5,927 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
@@ -47,7 +47,7 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试（改完代码必跑）──
-python -m pytest -q                      # 后端回归（107 个文件 / 1043 用例；CI 同款）
+python -m pytest -q                      # 后端回归（109 个文件 / 1060 用例；CI 同款）
 cd webui && npm test                     # 前端 22 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
 cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typedef 与后端字段对齐门禁）
@@ -57,10 +57,14 @@ python tools/audit_tools.py --strict     # 六层一致性审计（error 级门�
 python tools/validate_tools.py           # smart_tools 全链路回归（描述无损等）
 python tools/island_check.py --strict    # 十层孤岛对账（工具可达性，含 __all__ re-export）
 python tools/check_docs.py               # 文档数字 vs 源码实测（169 工具 / 106 路由 / 版本）
+python tools/check_silent_except.py      # 静默吞异常基线差分（只拦新增，见 §12 踩坑 26）
+
+# ── 出问题时的第一动作：导诊断包（不需要你翻日志）──
+python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 UI「设置 → 诊断」
 ```
 
 > **CI**：`.github/workflows/ci.yml` 含 4 个 job——`check`（ruff 关键规则 `E9,F63,F7,F82` +
-> 入口 `py_compile`）、`test-backend`（`pytest -q` + `check_docs`）、`gate-tools`（上面四道门禁）、
+> 入口 `py_compile`）、`test-backend`（`pytest -q` + `check_docs`）、`gate-tools`（上面五道门禁）、
 > `webui`（npm ci + build + `npm test`，自动发现全部 22 个套件）。全在 `windows-latest` 上跑。
 
 ---
@@ -72,7 +76,7 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（169 �
 | 层 | 模块 | 一句话职责 |
 |---|---|---|
 | **入口** | `web_app.py`（989 行） | 唯一启动入口：参数解析 → 依赖自检/自动安装 → 桌面+开始菜单快捷方式 → WebUI 自动构建 → 单实例探测 → 起 API → 开浏览器 → 托盘常驻 |
-| **API 层** | `api_server.py`（10,351 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**106 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
+| **API 层** | `api_server.py`（10,351 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**107 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
 | **能力引擎** | `deepseek_client.py`（5,927 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步。**工具实现已迁出至 `agent_tools/`** |
 | **工具声明** | `toolkit.py`（269 行） | **`@tool()` 装饰器 + 注册表 + 六层构建函数**——工具系统单一事实源（见 §6.1） |
 | **钩子管线** | `tool_hooks.py`（344 行） | 横切关注点收口：pre/post 钩子表 + `wrap()` 包装器；在 `@tool()` **注册处**统一包装执行体，任何调用路径都逃不掉钩子（P0-1） |
@@ -170,9 +174,9 @@ python tools/check_docs.py               # 文档数字 vs 源码实测（169 �
 | 路径 | 职责 |
 |---|---|
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
-| `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案） |
+| `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案）、`check_silent_except.py`（静默吞异常基线差分门禁 + `silent_except_baseline.txt`） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 106 个 pytest 文件 / 1043 用例 |
+| `tests/` | 后端回归 106 个 pytest 文件 / 1060 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
@@ -576,6 +580,17 @@ def my_tool(...): ...
 25. **只在开发机上红的测试，比没有测试更危险**（v3.16.18）：`test_node_resolve.py` 的断言
     在「本机 nvm + node 在 PATH」时必挂，而 CI（Linux、探测目录为空）恰好绕过该分支——
     本地回归长期不可信。**跨平台分支要用 monkeypatch 显式走两条路径**，别让环境决定跑哪条。
+26. **「有 degrade 模块」不等于「失败可见」**（v3.16.20）：`degrade.py` 早在 P0 就落地，
+    但全项目 `except …: pass` 有 **393 处**、`degrade()` 只有 **30 余个调用点**——
+    器件在位，绝大多数失败仍然无声。做法不是一次性全改（多数是无害探测），而是：
+    ① 把口径测量清楚（`tools/check_silent_except.py --report` 按「资源清理/可选依赖/待评」分类）；
+    ② 只把**会让用户看到假象**的那批补上 `degrade(impact=..., critical=?)`
+    （v3.16.20 修了 9 处：记忆回灌、任务链、技能结晶、上下文去重、指标与工具回调）；
+    ③ 用**基线差分门禁**把「新增即拦」固化，避免边修边长。
+    判断标准始终是「失败时用户会不会被误导」，不是「except 写得干不干净」。
+27. **诊断包要能自己坏掉而不影响主流程**：`diagnostics.py` 每段采集独立 try，失败进
+    `collection_errors`；配置只输出**与默认值不同的键**且凭据打码。这两个约束都有测试锁定——
+    诊断是排障出口，它自己抛异常或泄密，比没有诊断更糟。
 
 ---
 
@@ -589,7 +604,7 @@ def my_tool(...): ...
 
 ---
 
-## 14. 测试资产速查（tests/，106 个 pytest 文件 / 1043 用例）
+## 14. 测试资产速查（tests/，106 个 pytest 文件 / 1060 用例）
 
 按领域分组（文件名即内容）：
 
@@ -664,5 +679,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1043 用例 / 版本 3.16.19）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1060 用例 / 版本 3.16.20）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

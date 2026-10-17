@@ -5182,8 +5182,10 @@ class DeepSeekClient:
                 pass
             try:
                 on_metrics(payload)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                import degrade
+                degrade.degrade("metrics.callback", e,
+                                "前端指标回调失败，本轮速度/token 不显示", critical=False)
         empty_retries = 0
         plan_rejections = 0
         json_retried = False  # JSON 输出自校验重试只允许一次
@@ -5573,13 +5575,19 @@ class DeepSeekClient:
                     # 下工具拿到的是本作业的 client，而非被其它会话覆盖的全局单例。
                     try:
                         _bind_thread_client(self)
-                    except Exception:
-                        pass
+                    except Exception as e:  # noqa: BLE001
+                        import degrade
+                        degrade.degrade("tool.thread_client", e,
+                                        "工具线程未绑定本会话 client，并发会话可能串用网关配置",
+                                        critical=False)
                     if on_tool_start is not None:
                         try:
                             _emit_tool_cb(on_tool_start, name, raw_args, tc.get("id"))
-                        except Exception:
-                            pass
+                        except Exception as e:  # noqa: BLE001
+                            import degrade
+                            degrade.degrade("tool.callback.start", e,
+                                            "工具开始事件未通知前端，界面可能看起来像卡住",
+                                            critical=False)
                     fn = TOOL_CALL_MAP.get(name)
                     args = {}
                     t0 = time.monotonic()

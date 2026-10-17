@@ -688,6 +688,20 @@ export async function brainGrantAction(body) {
   return api("/v1/brain/grant", { method: "POST", body: JSON.stringify(body) });
 }
 
+// ── 诊断包 ───────────────────────────────────────────
+
+/** 诊断摘要（degrade 计数 / 工具与路由规模 / 错误日志行数），高频轮询用。
+ * @returns {Promise<Object>} */
+export async function getDiagnosticsSummary() {
+  return api("/v1/diagnostics?summary=1");
+}
+
+/** 导出完整诊断包到 DATA_DIR/diagnostics/。
+ * @returns {Promise<{ok:boolean, path?:string, bytes?:number, error?:string}>} */
+export async function exportDiagnostics() {
+  return api("/v1/diagnostics", { method: "POST", body: JSON.stringify({ action: "export" }) });
+}
+
 // ── 目录与文件 ───────────────────────────────────────
 
 /** @returns {Promise<{path:string, entries?:Array<{name:string, type:string, size?:number}>}>} 当前工作目录 */

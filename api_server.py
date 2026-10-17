@@ -3163,12 +3163,15 @@ def _record_tasklog(title, chain):
         tasks = tasks[-20:]
         data["tasks"] = tasks
         stores.save_tasklog(path, data)
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        import degrade
+        degrade.degrade("tasklog.save", e, "任务链未落盘，重启后任务统计丢失", critical=False)
     try:
         _crystallize_skills()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        import degrade
+        degrade.degrade("skills.crystallize", e,
+                        "技能结晶未执行，本次成功经验不会沉淀为技能", critical=False)
 
 
 def _crystallize_skills():
@@ -8250,6 +8253,39 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001
             self._fail_soft(e)
 
+    # ── 一键诊断包（v3.16.20）：把 degrade / 错误日志 / 环境事实收成一份可读报告 ──
+    @_get_route(("qpath", "/v1/diagnostics"))
+    def _g_v1_diagnostics(self):
+        """完整诊断（不落盘）。?summary=1 时只回极简摘要（高频轮询用）。"""
+        if not self._auth():
+            self._json(401, {"error": "unauthorized"})
+            return
+        try:
+            from urllib.parse import parse_qs, urlparse
+            import diagnostics
+            qs = parse_qs(urlparse(self.path).query)
+            if (qs.get("summary") or [""])[0] in ("1", "true", "yes"):
+                self._json(200, {"ok": True, **diagnostics.summary()})
+                return
+            doc = diagnostics.collect()
+            doc["fingerprint"] = diagnostics.fingerprint(doc)
+            self._json(200, {"ok": True, "diagnostics": doc})
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
+    @_post_route("/v1/diagnostics")
+    def _p_v1_diagnostics(self):
+        """导出诊断包到 DATA_DIR/diagnostics/。body: {action: "export"}（默认 export）"""
+        if not self._auth():
+            self._json(401, {"error": "unauthorized"})
+            return
+        try:
+            import diagnostics
+            result = diagnostics.export()
+            self._json(200 if result.get("ok") else 500, result)
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
     @_post_route("/v1/brain/memory")
     def _p_v1_brain_memory(self):
         # 大脑记忆管理：action=add|update|delete
@@ -9674,8 +9710,11 @@ class _Handler(BaseHTTPRequestHandler):
                                   if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
                 if text and last_user and not quiet_mode:
                     _chat_harvest(text, last_user[:600], cfg, messages=messages)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                import degrade
+                degrade.degrade("memory.harvest", e,
+                                "本次对话未提炼进长期记忆（这轮内容不会被自动记住）",
+                                critical=True)
             self._json(200, {"content": text or "", "usage": usage})
         except Exception as e:
             logger.exception("API chat 失败")
@@ -9836,8 +9875,10 @@ class _Handler(BaseHTTPRequestHandler):
                 user_msgs = [m for m in messages if m.get("role") == "user"]
                 if chain and user_msgs:
                     _record_tasklog(str(user_msgs[-1].get("content") or "")[:40], chain)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                import degrade
+                degrade.degrade("tasklog.record", e,
+                                "任务链未写入 tasklog，热图/任务统计会缺本次记录", critical=False)
             # 对话回写：自动提炼长期记忆（与非流式 _handle_chat 一致）。此前流式作业
             # 从未调用，导致 auto_memory 默认开启却永不生效——记忆不会从对话增长。
             # _chat_harvest 自身起后台线程，不阻塞作业收尾。
