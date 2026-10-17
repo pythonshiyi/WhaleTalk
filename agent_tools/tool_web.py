@@ -372,6 +372,24 @@ def search_web(query, num=SEARCH_MAX_RESULTS, offset=0, since="", until="", site
     merged = merged[offset:offset + num]
     if merged:
         lines = [f"搜索结果（{len(merged)} 条）:"]
+        # 相关性自检：Bing 对部分中文组合词（实测"定价"）会退化为只匹配首个词——
+        # 回显的查询词是对的，但结果与该词之外的关键词完全无关。这是服务端召回行为，
+        # 代码层无法通用纠正（强加同义词表既脆弱又不可维护）。改为显式告知调用方，
+        # 使其能判断"这批结果不可用、该换词重搜"，而不是把无关结果当事实依据。
+        # 判定：标题命中关键词比例 < 60% 时提示（9 组样本标定，8 组符合预期；
+        # 唯一"误报"样本标题确实不含任何查询词，判为合理告警）。故措辞克制为"提示"。
+        _heads = " ".join(str(r.get("title") or "") for r in merged[:3]).lower()
+        _toks = [t for t in re.split(r"[\s\-]+", str(q)) if len(t) >= 2][:4]
+        if _heads and _toks:
+            _hit = sum(1 for t in _toks if t.lower() in _heads)
+            if _hit / len(_toks) < 0.6:
+                # 启发式提示而非硬判定：标题未覆盖关键词也可能是正常情况（关键词在正文/
+                # 站点名而非标题）。因此只提醒调用方"自己看一眼是否切题"，绝不改写结果。
+                lines.append(
+                    f"ℹ️ 相关性提示（启发式，非错误）：查询关键词只有 {_hit}/{len(_toks)} "
+                    "个出现在前几条标题中。若内容明显不切题，可换用更短、更通用的关键词重搜；"
+                    "若切题则忽略本条提示。"
+                )
         if requested_num > len(merged):
             hint = f"（注：期望 {requested_num} 条，实返 {len(merged)} 条"
             hint += "——num 上限 20" if requested_num > 20 else ""
