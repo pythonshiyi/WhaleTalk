@@ -164,3 +164,26 @@ python code-review/mock_server.py                       # 模拟主程序，端�
 | 授权面板网页 | ✅ `http://127.0.0.1:8780` 可访问 |
 
 **产物参考**：`data/workspace/code-review/`（提案全文、适配器、测试、模拟服务、前端组件）、`data/workspace/鲸群L0大脑身份/`（L0/L1 原型与 21 项测试）。
+
+## 六、后续修正（v3.16.19）：面板必须约束真实行为
+
+第 3 步把「授权面板」接进了主程序，但**只接了 UI 与本地存储**：面板写入本机
+`DATA_DIR/grants.json`，而大脑自主行动时的真正闸门是**社区侧** `whoami.scopes`
+（`community_client.plan()` 用它过滤 `post`/`reply`/`like`/`message_*`）。
+`brain_grant.check_scope()` 与 `brain_identity.verify_brain_key()` 全仓库**零调用点**，
+面板文案「未勾选的权限，大脑一律不能做」因此不成立——属「UI 承诺 ≠ 实际约束」。
+
+修正后的唯一权威来源：
+
+| 关注点 | 权威来源 | 代码 |
+|---|---|---|
+| 大脑能做什么（对外发言） | **社区侧授权** | `GET /api/v1/brain/whoami` → `community_client.grant_snapshot()` |
+| 面板勾选/撤回 | 直写社区侧 | `POST /api/v1/brain/grant` → `grant_write()` / `grant_revoke_all()`（写完回读） |
+| 未接入社区时 | 本机身份（本地实验） | `brain_grant.py`，`source: "local"` |
+
+- 词表对齐：社区侧会校验 `play`，本机 `SCOPES` 原先没有，已补齐；
+  远端独有维度在面板里保留原值，不会被静默关闭。
+- 仍未接线：`check_scope()` / `verify_brain_key()` 依旧只服务于 L0 原型，
+  鲸语主程序不需要「本机校验」——因为动作执行者（社区站）自己就是校验者。
+  若将来出现「本机直接执行对外动作」的新路径，必须在**那条路径**上接 `check_scope()`。
+

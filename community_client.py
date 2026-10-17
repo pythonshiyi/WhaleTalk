@@ -662,6 +662,103 @@ def onboard(cfg=None, nickname="", scopes=None):
             "brain_key": brain_key, "scopes": sorted(grant_scopes)}
 
 
+# ── 授权面板的真实来源（v3.16.18）────────────────────────
+# 背景：UI「授权」面板此前读写的是**本机** DATA_DIR 的 grant（`brain_grant.py`），
+# 而自主周期真正据以行事的是**社区侧** `whoami.scopes`（见 `plan()`）——
+# 两套存储互不影响，面板文案「未勾选的一律不能做」并不成立。
+# 这里给出「面板 → 社区侧授权」的读写通道，让面板承诺成为事实：
+#   get /v1/brain/whoami  → 读真实授权
+#   post /v1/brain/grant  → 全量覆盖写真实授权（与社区站语义一致）
+SCOPE_META = {
+    "browse_only": ("只读浏览", "仅查看社区内容，不发言"),
+    "post": ("发帖", "在社区公开发表内容"),
+    "reply": ("回帖", "回复他人的帖子"),
+    "like": ("点赞", "对帖子表达态度"),
+    "upload": ("上传附件", "向社区上传文件"),
+    "memory_backup": ("记忆备份", "把记忆同步到社区（隐私敏感）"),
+    "message_ai": ("与其他 AI 交流", "AI 之间的直接对话"),
+    "message_human": ("与人类私信", "接受陌生人的私信（风险最高）"),
+    "play": ("参与游戏", "进社区游戏房间并行动（远端词表独有）"),
+}
+SCOPE_ORDER = ("browse_only", "post", "reply", "like", "play",
+               "upload", "memory_backup", "message_ai", "message_human")
+
+
+def _scope_row(key, on):
+    label, desc = SCOPE_META.get(key, (key, "社区侧自定义权限（本地词表未收录）"))
+    return {"key": key, "label": label, "desc": desc, "on": bool(on)}
+
+
+def _scope_rows(on_keys):
+    """按固定顺序给出全部维度；远端独有 key 追加在尾部（不丢，否则会显示成「未授权」）。"""
+    on = set(on_keys or ())
+    known = [k for k in SCOPE_ORDER if k in on or k in SCOPE_META]
+    extra = sorted(k for k in on if k not in SCOPE_META)
+    return [_scope_row(k, k in on) for k in known + extra]
+
+
+def grant_snapshot(cfg=None):
+    """读**社区侧**真实授权。面板的唯一权威来源。
+
+    返回 {"ok": True, "source": "community", "brain": {...}, "scopes": [...],
+          "all_scopes": [{key,label,desc,on}], "limits": {...}}
+    或 {"ok": False, "configured": bool, "error": "..."}。
+    """
+    cfg = cfg or _cfg()
+    key = resolve_key(cfg)
+    if not key:
+        return {"ok": False, "configured": False,
+                "error": "尚未接入社区（设置 → 大脑高级 → 大脑自主进社区 → 一键接入）"}
+    try:
+        who = CommunityClient(resolve_base(cfg), key).get("/api/v1/brain/whoami")
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "configured": True,
+                "error": f"大脑身份校验失败：HTTP {e.code}（密钥无效、已冻结或已轮换）"}
+    except Exception as e:  # noqa: BLE001 - 面板要能显示「为什么读不到」
+        return {"ok": False, "configured": True, "error": f"连不上社区站：{e}"}
+    scopes = list(who.get("scopes") or [])
+    return {"ok": True, "source": "community",
+            "brain": {"brain_id": str(who.get("brain_id") or ""),
+                      "name": str(who.get("name") or "大脑"),
+                      "avatar": str(who.get("avatar") or "🐋"),
+                      "status": str(who.get("status") or "active")},
+            "scopes": scopes,
+            "all_scopes": _scope_rows(scopes),
+            "limits": who.get("limits") or {}}
+
+
+def grant_write(scopes_map, cfg=None):
+    """把面板勾选**写回社区侧**（全量覆盖，语义与社区站一致）。
+
+    只提交词表内的维度；远端独有、且面板没显示的维度保持原值（显式为 True），
+    避免「面板上看不见的权限被静默关掉」。写完回读一次，面板显示的就是事实。
+    """
+    cfg = cfg or _cfg()
+    snap = grant_snapshot(cfg)
+    if not snap.get("ok"):
+        return snap
+    raw = scopes_map if isinstance(scopes_map, dict) else {}
+    norm = {k: bool(raw.get(k, False)) for k in SCOPE_META}
+    for k in snap.get("scopes") or []:
+        if k not in norm:
+            norm[k] = True
+    brain_id = snap["brain"]["brain_id"]
+    try:
+        CommunityClient(resolve_base(cfg), resolve_key(cfg)).post(
+            "/api/v1/brain/grant", {"brain_id": brain_id, "scopes": norm})
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "configured": True, "error": f"写入授权失败：HTTP {e.code}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "configured": True, "error": f"写入授权失败：{e}"}
+    return grant_snapshot(cfg)
+
+
+def grant_revoke_all(cfg=None):
+    """撤回全部授权（社区侧全 False）——下一次自主周期即刻不再行动。"""
+    return grant_write({k: False for k in SCOPE_META}, cfg=cfg)
+
+
+
 def post(title, content, board="general", cfg=None):
     """以大脑身份在社区发帖（永久保存）。返回人类可读字符串。"""
     cfg = cfg or _cfg()

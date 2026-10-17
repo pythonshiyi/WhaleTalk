@@ -3,15 +3,20 @@ import * as api from "../api.js";
 import { confirmDialog } from "../dialog.js";
 
 /**
- * BrainGrant —— 「授权」Tab：为大脑签发身份、逐项勾选授权、随时撤回。
+ * BrainGrant —— 「授权」Tab：逐项勾选授权、随时撤回。
  *
  * 对接后端（见 evolutions/brain_grant_l2_* 提案 §3）：
- *   GET  /v1/brain/grants?brain_id=X   → { ok, grant, all_scopes:[{key,label,on,desc}] }
+ *   GET  /v1/brain/grants?brain_id=X   → { ok, grant, all_scopes:[{key,label,on,desc}], source }
  *   POST /v1/brain/grant               → { action: "create_brain"|"list"|"set_grant"|"revoke"|... }
+ *
+ * 两种来源（后端 `source`）：
+ *   - `community`：**已接入社区时接管社区侧授权**——本面板读写的就是社区站里那个大脑的
+ *     真实 scopes，`community_client.plan()` 用它过滤动作，勾选/撤回立即生效；
+ *   - `local`：未接入社区，作用于本机大脑身份（本地实验）。
  *
  * 设计纪律（对齐 L1）：
  * - 所有维度默认关闭，用户不勾 = 大脑不能做；
- * - 撤回后立即失效（后端不缓存，前端刷新状态）；
+ * - 撤回后立即失效（后端不缓存，写入后回读）；
  * - brain_key 只显示一次，展示后要求用户自行保存。
  */
 export default function BrainGrant() {
@@ -19,6 +24,7 @@ export default function BrainGrant() {
   const [activeId, setActiveId] = React.useState("");
   const [grant, setGrant] = React.useState(null);
   const [scopes, setScopes] = React.useState([]);
+  const [source, setSource] = React.useState("local");
   const [msg, setMsg] = React.useState("");
   const [err, setErr] = React.useState("");
   const [newKey, setNewKey] = React.useState("");
@@ -33,6 +39,7 @@ export default function BrainGrant() {
       const r = await api.brainGrantAction({ action: "list" });
       if (!r || r.ok === false) throw new Error((r && r.error) || "读取大脑列表失败");
       const list = r.brains || [];
+      setSource(r.source === "community" ? "community" : "local");
       setBrains(list);
       setActiveId((cur) => cur || (list[0] ? list[0].brain_id : ""));
     } catch (e) { fail(e); }
@@ -43,6 +50,7 @@ export default function BrainGrant() {
     try {
       const r = await api.getBrainGrants(bid);
       if (!r || r.ok === false) throw new Error((r && r.error) || "读取授权失败");
+      if (r.source) setSource(r.source === "community" ? "community" : "local");
       setGrant(r.grant || null);
       setScopes(r.all_scopes || []);
     } catch (e) { fail(e); }
@@ -109,6 +117,13 @@ export default function BrainGrant() {
       {msg ? <div style={{ color: "#4ade80", fontSize: 13, padding: "6px 0" }}>{msg}</div> : null}
       {err ? <div style={{ color: "#ff8a5b", fontSize: 13, padding: "6px 0" }}>⚠️ {err}</div> : null}
 
+      {source === "community" ? (
+        <div style={{ fontSize: 12, opacity: 0.78, marginBottom: 10, lineHeight: 1.6 }}>
+          🐋 已接入社区：本面板<b>直接读写社区侧的授权</b>——勾选/撤回保存后，
+          大脑下一次自主周期即按此执行（不再有「本地勾了但不生效」的第二份记录）。
+        </div>
+      ) : null}
+
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <label style={{ fontSize: 13, opacity: 0.75 }}>大脑：</label>
         <select value={activeId} onChange={(e) => setActiveId(e.target.value)}>
@@ -119,14 +134,18 @@ export default function BrainGrant() {
             </option>
           ))}
         </select>
-        <input
-          placeholder="新大脑的名字"
-          value={newName}
-          maxLength={24}
-          onChange={(e) => setNewName(e.target.value)}
-        />
-        <button disabled={busy} onClick={createBrain}>创建大脑</button>
-        <button className="ghost" disabled={busy || !activeId} onClick={rotate}>轮换密钥</button>
+        {source === "community" ? null : (
+          <>
+            <input
+              placeholder="新大脑的名字"
+              value={newName}
+              maxLength={24}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <button disabled={busy} onClick={createBrain}>创建大脑</button>
+            <button className="ghost" disabled={busy || !activeId} onClick={rotate}>轮换密钥</button>
+          </>
+        )}
         <button className="ghost" disabled={busy || !activeId} onClick={revoke}>撤回全部授权</button>
       </div>
 

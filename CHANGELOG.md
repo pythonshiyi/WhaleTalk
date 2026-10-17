@@ -2,6 +2,50 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.16.19（2026-10-17）—— 🔐 授权面板接管社区侧真实授权
+
+**版本号 3.16.18 → 3.16.19。** 本条修的是 v3.16.18「已知遗留」里那处**安全承诺落空**：
+面板写着「未勾选的权限，大脑一律不能做」，但实际约束大脑行为的是**社区侧**的授权，
+而面板改的是**本机**另一份 grant——两套存储互不影响，用户勾选与撤回都不产生效果。
+
+### 缺陷取证（改造前）
+
+- `community_client.plan(who, …)` 用 `who["scopes"]`（社区站 `whoami` 返回的授权）过滤动作，
+  未授予的 `post`/`reply`/`like`/`message_*` 一律不产出——**真正的闸门在社区侧**。
+- 而 `POST /v1/brain/grant` → `brain_grant_adapter` → `brain_grant.py` 写的是
+  `DATA_DIR` 下的本机 `brains.json`/`grants.json`；`brain_grant.check_scope()` 与
+  `brain_identity.verify_brain_key()` **全仓库零调用点**（含测试），只有定义没有使用者。
+- 词表也不一致：社区侧实际会校验 `play`（进游戏房间），本机 `SCOPES` 里没有这一项，
+  于是「已授予游戏权限」在面板上无处显示。
+
+### 改造
+
+- **`community_client.py`** 新增授权读写通道（`SCOPE_META` / `grant_snapshot()` /
+  `grant_write()` / `grant_revoke_all()`）：面板读的就是 `GET /api/v1/brain/whoami` 的
+  真实 scopes，写的是 `POST /api/v1/brain/grant` 的全量覆盖语义，**写完回读一次**，
+  面板显示与事实一致。远端独有、面板词表未收录的维度**保持原值**，不会被静默关掉。
+- **`brain_grant_adapter.py`**：配置了社区大脑密钥（= 已一键接入）时，`list`/`set_grant`/`revoke`
+  直接作用于社区侧，返回 `source: "community"`；`create_brain`/`rotate`/`status`/`audit`
+  给出「去哪儿做」的具体指引，而不是静默改一份无效的本地记录。未接入社区时仍走原本地路径
+  （`source: "local"`），本地实验行为不变。
+- **`brain_shared.SCOPES`** 补 `play`（参与游戏），与社区侧校验维度对齐。
+- **`BrainGrant.jsx`**：按 `source` 提示当前作用域（社区侧 / 本机），社区模式隐藏
+  「创建大脑 / 轮换密钥」（这两件事属于接入流程），保留「撤回全部授权」。
+
+### 验证
+
+- 新增 `tests/test_brain_grant_remote.py` **9 个用例**（社区站替身，全程无网络）：
+  未接入时给出接入指引、读取真实 scopes、HTTP 401 透出、全量覆盖写 + 回读、
+  远端独有维度不被关掉、撤回全关、adapter 的三条社区路由、本地兜底。
+- 后端 `pytest` **1043 passed**（原 1034 + 9）；前端 `npm test` 22/22、`npm run build` 通过；
+  四道门禁全绿。
+
+### 边界说明
+
+- 本次只让「授权」变成事实，**没有**给社区能力增设新的外发路径：社区实验仍默认关闭，
+  未配置密钥即不外发；`experiments/` 社区站本体依旧不入库。
+- 授权读取依赖社区站可达；不可达时面板明确报「连不上社区站：…」，不伪造一份空授权。
+
 ## v3.16.18（2026-10-17）—— 🔬 门禁补盲：文档数字的最后两块盲区 + 测试可移植性
 
 **版本号 3.16.17 → 3.16.18。** 本轮不新增产品能力，只做**门禁与测试**：
@@ -49,7 +93,7 @@
 - **`brain_grant.check_scope` / `brain_identity.verify_brain_key` 仍无任何调用点**：
   社区周期实际按**远端** `whoami.scopes` 过滤动作（`community_client.plan`），而
   「授权」面板写的是**本机** DATA_DIR 里的 grant，两者互不影响——面板文案
-  「未勾选的权限，大脑一律不能做」当前**不成立**。属安全边界语义变更，需先定方案再动。
+  「未勾选的权限，大脑一律不能做」当前**不成立**。→ **已在 v3.16.19 修复**（面板接管社区侧授权）。
 
 ## v3.16.17（2026-10-01）—— 🧩 修复「写了没接上」的隐藏缺陷 + 门禁加固
 
