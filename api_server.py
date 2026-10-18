@@ -547,6 +547,12 @@ def _load_capabilities():
                 "errors": ["能力包目录装载失败（详情见日志）"], "packages": []}
 
 
+def _dc_call_map():
+    """deepseek_client 的实时分发表（能力装载/卸载会就地改写它）。"""
+    import deepseek_client as _dc
+    return _dc.TOOL_CALL_MAP
+
+
 def _capability_status():
     """能力主干现状（工具管理面用）：工具清单 + 健康度 + 已装载包。"""
     try:
@@ -556,7 +562,8 @@ def _capability_status():
             "packages": cap_mod.list_plugins(),
             "items": cap_mod.list_capabilities(),
             "health": cap_mod.health_all(),
-            "total_tools": len(TOOL_CALL_MAP),
+            # 工具总数含运行时能力：这里必须读 dc 的实时表，不能用本地导入期快照
+            "total_tools": len(_dc_call_map()),
         }
     except Exception as e:
         return {"ok": False, "error": "能力状态读取失败（详情见日志）", "packages": [], "items": [],
