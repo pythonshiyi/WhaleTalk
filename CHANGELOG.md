@@ -39,9 +39,35 @@
 `README` 路由数、`MODULES` 加粗端点式、`MODULES` 前端套件数、`MODULES` 标题版本号；
 并把 AI 指南测试文件数规则的空格缺陷改正。加规则前先验证「能抓到当前的 6 处」，避免又写一条永不命中的规则。
 
+### 顺带修复：`gate-tools` 连续 4 个提交红灯
+
+查 CI 时发现 `gate-tools` 从 `13a0373` 起一直 failure，但四个提交的说明都写着「门禁全绿」。
+日志给出的是**崩溃而非判红**：
+
+```
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 1-2
+  File "tools\check_silent_except.py", line 210, in main
+    print(f"[提示] 有 {len(fixed)} 处基线位置已不存在…")
+```
+
+两个缺陷叠在一起：
+
+| 缺陷 | 后果 |
+|---|---|
+| `check_silent_except.py` 缺 `sys.stdout.reconfigure(encoding="utf-8")`（其余四道门禁都有，唯它漏配） | windows-latest 的 cp1252 控制台编不出中文，**任何一句输出都会让它崩**，以崩代红 |
+| `SKIP_DIRS` 未排除 `data/` 与 `workspace/` | 扫描把 agent 运行时写出的脚本当源码：本机因此多出 3 处 `data/workspace/*.py` 的「新增」，基线里同时冻结了 3 条本机才有的指纹——**同一道门禁在本机与 CI 得出两种结论** |
+
+修法：补 stdio 加固（与 `check_docs.py` 同款）＋ `SKIP_DIRS` 增加 `data` / `workspace` / `.venv` / `venv` /
+`.pytest_cache` / `.ruff_cache`，然后 `--update-baseline` 把被污染的基线收紧到 **390 处**（原 393，剔除 3 条
+运行时产物指纹）。并核对「扫描到的 57 个文件全部被 git 跟踪」，确保基线可跨机器复现。
+
 ### 验证
 
 - `python tools/check_docs.py` → **校验通过**（实测：169 工具 / 111 路由 / 14 域模块 / 版本 3.16.21 / 114 测试文件 / 22 前端套件）。
+- `python tools/check_silent_except.py` → **通过（390 处全部在基线内，无新增）**；
+  `PYTHONIOENCODING=cp1252` 下复跑同样通过（模拟 CI 的 cp1252 控制台，验证不再崩溃）。
+- `tools/audit_tools.py --strict` → error 0；`tools/validate_tools.py` → 169 工具全链路正常；
+  `tools/island_check.py --strict` → 无孤岛。
 - 无代码逻辑改动，`api_server.py` / `deepseek_client.py` / `agent_tools/` 均未触碰。
 - 本机未安装 pytest，用例数校验按既有约定跳过（不影响本轮改动判定）。
 

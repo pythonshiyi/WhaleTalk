@@ -30,9 +30,27 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 BASELINE = Path(__file__).resolve().parent / "silent_except_baseline.txt"
+# data/ 与 workspace/ 是**运行时产物**（agent 自己写出的脚本、会话工作区），不是仓库源码：
+# 扫它们会让每次对话产出的脚本都算「新增静默吞异常」。此前基线正是这样被污染的
+# ——393 条里有 3 条来自 `data/workspace/`，CI 上那 3 个文件根本不存在，
+# 于是「基线有、实测无」，门禁在 CI 与本机给出两种结论。
 SKIP_DIRS = {"node_modules", ".git", "dist", "build", "__pycache__", "assets",
-             "experiments", "trust"}          # trust/ 是内核快照，不参与门禁
+             "experiments", "trust",          # trust/ 是内核快照，不参与门禁
+             "data", "workspace",             # 运行时产物，非源码
+             ".venv", "venv", ".pytest_cache", ".ruff_cache"}
 NOQA_MARK = "noqa: silent-except"
+
+# ── 输出编码加固 ───────────────────────────────────────────────────
+# Windows 控制台与 CI 的默认码页（cp1252 / cp936）编不出中文：任何一句 print 都会
+# 抛 UnicodeEncodeError 并让门禁**以崩代红**——CI 的 gate-tools 自 v3.16.17 起因
+# 「有 {n} 处基线位置已不存在」这句中文而连续 4 个提交失败，本地 Windows 终端
+# 因码页不同看不到。与 check_docs.py 同款处理（本文件此前独缺，属漏配）。
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: silent-except: 极老解释器无 reconfigure，退化即可
+        pass
 
 # 报告用的启发式分类（只影响可读性，不影响门禁判定）
 _CLEANUP_HINTS = ("os.path.", "os.remove", "os.unlink", ".close(", "rollback", "shutdown",
