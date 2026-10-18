@@ -18,6 +18,24 @@ TOOL_CALL_MAP / _TOOL_ACTION_PHRASES / TOOL_GROUPS / _PREACTIVATE_HINTS），
 
 注册完成后调用构建函数生成六层；顺序由显式 _ORDER 常量保证（迁移自历史数据）。
 重复注册/顺序表缺项/多余项均在模块加载时抛错——比任何 AST 门禁都早。
+
+## 来源（source）：core 与 capability 共用一张表
+
+v3.17 起，运行时装载的「扩展能力」（插件工具）与内置工具进**同一张注册表**，
+唯一区别是 `ToolDef.source`：
+
+    core        源码里 @tool() 声明的内置工具，顺序由 _TOOL_ORDER 固定
+    capability  运行时装载（capability.py），可撤销、可热替换
+
+这条边界必须在这里守住，原因是六层的构建方式：`_TOOL_ORDER` 是**核心工具的
+显式顺序表**，而运行时工具没有顺序表（它们按装载顺序排）。因此：
+
+- `_order_check` 只把 **core** 子集与顺序表比对（否则插件一装载，六层构建就报
+  "顺序表遗漏已注册工具"）；
+- `build_groups` / `build_preactivate` 把 capability 工具**追加**在核心成员之后，
+  组名/关键词命中已有的就直接并进去（插件不必自造分组，能复用现成能力地图）；
+- `unregister` 只允许撤销 capability 工具——核心工具由源码声明，撤销它等于让
+  六层与源码不一致。
 """
 
 from __future__ import annotations
@@ -32,29 +50,39 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 _UNSET = object()
 
+# 工具来源：core = 源码声明；capability = 运行时装载（可撤销）。
+SOURCE_CORE = "core"
+SOURCE_CAPABILITY = "capability"
+
 
 class ToolDef:
-    __slots__ = ("schema", "fn", "groups", "phrases", "preactivate_keys", "executor")
+    __slots__ = ("schema", "fn", "groups", "phrases", "preactivate_keys", "executor",
+                 "source", "plugin_id")
 
-    def __init__(self, schema, fn=None, groups=(), phrases=None, preactivate_keys=(), executor=_UNSET):
+    def __init__(self, schema, fn=None, groups=(), phrases=None, preactivate_keys=(),
+                 executor=_UNSET, source=SOURCE_CORE, plugin_id=None):
         self.schema = schema
         self.fn = fn
         self.groups = tuple(groups)
         self.phrases = phrases
         self.preactivate_keys = tuple(preactivate_keys)
         self.executor = fn if executor is _UNSET else executor
+        self.source = str(source or SOURCE_CORE)
+        self.plugin_id = plugin_id
 
 
 _REGISTRY: Dict[str, ToolDef] = {}
 
 
-def _register(name, schema, fn, groups, phrases, preactivate_keys, executor):
+def _register(name, schema, fn, groups, phrases, preactivate_keys, executor,
+              source=SOURCE_CORE, plugin_id=None):
     """注册一个工具；重复名直接抛错（防静默覆盖漂移）。"""
     if name in _REGISTRY:
         raise RuntimeError(f"[toolkit] 工具名重复注册: {name!r}（检查 @tool 与 register_tool）")
     _REGISTRY[name] = ToolDef(
         schema=schema, fn=fn, groups=groups,
         phrases=phrases, preactivate_keys=preactivate_keys, executor=executor,
+        source=source, plugin_id=plugin_id,
     )
 
 
@@ -101,11 +129,15 @@ def tool(schema: dict, *, groups: Optional[Sequence[str]] = None,
 
 def register_tool(schema: dict, *, groups: Optional[Sequence[str]] = None,
                   phrases: Optional[str] = None, preactivate: Optional[Sequence[Sequence[str]]] = None,
-                  executor: Any = _UNSET, hooks: Optional[Sequence[str]] = None) -> None:
+                  executor: Any = _UNSET, hooks: Optional[Sequence[str]] = None,
+                  source: str = SOURCE_CORE, plugin_id: Optional[str] = None) -> None:
     """命令式注册（无函数定义处可用，如 ask_user 走回调、无独立执行函数）。
 
     executor 为可调用对象时同样过 tool_hooks 包装；字符串（AST 重建模式）与
     None 原样保留——AST 门禁不执行函数，不需要钩子。
+
+    source/plugin_id：运行时扩展能力用 SOURCE_CAPABILITY + 所属能力包 id。
+    合法的 capability 名必须带前缀（由 capability.py 在装载时强制），这里不再判。
     """
     fn = schema.get("function", {})
     name = fn.get("name") if isinstance(fn, dict) else None
@@ -115,7 +147,43 @@ def register_tool(schema: dict, *, groups: Optional[Sequence[str]] = None,
     if callable(exec_):
         import tool_hooks
         exec_ = tool_hooks.wrap(name, exec_, hooks or ())
-    _register(name, schema, None, groups or (), phrases, preactivate or (), exec_)
+    _register(name, schema, None, groups or (), phrases, preactivate or (), exec_,
+              source=source, plugin_id=plugin_id)
+
+
+def unregister(name: str) -> bool:
+    """撤销一个**运行时**工具（core 工具不可撤销：它由源码声明）。
+
+    返回是否真的移除。调用方（capability.py）负责在之后刷新六层视图。
+    """
+    d = _REGISTRY.get(str(name))
+    if d is None:
+        return False
+    if d.source == SOURCE_CORE:
+        raise RuntimeError(f"[toolkit] 不允许撤销内置工具: {name!r}（它由 @tool() 声明）")
+    _REGISTRY.pop(str(name), None)
+    return True
+
+
+def is_registered(name: str) -> bool:
+    """工具名是否已被占用（内置或运行时）。装载前查冲突用。"""
+    return str(name) in _REGISTRY
+
+
+def executor_for(name: str):
+    """取工具的执行体（None = 特殊回调或未注册）。供 builtin_ref 复用内置能力。"""
+    d = _REGISTRY.get(str(name))
+    return d.executor if d is not None else None
+
+
+def capability_names() -> List[str]:
+    """运行时装载的工具名（声明顺序）。"""
+    return [n for n, d in _REGISTRY.items() if d.source != SOURCE_CORE]
+
+
+def capability_defs() -> List[Tuple[str, "ToolDef"]]:
+    """运行时装载的 (名字, ToolDef) 列表。"""
+    return [(n, d) for n, d in _REGISTRY.items() if d.source != SOURCE_CORE]
 
 
 # ---------------------------------------------------------------------------
@@ -123,12 +191,29 @@ def register_tool(schema: dict, *, groups: Optional[Sequence[str]] = None,
 # ---------------------------------------------------------------------------
 
 def _order_check(order, registry, what):
+    """顺序表与**核心**工具集合的一致性校验。
+
+    只比 core 子集：运行时能力（capability）没有顺序表，它们按装载顺序追加。
+    若把 capability 也算进"遗漏"，插件一装载六层构建就会炸——这条边界必须在这里
+    而不是在调用方守住，否则每个 build_* 调用点都要各自过滤一遍。
+    """
     missing = [n for n in order if n not in registry]
     if missing:
         raise RuntimeError(f"[toolkit] {what} 顺序表含未注册工具: {missing}")
-    extra = [n for n in registry if n not in order]
+    extra = [n for n, d in registry.items() if d.source == SOURCE_CORE and n not in order]
     if extra:
         raise RuntimeError(f"[toolkit] {what} 顺序表遗漏已注册工具: {extra}")
+
+
+def _build_order(tool_order: Sequence[str]) -> List[str]:
+    """核心顺序 + 运行时能力（追加在后，已被核心覆盖的不重复）。"""
+    order = list(tool_order)
+    seen = set(order)
+    for n in capability_names():
+        if n not in seen:
+            order.append(n)
+            seen.add(n)
+    return order
 
 
 def build_tool_list(order: Sequence[str]) -> List[dict]:
@@ -148,15 +233,23 @@ def build_groups(group_order: Sequence[str], tool_order: Sequence[str]) -> List[
     成员顺序 = tool_order（即 _TOOL_ORDER/TOOLS 列表顺序），与历史数据
     （手工 TOOL_GROUPS 字面量）保持一致；若按注册顺序则等于函数定义顺序，
     可能与 TOOLS 顺序不同而静默漂移。
+
+    运行时能力：声明了**已有组名**的并入该组（插件不必自造分类）；声明了**新组名**的
+    按装载顺序追加在末尾——否则插件工具在能力地图里不可见，等于没有装载（这正是
+    v3.16 之前插件工具的真实处境：有实现，模型找不到）。
     """
     by_group: Dict[str, List[str]] = {g: [] for g in group_order}
-    for name in tool_order:
+    extra_groups: List[str] = []
+    for name in _build_order(tool_order):
         for g in _REGISTRY[name].groups:
+            if g not in by_group:
+                by_group[g] = []
+                extra_groups.append(g)
             by_group[g].append(name)
     missing = [g for g in group_order if not by_group[g]]
     if missing:
         raise RuntimeError(f"[toolkit] TOOL_GROUPS 顺序表含无成员组: {missing}")
-    return [(g, by_group[g]) for g in group_order]
+    return [(g, by_group[g]) for g in list(group_order) + extra_groups]
 
 
 def build_phrases() -> Dict[str, str]:
@@ -171,23 +264,36 @@ def build_preactivate(hint_order: Sequence[Tuple[str, ...]], tool_order: Sequenc
     成员顺序 = tool_order（与 TOOLS 列表一致），避免注册顺序造成漂移。
     每个工具可声明多组 preactivate 关键词（参与多条提示）；所有声明必须命中
     hint_order 中的某条，否则抛错（防「写了关键词但没出现在提示里」的静默遗漏）。
+
+    运行时能力允许带来**新的关键词元组**（追加在核心 hint 之后）——但若它声明的
+    关键词与核心某条相同，直接并入那一条，不重复建条目。
     """
     by_keys: Dict[Tuple[str, ...], List[str]] = {tuple(ks): [] for ks in hint_order}
-    for name in tool_order:
+    extra_keys: List[Tuple[str, ...]] = []
+    for name in _build_order(tool_order):
         for ks in _REGISTRY[name].preactivate_keys:
-            by_keys[tuple(ks)].append(name)
+            k = tuple(ks)
+            if k not in by_keys:
+                by_keys[k] = []
+                extra_keys.append(k)
+            by_keys[k].append(name)
     hint_set = set(by_keys)
     order_set = set(hint_order)
-    if hint_set != order_set:
-        only_hint = order_set - hint_set
-        only_tool = hint_set - order_set
+    only_hint = order_set - hint_set
+    only_tool = hint_set - order_set - set(extra_keys)
+    if only_hint or only_tool:
         msg = []
         if only_hint:
             msg.append(f"hint 顺序表无对应工具: {sorted(only_hint)}")
         if only_tool:
             msg.append(f"工具声明了顺序表外的关键词: {sorted(only_tool)}")
         raise RuntimeError("[toolkit] _PREACTIVATE_HINTS 顺序表与工具声明不一致: " + "; ".join(msg))
-    return [(ks, by_keys[ks]) for ks in hint_order]
+    return [(ks, by_keys[ks]) for ks in list(hint_order) + extra_keys]
+
+
+def build_capability_list() -> List[dict]:
+    """运行时能力的 schema 列表（按装载顺序）。"""
+    return [copy.deepcopy(d.schema) for _n, d in capability_defs()]
 
 
 def registry_names() -> List[str]:

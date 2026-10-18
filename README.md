@@ -146,7 +146,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：169 工具（11 组）· 111 个 `/v1` 路由 · 后端 114 个 pytest 文件 / 1120 用例 · 前端 22 个 node 套件（自动发现，`npm test` 全跑）。
+- **规模**：169 工具（11 组）· 112 个 `/v1` 路由 · 后端 115 个 pytest 文件 / 1145 用例 · 前端 22 个 node 套件（自动发现，`npm test` 全跑）。
 
 ---
 
@@ -206,7 +206,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 ## 🕘 更新与版本
 
-- **版本单一源**：`config_defaults.VERSION`（当前 **3.16.21**），最新变更见 [CHANGELOG.md](CHANGELOG.md)。
+- **版本单一源**：`config_defaults.VERSION`（当前 **3.17.0**），最新变更见 [CHANGELOG.md](CHANGELOG.md)。
 - **更新源**：GitHub Releases（`api.github.com/repos/pythonshiyi/WhaleTalk/releases/latest`，可自定义 `update_url`）。
 - **更新方式**：应用内「关于 → 检查更新」自动检测；更新包支持 Ed25519 签名 + SHA-256 校验；更新前自动备份，可一键回滚。
 - **兼容性**：旧配置自动迁移，旧数据目录无缝升级。
@@ -223,6 +223,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 | [TECH_NOTES.md](TECH_NOTES.md) | 架构笔记与踩坑记录 |
 | [MODULES.md](MODULES.md) | 模块拆分清单与职责边界 |
 | [docs/配置与上限.md](docs/配置与上限.md) | **全部 `WHALETALK_*` 开关速查**（上限可配、0=不限；含 config 开关） |
+| [docs/能力协议.md](docs/能力协议.md) | **新工具接入的唯一标准**：能力 manifest、四种执行体、权限与预算、热插拔 |
 | [docs/插件开发指南.md](docs/插件开发指南.md) | **`.wtplugin` v2 插件协议**：五种形态、校验规则、工坊与调试发布 |
 | [docs/信任内核.md](docs/信任内核.md) | 自我完整性：内核改动可声明 · 可见 · 可回滚 |
 | [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) | UI 令牌与一致性规范（前端改界面必读） |
@@ -235,7 +236,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 ## English Introduction
 
-**WhaleTalk v3.16.21** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
+**WhaleTalk v3.17.0** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
 
 - **Capabilities**: **169 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
 - **Self-evolution**: proposal branches, failure-pattern lifecycle, success-pattern reuse — merging stays in your hands.

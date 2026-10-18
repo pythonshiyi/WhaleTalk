@@ -164,7 +164,10 @@ def test_legacy_names_confined_to_alias_and_history_tables():
     for p in REPO.rglob("*.py"):
         rel = p.relative_to(REPO)
         parts = set(rel.parts)
-        if parts & {".venv", "__pycache__", "tests", "build", "dist"}:
+        # data/ 与 workspace/ 是运行时产物（agent 自己写出的脚本），不是仓库源码：
+        # 不排除会让「本机能过、CI 能过」的测试在本机随机变红（同一类缺陷见
+        # tools/check_silent_except.py 的 SKIP_DIRS 修复）。
+        if parts & {".venv", "__pycache__", "tests", "build", "dist", "data", "workspace"}:
             continue
         if p.name in allowed:
             continue

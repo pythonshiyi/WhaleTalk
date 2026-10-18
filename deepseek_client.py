@@ -127,7 +127,8 @@ import snapshot as snapshot_mod
 # 按需加载能力：fetch_blocked（机场代理访问被墙站点）。独立模块按用户需要放
 # 入项目目录并启用后才生效；文件缺失/被剔除时功能静默降级（不阻塞主程序）。
 # P1-3 工具单一来源：@tool() 装饰器 + 六层注册表生成（toolkit.py）
-from toolkit import register_tool, build_tool_list, build_call_map, build_groups, build_phrases, build_preactivate
+from toolkit import (register_tool, build_tool_list, build_call_map, build_groups, build_phrases,
+                     build_preactivate, build_capability_list)
 
 try:
     from fetch_blocked import fetch_blocked as _fetch_blocked_impl
@@ -4702,6 +4703,47 @@ def _finalize_activate_tool():
 
 
 _finalize_activate_tool()
+
+
+def refresh_capability_layers():
+    """把运行时装载的扩展能力同步进六层视图（**内置工具层不变**）。
+
+    为什么需要重建：六层在模块导入时构建一次，而 runtime 能力（capability.py）
+    随时可装载/卸载。不重建的后果正是旧插件体系的老毛病——"装上了，但模型在能力
+    地图里看不到它"，于是表现为"我没有这项能力"的自我否定。本函数是该问题的
+    唯一修复点，由 capability.py 在装载/卸载后调用。
+
+    就地改写（`TOOLS[:] = …`）而不是重新赋值：TOOLS / TOOL_CALL_MAP 被多处按
+    引用持有，换对象会造成"一半代码看到新层、一半看到旧层"。
+    """
+    global _TOOL_GROUP_NAME_MAP, _GROUP_NAMES_TEXT
+    global _TOOL_INDEX_CACHE, _TOOL_INDEX_KEY, _TOOL_INDEX_COMPACT_CACHE
+    global _BASE_TOOLS_CACHE
+
+    TOOLS[:] = build_tool_list(_TOOL_ORDER) + build_capability_list()
+    TOOL_CALL_MAP.clear()
+    TOOL_CALL_MAP.update(build_call_map())
+    TOOL_GROUPS[:] = build_groups(_GROUP_ORDER, _TOOL_ORDER)
+    _TOOL_ACTION_PHRASES.clear()
+    _TOOL_ACTION_PHRASES.update(build_phrases())
+    _PREACTIVATE_HINTS[:] = build_preactivate(_HINT_ORDER, _TOOL_ORDER)
+
+    mapping = {}
+    for _cat, _members in TOOL_GROUPS:
+        mapping[_cat] = list(_members)
+        _bare = _cat.split(" ", 1)[-1] if " " in _cat else _cat
+        if _bare != _cat:
+            mapping[_bare] = list(_members)
+    _TOOL_GROUP_NAME_MAP = mapping
+    _GROUP_NAMES_TEXT = "、".join(
+        (_cat.split(" ", 1)[-1] if " " in _cat else _cat) for _cat, _ in TOOL_GROUPS
+    )
+    # 三处缓存都以"层内容"为前提：不清会让模型拿到装载前的地图/索引
+    _TOOL_INDEX_CACHE = None
+    _TOOL_INDEX_KEY = None
+    _TOOL_INDEX_COMPACT_CACHE = None
+    _BASE_TOOLS_CACHE = None
+    _finalize_activate_tool()
 
 
 def _expand_activation(wanted, available_names, activated):

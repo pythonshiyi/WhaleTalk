@@ -2,6 +2,79 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.17.0（2026-10-18）—— 🧩 能力主干：插件工具成为一等公民
+
+**版本号 3.16.21 → 3.17.0。** 本轮打通一件结构性的事：**运行时装载的工具与内置工具
+进同一张注册表**。这不是"插件功能增强"，是把插件从一条旁路并回主干。
+
+### 缺陷取证（改造前）
+
+插件工具和内置工具走两条互不相交的路，四条证据都能在代码里指到具体位置：
+
+| 链路 | 内置工具 | 插件工具 |
+|---|---|---|
+| 注册 | `@tool()` → `toolkit._REGISTRY` → 六层 | 写 `user_tools.json` |
+| 执行 | `TOOL_CALL_MAP[name]`（注册处已过 `tool_hooks.wrap`） | `chat(custom_tools=…)` → `_run_custom_tool`（`deepseek_client.py:6464`）只发 HTTP |
+| 能力地图 | 分组 + 动作短语 + 关键词预激活 | **没有分组** → smart_tools 模式下列不出来 |
+| 横切 | 快照 / 信任声明 / 出网账本 / 降级记账 | 全无 |
+| 卸载 | —— | 改写 `user_tools.json`，靠 `_source` 标记反删 |
+
+结果是"装了但模型找不到"——它进不了让工具变可靠的那条流水线。
+
+### 新增：能力注册表（`capability.py`）
+
+- **同一张表**：`toolkit.ToolDef` 增加 `source`（`core` / `capability`）与 `plugin_id`；
+  `_order_check` 只把 **core 子集**与 `_TOOL_ORDER` 比对（否则插件一装载，六层构建就报
+  "顺序表遗漏"）；`build_groups` / `build_preactivate` 把能力工具追加在核心成员之后，
+  **声明了已有组名的直接并入**（插件不必自造分类）。
+- **六层即时重建**：`deepseek_client.refresh_capability_layers()` 就地改写
+  `TOOLS` / `TOOL_CALL_MAP` / `TOOL_GROUPS` / `_PREACTIVATE_HINTS`，并清三处能力地图缓存
+  （不清会让模型拿到装载前的地图）。
+- **四种执行体**：`builtin_ref`（复用内置工具做组合，**最有价值**）/ `http` / `cli` / `python`。
+- **声明即最小权限**：`net` / `tools` / `cli` / `python` / `files`，装机时校验一次、
+  **调用时每次强制**。未声明 = 无权限。
+- **超时 + 熔断 + 截断 + 记账**：超时返回「错误：…」；连续失败 3 次熔断 60s（坏能力不再
+  反复吃掉超时预算）；输出超限截断并注明；失败/超时/权限拒绝全部进 `degrade` 账本。
+- **温和失效卸载**：epoch 递增使旧句柄返回「已卸载」，但已进入执行的调用不打断。
+
+### 新增：标准接入与迁移桥
+
+- manifest 规范见 [docs/能力协议.md](docs/能力协议.md)：七个必填项（`api` / `name` / `description` /
+  `parameters` / `exec` / `perms` / `groups`），**不声明分组即拒装**——没有分组的能力进不了
+  能力地图，等于没装（正是旧插件的病根）。
+- `adapt_legacy()`：把 `.wtplugin` v2 的 HTTP 工具转成能力声明，迁移期单向桥。
+- 启动自动装载 `data/capabilities/*.json`（单个坏包只报错，不影响其余）。
+- 端点：`GET /v1/capabilities`（包 / 清单 / 健康度）、`POST /v1/capabilities`（load/reload/unload，
+  `file` 只接受目录内文件名，防任意装载）。
+
+### 新增：核心工具预算门禁（`tools/check_tool_budget.py`）
+
+有了主干，"加功能"有两条成本不同的路。门禁不做禁止，只要求**一次辩护**：新增/删除内置
+工具即红灯，需 `--waive "为什么不能做成能力包"` 才放行，变更写进 `core_tool_budget_log.txt`
+（时间/作者/增减清单/理由）。已固化 169 项基线并接入 CI 的 `gate-tools`。
+
+### 顺带修复
+
+- `tests/test_model_unified.py` 的旧模型名扫描未排除 `data/`、`workspace/`，本机被运行时
+  脚本误伤（同 `check_silent_except` SKIP_DIRS 那类缺陷）。已排除，测试恢复可移植。
+
+### 验证
+
+- 新增 `tests/test_capability.py` **25 例**：manifest 七类拒绝、进六层与分组、`builtin_ref`
+  实调、命名冲突整包回滚、热替换、旧句柄温和失效、cli 越权拒绝、路径越界拒绝、熔断、
+  超时、截断、健康度、迁移桥。
+- 后端 `pytest` **1143 passed**（原 1120 + 25，含两条修复）；`audit_tools --strict` error 0；
+  `validate_tools` 169 全链路正常；`island_check --strict` 无孤岛；
+  `check_docs` / `check_silent_except` / `check_tool_budget` 全绿。
+- 无内置工具改动，`_TOOL_ORDER` 与 169 项 schema 未变。
+
+### 已知边界（v1 有意为之）
+
+- **进程内执行，无沙箱**：与 `run_python` 同一安全模型；故 `python` 执行体必须显式声明
+  `perms.python=true`。
+- **超时不中断线程**：Python 无法中断线程，超时后工作线程仍会跑完（结果丢弃）。
+- 插件工具仍走旧旁路（未迁移）；工具管理页与「能力」文案统一在下一轮。
+
 ## v3.16.21（2026-10-18）—— 📏 文档数字的第三轮补盲：11 处漂移 + 4 条规则缺陷
 
 **版本号 3.16.20 → 3.16.21。** 本轮不新增产品能力，只做一件事：把「门禁说全绿、文档却写错」

@@ -527,6 +527,42 @@ def _plugin_paths():
     }
 
 
+# 能力包目录（v3.17 能力主干）：每个 *.json 是一份能力 manifest，启动时自动装载。
+# 与 data/plugins（旧 .wtplugin）分开放：旧格式走旧旁路，新格式走主干。
+# 刻意写成函数而不是模块级常量：DATA_DIR 在文件后段才解析（见 `DATA_DIR = _resolve_data_dir()`），
+# 常量会在导入期拿到未定义的 DATA_DIR（本文件曾经因此让 33 个测试采集直接失败）。
+def _capability_dir():
+    return os.path.join(DATA_DIR, "capabilities")
+
+
+def _load_capabilities():
+    """装载 CAPABILITY_DIR 下的全部能力包（可降级，失败不影响内置工具）。"""
+    try:
+        import capability as cap_mod
+        return cap_mod.load_dir(_capability_dir())
+    except Exception as e:
+        logger.warning("能力包装载失败（可降级）：本次会话无运行时能力，内置工具不受影响",
+                       exc_info=True)
+        return {"ok": False, "loaded": 0, "tools": 0,
+                "errors": ["能力包目录装载失败（详情见日志）"], "packages": []}
+
+
+def _capability_status():
+    """能力主干现状（工具管理面用）：工具清单 + 健康度 + 已装载包。"""
+    try:
+        import capability as cap_mod
+        return {
+            "ok": True,
+            "packages": cap_mod.list_plugins(),
+            "items": cap_mod.list_capabilities(),
+            "health": cap_mod.health_all(),
+            "total_tools": len(TOOL_CALL_MAP),
+        }
+    except Exception as e:
+        return {"ok": False, "error": "能力状态读取失败（详情见日志）", "packages": [], "items": [],
+                "health": {"count": 0, "items": []}, "total_tools": 0}
+
+
 def _plugin_summary(p):
     meta = p.get("meta") or {}
     contents = p.get("contents") or {}
@@ -8041,6 +8077,58 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, _status())
 
 
+    @_get_route("/v1/capabilities")
+    def _g_v1_capabilities(self):
+        """能力主干现状：已装载能力包 / 能力清单 / 健康度（工具管理面数据源）。
+
+        与 /v1/tools（内置工具开关）分开：本端点描述的是**运行时装载的能力**，
+        它们的启用状态跟随能力包生命周期，不存在"单独开关"这回事。
+        """
+        self._json(200, _capability_status())
+
+
+    @_post_route("/v1/capabilities")
+    def _p_v1_capabilities(self):
+        """装载 / 卸载能力包。
+
+        body: {"action": "load|reload|unload", "file": "<能力包文件名>", "plugin_id": "..."}
+        安全边界：`file` 只能是能力包目录内的**文件名**（不接受路径），
+        否则这个端点就成了任意 JSON 装载入口。
+        """
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        action = str(body.get("action") or "reload").strip().lower()
+        try:
+            import capability as cap_mod
+            if action == "unload":
+                pid = str(body.get("plugin_id") or "").strip()
+                if not pid:
+                    self._json(400, {"error": "unload 需要 plugin_id"})
+                    return
+                res = cap_mod.unregister_plugin(pid, reason="api")
+            elif action in ("load", "reload"):
+                name = os.path.basename(str(body.get("file") or "").strip())
+                if not name:
+                    self._json(400, {"error": "load 需要 file（能力包文件名）"})
+                    return
+                path = os.path.join(_capability_dir(), name)
+                if not os.path.isfile(path):
+                    self._json(404, {"error": f"能力包不存在：{name}"})
+                    return
+                res = cap_mod.load_file(path, plugin_id=str(body.get("plugin_id") or ""))
+            else:
+                self._json(400, {"error": f"未知 action：{action}（load/reload/unload）"})
+                return
+        except Exception:  # noqa: BLE001
+            # 与全仓错误出口一致：异常详情只落日志，前端收脱敏文案
+            logger.exception("能力包操作失败")
+            self._json(500, {"error": "能力包操作失败（详情见日志）"})
+            return
+        self._json(200, {"result": res, "status": _capability_status()})
+
+
     @_get_route(("qpath", "/v1/trust"))
     def _g_v1_trust(self):
         """信任内核状态。?deep=1 现场重新核对（重算 sha256 并生成事件）。
@@ -10522,6 +10610,16 @@ def start_server(port=8745, token=""):
             logger.info("已迁移 %s 个旧版会话到会话库", n)
     except Exception:
         logger.warning("旧会话迁移失败（可降级）：旧版会话暂不可见，不影响新会话")
+    # ── 可降级：装载运行时能力包（能力主干，v3.17）──
+    # 失败只损失扩展能力，内置 169 项工具不受影响；坏包逐个报错而不是整体放弃。
+    try:
+        _cap_summary = _load_capabilities()
+        if _cap_summary.get("loaded"):
+            logger.info("已装载 %d 个能力包 / %d 项能力", _cap_summary["loaded"], _cap_summary["tools"])
+        for _err in _cap_summary.get("errors") or []:
+            logger.warning("能力包未装载：%s", _err)
+    except Exception:
+        logger.warning("能力主干初始化失败（可降级）：本次会话无运行时能力", exc_info=True)
     if _SCHEDULER_THREAD is None:
         _SCHEDULER_THREAD = threading.Thread(target=_scheduler_loop, daemon=True)
         _SCHEDULER_THREAD.start()
