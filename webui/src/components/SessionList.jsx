@@ -268,7 +268,11 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
               tabIndex={0}
               className={`sl-item ${activeId === s.id ? "sl-item-on" : ""} ${multiMode ? "sl-item-multi" : ""} ${isSel ? "sl-item-selected" : ""}`}
               onClick={(e) => (multiMode ? onRowClick(s.id, e) : onPick(s.id))}
-              onContextMenu={(e) => openItemMenu(e, s)}
+              onContextMenu={(e) => {
+                // 内联重命名/标签输入框上右键保留原生文本菜单
+                if (e.target && e.target.closest && e.target.closest("input, textarea")) return;
+                openItemMenu(e, s);
+              }}
               onKeyDown={(e) => {
                 if (e.target !== e.currentTarget) return;
                 if (e.key === "Enter" || e.key === " ") {

@@ -2363,10 +2363,10 @@ button.st-alert:focus-visible { outline: none; box-shadow: var(--ring); }
   box-shadow: var(--shadow-2);
   animation: toastIn .25s var(--ease);
   max-width: 340px;
-  pointer-events: auto;
 }
 .toast-text { flex: 1; }
 .toast-action {
+  pointer-events: auto;
   flex-shrink: 0; font-size: var(--fs-xs); font-weight: 600;
   color: var(--brand-strong); background: var(--bg-active);
   border: 1px solid rgba(var(--brand-rgb),.35); border-radius: var(--r-sm);

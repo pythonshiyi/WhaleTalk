@@ -31,7 +31,9 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
 
   const resolve = async (ids, action) => {
     try {
-      await api.resolvePendingMemory({ action, ids });
+      const d = await api.resolvePendingMemory({ action, ids });
+      // 后端失败走 _fail_soft（HTTP 200 + ok:false），必须显式判 ok，否则误报成功
+      if (d && d.ok === false) throw new Error(d.error || "操作失败");
       setPending((prev) => prev.filter((x) => !ids.includes(x.id)));
       setTip(action === "accept" ? "已写入长期记忆" : "已忽略");
     } catch {

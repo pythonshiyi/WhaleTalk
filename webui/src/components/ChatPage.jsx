@@ -2166,7 +2166,11 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                     if (e.target && e.target.closest && e.target.closest("button, a, input, textarea, select, .msg-ops")) return;
                     toggleSelect(gi);
                   } : undefined}
-                  onContextMenu={multiSel ? undefined : (e) => openMsgMenu(e, gi)}
+                  onContextMenu={multiSel ? undefined : (e) => {
+                    // 输入框/按钮/链接上右键保留原生菜单（与 hover 操作条一致）
+                    if (e.target && e.target.closest && e.target.closest("input, textarea, select, a, button")) return;
+                    openMsgMenu(e, gi);
+                  }}
                   onKeyDown={multiSel ? (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleSelect(gi); } } : undefined}
                 >
                   <Message
