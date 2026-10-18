@@ -94,23 +94,3 @@ def test_patch_array_items_handles_union_type_and_non_dict():
     assert nested["zs"]["items"] == {}
 
 
-def test_custom_tools_cache_uses_content_fingerprint():
-    """自定义工具缓存键须为内容指纹（非 id）：列表被就地修改后不得返回陈旧副本。"""
-    def _mk(desc):
-        return [{"type": "function", "function": {
-            "name": "x", "description": desc,
-            "parameters": {"type": "object", "properties": {}}}}]
-    old_cache, old_sig = dsc._CUSTOM_TOOLS_CACHE, dsc._CUSTOM_TOOLS_SIG
-    dsc._CUSTOM_TOOLS_CACHE = None
-    dsc._CUSTOM_TOOLS_SIG = None
-    try:
-        a = _mk("v1")
-        out1 = dsc._cached_all_tools(a)
-        a[0]["function"]["description"] = "v2"   # 就地修改同一列表对象
-        out2 = dsc._cached_all_tools(a)
-        d1 = [t["function"]["description"] for t in out1 if t["function"]["name"] == "x"]
-        d2 = [t["function"]["description"] for t in out2 if t["function"]["name"] == "x"]
-        assert d1 == ["v1"]
-        assert d2 == ["v2"], "内容变更后缓存未失效（id() 键的陈旧缓存问题）"
-    finally:
-        dsc._CUSTOM_TOOLS_CACHE, dsc._CUSTOM_TOOLS_SIG = old_cache, old_sig

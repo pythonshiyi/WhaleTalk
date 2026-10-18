@@ -174,8 +174,7 @@ def test_get_exact_match():
         "/v1/config": "_g_v1_config",
         "/v1/failures": "_g_v1_failures",
         "/v1/evolutions": "_g_v1_evolutions",
-        "/v1/plugins": "_g_v1_plugins",
-        "/v1/plugin_market": "_g_v1_plugin_market",
+        "/v1/capabilities": "_g_v1_capabilities",
         "/v1/context": "_g_v1_context",
         "/v1/tts/voices": "_g_v1_tts_voices",
     }
@@ -185,13 +184,12 @@ def test_get_exact_match():
 
 
 def test_get_pre_matcher():
-    """pre 型（空后缀 = 纯前缀 / 带后缀）：/v1/tools/、/v1/evolutions/、/v1/plugins/、
+    """pre 型（空后缀 = 纯前缀 / 带后缀）：/v1/tools/、/v1/evolutions/、
     /v1/tts/audio/ 前缀命中各自端点；sessions 需同时满足前缀+后缀。"""
     cases = {
         "/v1/tools/search_web": "_g_v1_tools_item",
         "/v1/tools/": "_g_v1_tools_item",          # 空名：路由命中，端点内部 404
         "/v1/evolutions/abc": "_g_v1_evolutions_item",
-        "/v1/plugins/xyz": "_g_v1_plugins_item",
         "/v1/tts/audio/1a2b3c4d.wav": "_g_v1_tts_audio",
         "/v1/sessions/abc123/messages": "_g_v1_sessions_messages",
     }

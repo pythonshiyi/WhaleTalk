@@ -101,7 +101,7 @@ ACTION_TOOLS = (
     "media_ffmpeg",
     "mv_compose",
     "webdav",
-    "create_plugin",
+    "create_capability",
     "rpa_click",
     "rpa_type",
     "rpa_hotkey",

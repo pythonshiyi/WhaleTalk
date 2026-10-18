@@ -1388,20 +1388,6 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
 
   const nowTime = () => nowClock();
 
-  // 应用型插件执行结果：作为本地消息展示（local 标记——不落盘、不进模型历史）。
-  // 关键：流式生成期间助手消息必须始终位于列表末尾（makePatchLast / currentMsg 等
-  // 热路径都依赖 `m.length-1`），故此时把本地消息插在流式消息**之前**，绝不追加到末尾。
-  const onPluginRun = (text) => {
-    const out = String(text || "").trim();
-    if (!out) return;
-    setMsgs((m) => {
-      const localMsg = { role: "assistant", text: out, time: nowTime(), local: true };
-      const last = m[m.length - 1];
-      if (last && last.streaming) return [...m.slice(0, -1), localMsg, last];
-      return [...m, localMsg];
-    });
-  };
-
   const onInjectFile = async (path) => {
     try {
       const d = await api.readFile(path);
@@ -2209,7 +2195,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
           )}
 
           <div className="composer-dock" ref={composerDockRef}>
-            <Composer ref={composerRef} busy={busy} onSend={onSend} onStop={onStop} isTask={isTask} onPluginRun={onPluginRun} />
+            <Composer ref={composerRef} busy={busy} onSend={onSend} onStop={onStop} isTask={isTask} />
           </div>
         </div>
 

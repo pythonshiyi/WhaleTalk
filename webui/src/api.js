@@ -629,61 +629,16 @@ export async function restoreBuiltinPrompts() {
   return api("/v1/prompts/restore_builtin", { method: "POST", body: JSON.stringify({}) });
 }
 
-// ── 插件 ─────────────────────────────────────────────
-
-/** @returns {Promise<Array<{slug:string, title:string, description?:string}>>} 已装插件的技能提示词 */
-export async function getPluginSkills() {
-  const d = await api("/v1/plugin_skills");
-  return d.skills || [];
+// ── 能力（运行时装载的工具）─────────────────────────────
+/** @returns {Promise<{packages:Array<Object>, items:Array<Object>, health:Object}>} 能力包 / 清单 / 健康度 */
+export async function capabilities() {
+  return api("/v1/capabilities");
 }
 
-// ── 插件中心（画廊 / 市场 / 工坊）─────────────────────
-
-/** @returns {Promise<{installed?:Array<Object>, gallery?:Array<Object>}>} 已装插件与画廊 */
-export async function getPlugins() {
-  return api("/v1/plugins");
-}
-
-/** @param {string} name @returns {Promise<Object>} 插件详情 */
-export async function getPluginDetail(name) {
-  return api(`/v1/plugins/${encodeURIComponent(name)}`);
-}
-
-/** @param {string} name @param {"install"|"uninstall"|"enable"|"disable"} action
- * @returns {Promise<{ok?:boolean, error?:string}>} */
-export async function pluginAction(name, action) {
-  return api("/v1/plugins", { method: "POST", body: JSON.stringify({ name, action }) });
-}
-
-/** @returns {Promise<{plugins?:Array<Object>, source?:string, error?:string}>} 在线市场索引 */
-export async function getPluginMarket() {
-  return api("/v1/plugin_market");
-}
-
-/** @param {string} name @returns {Promise<{ok?:boolean, error?:string}>} 校验并安装市场插件 */
-export async function installMarketPlugin(name) {
-  return api("/v1/plugin_market/install", { method: "POST", body: JSON.stringify({ name }) });
-}
-
-/** AI 插件设计工坊：生成插件。
- * @param {{description:string, name?:string, type?:string}} spec
- * @returns {Promise<{plugin?:Object, error?:string}>} */
-export async function pluginStudioGenerate(spec) {
-  return api("/v1/plugin_studio/generate", { method: "POST", body: JSON.stringify(spec) });
-}
-
-/** AI 插件设计工坊：校验并安装。
- * @param {Object} plugin @returns {Promise<{ok?:boolean, error?:string}>} */
-export async function pluginStudioInstall(plugin) {
-  return api("/v1/plugin_studio/install", { method: "POST", body: JSON.stringify({ plugin }) });
-}
-
-/** 执行应用型插件（v2 app，如「鲸群社区 · 大脑运行态」）。
- * @param {string} name 插件名（meta.name）
- * @param {string} [arg] 传给插件入口的参数（如 status / once / loop 5 / 文本=发帖）
- * @returns {Promise<{ok?:boolean, output?:string, error?:string}>} */
-export async function pluginRun(name, arg = "") {
-  return api("/v1/plugins/run", { method: "POST", body: JSON.stringify({ name, arg }) });
+/** 装载 / 重载 / 卸载能力包。action: load|reload|unload
+ * @param {{action:string, file?:string, pack_id?:string}} body */
+export async function capabilityAction(body) {
+  return api("/v1/capabilities", { method: "POST", body: JSON.stringify(body) });
 }
 
 // ── 大脑自主进社区（鲸群）────────────────────────────

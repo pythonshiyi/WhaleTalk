@@ -25,9 +25,9 @@ community_post
 community_save
 community_status
 control_map
+create_capability
 create_doc
 create_evolution
-create_plugin
 daily_brief
 database_execute
 database_query

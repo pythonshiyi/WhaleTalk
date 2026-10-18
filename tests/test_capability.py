@@ -291,3 +291,75 @@ def test_capability_names_never_shadow_core():
     res = capability.register_manifest(_manifest([cap]), plugin_id="p2")
     assert not res["ok"]
     assert "p_read_file" in toolkit.registry_names()   # 原注册仍在
+
+
+# ── 7. 内置包（bundled）：可停用，不可卸载 ────────────────────────────
+
+def test_bundled_pack_cannot_be_unloaded():
+    res = capability.register_manifest(_manifest([_cap(name="p_builtin_x")]),
+                                      plugin_id="builtin-x", bundled=True)
+    assert res["ok"]
+    out = capability.unregister_plugin("builtin-x")
+    assert not out["ok"]
+    assert "只允许停用" in out["error"]
+    assert "p_builtin_x" in toolkit.registry_names()      # 仍在注册表里
+
+    # force=True 是内部热替换用的通道，仍可撤销（否则组件无法重载）
+    assert capability.unregister_plugin("builtin-x", force=True)["ok"]
+
+
+def test_bundled_flag_survives_listing():
+    assert capability.register_manifest(_manifest([_cap(name="p_builtin_y")]),
+                                        plugin_id="builtin-y", bundled=True)["ok"]
+    packs = capability.list_plugins()
+    assert any(p["plugin_id"] == "builtin-y" and p["bundled"] for p in packs)
+
+
+def test_default_enabled_false_is_skipped(tmp_path):
+    import json as _json
+    good = _manifest([_cap(name="p_pack_on")])
+    off = _manifest([_cap(name="p_pack_off")], name="默认关闭")
+    off["meta"]["default_enabled"] = False
+    (tmp_path / "on.json").write_text(_json.dumps(good, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "off.json").write_text(_json.dumps(off, ensure_ascii=False), encoding="utf-8")
+    out = capability.load_dir(str(tmp_path))
+    assert out["loaded"] == 1
+    assert "off.json" in out["skipped"]
+    assert "p_pack_on" in toolkit.registry_names()
+    assert "p_pack_off" not in toolkit.registry_names()
+
+
+# ── 7. 内置包（bundled）：可停用，不可卸载 ────────────────────────────
+
+def test_bundled_pack_cannot_be_unloaded():
+    res = capability.register_manifest(_manifest([_cap(name="p_builtin_x")]),
+                                      plugin_id="builtin-x", bundled=True)
+    assert res["ok"]
+    out = capability.unregister_plugin("builtin-x")
+    assert not out["ok"]
+    assert "只允许停用" in out["error"]
+    assert "p_builtin_x" in toolkit.registry_names()      # 仍在注册表里
+
+    # force=True 是内部热替换用的通道，仍可撤销（否则组件无法重载）
+    assert capability.unregister_plugin("builtin-x", force=True)["ok"]
+
+
+def test_bundled_flag_survives_listing():
+    assert capability.register_manifest(_manifest([_cap(name="p_builtin_y")]),
+                                        plugin_id="builtin-y", bundled=True)["ok"]
+    packs = capability.list_plugins()
+    assert any(p["plugin_id"] == "builtin-y" and p["bundled"] for p in packs)
+
+
+def test_default_enabled_false_is_skipped(tmp_path):
+    import json as _json
+    good = _manifest([_cap(name="p_pack_on")])
+    off = _manifest([_cap(name="p_pack_off")], name="默认关闭")
+    off["meta"]["default_enabled"] = False
+    (tmp_path / "on.json").write_text(_json.dumps(good, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "off.json").write_text(_json.dumps(off, ensure_ascii=False), encoding="utf-8")
+    out = capability.load_dir(str(tmp_path))
+    assert out["loaded"] == 1
+    assert "off.json" in out["skipped"]
+    assert "p_pack_on" in toolkit.registry_names()
+    assert "p_pack_off" not in toolkit.registry_names()

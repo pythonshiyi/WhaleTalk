@@ -11,7 +11,6 @@ const SOURCES = [
   { id: "all", label: "全部" },
   { id: "mine", label: "我的指令" },
   { id: "builtin", label: "内置模板" },
-  { id: "plugin", label: "插件技能" },
   { id: "off", label: "已禁用" },
 ];
 
@@ -35,7 +34,6 @@ function fillVars(text) {
 
 export default function PromptsPage({ onApply }) {
   const [items, setItems] = React.useState(null);
-  const [pluginSkills, setPluginSkills] = React.useState([]);
   const [q, setQ] = React.useState("");
   const [cat, setCat] = React.useState("全部");
   const [src, setSrc] = React.useState("all");
@@ -58,12 +56,6 @@ export default function PromptsPage({ onApply }) {
       setItems([]);
       setErr("指令库加载失败（后端未连接或接口异常）");
     }
-    try {
-      const sk = await api.getPluginSkills();
-      setPluginSkills(Array.isArray(sk) ? sk : []);
-    } catch {
-      setPluginSkills([]);
-    }
   }, []);
 
   React.useEffect(() => {
@@ -75,19 +67,7 @@ export default function PromptsPage({ onApply }) {
     return ["全部", ...Array.from(s)];
   }, [items]);
 
-  // 插件技能：只读来源（id 带 plugin: 前缀，操作仅「复制」）
-  const pluginItems = pluginSkills.map((s) => ({
-    id: `plugin:${s.plugin}:${s.name}`,
-    name: s.name,
-    text: s.text,
-    icon: "🧩",
-    category: "插件技能",
-    desc: `来自插件「${s.plugin}」`,
-    fromPlugin: true,
-    enabled: true,
-  }));
-
-  const filtered = (src === "plugin" ? pluginItems : items || []).filter((p) => {
+  const filtered = (items || []).filter((p) => {
     if (src === "mine" && p.builtin) return false;
     if (src === "builtin" && !p.builtin) return false;
     if (src === "off" && p.enabled !== false) return false;
@@ -270,7 +250,6 @@ export default function PromptsPage({ onApply }) {
                     <span className="pm-icon">{p.icon || "⚡"}</span>
                     <b className="pm-name">{p.name}</b>
                     {p.builtin && <span className="pm-badge">内置</span>}
-                    {p.fromPlugin && <span className="pm-badge">插件</span>}
                     {p.auto_skill && <span className="pm-badge">自动结晶草稿</span>}
                     {off && <span className="pm-badge pm-badge-off">已禁用</span>}
                     <span className="pm-cat">{p.category || "未分类"}</span>

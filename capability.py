@@ -66,11 +66,14 @@ API_VERSION = "whaletalk.tool/1"
 NAME_PREFIX = "p_"
 FAIL_PREFIX = "错误"
 DEFAULT_TIMEOUT = 60.0
+MAX_TIMEOUT = 3600.0        # 上限放宽到 1 小时：MV 成片这类长任务的声明不该被静默压到 600s
 DEFAULT_MAX_CHARS = 20000
 BREAKER_FAILS = 3           # 连续失败多少次进入熔断
 BREAKER_COOLDOWN = 60.0     # 熔断冷却秒数
 EXEC_TYPES = ("http", "python", "builtin_ref", "cli")
 LEGACY_GROUP = "🧩 扩展能力"   # 旧插件迁移时的默认分组（能力地图里要有位置）
+_BUILTIN_DIR = ""   # 仓库内 capabilities/（随包分发，不可卸载）
+_USER_DIR = ""      # data/capabilities（用户自建）
 
 _NAME_RE = re.compile(r"^p_[a-z][a-z0-9_]{0,60}$")
 _SLUG_RE = re.compile(r"[^0-9a-z]+")
@@ -104,6 +107,25 @@ def _next_epoch() -> int:
         return _EPOCH
 
 
+def set_dirs(builtin_dir: str = "", user_dir: str = "") -> None:
+    """注入内置/用户能力包目录（api_server 启动时调用一次）。"""
+    global _BUILTIN_DIR, _USER_DIR
+    if builtin_dir:
+        _BUILTIN_DIR = str(builtin_dir)
+    if user_dir:
+        _USER_DIR = str(user_dir)
+
+
+def user_dir() -> str:
+    """用户能力包目录（create_capability 工具落盘处）。"""
+    return _USER_DIR
+
+
+def builtin_dir() -> str:
+    """随包分发的内置能力包目录。"""
+    return _BUILTIN_DIR
+
+
 def slugify(text: str) -> str:
     """能力包 id 安全化（小写字母数字与 -_，空则 fallback）。"""
     s = _SLUG_RE.sub("-", str(text or "").strip().lower()).strip("-")
@@ -131,7 +153,7 @@ def _norm_budget(budget) -> dict:
     except (TypeError, ValueError):
         timeout = DEFAULT_TIMEOUT
     return {
-        "timeout": max(1.0, min(timeout, 600.0)),
+        "timeout": max(1.0, min(timeout, MAX_TIMEOUT)),
         "idempotent": bool(b.get("idempotent", True)),
         "write": bool(b.get("write", False)),
     }
@@ -511,7 +533,7 @@ def _refresh_layers() -> None:
 
 
 def register_manifest(manifest: dict, *, base_dir: str = "", path: str = "",
-                      plugin_id: str = "") -> dict:
+                      plugin_id: str = "", bundled: bool = False) -> dict:
     """装载一个能力包。返回 {ok, plugin_id, tools, errors}。
 
     原子性：先整体校验（含重名冲突），全部通过才逐个注册；任一注册失败则回滚已装部分。
@@ -601,6 +623,7 @@ def register_manifest(manifest: dict, *, base_dir: str = "", path: str = "",
         _PLUGINS[pid] = {
             "manifest": manifest, "epoch": epoch, "tools": list(registered),
             "base_dir": base_dir or "", "path": path or "",
+            "bundled": bool(bundled),
             "loaded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
     _refresh_layers()
@@ -630,9 +653,18 @@ def _unregister_locked(pid: str, *, reason: str = "") -> dict:
     return {"ok": True, "removed": removed, "reason": reason}
 
 
-def unregister_plugin(pid: str, *, reason: str = "") -> dict:
-    """卸载一个能力包（温和失效）。返回 {ok, removed, error}。"""
+def unregister_plugin(pid: str, *, reason: str = "", force: bool = False) -> dict:
+    """卸载一个能力包（温和失效）。返回 {ok, removed, error}。
+
+    **内置包（bundled）不允许卸载**：它是产品的一部分，卸载等于能力面缺失，
+    用户会当成 bug 报（"公众号写作怎么没了"）。要关就用停用，别删。
+    `force=True` 仅供内部热替换/重启使用。
+    """
     with _lock:
+        info = _PLUGINS.get(pid)
+        if info is not None and info.get("bundled") and not force:
+            return {"ok": False, "removed": [],
+                    "error": "内置能力包只允许停用，不允许卸载"}
         res = _unregister_locked(pid, reason=reason)
     if res.get("ok"):
         _refresh_layers()
@@ -713,6 +745,7 @@ def list_plugins() -> list:
         return [
             {"plugin_id": pid, "epoch": info["epoch"], "tools": list(info["tools"]),
              "loaded_at": info.get("loaded_at", ""), "path": info.get("path", ""),
+             "bundled": bool(info.get("bundled")),
              "name": (info.get("manifest") or {}).get("meta", {}).get("name", pid)}
             for pid, info in _PLUGINS.items()
         ]
@@ -724,7 +757,7 @@ def epoch_of(pid: str) -> int:
         return int(info["epoch"]) if info else 0
 
 
-def load_file(path: str, *, plugin_id: str = "") -> dict:
+def load_file(path: str, *, plugin_id: str = "", bundled: bool = False) -> dict:
     """从单个 manifest 文件装载能力包。返回 register_manifest 的结果。"""
     try:
         with open(path, encoding="utf-8") as f:
@@ -733,21 +766,30 @@ def load_file(path: str, *, plugin_id: str = "") -> dict:
         return {"ok": False, "plugin_id": plugin_id, "tools": [],
                 "errors": [f"manifest 解析失败：{type(e).__name__}: {e}"]}
     return register_manifest(manifest, base_dir=os.path.dirname(os.path.abspath(path)),
-                             path=path, plugin_id=plugin_id)
+                             path=path, plugin_id=plugin_id, bundled=bundled)
 
 
-def load_dir(directory: str) -> dict:
+def load_dir(directory: str, *, bundled: bool = False) -> dict:
     """装载目录下全部 `*.json` 能力包。**单个包失败不影响其余**。
 
     启动时由 api_server 调用；返回汇总供日志与 /v1/capabilities 展示。
     失败进 errors 而不抛：一个坏包不该让整个能力主干起不来。
     """
-    out = {"ok": True, "loaded": 0, "tools": 0, "errors": [], "packages": []}
+    out = {"ok": True, "loaded": 0, "tools": 0, "errors": [], "packages": [], "skipped": []}
     if not directory or not os.path.isdir(directory):
         return out
     import glob
     for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
-        res = load_file(path)
+        # meta.default_enabled=false：装但不启用（社区这类需要配置才有意义的能力）
+        try:
+            with open(path, encoding="utf-8") as f:
+                _meta = (json.load(f) or {}).get("meta") or {}
+            if _meta.get("default_enabled") is False:
+                out["skipped"].append(os.path.basename(path))
+                continue
+        except Exception:  # noqa: silent-except: 解析失败不在这里报，交给 load_file 给具体错误
+            pass
+        res = load_file(path, bundled=bundled)
         base = os.path.basename(path)
         if res.get("ok"):
             out["loaded"] += 1

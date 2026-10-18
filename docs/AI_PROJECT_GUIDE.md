@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.17.0）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.18.0）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,9 +17,9 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.17.0`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.18.0`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **112 个 `/v1` 路由**、**115 个 pytest 文件 / 1145 用例 + 22 个前端 node 套件**、
+  **104 个 `/v1` 路由**、**114 个 pytest 文件 / 1137 用例 + 22 个前端 node 套件**、
   源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
   主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
@@ -47,7 +47,7 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试 ──
-python -m pytest -q                      # 后端全量（115 个文件 / 1145 用例，约 73s；CI 同款，见下方「分级验证」）
+python -m pytest -q                      # 后端全量（114 个文件 / 1137 用例，约 73s；CI 同款，见下方「分级验证」）
 python -m pytest tests/test_registry.py -q    # 只跑相关文件：日常改动的正确姿势（1–3s）
 cd webui && npm test                     # 前端 22 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
@@ -98,7 +98,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | 层 | 模块 | 一句话职责 |
 |---|---|---|
 | **入口** | `web_app.py`（989 行） | 唯一启动入口：参数解析 → 依赖自检/自动安装 → 桌面+开始菜单快捷方式 → WebUI 自动构建 → 单实例探测 → 起 API → 开浏览器 → 托盘常驻 |
-| **API 层** | `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**112 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
+| **API 层** | `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**104 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
 | **能力引擎** | `deepseek_client.py`（6,540 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步。**工具实现已迁出至 `agent_tools/`** |
 | **工具声明** | `toolkit.py`（269 行） | **`@tool()` 装饰器 + 注册表 + 六层构建函数**——工具系统单一事实源（见 §6.1） |
 | **钩子管线** | `tool_hooks.py`（344 行） | 横切关注点收口：pre/post 钩子表 + `wrap()` 包装器；在 `@tool()` **注册处**统一包装执行体，任何调用路径都逃不掉钩子（P0-1） |
@@ -117,7 +117,6 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | **大脑适配** | `brain_api.py`（1,180 行） | 大脑→API 适配层：把 CLI 命令包装成纯函数 + `brain_context`（身份/断点/目标/自我认知/未决决策/记忆注入）+ `consolidate_with_llm` |
 | **创世化初始** | `genesis.py`（143 行） | 让 AI 完全自主设定自己的「前半生」，产出多版候选供选 |
 | **MCP 出口** | `mcp_server.py`（156 行） | MCP over stdio，供外部 host 调 WhaleTalk 的工具（纯标准库，最小合规子集） |
-| **应用型插件执行** | `plugin_app.py` | `.wtplugin v2 app` 执行器：按 `contents.app.entry` 从 `plugins/<slug>/` 按文件加载执行（不污染 sys.path、零残留）；经 `POST /v1/plugins/run` 调用 |
 | **鲸群实验（可选·默认关）** | `community_client.py` | ⚠️ **不是鲸语功能，是可选实验场**：连接独立社区站（`experiments/鲸群实验场/`，已剥离出主程序）的一根「绳」。默认关、未配置密钥不外发、可整体删除。**当前冻结**，重启条件见实验场 README；主程序仅保留端点/工具/配置以备用 |
 
 ### 2.2 工具域包 `agent_tools/`（167 个 `@tool()` 的实现所在，P0-1 巨石拆分成果）
@@ -159,7 +158,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `config_utils.py` | 配置加载/规范化（字段钳制、非法值回退、新工具自动合并）/DPAPI 加解密保存；**返回进程级共享对象（只读）**，改配置必须 `mutable_config()` 取深拷贝 |
 | `profiles.py` | Profile 多账号（API Key DPAPI 加密） |
 | `roles.py` / `templates.py` / `themes.py` / `deps.py` | 角色预设 / 任务模板 / 主题 token / 依赖分层清单 |
-| `plugins.py` / `plugin_app.py` / `user_tools.py` | 插件体系（.wtplugin v1/v2，零残留卸载）/ 应用型插件执行器 / 自定义工具加载（mtime+size 缓存） |
+| `capability.py` | **能力主干**：manifest 校验、四种执行体、声明式最小权限、超时/熔断、温和失效卸载；内置包在仓库 `capabilities/`（不可卸载），用户包在 `data/capabilities/` |
 | `snapshot.py` | 写操作自动快照（写前备份到 `DATA_DIR/undo/`，上限 200 条，可恢复） |
 | `stats.py` | 用量统计 + 峰谷定价费用估算（按「用量发生日」选价，不被追溯改价） |
 | `tokens.py` | token 估算（tiktoken o200k_base，缺省回退 1.5 字符/token） |
@@ -177,9 +176,9 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `src/App.jsx` / `main.jsx` | 应用骨架 / 入口（无 react-router，纯 state 切页；`ChatPage` 用 `hidden` 常驻挂载） |
 | `src/components/ChatPage.jsx`（1,944） | 主聊天页（最大组件）：流式引擎、会话/滚动/附件/面板/快捷键 |
 | `src/components/SettingsPage.jsx`（1,348） | 设置中心 |
-| `src/components/Pages.jsx`（1,384） | 栏目路由聚合（工作台/能力/记忆/权限/文件/进化/系统 + 插件/设置） |
+| `src/components/Pages.jsx`（1,384） | 栏目路由聚合（工作台/能力/能力包/记忆/权限/文件/进化/系统 + 设置） |
 | `src/components/AuxPanel.jsx`（933） | 控制台侧栏（文件/进程/参数/活动四标签，可见感知轮询） |
-| `src/components/{Brain*,PromptsPage,AutonomyPage,PluginsPage}.jsx` | 大脑 / 指令库 / 自主 / 插件栏目 |
+| `src/components/{Brain*,PromptsPage,AutonomyPage,CapabilitiesPage}.jsx` | 大脑 / 指令库 / 自主 / 能力栏目 |
 | `src/components/{Message,Composer,SessionList,ContextPanel,Sidebar,StatusBar}.jsx` | 消息（含工具步骤条 + `team_run` 流水线解析）/ 输入 / 会话列表 / 上下文 / 侧栏 / 状态条 |
 | `src/components/PixelDocViewer.jsx` / `OfficePreview.jsx` | **产物预览**（均由 `FilesPage` 点击文件触发）：前者像素级渲染 pdf/docx/pptx；后者取 `/v1/files/preview` 做 xlsx/Word **就地编辑回写** |
 | `src/mdParser.js` / `mdInline.js` / `mdHighlight.js` / `mdMath.js` / `longTextUtil.js` | **Markdown 渲染管线**（纯数据 AST，零依赖、流式安全；对应 node 单测） |
@@ -198,7 +197,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案）、`check_silent_except.py`（静默吞异常基线差分门禁 + `silent_except_baseline.txt`） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 115 个 pytest 文件 / 1145 用例 |
+| `tests/` | 后端回归 114 个 pytest 文件 / 1137 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
@@ -239,7 +238,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
   `("qpath",path)`（去查询串精确）。**表顺序即匹配优先级（= 源码顺序）**。
 - 兼容 `/api/v1/...` 与 `/v1/...`（Vite 代理）。
 
-### 4.3 端点分组（共 112 个 `/v1` 路由）
+### 4.3 端点分组（共 104 个 `/v1` 路由）
 
 **会话与消息**：`GET /v1/sessions` · `/v1/sessions/<id>/messages` · `POST /v1/sessions`
 (+`delete_batch`/`delete`/`pin`/`rename`/`tags`) · `POST /v1/search`
@@ -256,10 +255,10 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 **自我进化**：`GET /v1/evolutions`(+/<name>) · `POST /v1/evolutions/{apply,ignore,restore}` ·
 `GET /v1/evolve_branches` · `POST /v1/evolve_branches/{detail,merge,delete}` ·
 `GET /v1/self_profile` · `POST /v1/skills/crystallize`
-**指令库/插件**：`GET /v1/prompts`(+export) · `POST /v1/prompts`(save/delete/reorder/import/use/restore_builtin) ·
+**指令库 / 能力包**：`GET /v1/prompts`(+export) · `POST /v1/prompts`(save/delete/reorder/import/use/restore_builtin) ·
 `GET /v1/plugin_skills` · `GET /v1/plugins`(+/<name>) / `POST /v1/plugins` ·
 `GET /v1/plugin_market` / `POST /v1/plugin_market/install` · `POST /v1/plugin_studio/{generate,install}` ·
-`POST /v1/plugins/run`（应用型插件执行）
+`GET/POST /v1/capabilities`（能力包：清单 / 装载 / 卸载）
 **鲸群实验（⚠️ 可选·默认关，非鲸语功能）**：`GET /v1/community`（状态）· `POST /v1/community`（onboard/run/test/stop_server）——连接独立社区站（`experiments/鲸群实验场/`）备用，冻结中。
 **任务/调度/服务**：`GET /v1/tasks` · `/v1/tasklog` · `/v1/schedules` / `POST /v1/schedules` ·
 `/v1/workflows` / `POST /v1/workflows` · `/v1/checkpoint` / `POST /v1/checkpoint` ·
@@ -309,7 +308,7 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：`reasoning`（思
 
 - Provider 表（顺序即优先级）：系统提示词/任务质量指南 → 长期记忆（最近 6 条）→ 核心自我状态 →
   鲸语大脑上下文 → 工作目录 → 失败模式（最近 3 条，仅未消解）+ 成功模式（最近 3 条）→
-  已装插件提示 + 项目任务记录（最近 3 条）。
+  项目任务记录（最近 3 条）。
 - `quiet_mode` 关闭全部个性注入；`pure_chat` 用 `DIALOG_SYSTEM_PROMPT` 且不带工具。
 - **缓存友好原则**：恒定内容（提示词/指南）在前，易变内容（记忆）在尾——官方硬盘缓存按前缀完整匹配命中。
 - 装配回执存 `context_providers.last_receipt()`，经 `GET /v1/context` 暴露。
@@ -535,7 +534,7 @@ def my_tool(...): ...
 
 1. **DeepSeek API 400 三连**：空 content 的 assistant、悬空 tool_calls、孤立 tool 消息——
    `_sanitize_messages` 必须前置清理；流中断/停止后必须补齐 tool 结果或移除半截 tool_calls。
-2. **array 参数缺 items → 400**：`_patch_array_items` 每次请求前递归兜底（含自定义/插件工具）。
+2. **array 参数缺 items → 400**：`_patch_array_items` 每次请求前递归兜底（含能力工具）。
 3. **JSON 输出非法**：官方有概率返回非 JSON，应用层解析失败自动重试一次（`json_retried`）。
 4. **流式中途断线**：已有增量送达 UI 时不整体重试（避免重复显示）；无增量时重试一次。
 5. **缓存命中**：SSE 流式必须显式 `stream_options.include_usage`；prompt 前缀稳定（system 恒前、
@@ -630,7 +629,7 @@ def my_tool(...): ...
 
 ---
 
-## 14. 测试资产速查（tests/，115 个 pytest 文件 / 1145 用例）
+## 14. 测试资产速查（tests/，114 个 pytest 文件 / 1137 用例）
 
 按领域分组（文件名即内容）：
 
@@ -673,7 +672,7 @@ def my_tool(...): ...
 | 改 Markdown 渲染 | `webui/src/mdParser.js`/`mdInline.js`/`mdHighlight.js`/`longTextUtil.js` + `Markdown.jsx` |
 | 加前端测试 | `webui/tests/<名字>.test.mjs`（`npm test` 自动发现，**无需改任何配置**） |
 | 改公众号写作 | `wechat_writer/`（main.run_once 全流程） |
-| 改插件体系 | `plugins.py`（装载/校验/零残留卸载）+ `plugin_app.py`（v2 app 执行）+ [插件开发指南](插件开发指南.md) |
+| 改能力体系 | `capability.py`（装载/校验/权限/熔断/卸载）+ `capabilities/*.json`（内置能力包）+ [能力协议](能力协议.md) |
 | 改界面样式/主题 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) + `webui/src/theme.css` |
 | 改配置结构 | `config_defaults.py`（默认值）+ `config_utils.py`（规范化/钳制） |
 | 改 CI / 门禁 | `.github/workflows/ci.yml` + `tools/*.py` |
@@ -690,7 +689,7 @@ def my_tool(...): ...
 | [../TECH_NOTES.md](../TECH_NOTES.md) | 改架构前的设计取舍与历史踩坑 |
 | [../MODULES.md](../MODULES.md) | 查「某个文件负责什么」的逐模块清单 |
 | [配置与上限.md](配置与上限.md) | 调上限/开关（全部 `WHALETALK_*` 环境变量速查） |
-| [插件开发指南.md](插件开发指南.md) | 写 `.wtplugin` 插件（五种形态 + 校验规则 + 工坊） |
+| [能力协议.md](能力协议.md) | 写能力包（四执行体 + 权限 + 预算 + 自检清单） |
 | [信任内核.md](信任内核.md) | 改 `permissions`/`security`/`crypto`/`snapshot` 前必读 |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | 改前端样式：令牌体系与一致性铁律 |
 | [出网账本与记忆门面.md](出网账本与记忆门面.md) | 新增出网能力 / 改记忆写入路径 |
@@ -705,5 +704,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1145 用例 / 版本 3.17.0）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1137 用例 / 版本 3.18.0）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

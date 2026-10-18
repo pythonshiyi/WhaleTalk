@@ -16,7 +16,6 @@ from datetime import datetime
 
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 import permissions
-import plugins as plugins_mod
 from deepseek_client import (
     _atomic_write,
     _current_version,
@@ -1634,113 +1633,83 @@ def self_report(days=7, write=False):
         {
             "type": "function",
             "function": {
-                "name": "create_plugin",
-                "description": "根据用户需求生成并安装鲸语插件：组合自定义工具/技能模板/自动化流程/场景配置，生成后立即生效。适合『添加一个XX工具』『创建一个XX流程』『帮我加个小红书文案技能』等需求",
+                "name": "create_capability",
+                "description": "把一项新能力装进鲸语（写能力包并立即生效）。用户说『加一个能XX的工具』『做个查XX的能力』时用它。能力可以复用内置工具（exec.type=builtin_ref，最常用）、调用 HTTP 接口（http）、跑命令（cli）或执行自带 Python（python）。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string", "description": "插件名称（简短，如 小红书文案助手）"},
-                        "description": {"type": "string", "description": "可选：插件说明"},
-                        "tools": {
+                        "name": {"type": "string", "description": "能力包名称（简短中文，如 小红书文案）"},
+                        "description": {"type": "string", "description": "可选：能力包说明"},
+                        "capabilities": {
                             "type": "array",
-                            "description": "可选：自定义 HTTP 工具列表，每项 {name, endpoint, description, method, params}（params 为逗号分隔的参数名）",
+                            "description": "能力列表，每项一个工具声明",
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "name": {"type": "string", "description": "工具名（英文标识）"},
-                                    "endpoint": {"type": "string", "description": "HTTP 地址（http/https）"},
-                                    "description": {"type": "string", "description": "工具描述（AI 何时调用）"},
-                                    "method": {"type": "string", "description": "可选：POST/GET（默认 POST）"},
-                                    "params": {"type": "string", "description": "可选：参数名，逗号分隔，如 topic, style"},
+                                    "name": {"type": "string", "description": "工具名，必须 p_ 开头且小写英文/数字/下划线，如 p_xhs_copy"},
+                                    "description": {"type": "string", "description": "给模型看的触发场景（写清什么时候该调用）"},
+                                    "parameters": {"type": "object", "description": "JSON Schema（type=object）"},
+                                    "exec": {"type": "object", "description": "执行体：{type: builtin_ref|http|cli|python, ...}"},
+                                    "perms": {"type": "object", "description": "最小权限：{net, tools, cli, python, files}"},
+                                    "groups": {"type": "array", "description": "能力分组（可复用已有组名，如 🔧 系统与基础）", "items": {"type": "string"}},
+                                    "preactivate": {"type": "array", "description": "关键词组，如 [[\"小红书\",\"文案\"]]", "items": {"type": "array", "items": {"type": "string"}}},
                                 },
+                                "required": ["name", "description", "exec", "perms", "groups"],
                             },
-                        },
-                        "skills": {
-                            "type": "array",
-                            "description": "可选：技能/提示词模板，每项 {name, text}（text 中 {{TEXT}} 会被输入框内容替换）",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "name": {"type": "string", "description": "技能名"},
-                                    "text": {"type": "string", "description": "提示词模板内容"},
-                                },
-                            },
-                        },
-                        "workflows": {
-                            "type": "object",
-                            "description": "可选：自动化流程 {流程名: {steps: [{text: 指令}]}}",
-                            "additionalProperties": {"type": "object"},
-                        },
-                        "requires": {
-                            "type": "array",
-                            "description": "可选：依赖的 pip 包名列表",
-                            "items": {"type": "string"},
                         },
                     },
-                    "required": ["name"],
+                    "required": ["name", "capabilities"],
                 },
             },
         },
     groups=['🔧 系统与基础'],
-    phrases='创建用户插件',
-    preactivate=(('创建插件', '加个插件', '写个技能', '做一个插件'),),
+    phrases='创建一项新能力',
+    preactivate=(('创建能力', '加个能力', '做个工具', '增加功能'),),
 )
-def create_plugin(name, description="", tools=None, skills=None, workflows=None,
-                  requires=None):
-    """AI 生成并安装插件：根据需求组合工具/技能/流程，生成后立即生效。
+def create_capability(name, capabilities=None, description=""):
+    """写一个能力包 manifest 到 data/capabilities/ 并立即装载（v3.18 起取代 create_plugin）。
 
-    内部走审批闸门（ACTION_TOOLS 注册）；安装后可在「工具 → 插件管理」停用/卸载。
+    与旧插件的区别：能力是**一等公民**——进同一张注册表，因此有分组、预激活、钩子、
+    权限强制与健康度；卸载是温和失效，不需要改写任何 JSON 数据文件。
+
+    校验失败直接返回错误（不装半个包）；成功后下一次工具调用即可见。
     """
     name = str(name or "").strip()
     if not name:
-        return "错误：name 必填（插件名称）"
-    contents = {}
-    if tools:
-        converted = [_to_tool_schema(t) for t in tools] if isinstance(tools, list) else [_to_tool_schema(tools)]
-        converted = [t for t in converted if t]
-        if converted:
-            contents["tools"] = converted
-    if skills:
-        contents["skills"] = skills if isinstance(skills, list) else [skills]
-    if workflows:
-        contents["workflows"] = workflows
-    if not contents:
-        return "错误：插件需要至少一项能力（tools / skills / workflows）"
-    plugin = {
-        "format": plugins_mod.PLUGIN_FORMAT,
-        "version": 1,
-        "meta": {
-            "name": name[:40],
-            "description": str(description or "")[:200],
-            "author": "鲸语 AI",
-            "version": "1.0.0",
-        },
-        "requires": [str(r).strip() for r in (requires or []) if str(r).strip()],
-        "contents": contents,
+        return "错误：name 必填（能力包名称）"
+    caps = capabilities if isinstance(capabilities, list) else [capabilities]
+    caps = [c for c in caps if isinstance(c, dict)]
+    if not caps:
+        return "错误：capabilities 至少需要一项能力"
+    try:
+        import capability as cap_mod
+    except Exception as e:  # noqa: BLE001
+        return f"错误：能力主干不可用（{type(e).__name__}: {e}）"
+    base = cap_mod.user_dir()
+    if not base:
+        return "错误：能力目录未初始化（服务尚未完成启动）"
+    manifest = {
+        "api": cap_mod.API_VERSION,
+        "meta": {"name": name[:40], "description": str(description or "")[:200],
+                 "author": "鲸语 AI", "version": "1.0.0"},
+        "capabilities": caps,
     }
-    ok, err = plugins_mod.validate_plugin(plugin)
+    ok, errs = cap_mod.validate_manifest(manifest)
     if not ok:
-        return f"错误：插件校验失败：{err}"
-    if not _dc.PLUGIN_PATHS:
-        return "错误：插件模块未初始化"
-    res = plugins_mod.apply_plugin(plugin, _dc.PLUGIN_PATHS)
+        return "错误：能力包校验失败：" + "\n" + "- " + "\n- ".join(errs)
+    try:
+        os.makedirs(base, exist_ok=True)
+        path = os.path.join(base, cap_mod.slugify(name) + ".json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        return f"错误：写入能力包失败：{e}"
+    res = cap_mod.load_file(path)
     if not res.get("ok"):
-        return f"错误：插件安装失败：{res.get('error')}"
-    added = res.get("added") or {}
-    parts = []
-    if added.get("tools"):
-        parts.append(f"工具 {'、'.join(added['tools'])}")
-    if added.get("skills"):
-        parts.append(f"技能 {'、'.join(added['skills'])}")
-    if added.get("workflows"):
-        parts.append(f"流程 {'、'.join(added['workflows'])}")
-    miss = plugins_mod.missing_requires(plugin)
-    note = f"\n⚠ 缺失依赖：{'、'.join(miss)}（pip install …，可在「依赖状态」查看）" if miss else ""
-    return (
-        f"✅ 插件「{name}」已生成并安装：{'；'.join(parts) or '空'}。\n"
-        f"安装目录：{res.get('path')}{note}\n"
-        "可在「工具 → 插件管理」查看、停用或卸载；插件可导出 .wtplugin 分享给他人。"
-    )
+        return "错误：能力包装载失败：" + "\n" + "- " + "\n- ".join(res.get("errors") or ["未知错误"])
+    return (f"✅ 能力包「{name}」已装载：{'、'.join(res.get('tools') or [])}。" + "\n"
+            f"文件：{path}" + "\n"
+            "现在起模型可在能力地图里看到它；不想要了可以停用（内置包不可卸载）。")
 
 
 def _perf_snapshot(top=8):
@@ -1862,4 +1831,4 @@ def hardware_accel(action="probe", size="", top=8):
     return "错误：action 仅支持 probe / bench / selftest / perf"
 
 
-__all__ = ['create_plugin', 'watch_files', 'recall_session', 'project_info', 'read_project_file', 'list_my_capabilities', 'create_evolution', 'self_evolve', 'verify_files', 'git_tool', 'notify_desktop', 'app_manage', 'usage_report', 'capability_heatmap', 'self_report', 'hardware_accel']
+__all__ = ['create_capability', 'watch_files', 'recall_session', 'project_info', 'read_project_file', 'list_my_capabilities', 'create_evolution', 'self_evolve', 'verify_files', 'git_tool', 'notify_desktop', 'app_manage', 'usage_report', 'capability_heatmap', 'self_report', 'hardware_accel']

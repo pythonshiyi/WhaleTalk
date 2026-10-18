@@ -459,7 +459,7 @@ _TOOL_DOMAIN = {
     "run_python": "开发与测试", "run_command": "开发与测试", "pip_install": "开发与测试",
     "write_code_project": "开发与测试", "run_tests": "开发与测试", "verify_output": "开发与测试",
     "verify_files": "开发与测试", "project_info": "开发与测试", "read_project_file": "开发与测试",
-    "create_plugin": "开发与测试", "create_evolution": "开发与测试", "self_evolve": "开发与测试",
+    "create_capability": "开发与测试", "create_evolution": "开发与测试", "self_evolve": "开发与测试",
     "app_manage": "开发与测试", "git": "开发与测试", "run_lint": "开发与测试",
     "verify_project": "开发与测试", "dev_plan": "开发与测试", "project_scaffold": "开发与测试",
     "project_map": "开发与测试", "find_symbol": "开发与测试", "get_status": "开发与测试",
@@ -518,28 +518,36 @@ _DOMAIN_COLORS = {
 }
 
 
-def _plugin_paths():
-    return {
-        "plugins_dir": os.path.join(DATA_DIR, "plugins"),
-        "user_tools": os.path.join(DATA_DIR, "user_tools.json"),
-        "prompts": os.path.join(DATA_DIR, "prompts.json"),
-        "workflows": os.path.join(DATA_DIR, "workflows.json"),
-    }
-
-
 # 能力包目录（v3.17 能力主干）：每个 *.json 是一份能力 manifest，启动时自动装载。
-# 与 data/plugins（旧 .wtplugin）分开放：旧格式走旧旁路，新格式走主干。
+# 内置能力包在仓库根 capabilities/（随包分发、不可卸载）；用户自建的放这里。
 # 刻意写成函数而不是模块级常量：DATA_DIR 在文件后段才解析（见 `DATA_DIR = _resolve_data_dir()`），
 # 常量会在导入期拿到未定义的 DATA_DIR（本文件曾经因此让 33 个测试采集直接失败）。
 def _capability_dir():
     return os.path.join(DATA_DIR, "capabilities")
 
 
+def _builtin_capability_dir():
+    return os.path.join(_ORIG_DIR, "capabilities")
+
+
 def _load_capabilities():
-    """装载 CAPABILITY_DIR 下的全部能力包（可降级，失败不影响内置工具）。"""
+    """装载能力包：先内置（仓库 capabilities/，不可卸载），再用户（data/capabilities/）。
+
+    可降级：任一目录失败都只损失该目录的能力，内置 169 项工具不受影响。
+    """
     try:
         import capability as cap_mod
-        return cap_mod.load_dir(_capability_dir())
+        cap_mod.set_dirs(_builtin_capability_dir(), _capability_dir())
+        builtin = cap_mod.load_dir(_builtin_capability_dir(), bundled=True)
+        user = cap_mod.load_dir(_capability_dir())
+        return {
+            "ok": builtin.get("ok") and user.get("ok"),
+            "loaded": builtin.get("loaded", 0) + user.get("loaded", 0),
+            "tools": builtin.get("tools", 0) + user.get("tools", 0),
+            "errors": (builtin.get("errors") or []) + (user.get("errors") or []),
+            "packages": (builtin.get("packages") or []) + (user.get("packages") or []),
+            "skipped": (builtin.get("skipped") or []) + (user.get("skipped") or []),
+        }
     except Exception as e:
         logger.warning("能力包装载失败（可降级）：本次会话无运行时能力，内置工具不受影响",
                        exc_info=True)
@@ -569,298 +577,6 @@ def _capability_status():
         return {"ok": False, "error": "能力状态读取失败（详情见日志）", "packages": [], "items": [],
                 "health": {"count": 0, "items": []}, "total_tools": 0}
 
-
-def _plugin_summary(p):
-    meta = p.get("meta") or {}
-    contents = p.get("contents") or {}
-    kind = "应用型" if contents.get("app") else ("流程" if contents.get("workflows") else ("技能" if contents.get("skills") else "工具"))
-    try:
-        import plugins as plugins_mod
-        perms = plugins_mod.plugin_permissions(p)
-    except Exception:
-        perms = {"declared": False, "tools": [], "files": [], "net": False, "notes": ""}
-    return {
-        "name": str(meta.get("name") or "未命名插件"),
-        "description": str(meta.get("description") or ""),
-        "author": str(meta.get("author") or ""),
-        "version": str(meta.get("version") or ""),
-        "enabled": bool(p.get("enabled", True)),
-        "trigger": str((meta.get("triggers") or [meta.get("trigger")])[0] if isinstance(meta.get("triggers"), list) else (meta.get("trigger") or "")),
-        "slug": str(p.get("slug") or ""),
-        "kind": kind,
-        "permissions": perms,
-    }
-
-
-def _plugins():
-    """插件市场：已安装 + 画廊（sample_plugins）。"""
-    import plugins as plugins_mod
-    installed = []
-    try:
-        for p in plugins_mod.list_plugins(_plugin_paths()["plugins_dir"]):
-            installed.append(_plugin_summary(p))
-    except Exception:
-        logger.exception("读取已装插件失败")
-    gallery = []
-    sample_dir = os.path.join(_ORIG_DIR, "sample_plugins")
-    installed_names = {p["name"] for p in installed}
-    if os.path.isdir(sample_dir):
-        for fn in sorted(os.listdir(sample_dir)):
-            if not fn.endswith(plugins_mod.PLUGIN_EXT):
-                continue
-            try:
-                p, err = plugins_mod.parse_plugin_file(os.path.join(sample_dir, fn))
-                if p is not None:
-                    s = _plugin_summary(p)
-                    s["installed"] = s["name"] in installed_names
-                    gallery.append(s)
-            except Exception:
-                continue
-    return {"installed": installed, "gallery": gallery}
-
-
-def _plugins_action(body):
-    """安装/卸载/启用/停用插件。body: {name, action}。返回 (result, error)。"""
-    import plugins as plugins_mod
-    name = str(body.get("name") or "")
-    action = str(body.get("action") or "")
-    if not name or action not in ("install", "uninstall", "enable", "disable"):
-        return None, "参数错误：name + action(install/uninstall/enable/disable)"
-    paths = _plugin_paths()
-    plugins_dir = paths["plugins_dir"]
-    installed = plugins_mod.list_plugins(plugins_dir)
-    target = next((p for p in installed if (p.get("meta") or {}).get("name") == name), None)
-    if action == "install":
-        if target:
-            return None, "插件已安装"
-        sample_dir = os.path.join(_ORIG_DIR, "sample_plugins")
-        src = None
-        if os.path.isdir(sample_dir):
-            for fn in os.listdir(sample_dir):
-                if not fn.endswith(plugins_mod.PLUGIN_EXT):
-                    continue
-                try:
-                    p, err = plugins_mod.parse_plugin_file(os.path.join(sample_dir, fn))
-                    if p is not None and (p.get("meta") or {}).get("name") == name:
-                        src = p
-                        break
-                except Exception:                    continue
-        if src is None:
-            return None, "画廊中未找到该插件"
-        res = plugins_mod.apply_plugin(src, paths)
-        if res.get("ok"):
-            ret = {"ok": True, "added": res.get("added")}
-            try:
-                perms = plugins_mod.plugin_permissions(src)
-                if not perms["declared"]:
-                    ret["warning"] = "⚠️ 该插件未声明权限（tools/files/net），调用其能力时权限按系统默认执行"
-            except Exception:
-                pass
-            return ret, None
-        return None, str(res.get("error") or "安装失败")
-    if not target:
-        return None, "插件未安装"
-    if action == "uninstall":
-        res = plugins_mod.unapply_plugin(target, paths)
-        if res.get("ok"):
-            try:
-                if os.path.exists(target.get("_file", "")):
-                    os.remove(target["_file"])
-            except Exception:
-                pass
-            return {"ok": True}, None
-        return None, str(res.get("error") or "卸载失败")
-    if action == "enable" and not target.get("enabled"):
-        target["enabled"] = True
-        plugins_mod.save_plugin_file(target, plugins_dir)
-        plugins_mod.apply_plugin(target, paths)
-        return {"ok": True}, None
-    if action == "disable" and target.get("enabled"):
-        target["enabled"] = False
-        plugins_mod.save_plugin_file(target, plugins_dir)
-        plugins_mod.unapply_plugin(target, paths)
-        return {"ok": True}, None
-    return {"ok": True}, None
-
-
-# ── 在线插件市场（v3.5 P2）：远程索引 + SHA-256/Ed25519 校验 + 质量分级 ──
-# index.json 结构：
-# {"plugins": [{"name","description","author","version","url","sha256",
-#               "tier": "official|community|experimental", "note": ""}]}
-# 质量分级：official（官方维护）/ community（社区贡献）/ experimental（实验性）
-_MARKET_CACHE = {"ts": 0.0, "data": None}
-_MARKET_TTL = 300  # 索引缓存 5 分钟
-_MARKET_TIMEOUT = 12
-
-
-def _market_url():
-    import config_defaults
-    try:
-        import config_utils as _cu
-        cfg = _cu.load_config()
-        return str(cfg.get("plugin_market_url") or config_defaults.PLUGIN_MARKET_URL).strip()
-    except Exception:
-        return config_defaults.PLUGIN_MARKET_URL
-
-
-def _market_public_key():
-    try:
-        import config_utils as _cu
-        return str(_cu.load_config().get("plugin_market_public_key") or "").strip()
-    except Exception:
-        return ""
-
-
-def _market_index(force=False):
-    """拉取市场索引（带缓存）。返回 (plugins_list, source_url, error)。"""
-    now = time.time()
-    if not force and _MARKET_CACHE["data"] is not None and now - _MARKET_CACHE["ts"] < _MARKET_TTL:
-        return _MARKET_CACHE["data"], _MARKET_CACHE["source"], None
-    url = _market_url()
-    try:
-        r = urllib.request.urlopen(url, timeout=_MARKET_TIMEOUT)
-        raw = r.read(2 * 1024 * 1024)
-        data = json.loads(raw.decode("utf-8", errors="replace"))
-        plugins = data.get("plugins") if isinstance(data, dict) else None
-        if not isinstance(plugins, list):
-            return None, url, "市场索引格式错误（缺少 plugins 数组）"
-        cleaned = []
-        for p in plugins:
-            if not isinstance(p, dict) or not str(p.get("name") or "").strip():
-                continue
-            cleaned.append({
-                "name": str(p["name"]).strip(),
-                "description": str(p.get("description") or ""),
-                "author": str(p.get("author") or "社区"),
-                "version": str(p.get("version") or ""),
-                "url": str(p.get("url") or ""),
-                "sha256": str(p.get("sha256") or "").strip().lower(),
-                "signature": str(p.get("signature") or "").strip(),
-                "tier": str(p.get("tier") or "community").strip() or "community",
-                "note": str(p.get("note") or ""),
-            })
-        _MARKET_CACHE.update(ts=now, data=cleaned, source=url)
-        return cleaned, url, None
-    except Exception as e:
-        return None, url, f"市场索引拉取失败：{e}"
-
-
-def _verify_plugin_download(raw, entry):
-    """校验下载的插件字节：SHA-256 必校验；配置公钥后强制 Ed25519 验签。返回 (ok, error)。
-
-    fail-closed：既无 sha256 也无签名（未配公钥）时一律拒绝——否则被篡改/自建的
-    市场索引可投放"零校验"插件，落盘并启用任意代码。
-    """
-    import hashlib
-    entry = entry or {}
-    sha256 = str(entry.get("sha256") or "").strip().lower()
-    pub = _market_public_key()
-    if not sha256 and not pub:
-        return False, "该插件既无 sha256 校验值也无签名，已拒绝安装（fail-closed）"
-    if sha256:
-        actual = hashlib.sha256(raw).hexdigest()
-        if actual != sha256:
-            return False, f"SHA-256 校验失败（期望 {sha256[:16]}…，实际 {actual[:16]}…），已拒绝安装"
-    if pub:
-        sig = str(entry.get("signature") or "").strip()
-        if not sig:
-            return False, "市场配置了签名公钥，但该插件缺少 signature 字段，已拒绝安装（fail-closed）"
-        try:
-            import base64
-
-            from cryptography.hazmat.primitives import serialization
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-            key_material = pub.encode("utf-8")
-            try:
-                pubkey = serialization.load_pem_public_key(key_material)
-            except Exception:
-                der = base64.b64decode(pub)
-                pubkey = Ed25519PublicKey.from_public_bytes(der)
-            pubkey.verify(base64.b64decode(sig), raw)
-        except Exception as e:
-            return False, f"Ed25519 签名校验失败，已拒绝安装：{e}"
-    return True, ""
-
-
-def _plugin_market():
-    """GET /v1/plugin_market：市场条目 + 已安装状态。"""
-    import plugins as plugins_mod
-    plugins_list, source, err = _market_index()
-    installed_names = set()
-    try:
-        for p in plugins_mod.list_plugins(_plugin_paths()["plugins_dir"]):
-            installed_names.add(str((p.get("meta") or {}).get("name") or ""))
-    except Exception:
-        pass
-    out = []
-    for p in plugins_list or []:
-        out.append({
-            **p,
-            "installed": p["name"] in installed_names,
-            "has_sha256": bool(p.get("sha256")),
-            "signed": bool(p.get("signature")) or bool(_market_public_key()),
-        })
-    return {"plugins": out, "source": source, "error": err,
-            "signature_enforced": bool(_market_public_key()), "count": len(out)}
-
-
-def _plugin_market_install(body):
-    """POST /v1/plugin_market/install：{name} → 下载 + 校验 + 安装。"""
-    import plugins as plugins_mod
-    name = str(body.get("name") or "").strip()
-    if not name:
-        return {"ok": False, "error": "缺少插件名称"}
-    plugins_list, source, err = _market_index()
-    if err:
-        return {"ok": False, "error": err}
-    entry = next((p for p in (plugins_list or []) if p["name"] == name), None)
-    if entry is None:
-        return {"ok": False, "error": f"市场中未找到插件：{name}"}
-    url = str(entry.get("url") or "").strip()
-    if not url.startswith(("http://", "https://")):
-        return {"ok": False, "error": "插件下载地址无效"}
-    try:
-        from security import _safe_url
-        if _safe_url(url):
-            return {"ok": False, "error": "插件下载地址被安全策略拦截"}
-    except Exception:
-        pass
-    # 下载
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "WhaleTalk/3.5"})
-        with urllib.request.urlopen(req, timeout=_MARKET_TIMEOUT) as r:
-            final_url = r.geturl()
-            raw = r.read(2 * 1024 * 1024)
-    except Exception as e:
-        return {"ok": False, "error": f"插件下载失败：{e}"}
-    # 重定向落点复核：首跳 _safe_url 无法阻止 302 跳到内网/保留段
-    try:
-        from security import _safe_url as _safe_url_final
-        if _safe_url_final(final_url):
-            return {"ok": False, "error": "插件下载重定向落点被安全策略拦截"}
-    except Exception:
-        pass
-    # 签名/哈希校验（fail-closed）
-    ok_v, err_v = _verify_plugin_download(raw, entry)
-    if not ok_v:
-        return {"ok": False, "error": err_v}
-    # 结构校验
-    try:
-        data = json.loads(raw.decode("utf-8", errors="replace"))
-    except Exception as e:
-        return {"ok": False, "error": f"插件 JSON 解析失败：{e}"}
-    ok_p, err_p = plugins_mod.validate_plugin(data)
-    if not ok_p:
-        return {"ok": False, "error": f"插件结构校验失败：{err_p}"}
-    data.setdefault("meta", {})["author"] = str(entry.get("author") or data["meta"].get("author") or "社区")
-    data["_market_tier"] = str(entry.get("tier") or "community")
-    data["_market_source"] = source
-    # 安装
-    res = plugins_mod.apply_plugin(data, _plugin_paths())
-    if not res.get("ok"):
-        return {"ok": False, "error": str(res.get("error") or "安装失败")}
-    return {"ok": True, "name": name, "tier": data.get("_market_tier"),
-            "verified": "sha256" if entry.get("sha256") else ("ed25519" if entry.get("signature") else "none")}
 
 
 def _memory_full():
@@ -1773,27 +1489,6 @@ def _prompts_save_user(items):
             clean.append(n)
     stores.save_patterns(PROMPTS_PATH, clean)
     return clean
-
-
-def _plugin_skills():
-    """已启用插件的提示词技能（只读来源：可在指令库「复制」为我的指令后修改）。"""
-    import plugins as plugins_mod
-    out = []
-    try:
-        for p in plugins_mod.list_plugins(_plugin_paths()["plugins_dir"]):
-            if not p.get("enabled", True):
-                continue
-            pname = str((p.get("meta") or {}).get("name") or "")
-            for s in ((p.get("contents") or {}).get("skills") or []):
-                if isinstance(s, dict) and str(s.get("name") or "").strip():
-                    out.append({
-                        "name": str(s.get("name") or "").strip()[:40],
-                        "text": str(s.get("text") or "")[:_PROMPT_MAX_TEXT],
-                        "plugin": pname,
-                    })
-    except Exception:
-        logger.exception("读取插件技能失败")
-    return {"skills": out}
 
 
 def _prompts():
@@ -2768,7 +2463,7 @@ def _valid_name(raw, limit=120):
     校验：拒绝路径穿越与控制字符、限制长度，避免异常查表与日志注入。
 
     实际调用方（经 `_Handler._safe_name` 包装）是**路径片段型**端点：
-    插件名 / 工具名 / 进化分支名 / plugin_studio 等。
+    能力包名 / 工具名 / 进化分支名 等。
     会话 id **不走这里**——它有自己的 `_valid_sid`，白名单更窄（只允许
     `[0-9a-zA-Z_-]`），因为要直接拼成 `<sid>.json` 文件名。
     """
@@ -2971,7 +2666,6 @@ def _init_dc_paths():
         )
     for attr, value in wiring:
         setattr(dc, attr, value)
-    dc.PLUGIN_PATHS = _plugin_paths()
     dc.BUILD_SITUATION = build_situation  # 态势快照单一事实源（get_status 工具与前端 /v1/situation 共用）
     os.environ.setdefault("WHALETALK_DATA_DIR", DATA_DIR)  # 应用型插件数据目录（flybot.db 等）
 
@@ -2982,7 +2676,7 @@ def _init_dc_paths():
     ]
     if mism:
         raise RuntimeError("dc 装配核对不一致：\n- " + "\n- ".join(mism))
-    for attr in ("PLUGIN_PATHS", "BUILD_SITUATION"):
+    for attr in ("BUILD_SITUATION",):
         if getattr(dc, attr, None) is None:
             raise RuntimeError(f"dc 装配后仍为 None：{attr}")
 
@@ -4634,35 +4328,6 @@ def _scheduler_loop():
         time.sleep(30)
 
 
-def _installed_plugins_hint():
-    """已启用插件的触发词提示（对齐旧 main 的静态注入：让模型知道有哪些插件可提/可调）。
-
-    v3.0 重构丢失了这段注入——用户装了插件后模型毫无感知，只能靠人肉说明。
-    """
-    try:
-        import plugins as plugins_mod
-        lines = []
-        for p in plugins_mod.list_plugins(_plugin_paths()["plugins_dir"]):
-            if not p.get("enabled", True):
-                continue
-            meta = p.get("meta") or {}
-            name = str(meta.get("name") or "")
-            if not name:
-                continue
-            trs = meta.get("triggers") or ([meta.get("trigger")] if meta.get("trigger") else [])
-            desc = str(meta.get("description") or "")[:40]
-            tr_text = "/".join(str(t) for t in trs[:3]) if trs else "无固定触发词"
-            lines.append(f"- {name}（触发词：{tr_text}）{desc}")
-        if not lines:
-            return ""
-        return (
-            "[已安装插件] 用户可能提到这些应用；命中触发词即代表想使用对应能力，"
-            "按其功能直接执行或引导使用：\n" + "\n".join(lines[:10])
-        )
-    except Exception:
-        return ""
-
-
 def _headless_chat(text, reply_channel=""):
     """无头执行一段指令（定时任务 message / run_workflow 消息投递 / IM 远程任务共用）。
 
@@ -6222,164 +5887,6 @@ def _tool_bookkeeping(name, args, result):
     return None
 
 
-def _plugin_detail(name):
-    """插件详情：完整结构（contents 各段概览 + 评分）。"""
-    import plugins as plugins_mod
-    name = str(name or "")
-    paths = _plugin_paths()
-    target = None
-    for p in plugins_mod.list_plugins(paths["plugins_dir"]):
-        if (p.get("meta") or {}).get("name") == name:
-            target = p
-            break
-    if target is None:
-        sample_dir = os.path.join(_ORIG_DIR, "sample_plugins")
-        if os.path.isdir(sample_dir):
-            for fn in os.listdir(sample_dir):
-                if not fn.endswith(plugins_mod.PLUGIN_EXT):
-                    continue
-                try:
-                    p, err = plugins_mod.parse_plugin_file(os.path.join(sample_dir, fn))
-                    if p is not None and (p.get("meta") or {}).get("name") == name:
-                        target = p
-                        break
-                except Exception:
-                    continue
-    if target is None:
-        return None
-    meta = target.get("meta") or {}
-    contents = target.get("contents") or {}
-    tools = contents.get("tools") or []
-    skills = contents.get("skills") or []
-    workflows = contents.get("workflows") or {}
-    app = contents.get("app") or {}
-    files = contents.get("files") or {}
-    rating = plugins_mod.plugin_rating_summary(paths["plugins_dir"], target.get("slug") or "") or {}
-    return {
-        "name": str(meta.get("name") or name),
-        "description": str(meta.get("description") or ""),
-        "author": str(meta.get("author") or ""),
-        "version": str(meta.get("version") or ""),
-        "trigger": str(meta.get("trigger") or (meta.get("triggers") or [""])[0]),
-        "kind": "应用型" if app else ("流程" if workflows else ("技能" if skills else "工具")),
-        "enabled": bool(target.get("enabled", True)),
-        "requires": [str(x) for x in (target.get("requires") or [])][:20],
-        "tools": [str((t.get("function") or {}).get("name") or "") for t in tools[:30]],
-        "skills": [str(s.get("name") or "") for s in skills[:30]] if isinstance(skills, list) else [],
-        "workflows": [str(w) for w in (workflows.keys() if isinstance(workflows, dict) else [])][:30],
-        "app_entry": str((app or {}).get("entry") or "")[:120],
-        "files": [str(f) for f in files][:40],
-        "rating": rating,
-    }
-
-
-_PLUGIN_GEN_PROMPT = """你是鲸语插件架构师。根据用户需求生成一个 .wtplugin v2 插件（JSON）。
-
-插件格式（严格 JSON，不要输出任何多余文字）：
-{
-  "format": "wtplugin",
-  "version": 2,
-  "meta": {"name": "中文插件名", "description": "简短描述", "author": "鲸语 AI", "version": "1.0.0", "trigger": "/触发词", "triggers": ["/触发词"]},
-  "requires": [],
-  "contents": { ... }
-}
-
-contents 四种能力（按需求选用，至少一种）：
-1. tools（HTTP 工具）：[{"function": {"name": "xxx", "description": "...", "parameters": {"type":"object","properties":{...},"required":[...]}, "endpoint": "https://...", "method": "GET|POST"}}]
-2. skills（提示词技能）：[{"name": "...", "text": "..."}]
-3. workflows（流程）：{"流程名": {"steps": ["指令1", "指令2"]}}
-4. app（应用型，需自带 Python 代码）：{"type": "local", "entry": "main:run"} + files: {"main.py": "def run(arg_text=''):\\n    return '...'"}
-
-约束：
-- 触发词以 / 或 @ 开头，不含空格
-- 应用型必须有至少一个 .py 文件，路径不得含 ..，entry 为 module:func 或 module:class:func
-- 用户要"应用"时生成 app+files（给 main.py 写可运行骨架，def run(arg_text='') -> str）
-- 其他情况生成 tools/skills/workflows
-- 纯 JSON 输出"""
-
-
-def _studio_generate(body):
-    """AI 插件工坊：需求 → LLM 生成插件 JSON → 校验。"""
-    import config_utils
-    import deepseek_client as dc
-    import plugins as plugins_mod
-    desc = str(body.get("description") or "").strip()
-    if not desc:
-        return None, "请描述你想做什么（需求）"
-    name = str(body.get("name") or "").strip()
-    ptype = str(body.get("type") or "").strip()
-    cfg = config_utils.load_config()
-    key = str(cfg.get("api_key") or "").strip()
-    if not key:
-        return None, "未配置 DeepSeek API Key"
-    client = dc.DeepSeekClient(key, base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
-                               model=cfg.get("model") or dc.DEFAULT_MODEL,
-                               timeout=float(cfg.get("timeout") or 0))
-    user_req = f"插件名：{name or '（自动起名）'}\n类型偏好：{ptype or '（自动判断）'}\n需求：{desc}"
-    parts = []
-    client.chat(
-        [{"role": "user", "content": _PLUGIN_GEN_PROMPT + "\n\n" + user_req}],
-        scenario="通用",
-        thinking="none",
-        tools_enabled=False,
-        json_output=True,
-        on_content=lambda t: parts.append(t),
-    )
-    text = "".join(parts).strip()
-    # 提取 JSON（去除可能的围栏）
-    import re as _re
-    m = _re.search(r"\{.*\}", text, _re.S)
-    if not m:
-        return None, "AI 未生成有效 JSON：" + text[:100]
-    try:
-        plugin = json.loads(m.group(0))
-    except Exception as e:
-        return None, f"AI 生成 JSON 解析失败：{e}"
-    ok, err = plugins_mod.validate_plugin(plugin)
-    if not ok:
-        # 尝试修复：给 AI 错误信息重试一次
-        parts2 = []
-        client.chat(
-            [{"role": "user", "content": _PLUGIN_GEN_PROMPT + "\n\n" + user_req + "\n\n上次校验失败：" + err + "\n请修正后重新输出完整 JSON。"}],
-            scenario="通用", thinking="none", tools_enabled=False, json_output=True,
-            on_content=lambda t: parts2.append(t),
-        )
-        text2 = "".join(parts2).strip()
-        m2 = _re.search(r"\{.*\}", text2, _re.S)
-        if m2:
-            try:
-                plugin = json.loads(m2.group(0))
-                ok, err = plugins_mod.validate_plugin(plugin)
-            except Exception:
-                ok = False
-        if not ok:
-            return None, f"插件校验失败（已重试一次仍失败）：{err}"
-    return {"plugin": plugin}, None
-
-
-def _studio_install(body):
-    """工坊安装：校验通过的插件 JSON → apply_plugin。"""
-    import plugins as plugins_mod
-    plugin = body.get("plugin")
-    if not isinstance(plugin, dict):
-        return None, "缺少插件 JSON"
-    ok, err = plugins_mod.validate_plugin(plugin)
-    if not ok:
-        return None, f"插件校验失败：{err}"
-    res = plugins_mod.apply_plugin(plugin, _plugin_paths())
-    if not res.get("ok"):
-        return None, str(res.get("error") or "安装失败")
-    added = res.get("added") or {}
-    ret = {"ok": True, "added": added, "name": (plugin.get("meta") or {}).get("name")}
-    try:
-        perms = plugins_mod.plugin_permissions(plugin)
-        if not perms["declared"]:
-            ret["warning"] = "⚠️ 该插件未声明权限（tools/files/net），调用其能力时权限按系统默认执行"
-    except Exception:
-        pass
-    return ret, None
-
-
 def _abilities():
     """按 12 域分组返回全部工具（name/description/enabled）。"""
     import config_utils
@@ -6486,7 +5993,7 @@ def _runtime_dir():
 
 
 BASE_DIR = _runtime_dir()
-# 前端静态资源 / 捆绑的只读资源（sample_plugins / evolutions / webui/start.py）：
+# 前端静态资源 / 捆绑的只读资源（evolutions / webui/start.py）：
 # 源码运行在仓库；打包运行时这些被捆绑在 _MEIPASS 临时目录内（进程生命周期内有效），
 # 须用原始模块路径，而不能用 exe 所在目录（那里没有这些资源）。
 _ORIG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -6564,18 +6071,14 @@ WORKFLOWS_PATH = os.path.join(DATA_DIR, "workflows.json")
 CHECKPOINT_PATH = os.path.join(DATA_DIR, "task_checkpoint.json")
 PROFILES_PATH = os.path.join(DATA_DIR, "profiles.json")
 GATEWAYS_PATH = os.path.join(DATA_DIR, "gateway_keys.json")
-USER_TOOLS_PATH = os.path.join(DATA_DIR, "user_tools.json")
 DIST_DIR = os.path.join(_ORIG_DIR, "webui", "dist")
 try:
     import profiles as _profiles_mod
     _profiles_mod.DEFAULT_PROFILES_PATH = PROFILES_PATH
     _profiles_mod.DEFAULT_GATEWAYS_PATH = GATEWAYS_PATH
-    import user_tools as _user_tools_mod
-    _user_tools_mod.DEFAULT_USER_TOOLS_PATH = USER_TOOLS_PATH
 except Exception:
-    # 不静默：接线失败会让 Profile / 自定义工具读写到默认路径，用户切换的方案
-    # 与自定义工具可能看起来像是丢了，排障时必须能从日志定位。
-    logger.exception("接线 profiles/user_tools 数据路径失败，方案与自定义工具可能读写到非预期路径")
+    # 不静默：接线失败会让 Profile 读写到默认路径，用户切换的方案看起来像是丢了。
+    logger.exception("接线 profiles 数据路径失败，方案可能读写到非预期路径")
 
 _MIME = {
     ".html": "text/html; charset=utf-8",
@@ -7939,11 +7442,6 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"prompts": _prompts_load_user(), "exported_at": time.strftime("%Y-%m-%d %H:%M:%S")})
 
 
-    @_get_route("/v1/plugin_skills")
-    def _g_v1_plugin_skills(self):
-        self._json(200, _plugin_skills())
-
-
     @_get_route("/v1/dir")
     def _g_v1_dir(self):
         self._json(200, _dirs())
@@ -8098,7 +7596,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _p_v1_capabilities(self):
         """装载 / 卸载能力包。
 
-        body: {"action": "load|reload|unload", "file": "<能力包文件名>", "plugin_id": "..."}
+        body: {"action": "load|reload|unload", "file": "<能力包文件名>", "pack_id": "..."}
         安全边界：`file` 只能是能力包目录内的**文件名**（不接受路径），
         否则这个端点就成了任意 JSON 装载入口。
         """
@@ -8110,9 +7608,9 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             import capability as cap_mod
             if action == "unload":
-                pid = str(body.get("plugin_id") or "").strip()
+                pid = str(body.get("pack_id") or body.get("plugin_id") or "").strip()
                 if not pid:
-                    self._json(400, {"error": "unload 需要 plugin_id"})
+                    self._json(400, {"error": "unload 需要 pack_id"})
                     return
                 res = cap_mod.unregister_plugin(pid, reason="api")
             elif action in ("load", "reload"):
@@ -8124,7 +7622,7 @@ class _Handler(BaseHTTPRequestHandler):
                 if not os.path.isfile(path):
                     self._json(404, {"error": f"能力包不存在：{name}"})
                     return
-                res = cap_mod.load_file(path, plugin_id=str(body.get("plugin_id") or ""))
+                res = cap_mod.load_file(path, plugin_id=str(body.get("pack_id") or ""))
             else:
                 self._json(400, {"error": f"未知 action：{action}（load/reload/unload）"})
                 return
@@ -8306,16 +7804,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._fail_soft(e)
 
 
-    @_get_route("/v1/plugins")
-    def _g_v1_plugins(self):
-        self._json(200, _plugins())
-
-
-    @_get_route("/v1/plugin_market")
-    def _g_v1_plugin_market(self):
-        self._json(200, _plugin_market())
-
-
     @_get_route("/v1/community")
     def _g_v1_community(self):
         """大脑自主进社区状态：开关 / 可达性 / 身份 / 授权 / 上次周期结果。"""
@@ -8324,20 +7812,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, community_client.status())
         except Exception as e:  # noqa: BLE001
             self._fail_soft(e)
-
-
-    @_get_route(("pre", "/v1/plugins/", ""))
-    def _g_v1_plugins_item(self):
-        import urllib.parse as _up
-        name = self._safe_name(_up.unquote(self.path[len("/v1/plugins/"):]))
-        if name is None:
-            self._json(400, {"error": "非法的插件名"})
-            return
-        detail = _plugin_detail(name)
-        if detail is None:
-            self._json(404, {"error": "plugin not found"})
-        else:
-            self._json(200, detail)
 
 
     @_get_route("/v1/context")
@@ -9100,88 +8574,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid json or body too large"})
             return
         self._json(200, _global_search(body.get("query") or "", body.get("filters") or {}))
-
-
-    @_post_route("/v1/plugin_studio/generate")
-    def _p_v1_plugin_studio_generate(self):
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        result, err = _studio_generate(body)
-        if err:
-            self._json(400, {"error": err})
-        else:
-            self._json(200, result)
-
-
-    @_post_route("/v1/plugin_studio/install")
-    def _p_v1_plugin_studio_install(self):
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        result, err = _studio_install(body)
-        if err:
-            self._json(400, {"error": err})
-        else:
-            self._json(200, result)
-
-
-    @_post_route("/v1/plugins")
-    def _p_v1_plugins(self):
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        result, err = _plugins_action(body)
-        if err:
-            self._json(400, {"error": err})
-        else:
-            self._json(200, result)
-
-
-    @_post_route("/v1/plugin_market/install")
-    def _p_v1_plugin_market_install(self):
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        self._json(200, _plugin_market_install(body))
-
-
-    @_post_route("/v1/plugins/run")
-    def _p_v1_plugins_run(self):
-        """执行应用型插件（.wtplugin v2 `app`）。body: {name, arg}。
-
-        只执行**用户已安装且启用**的插件（与现有插件体系同信任级）；执行器
-        `plugin_app.run_plugin` 按文件加载、不污染 sys.path。鉴权由 do_POST 统一前置。
-        """
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        name = str(body.get("name") or "")
-        arg = str(body.get("arg") or "")
-        try:
-            import plugin_app
-            import plugins as plugins_mod
-            paths = _plugin_paths()
-            target = next(
-                (p for p in plugins_mod.list_plugins(paths["plugins_dir"])
-                 if (p.get("meta") or {}).get("name") == name and p.get("enabled", True)),
-                None,
-            )
-            if target is None:
-                self._json(404, {"ok": False, "error": "未找到已启用的该插件"})
-                return
-            if not (target.get("contents") or {}).get("app"):
-                self._json(400, {"ok": False, "error": "该插件不是应用型"})
-                return
-            out = plugin_app.run_plugin(target, paths["plugins_dir"], arg)
-            self._json(200, {"ok": True, "output": out})
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
 
 
     @_post_route("/v1/community")
@@ -10074,7 +9466,6 @@ class _Handler(BaseHTTPRequestHandler):
                 "egress_notice": _context_egress_notice,
                 "failures_text": lambda: stores_mod.failure_patterns_text(FAILURES_PATH),
                 "patterns_load": lambda: stores_mod.load_patterns(PATTERNS_PATH),
-                "plugins_hint": _installed_plugins_hint,
             },
         )
         out = _cp.assemble(ctx)
@@ -10109,12 +9500,6 @@ class _Handler(BaseHTTPRequestHandler):
             )
             if memory_text:
                 kwargs["memory_text"] = memory_text
-            try:
-                # 插件工具/用户自定义工具（对齐旧 main.py：custom_tools=load_user_tools(...)）
-                import user_tools as _ut
-                kwargs["custom_tools"] = _ut.load_user_tools(USER_TOOLS_PATH)
-            except Exception:
-                logger.exception("加载自定义工具失败（不影响基础工具）")
             messages, comp_info = _compress_messages(
                 messages, cfg, client,
                 session_id=str(body.get("session_id") or ""),
@@ -10217,12 +9602,6 @@ class _Handler(BaseHTTPRequestHandler):
             )
             if memory_text:
                 kwargs["memory_text"] = memory_text
-            try:
-                # 插件工具/用户自定义工具（对齐旧 main.py：custom_tools=load_user_tools(...)）
-                import user_tools as _ut
-                kwargs["custom_tools"] = _ut.load_user_tools(USER_TOOLS_PATH)
-            except Exception:
-                logger.exception("加载自定义工具失败（不影响基础工具）")
             messages, comp_info = _compress_messages(
                 messages, cfg, client, session_id=job.sid,
                 pure_chat=bool(kwargs.get("pure_chat")))

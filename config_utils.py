@@ -29,7 +29,6 @@ from deepseek_client import (
     TOOLS,
 )
 from themes import THEMES
-from user_tools import load_user_tools
 
 logger = logging.getLogger("whaletalk.config_utils")
 
@@ -162,11 +161,8 @@ def normalize_config(cfg):
         all_tool_names = [t["function"]["name"] for t in TOOLS]
     except (KeyError, TypeError):
         all_tool_names = []
-    try:
-        user_tool_names = [t["function"]["name"] for t in load_user_tools()]
-    except Exception:
-        user_tool_names = []
-    valid_tool_names = set(all_tool_names) | set(user_tool_names)
+    # v3.18 起没有第二条工具来源：运行时能力已并入 TOOLS（capability.refresh_capability_layers）
+    valid_tool_names = set(all_tool_names)
     raw_tools = cfg.get("enabled_tools")
     if isinstance(raw_tools, list):
         cfg["enabled_tools"] = [n for n in raw_tools if n in valid_tool_names]

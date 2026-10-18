@@ -277,7 +277,7 @@ def main(argv=None):
                  "delete_file", "batch_rename", "extract_archive", "start_process",
                  "stop_process", "publish_draft", "database_execute", "screen_capture",
                  "clipboard_get", "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move",
-                 "rpa_scroll", "webdav", "create_plugin", "pip_install",
+                 "rpa_scroll", "webdav", "create_capability", "pip_install",
                  "read_email", "image_generate", "run_workflow", "pdf_create", "qrcode",
                  "media_ffmpeg", "create_doc", "write_code_project"]
     for t in high_risk:

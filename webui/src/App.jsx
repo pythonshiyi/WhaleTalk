@@ -15,7 +15,7 @@ import { silentWarn } from "./quiet.js";
 const LazyPages = {
   workbench: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.WorkbenchPage }))),
   abilities: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.AbilitiesPage }))),
-  plugins: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.PluginsPage }))),
+  capabilities: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.CapabilitiesPage }))),
   settings: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.SettingsPage }))),
   prompts: lazy(() => import("./components/PromptsPage.jsx")),
   brain: lazy(() => import("./components/BrainPage.jsx")),
@@ -256,17 +256,7 @@ export default function App() {
                       );
                     })()}
                     {page === "abilities" && <LazyPages.abilities />}
-                    {page === "plugins" && (() => {
-                      const P = LazyPages.plugins;
-                      return (
-                        <P
-                          onApply={(text) => {
-                            setApplyPrompt(text);
-                            setPage("chat");
-                          }}
-                        />
-                      );
-                    })()}
+                    {page === "capabilities" && <LazyPages.capabilities />}
                     {page === "prompts" && (() => {
                       const P = LazyPages.prompts;
                       return (

@@ -105,7 +105,7 @@ export function AbilitiesPage() {
   );
 }
 
-export { default as PluginsPage } from "./PluginsPage.jsx";
+export { default as CapabilitiesPage } from "./CapabilitiesPage.jsx";
 
 // ── 知识库 RAG（记忆与知识页）：文档建索引 → 语义问答带引用源 ──
 function KnowledgeBaseBlock() {

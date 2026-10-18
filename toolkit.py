@@ -356,6 +356,10 @@ def rebuild_layers(source_text: str, *extra_sources: str) -> Dict[str, Any]:
     其余语义同单文件版本：executor 用名字字符串标记（无真实函数对象）；
     调用会清空并重建全局注册表。
     """
+    # 保存并恢复全局注册表：本函数是**只读审计接口**，却被就地清空重建过——
+    # 同进程内调用它（门禁脚本、测试）会让运行时能力（capability）从注册表里消失，
+    # 而 dc.TOOLS 仍留着它们的 schema，两层就此分叉。审计不该改变被审计对象的状态。
+    saved = dict(_REGISTRY)
     clear_registry()
 
     def arg_value(call_node, key, default=None):
@@ -402,10 +406,14 @@ def rebuild_layers(source_text: str, *extra_sources: str) -> Dict[str, Any]:
     if not tool_order:
         raise ValueError("[toolkit] rebuild_layers 找不到 _TOOL_ORDER（文件未迁移？）")
 
-    return {
-        "TOOLS": build_tool_list(tool_order),
-        "TOOL_CALL_MAP": build_call_map(),
-        "TOOL_GROUPS": build_groups(group_order or [], tool_order),
-        "_TOOL_ACTION_PHRASES": build_phrases(),
-        "_PREACTIVATE_HINTS": build_preactivate(hint_order, tool_order),
-    }
+    try:
+        return {
+            "TOOLS": build_tool_list(tool_order),
+            "TOOL_CALL_MAP": build_call_map(),
+            "TOOL_GROUPS": build_groups(group_order or [], tool_order),
+            "_TOOL_ACTION_PHRASES": build_phrases(),
+            "_PREACTIVATE_HINTS": build_preactivate(hint_order, tool_order),
+        }
+    finally:
+        _REGISTRY.clear()
+        _REGISTRY.update(saved)

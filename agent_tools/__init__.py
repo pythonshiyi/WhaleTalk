@@ -50,7 +50,7 @@ __all__ = [
     'fetch_url',
     '_run_fetch_blocked',   # P2-4: fetch_blocked 别名见 tool_web（schema 名 = 实现名别名）
     'fetch_blocked',        # P2-4: 与其余工具一致的 dc.<tool_name> 访问路径
-    'create_plugin',
+    'create_capability',
     'download_file',
     'search_web',
     'search_github',

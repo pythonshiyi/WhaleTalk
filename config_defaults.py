@@ -4,7 +4,7 @@
 """
 
 # 应用版本号（统一来源：deepseek_client / backup 引用此处）
-VERSION = "3.17.0"
+VERSION = "3.18.0"
 
 # 统一模型能力说明（v3.10.0）：DeepSeek 已把「快速模式 / 专家模式 / 识图模式」
 # 合并为统一的智能模式——V4.1 Flash 原生多模态，自行判断任务复杂度并在检测到
@@ -68,7 +68,7 @@ BUILTIN_TOOL_NAMES = [
     "run_workflow",
     "usage_report",
     "daily_brief",
-    "create_plugin",
+    "create_capability",
     "download_file",
     "archive_list",
     "epub_read",

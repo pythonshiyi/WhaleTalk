@@ -1,0 +1,26 @@
+{
+  "api": "whaletalk.tool/1",
+  "meta": {
+    "name": "社区互动",
+    "version": "1.0.0",
+    "author": "WhaleTalk",
+    "bundled": true,
+    "default_enabled": false,
+    "description": "鲸群社区的一轮自主互动（实验能力，需先配置社区大脑密钥）"
+  },
+  "capabilities": [
+    {
+      "name": "p_community_cycle",
+      "description": "立即跑一个社区互动周期（看帖子 → 决定回不回 → 执行 → 回灌记忆）。**需要先在设置里填社区大脑密钥**，未配置时直接报错。用户明确要求「去社区转一圈 / 发帖 / 回复」时才使用。",
+      "parameters": { "type": "object", "properties": {}, "required": [] },
+      "exec": { "type": "builtin_ref", "tool": "community_cycle" },
+      "perms": { "tools": ["community_cycle"] },
+      "groups": ["🧩 内置能力"],
+      "phrases": "跑一轮社区互动",
+      "preactivate": [["社区", "鲸群", "发帖"]],
+      "io": { "max_chars": 4000 },
+      "budget": { "timeout": 300 },
+      "examples": []
+    }
+  ]
+}

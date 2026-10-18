@@ -53,25 +53,7 @@ def test_fetch_blocked_allows_loopback_and_public(blacklist_ctx):
 
 # ── 2. 插件市场安装 fail-closed ──────────────────────────────────────
 
-def test_plugin_download_fail_closed_no_sha_no_sig(monkeypatch):
-    monkeypatch.setattr(api_server, "_market_public_key", lambda: "")
-    ok, err = api_server._verify_plugin_download(b"anything", {})
-    assert ok is False and "拒绝" in err
 
-
-def test_plugin_download_accepts_matching_sha256(monkeypatch):
-    import hashlib
-    monkeypatch.setattr(api_server, "_market_public_key", lambda: "")
-    raw = b"plugin-bytes"
-    entry = {"sha256": hashlib.sha256(raw).hexdigest()}
-    ok, err = api_server._verify_plugin_download(raw, entry)
-    assert ok is True and err == ""
-
-
-def test_plugin_download_rejects_wrong_sha256(monkeypatch):
-    monkeypatch.setattr(api_server, "_market_public_key", lambda: "")
-    ok, err = api_server._verify_plugin_download(b"plugin-bytes", {"sha256": "0" * 64})
-    assert ok is False and "SHA-256" in err
 
 
 # ── 3. 批量删除会话：失败不再谎报成功 ────────────────────────────────

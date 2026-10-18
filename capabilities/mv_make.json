@@ -1,0 +1,48 @@
+{
+  "api": "whaletalk.tool/1",
+  "meta": {
+    "name": "音乐 MV 成片",
+    "version": "1.0.0",
+    "author": "WhaleTalk",
+    "bundled": true,
+    "description": "音频 + 歌词 → 卡点对词分镜 → 成片（原生引擎，不依赖外部程序）"
+  },
+  "capabilities": [
+    {
+      "name": "p_mv_make",
+      "description": "把一首歌和它的歌词做成卡点对词 MV：本地音频分析（BPM/节拍）+ 逐句歌词对轴 + 分镜 + 渲染合成。用户说「做个 MV / 卡点视频 / 歌词视频」时使用。长任务，产出 mp4。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "audio": { "type": "string", "description": "音频文件路径（mp3/wav 等）" },
+          "lyrics": { "type": "string", "description": "歌词文本或 .lrc/.txt 路径" },
+          "style": { "type": "string", "description": "视觉风格（默认 citypop_night_v1）" },
+          "out": { "type": "string", "description": "输出目录；留空使用默认产物目录" },
+          "action": {
+            "type": "string",
+            "description": "plan = 只出分镜与自检；render = 渲染成片（默认 plan，先看再渲）"
+          }
+        },
+        "required": ["audio", "lyrics"]
+      },
+      "exec": {
+        "type": "builtin_ref",
+        "tool": "mv_produce",
+        "args_map": {
+          "audio": "audio",
+          "lyrics": "lyrics",
+          "style": "style",
+          "out": "out",
+          "action": "action"
+        }
+      },
+      "perms": { "tools": ["mv_produce"] },
+      "groups": ["🧩 内置能力"],
+      "phrases": "用音频和歌词做成片",
+      "preactivate": [["MV", "卡点", "歌词视频", "成片"]],
+      "io": { "max_chars": 20000 },
+      "budget": { "timeout": 3600, "write": true },
+      "examples": []
+    }
+  ]
+}

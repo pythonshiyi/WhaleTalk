@@ -2,6 +2,79 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.18.0（2026-10-18）—— 🧹 拆掉旧插件体系，装 4 个内置能力包
+
+**版本号 3.17.0 → 3.18.0。** v3.17 把能力主干打通了，但旧插件体系还在——两套东西
+并存意味着两套心智、两套维护成本，而且旧的那套只会继续漂移。本轮把它**整条拆掉**，
+换成 4 个走主干的内置能力包。
+
+### 删除（净减约 1,700 行）
+
+| 对象 | 说明 |
+|---|---|
+| `plugins.py`（457 行） | `.wtplugin` 校验/安装/卸载/评分 |
+| `plugin_app.py`（70 行） | 应用型插件执行器（触发词直跑，绕过 AI） |
+| `user_tools.py`（87 行） | 自定义 HTTP 工具加载（插件工具的真正入口） |
+| `sample_plugins/`（10 个） | 示例插件：PDF摘要 / SQL查询 / 会议纪要 / 公众号排版 / 周报 / 小红书 / 图表 / 飞侠 / 网页监控 / 翻译润色 |
+| 8 个端点 | `/v1/plugins`(GET/POST) · `/v1/plugins/<name>` · `/v1/plugins/run` · `/v1/plugin_market`(+install) · `/v1/plugin_skills` · `/v1/plugin_studio/{generate,install}` |
+| 前端 | `PluginsPage.jsx`（484 行）+ 输入框触发词执行链路 + 指令页「插件技能」来源 |
+| 工具 | `create_plugin` → 换成 `create_capability` |
+
+示例插件已归档到 `data/archive/sample_plugins_20261018/`（不入库），需要时可取回改造。
+
+**`deepseek_client` 的第二条工具路径也一起拆了**：`custom_tools` 参数、`custom_map` 分发
+分支、`_run_custom_tool`（直发 HTTP）、`_custom_tools_fingerprint` 全部移除。`chat()` 现在
+只有一个工具来源——`TOOL_CALL_MAP`，而它就是注册表的视图。这条比删文件更重要：
+**只要旁路还在，迟早会有人把新工具塞进去。**
+
+### 新增：4 个内置能力包（`capabilities/`，随包分发）
+
+| 能力包 | 能力 | 封装 | 分组 |
+|---|---|---|---|
+| **公众号写作** | `p_wechat_article` | `run_wechat_writer`（采集→选题→三阶段写作→质检→草稿箱） | 🧩 内置能力 |
+| 音乐 MV 成片 | `p_mv_make` | `mv_produce`（音频分析→歌词对轴→分镜→渲染） | 🧩 内置能力 |
+| 每日简报 | `p_daily_brief` | `daily_brief`（按主题聚合当日信息） | 🧩 内置能力 |
+| 社区互动 | `p_community_cycle` | `community_cycle`（**默认不启用**，需先配密钥） | 🧩 内置能力 |
+
+四个都是 `builtin_ref` 执行体——**重组而非复制**：能力包只声明"用户要什么"，
+实现仍在内置工具里，所以不会出现两份代码各自漂移。
+
+### 新增：内置包语义（`bundled`）
+
+- **可停用，不可卸载**：`unregister_plugin` 对 `bundled=true` 直接拒绝（`force=True`
+  仅内部热替换用）。理由很实际——卸载掉「公众号写作」这种开箱能力，用户会当成 bug 报。
+- `meta.default_enabled: false`：装但不启用（社区这类要有配置才有意义的能力）。
+- 加载顺序：先仓库 `capabilities/`（内置），再 `data/capabilities/`（用户自建）。
+
+### 新增：`create_capability` 工具（取代 `create_plugin`）
+
+直接说「加一个能 XX 的工具」，它会把能力声明校验 → 写成 `data/capabilities/<slug>.json`
+→ 立即装载。走的是与手写 manifest 完全相同的校验链路，**AI 造的能力和内置能力同一等级**。
+
+### 界面：不再出现「插件」
+
+侧栏「插件市场」→「能力」，页内是能力包（内置/自建、可停用/可卸载）+ 能力清单
+（执行体、分组、调用次数、失败率、均耗时）。旧页面里画廊、市场、工坊、触发词全部下线。
+
+### 顺带调整的测试
+
+- `test_tool_split`：AST 重建只比**源码声明**的工具（运行时能力包不在源码里，不该参与比对）；
+  内置工具数仍锁 169。
+- `test_api_routes`：插件路由断言 → `/v1/capabilities`。
+- 删除 `test_plugin_app.py`、`test_custom_tools_cache_uses_content_fingerprint`、3 条插件下载校验用例。
+- `permissions.ACTION_TOOLS` 的 `create_plugin` → `create_capability`（信任内核已按流程 `accept`）。
+
+### 验证
+
+- 后端 `pytest` **1135 passed**（删 4 插件相关用例、增 3 内置包语义用例后）；前端 `npm run build` 通过。
+- `check_docs` / `check_silent_except`（383 处）/ `check_tool_budget`（169 项，`create_plugin→create_capability` 已留痕）
+  / `validate_tools` / `island_check` / `audit_tools` 全绿。
+
+### 已知遗留
+
+- `permissions.ACTION_TOOLS` 等处的旧名字已同步；`trust/baseline` 已按流程推进。
+- 旧的 `data/plugins/`（若用户机器上有）不再被读取，可手动删除；不会自动清理用户数据。
+
 ## v3.17.0（2026-10-18）—— 🧩 能力主干：插件工具成为一等公民
 
 **版本号 3.16.21 → 3.17.0。** 本轮打通一件结构性的事：**运行时装载的工具与内置工具

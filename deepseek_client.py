@@ -121,7 +121,6 @@ from search_utils import (  # noqa: F401  # 兼容旧访问名
     search_drop_junk as _search_drop_junk,
     search_safe as _search_safe,
 )
-import plugins as plugins_mod
 import snapshot as snapshot_mod
 
 # 按需加载能力：fetch_blocked（机场代理访问被墙站点）。独立模块按用户需要放
@@ -3052,7 +3051,6 @@ VISION_SELF_REVIEW = False   # 视觉自审（由 main 注入）：工具产出�
 RSS_SOURCES_FILE = None      # DATA_DIR/rss_sources.json（RSS 订阅列表）
 KV_CACHE_DIR = None          # DATA_DIR/kv_cache（diskcache 存储目录）
 WEBDAV_CONFIG_FILE = None    # DATA_DIR/webdav_config.json（WebDAV 连接）
-PLUGIN_PATHS = None          # 插件体系路径（plugins_dir/user_tools/prompts/workflows，main 注入）
 
 _SEND_CALLBACK = None              # run_workflow：向主线程投递要发送的消息
 _BUSY_PROVIDER = None              # run_workflow：查询是否正在生成
@@ -4488,7 +4486,7 @@ _TOOL_ORDER = [
     'app_manage', 'screen_find_click', 'vision_loop', 'voice_chat_loop', 'team_run', 'net_diagnose', 'fetch_url_smart', 'knowledge_index',
     'knowledge_search', 'database_execute', 'read_email', 'email_summary', 'agent_mail', 'task_checkpoint_save', 'task_checkpoint_load', 'run_workflow',
     'image_generate', 'usage_report', 'pdf_extract', 'pdf_create', 'pdf_visual_check', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'rss_fetch', 'qrcode',
-    'secret_store', 'kv_store', 'media_ffmpeg', 'mv_compose', 'mv_produce', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_plugin', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check',
+    'secret_store', 'kv_store', 'media_ffmpeg', 'mv_compose', 'mv_produce', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_capability', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check',
     'list_my_capabilities', 'capability_heatmap', 'self_report',
     'chart_render', 'pdf_toolkit', 'design_kit', 'image_codegen',
     'image_inpaint', 'control_map', 'sprite_sheet', 'make_gif', 'image_hybrid',
@@ -5157,33 +5155,16 @@ def _strictify_schema(schema, is_root=False):
 
 
 _BASE_TOOLS_CACHE = None
-_CUSTOM_TOOLS_CACHE = None
-_CUSTOM_TOOLS_SIG = None
+def _cached_all_tools():
+    """缓存内置工具（含运行时能力）的深拷贝，避免每轮 chat() 全量 deepcopy 100+ 工具。
 
-
-def _custom_tools_fingerprint(tools):
-    """自定义工具的内容指纹（不用 id()：调用方返回的可能是被就地复用/释放的
-    列表对象，id 复用会命中陈旧缓存，返回错误工具）。"""
-    try:
-        return json.dumps(tools, sort_keys=True, ensure_ascii=False, default=str)
-    except Exception:
-        return str(id(tools))
-
-
-def _cached_all_tools(custom_tools):
-    """缓存内置工具/自定义工具的深拷贝，避免每轮 chat() 全量 deepcopy 100+ 工具。"""
-    global _BASE_TOOLS_CACHE, _CUSTOM_TOOLS_CACHE, _CUSTOM_TOOLS_SIG
+    v3.18 起不再有「自定义 HTTP 工具」这第二条路：运行时工具已并入 TOOLS
+    （见 capability.refresh_capability_layers），所以这里只需要缓存一份。
+    """
+    global _BASE_TOOLS_CACHE
     if _BASE_TOOLS_CACHE is None or _BASE_TOOLS_CACHE[0] != id(TOOLS):
         _BASE_TOOLS_CACHE = (id(TOOLS), copy.deepcopy(TOOLS))
-    base = _BASE_TOOLS_CACHE[1]
-    custom_tools = custom_tools or []
-    if not custom_tools:
-        return copy.deepcopy(base)
-    sig = _custom_tools_fingerprint(custom_tools)
-    if _CUSTOM_TOOLS_CACHE is None or sig != _CUSTOM_TOOLS_SIG:
-        _CUSTOM_TOOLS_CACHE = copy.deepcopy(custom_tools)
-        _CUSTOM_TOOLS_SIG = sig
-    return copy.deepcopy(base + _CUSTOM_TOOLS_CACHE)
+    return copy.deepcopy(_BASE_TOOLS_CACHE[1])
 
 
 def _strictify_tools(tools):
@@ -5443,7 +5424,6 @@ class DeepSeekClient:
         stop_event=None,
         temperature=None,
         top_p=None,
-        custom_tools=None,
         max_tool_rounds=None,
         on_loop_guard=None,
         on_tool_duration=None,
@@ -5596,7 +5576,7 @@ class DeepSeekClient:
                 kwargs["reasoning_effort"] = effort
         if seed is not None:
             kwargs["seed"] = seed
-        all_tools = _cached_all_tools(custom_tools or [])
+        all_tools = _cached_all_tools()
         # 兜底：array 参数缺 items 会导致 API 400（missing field 'items'），
         # 内置/自定义/插件工具一律补齐，防御用户自定义 schema 遗漏
         _patch_array_items(all_tools)
@@ -6064,10 +6044,6 @@ class DeepSeekClient:
                     last_round_sig = None
                     same_repeats = 0
 
-                custom_map = {
-                    t["function"]["name"]: t for t in (custom_tools or [])
-                }
-
                 def execute_tool(tc):
                     """执行单个工具调用，返回 (name, args, result, duration)。
 
@@ -6153,11 +6129,7 @@ class DeepSeekClient:
                         else:
                             result = "已放行（黑名单模式默认通过，无需授权）"
                     elif not fn:
-                        handler = custom_map.get(name)
-                        if handler:
-                            result = self._run_custom_tool(handler, raw_args)
-                        else:
-                            result = f"未知工具: {name}，可用工具: {list(TOOL_CALL_MAP)} + 自定义工具 {list(custom_map)}"
+                        result = f"未知工具: {name}，可用工具: {list(TOOL_CALL_MAP)}"
                     else:
                         approved = True
                         if on_approval is not None:
@@ -6501,38 +6473,6 @@ class DeepSeekClient:
             "cache_hit": getattr(usage, "prompt_cache_hit_tokens", 0) or 0,
             "cache_miss": getattr(usage, "prompt_cache_miss_tokens", 0) or 0,
         }
-
-    @staticmethod
-    def _run_custom_tool(handler, raw_args, timeout=15.0, max_chars=20000):
-        """执行用户自定义工具：向 endpoint 发送 HTTP 请求。"""
-        spec = handler.get("function", {})
-        endpoint = spec.get("endpoint") or handler.get("endpoint")
-        method = (spec.get("method") or handler.get("method") or "POST").upper()
-        if not endpoint:
-            return "错误：自定义工具未配置 endpoint"
-        err = _safe_url(endpoint)
-        if err:
-            return f"错误：自定义工具 endpoint 不合法（{err}）"
-        try:
-            args = _parse_tool_args(raw_args)
-        except (json.JSONDecodeError, ValueError) as e:
-            return f"工具参数解析失败: {e}，原始参数: {raw_args!r}"
-        try:
-            if method in ("GET",):
-                resp = _safe_request(
-                    "GET", endpoint, params=args, timeout=timeout
-                )
-            else:
-                resp = _safe_request(
-                    "POST", endpoint, json=args, timeout=timeout
-                )
-            resp.raise_for_status()
-            out = resp.text
-            if len(out) > max_chars:
-                out = out[:max_chars] + "\n[输出已截断]"
-            return out
-        except Exception as e:
-            return f"错误：调用自定义工具失败: {e}"
 
     def fim_complete(self, prompt, suffix="", max_tokens=None):
         """FIM 补全（Beta）：提供前缀与可选后缀，模型补全中间内容。

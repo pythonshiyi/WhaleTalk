@@ -1,0 +1,36 @@
+{
+  "api": "whaletalk.tool/1",
+  "meta": {
+    "name": "每日简报",
+    "version": "1.0.0",
+    "author": "WhaleTalk",
+    "bundled": true,
+    "description": "按主题聚合当日信息，产出一份可直接读的简报"
+  },
+  "capabilities": [
+    {
+      "name": "p_daily_brief",
+      "description": "生成一份当日简报：按主题聚合信息源、去重、按重要性排序。用户说「今天有什么 / 每日简报 / 给我汇总一下」时使用。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "topic": { "type": "string", "description": "关注主题；留空则为综合简报" },
+          "max_items": { "type": "integer", "description": "最多条数（默认 8）" }
+        },
+        "required": []
+      },
+      "exec": {
+        "type": "builtin_ref",
+        "tool": "daily_brief",
+        "args_map": { "topic": "topic", "max_items": "max_items" }
+      },
+      "perms": { "tools": ["daily_brief"] },
+      "groups": ["🧩 内置能力"],
+      "phrases": "生成每日简报",
+      "preactivate": [["简报", "今天有什么", "每日汇总", "日报"]],
+      "io": { "max_chars": 12000 },
+      "budget": { "timeout": 300 },
+      "examples": []
+    }
+  ]
+}

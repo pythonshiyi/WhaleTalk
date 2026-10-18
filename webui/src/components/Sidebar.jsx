@@ -1,12 +1,12 @@
 import React from "react";
 import { getStatus } from "../api.js";
 
-// 真实导航布局（非演示数据）：会话 / 工作台 / 能力中心 / 插件市场 / 记忆与知识 / 设置
+// 真实导航布局（非演示数据）：会话 / 工作台 / 能力中心 / 能力 / 记忆与知识 / 设置
 const NAV_ITEMS = [
   { id: "chat", label: "会话", icon: "chat" },
   { id: "workbench", label: "工作台", icon: "home" },
   { id: "abilities", label: "能力中心", icon: "grid" },
-  { id: "plugins", label: "插件市场", icon: "puzzle" },
+  { id: "capabilities", label: "能力", icon: "puzzle" },
   { id: "prompts", label: "指令库", icon: "bolt" },
   { id: "brain", label: "大脑", icon: "brain" },
   { id: "autonomy", label: "自主", icon: "spark" },

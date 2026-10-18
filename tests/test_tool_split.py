@@ -65,7 +65,10 @@ def test_rebuild_layers_multifile_matches_runtime():
     ]
     layers = toolkit.rebuild_layers(main, *extra)
     rebuilt = [t["function"]["name"] for t in layers["TOOLS"]]
-    runtime = [t["function"]["name"] for t in dc.TOOLS]
+    # 只比**源码声明**的工具：v3.17 起运行时能力包（capability.py）也会进 TOOLS，
+    # 但它们不在源码里，AST 重建天然看不到——用它们比对等于要求门禁去读数据文件。
+    cap = set(toolkit.capability_names())
+    runtime = [t["function"]["name"] for t in dc.TOOLS if t["function"]["name"] not in cap]
     assert rebuilt == runtime, "AST 重建工具顺序与运行时不一致（门禁与实跑会分叉）"
     # 拆分的工具也必须出现在重建结果里
     assert set(SPLIT_TOOLS) <= set(rebuilt)
@@ -147,7 +150,7 @@ ALL_SPLIT_TOOLS = [
     "run_wechat_writer", "daily_brief",
     "watch_files", "recall_session", "project_info", "read_project_file",
     "create_evolution", "self_evolve", "verify_files", "notify_desktop",
-    "app_manage", "usage_report", "create_plugin",
+    "app_manage", "usage_report", "create_capability",
     "rpa_screen_size", "rpa_click", "rpa_type", "rpa_hotkey", "rpa_move",
     "rpa_scroll", "rpa_screenshot", "screen_find_click", "vision_loop",
     "tts_save", "tts_speak", "tts_stop", "speech_to_text",
@@ -196,11 +199,14 @@ def test_all_split_tools_module_ownership():
 
 
 def test_all_split_tools_in_all_six_layers():
-    names = [t["function"]["name"] for t in dc.TOOLS]
+    import toolkit
+
+    cap = set(toolkit.capability_names())      # 运行时能力包（内置/用户）不算内置工具
+    names = [t["function"]["name"] for t in dc.TOOLS if t["function"]["name"] not in cap]
     # 163（162 + hardware_accel）→ 165（+ lyric_align / mv_credits_card）→ 169（+ 鲸群社区 4 工具）
-    assert len(names) == 169, "工具总数应为 169，实际 %d" % len(names)
+    assert len(names) == 169, "内置工具总数应为 169，实际 %d" % len(names)
     assert len(dc._TOOL_ORDER) == 169, "顺序表必须与工具数一致"
-    assert set(dc.TOOL_CALL_MAP) == set(dc._TOOL_ORDER), "CALL_MAP 键与 ORDER 必须一一对应"
+    assert set(dc.TOOL_CALL_MAP) - cap == set(dc._TOOL_ORDER), "CALL_MAP 键与 ORDER 必须一一对应"
     for n in _uniq(ALL_SPLIT_TOOLS):
         assert n in names, "%s 必须仍在 TOOLS 列表" % n
         impl = dc.TOOL_CALL_MAP.get(n)
