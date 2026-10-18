@@ -865,6 +865,10 @@ button {
 .mem-id { font-family: var(--font-mono); font-size: var(--fs-3xs); color: var(--ai); }
 .mem-tag { font-size: var(--fs-3xs); padding: 1px 7px; border-radius: var(--r-full); background: var(--ai-soft); color: var(--ai); }
 .mem-text { font-size: var(--fs-xs); color: var(--text-2); line-height: 1.6; }
+.mem-pending { border-color: rgba(var(--warn-rgb),.4); background: rgba(var(--warn-rgb),.06); }
+.mem-pending .mem-tag { background: rgba(var(--warn-rgb),.14); color: var(--warn-text); }
+.mem-pending-ops { display: flex; gap: 6px; margin-top: 8px; }
+.mem-pending-ops .ctx-action { display: inline-flex; align-items: center; gap: 4px; }
 .usage-row { display: flex; justify-content: space-between; padding: 7px var(--sp-1); font-size: var(--fs-xs); color: var(--text-3); border-bottom: 1px solid var(--border); }
 .usage-row b { color: var(--text-1); font-family: var(--font-mono); }
 .usage-row .usage-ok { color: var(--ok-text); }

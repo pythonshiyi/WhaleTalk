@@ -1483,6 +1483,15 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                 <Toggle on={cfg.autostart !== false} label="🚀 开机自启" desc="注册 HKCU Run 开机自动启动（无窗口静默进入托盘）" onClick={() => saveField({ autostart: cfg.autostart === false })} />
                 <Toggle on={cfg.privacy_mode !== false} label="🔒 隐私模式" desc="不写快照/会话/记忆/统计" onClick={() => saveField({ privacy_mode: cfg.privacy_mode === false })} />
                 <Toggle on={cfg.memory_enabled !== false} label="🧠 长期记忆" desc="跨会话记忆：关闭后不注入记忆、AI 不再自动写入（记忆可随时用工具管理）" onClick={() => saveField({ memory_enabled: cfg.memory_enabled === false })} />
+                <Row label="🧾 记忆回写方式" desc="自动提炼的信息如何落地：待确认=先由你裁决后才写入（推荐，防 AI 推断污染）；直接=旧行为；关闭=不提炼">
+                  <select className="set-select" value={cfg.memory_harvest_mode || "pending"} onChange={(e) => saveField({ memory_harvest_mode: e.target.value })}>
+                    <option value="pending">待确认</option>
+                    <option value="auto">直接写入</option>
+                    <option value="off">关闭</option>
+                  </select>
+                </Row>
+                <Toggle on={cfg.brain_persona_enabled === true} label="🎭 大脑人格" desc="注入身份/自述前史/表达风格/信念（角色设定，最易盖过任务本身，默认关）" onClick={() => saveField({ brain_persona_enabled: !(cfg.brain_persona_enabled === true) })} />
+                <Toggle on={cfg.brain_continuity_enabled !== false} label="🧭 大脑连续性" desc="注入进行中目标/自我认知/未决决策/相关记忆（跨会话接着做事，默认开）" onClick={() => saveField({ brain_continuity_enabled: cfg.brain_continuity_enabled === false })} />
                 <Toggle on={quietMode} label="🧘 纯净对话" desc="一键关闭整套个性能力：不注入长期记忆/核心自我/大脑，AI 以全新姿态应答，也不自动回写记忆（对话页 header 有快捷开关）" onClick={() => { onToggleQuiet(); saveField({ quiet_mode: !quietMode }); }} />
                 <VoiceSettingsBlock cfg={cfg} saveField={saveField} onTip={setTip} />
                 <Row label="💵 本月预算（元）" desc="0=不限">

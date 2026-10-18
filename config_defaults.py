@@ -403,7 +403,18 @@ DEFAULT_CONFIG = {
     "evolution_reminder_days": 7,
     "suggestions_enabled": True,
     "memory_enabled": True,  # 长期记忆总开关：关闭后停止记忆注入与自动写入（工具仍可手动调用）
-    "auto_memory": True,     # 对话回写：每次对话后自动提炼值得记住的写入长期记忆（并同步大脑）
+    "auto_memory": True,     # 对话回写：每次对话后自动提炼值得记住的信息（并同步大脑）
+    # 自动提炼的落地方式：pending=先入「待确认」队列由用户裁决（默认，防"推断污染"）；
+    # auto=旧行为（直接写入长期记忆）；off=不提炼。均受 auto_memory 总开关约束。
+    "memory_harvest_mode": "pending",
+    # 记忆注入：按与当前问题的相关度检索（而非"最近 N 条"）——
+    # inject_limit=最多注入条数；min_score=最低相关度（0=只要有词面命中即可，调高更保守）。
+    "memory_inject_limit": 6,
+    "memory_min_score": 0.0,
+    # 大脑上下文分层：persona=身份/前史/表达风格/信念（角色设定，最易盖过任务，默认关）；
+    # continuity=目标/自我认知/未决决策/复习/相关记忆（跨会话连续性，默认开）。
+    "brain_persona_enabled": False,
+    "brain_continuity_enabled": True,
     "pure_chat": False,
     "web_search": False,  # 对话模式联网开关：开启后纯对话注入 search_web 等联网工具（仅搜索，克制注入）
     "quiet_mode": False,  # 纯净对话总开关：开启后停止全部个性上下文注入（长期记忆/核心自我/大脑）与对话回写，AI 只带基础系统提示

@@ -272,3 +272,28 @@ def test_memory_invariants(btmp):
     # 每行合法 JSON
     for line in bk.MEMORY_JSONL.read_text(encoding="utf-8").splitlines():
         assert json.loads(line)["id"]
+
+
+# ---- 大脑分层：人格 / 连续性 独立开关（v3.16.21）----
+
+def test_persona_layer_can_be_disabled(btmp):
+    import brain_api
+    ident = bk.load_json(bk.BRAIN_DIR / "identity.json", {})
+    ident["prehistory"] = "我诞生于一次对话"
+    ident["voice"] = "简洁"
+    bk.save_json(bk.BRAIN_DIR / "identity.json", ident)
+    on = brain_api.brain_context()
+    off = brain_api.brain_context(include_persona=False)
+    assert "自述前史" in on and "自述前史" not in off
+    # 最小身份行仍在（大脑可辨识自己，只是不带人设）
+    assert "鲸语大脑" in off
+
+
+def test_continuity_layer_can_be_disabled(btmp):
+    import brain_api
+    bk.remember_structured("用户偏好表格化输出", type="偏好", importance=4, source="对话")
+    on = brain_api.brain_context()
+    off = brain_api.brain_context(include_continuity=False)
+    assert "用户偏好表格化输出" in on
+    assert "用户偏好表格化输出" not in off
+    assert "鲸语大脑" in off

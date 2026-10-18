@@ -102,6 +102,23 @@ def _not_quiet(ctx):
     return not ctx.quiet_mode
 
 
+def _last_user_query(ctx, tail=200):
+    """取最近一条 user 消息的文本尾部（供话题感知检索）。无则返回空串。"""
+    for m in reversed(ctx.messages):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        c = m.get("content")
+        if isinstance(c, str) and c.strip():
+            return c.strip()[-tail:]
+        if isinstance(c, list):
+            txt = "".join(
+                str(x.get("text") or "").strip()
+                for x in c if isinstance(x, dict) and x.get("type") == "text"
+                and str(x.get("text") or "").strip())
+            return txt[-tail:] if txt.strip() else ""
+    return ""
+
+
 # ── 内置 Provider（顺序与内容对齐改造前的 _inject_system_messages）──────────
 
 # 记忆/自我/大脑等「已记录信息」的统一防注入声明：这些段以 system 身份注入，内容
@@ -138,18 +155,47 @@ register(Provider(
 
 
 def _provide_memory(ctx):
-    """长期记忆（近 6 条生效条目）。config.memory_enabled 关闭时完全不注入。
+    """长期记忆：按与**当前问题**的相关度检索（而非"最近 6 条"）后注入。
+
+    为什么改检索：旧实现取 `facts[-6:]`，与当前问题无关的记忆每轮都进上下文并成为
+    模型先验——这是"记忆污染"的主要来源。现在用 `memory_facade.rank` 对最近一条
+    user 消息做相关度排序；**无任何命中则不注入**（空上下文 > 无关上下文）。
 
     P1-B 起带**血缘标注**：只有 `user` 来源不加前缀（最高可信），其余加
     `〔推断〕`/`〔来自外部内容〕`。这是打断
     「外部网页 → 自动提炼 → 变成持久记忆 → 被当作用户前提」这条链的关键：
     模型必须能区分「用户明说」与「我自己推断的」。
+
+    config.memory_enabled=False 或纯净对话时完全不注入。
     """
     mem = ctx.dep("memory_full")()
     facts = [f for f in (mem or {}).get("facts", []) if f.get("text")]
     if not facts:
         return None
-    picked = facts[-6:]
+    try:
+        limit = int(ctx.cfg.get("memory_inject_limit") or 6)
+    except (TypeError, ValueError):
+        limit = 6
+    limit = max(1, min(50, limit))
+    try:
+        min_score = float(ctx.cfg.get("memory_min_score") or 0.0)
+    except (TypeError, ValueError):
+        min_score = 0.0
+    query = _last_user_query(ctx)
+    try:
+        from memory_facade import rank as _rank
+        picked = _rank(query, facts, limit=limit, min_score=min_score)
+    except Exception as e:  # noqa: BLE001 - 检索失败退回"最近"语义，绝不因排序丢注入
+        import degrade
+        degrade.degrade("context.memory.rank", e,
+                        "记忆相关度检索失败，退回最近条目注入", critical=False)
+        picked = facts[-limit:]
+    if not picked:
+        return None
+
+    def _text(f):
+        return str(f.get("value") or f.get("text") or "")
+
     try:
         from memory_facade import ORIGIN_LABEL
     except Exception:
@@ -162,7 +208,7 @@ def _provide_memory(ctx):
     lines = [header]
     for f in picked:
         label = ORIGIN_LABEL.get(str(f.get("origin") or ""), "")
-        lines.append(f"- {label}{f['text']}")
+        lines.append(f"- {label}{_text(f)}")
     return "\n".join(lines)
 
 
@@ -202,20 +248,7 @@ def _provide_brain(ctx):
     同时模块属性在调用时解析，测试打桩 `brain_api.brain_context` 依然生效。
     """
     brain_api = ctx.dep("brain_api")()
-    q = ""
-    for m in reversed(ctx.messages):
-        if not isinstance(m, dict) or m.get("role") != "user":
-            continue
-        c = m.get("content")
-        if isinstance(c, str) and c.strip():
-            q = c.strip()[-60:]
-        elif isinstance(c, list):
-            txt = "".join(
-                str(x.get("text") or "").strip()
-                for x in c if isinstance(x, dict) and x.get("type") == "text"
-                and str(x.get("text") or "").strip())
-            q = txt[-60:] if txt else ""
-        break
+    q = _last_user_query(ctx, tail=60)
     try:
         # L1 预算：大脑上下文控制在 ~1500 字符（不挤占其他注入段）
         budget = int(ctx.cfg.get("brain_context_budget") or 1500) or 0
@@ -242,7 +275,13 @@ def _provide_brain(ctx):
             import degrade
             degrade.degrade("context.memory_dedup", e,
                             "记忆去重失效，大脑镜像可能与记忆段落重复注入", critical=False)
-        kw = dict(memory_enabled=mem_on, include_goals=include_goals, dedup_texts=dedup)
+        # 大脑分层（v3.16.21）：人格（身份/前史/风格/信念，默认关）与
+        # 连续性（目标/自我认知/未决决策/复习/相关记忆，默认开）可独立开关——
+        # 人格最易盖过任务，连续性才是真正提升"跨会话办事"的部分。
+        include_persona = bool(ctx.cfg.get("brain_persona_enabled", False))
+        include_continuity = bool(ctx.cfg.get("brain_continuity_enabled", True))
+        kw = dict(memory_enabled=mem_on, include_goals=include_goals, dedup_texts=dedup,
+                  include_persona=include_persona, include_continuity=include_continuity)
         if budget <= 0:
             bc = (brain_api.brain_context(query=q, **kw) if q
                   else brain_api.brain_context(**kw))

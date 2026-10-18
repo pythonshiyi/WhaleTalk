@@ -54,6 +54,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -132,6 +133,65 @@ def similarity(a, b):
     inter = len(ta & tb)
     union = len(ta | tb)
     return inter / union if union else 0.0
+
+
+def rank(query, facts, limit=6, min_score=0.0):
+    """按与 query 的相关度排序取前 limit 条（纯函数，**不改文件**）。
+
+    为什么需要它：长期记忆此前按「最近 6 条」注入（`facts[-6:]`），与当前问题
+    无关的记忆每轮都进上下文并成为模型先验——这是"记忆污染"的主要来源。改为
+    相关度检索后，无关记忆不再注入。
+
+    - query 为空 → 返回最近 limit 条（无查询时保持既有"最近"语义）。
+    - 有 query：中文单字+bigram / 拉丁词，IDF 加权余弦 + 覆盖率，`key`/`entities`
+      作补充语料；分数再乘 confidence（用户明说 > 推断）让高可信记忆优先。
+    - 低于 min_score 的丢弃；**无任何命中返回 []**（调用方据此不注入，而不是硬塞）。
+    - 复用 `similarity` 的同一套分词，不引入外部依赖。
+    """
+    items = []
+    for f in (facts or []):
+        n = normalize(f)
+        if n and str(n.get("value") or ""):
+            items.append(n)
+    if not items:
+        return []
+    try:
+        lim = int(limit)
+    except (TypeError, ValueError):
+        lim = 0
+    if lim < 0:
+        lim = 0
+    q = str(query or "").strip()
+    if not q:
+        return items[-lim:] if lim else list(items)
+    q_toks = _tokens(q)
+    if not q_toks:
+        return items[-lim:] if lim else list(items)
+    docs = [
+        _tokens(str(f.get("value") or "") + " " + str(f.get("key") or "") + " "
+                + " ".join(str(x) for x in (f.get("entities") or [])))
+        for f in items
+    ]
+    n_docs = len(items)
+    idf = {}
+    for t in q_toks:
+        df = sum(1 for dt in docs if t in dt)
+        idf[t] = math.log((n_docs + 1) / (df + 1)) + 1.0
+    scored = []
+    for f, dt in zip(items, docs):
+        common = q_toks & dt
+        if not common:
+            continue
+        w = sum(idf.get(t, 1.0) for t in common)
+        cosine = w / ((len(q_toks) ** 0.5) * (len(dt) ** 0.5)) if dt else 0.0
+        recall = len(common) / len(q_toks)
+        conf = float(f.get("confidence") or 0.5)
+        score = (0.55 * cosine + 0.45 * recall) * (0.6 + 0.4 * conf)
+        if score > float(min_score):
+            scored.append((score, f))
+    scored.sort(key=lambda x: -x[0])
+    picked = [f for _, f in scored]
+    return picked[:lim] if lim else picked
 
 
 # ── 读取与归一化 ─────────────────────────────────────────────────────────
@@ -461,3 +521,111 @@ def reset():
         if not MEMORY_PATH:
             return
         _save({"enabled": True, "facts": []})
+
+
+# ── 待确认队列（自动提炼的"缓入"层）─────────────────────────────────────
+# 自动提炼（_chat_harvest）默认不再直接写长期记忆，而是先落到这里由用户裁决：
+# 避免「AI 自己推断 → 立刻变成持久记忆 → 下轮被当作用户前提」的污染链。
+PENDING_PATH: Optional[str] = None
+MAX_PENDING = 200
+
+
+def init_pending(path=None):
+    """注入待确认队列文件路径（api_server 启动时调用；可重复）。"""
+    global PENDING_PATH
+    with _lock:
+        if path:
+            PENDING_PATH = str(path)
+
+
+def _load_pending() -> Dict[str, Any]:
+    if not PENDING_PATH or not os.path.exists(PENDING_PATH):
+        return {"items": []}
+    try:
+        with open(PENDING_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and isinstance(d.get("items"), list):
+            return d
+    except Exception:
+        logger.exception("读取待确认记忆失败")
+    return {"items": []}
+
+
+def _save_pending(d) -> bool:
+    if not PENDING_PATH:
+        return False
+    try:
+        from persistence import atomic_json_write
+        return atomic_json_write(PENDING_PATH, d, indent=1)
+    except Exception:
+        logger.exception("写入待确认记忆失败")
+        return False
+
+
+def add_pending(texts, *, origin="agent", source="", limit=3) -> int:
+    """把自动提炼的候选写入待确认队列。返回新增条数（去重：不重复、也不与已生效记忆重复）。"""
+    cleaned = [str(t).strip() for t in (texts or []) if str(t).strip()]
+    if not cleaned:
+        return 0
+    with _lock:
+        d = _load_pending()
+        items = d.get("items") or []
+        existing = {str(x.get("text") or "") for x in items}
+        try:
+            active = {str(f.get("value") or "") for f in all_facts()}
+        except Exception:
+            active = set()
+        added = 0
+        ts = _now()
+        for t in cleaned[:int(limit)]:
+            if t in existing or t in active:
+                continue
+            items.append({
+                "id": _make_id(ts + "|" + t, t),
+                "text": t,
+                "origin": origin if origin in VALID_ORIGINS else "agent",
+                "source": str(source or "")[:200],
+                "ts": ts,
+            })
+            existing.add(t)
+            added += 1
+        d["items"] = items[-MAX_PENDING:]
+        _save_pending(d)
+        return added
+
+
+def list_pending() -> List[Dict[str, Any]]:
+    with _lock:
+        d = _load_pending()
+    return list(d.get("items") or [])
+
+
+def resolve_pending(ids, action="accept") -> Tuple[bool, int, Optional[str]]:
+    """裁决待确认项。action: accept（写入长期记忆）| dismiss（丢弃）。返回 (ok, n, error)。"""
+    ids = [str(i) for i in (ids or [])]
+    if not ids:
+        return False, 0, "缺少 id"
+    act = "dismiss" if str(action or "").strip().lower() == "dismiss" else "accept"
+    with _lock:
+        d = _load_pending()
+        items = d.get("items") or []
+        hit = [x for x in items if str(x.get("id") or "") in ids]
+        d["items"] = [x for x in items if str(x.get("id") or "") not in ids]
+        _save_pending(d)
+    n = 0
+    for x in hit:
+        if act == "accept":
+            r = remember(str(x.get("text") or ""),
+                         origin=str(x.get("origin") or "agent"),
+                         key="自动记忆")
+            if r.get("ok"):
+                n += 1
+        else:
+            n += 1
+    return True, n, None
+
+
+def reset_pending():
+    """清空待确认队列（仅测试用）。"""
+    with _lock:
+        _save_pending({"items": []})

@@ -213,3 +213,74 @@ def test_render_excludes_superseded(mem):
 def test_render_none_when_empty(mem):
     m, p = mem
     assert m.render_for_context() is None
+
+
+# ── 相关度检索（rank）：把「最近 N 条」换成「相关 N 条」────────────────────
+
+def test_rank_prefers_relevant_over_recent():
+    facts = [
+        {"text": "用户偏好中文回复"},
+        {"text": "项目采用纯静态架构"},
+        {"text": "用户喜欢喝咖啡"},
+    ]
+    picked = mf.rank("项目架构用什么", facts, limit=2)
+    assert picked and "纯静态架构" in picked[0]["value"]
+
+
+def test_rank_drops_irrelevant():
+    facts = [{"text": "用户偏好中文回复"}]
+    assert mf.rank("今天天气如何", facts) == []
+
+
+def test_rank_empty_query_returns_recent():
+    facts = [{"text": f"事实{i}"} for i in range(5)]
+    picked = mf.rank("", facts, limit=2)
+    assert [f["value"] for f in picked] == ["事实3", "事实4"]
+
+
+def test_rank_confidence_breaks_ties():
+    facts = [
+        {"text": "用户偏好简洁", "origin": "user"},          # conf 1.0
+        {"text": "用户偏好简洁（推断）", "origin": "agent"},   # conf 0.5
+    ]
+    picked = mf.rank("用户偏好", facts, limit=2)
+    assert picked[0]["origin"] == "user"
+
+
+# ── 待确认队列（pending）：自动提炼的"缓入"层 ─────────────────────────────
+
+@pytest.fixture
+def pend(tmp_path):
+    mp = tmp_path / "memory.json"
+    mp.write_text(json.dumps({"enabled": True, "facts": []}, ensure_ascii=False), encoding="utf-8")
+    pp = tmp_path / "pending.json"
+    mf.init(memory_path=str(mp))
+    mf.init_pending(str(pp))
+    yield mf, mp, pp
+    mf.init(memory_path=None)
+
+
+def test_pending_add_list_and_accept(pend):
+    m, mp, pp = pend
+    assert m.add_pending(["用户偏好中文回复", "项目用 PostgreSQL"], origin="agent") == 2
+    items = m.list_pending()
+    assert len(items) == 2
+    ok, resolved, err = m.resolve_pending([items[0]["id"]], "accept")
+    assert ok and resolved == 1 and err is None
+    assert len(m.list_pending()) == 1
+    assert any("用户偏好中文回复" in str(f.get("value")) for f in m.all_facts())
+
+
+def test_pending_dismiss_does_not_write(pend):
+    m, mp, pp = pend
+    m.add_pending(["某网页称该库已弃用"], origin="web")
+    item = m.list_pending()[0]
+    ok, resolved, err = m.resolve_pending([item["id"]], "dismiss")
+    assert ok and resolved == 1
+    assert m.all_facts() == []
+
+
+def test_pending_dedup_against_active(pend):
+    m, mp, pp = pend
+    m.remember("用户偏好中文回复", origin="user")
+    assert m.add_pending(["用户偏好中文回复"], origin="agent") == 0

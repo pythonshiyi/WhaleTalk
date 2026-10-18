@@ -600,6 +600,7 @@ function useDataSources() {
             tools: (c.tools || []).slice(0, 12).map((name) => ({ name, desc: "", state: "on" })),
             memory: (c.memory?.facts || []).map((f, i) => ({ id: `MEM#${i}`, text: f, tag: "记忆" })),
             usage: c.usage,
+            injection: c.last_injection || null,
           });
         }
       } catch (e) { silentWarn(e, "ChatPage"); }

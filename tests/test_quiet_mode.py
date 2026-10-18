@@ -32,7 +32,8 @@ brain_api.brain_context = lambda *a, **k: "[大脑上下文] 身份：鲸语；�
 
 def inject(quiet_mode, memory_enabled=True, pure_chat=True):
     cfg = {"memory_enabled": memory_enabled, "quiet_mode": quiet_mode}
-    return h._inject_system_messages([{"role": "user", "content": "你好"}], cfg, pure_chat, quiet_mode)
+    # 记忆注入已改为「相关度检索」：query 须与桩记忆词面重叠，否则不注入（新契约）。
+    return h._inject_system_messages([{"role": "user", "content": "用户偏好中文回复"}], cfg, pure_chat, quiet_mode)
 
 # ── 用例 1：quiet_mode=True → 三路全停（memory_text=None）──
 msgs, mem = inject(quiet_mode=True, memory_enabled=True)

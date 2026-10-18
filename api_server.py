@@ -6812,12 +6812,15 @@ def _harvest_is_low_value(line: str) -> bool:
 
 
 def _chat_harvest(reply: str, user_text: str, cfg: dict, messages=None):
-    """后台线程：从本次对话提炼 0-3 条值得长期记住的信息写入记忆（自动入脑）。
+    """后台线程：从本次对话提炼 0-3 条值得长期记住的信息。
 
-    config.auto_memory 控制开关（默认开）；无可用 LLM / 记忆关闭时静默跳过。
+    开关与落地方式：
+    - config.auto_memory（默认开）总开关；无可用 LLM / 记忆关闭时静默跳过。
+    - config.memory_harvest_mode：`pending`（默认）→ 先入「待确认」队列由用户裁决，
+      防"推断污染"；`auto` → 直接写长期记忆（旧行为）；`off` → 不提炼。
     origin 判定（P1-B 血缘自动化）：本轮工具结果中出现「外部内容开始」标记
     （即 AI 抓取了外部网页）时，提炼的记忆标 origin="web"（confidence=0.3），
-    否则标 "agent"（confidence=0.4）——打断「外部网页→自动提炼→被当作用户前提」的注入链。
+    否则标 "agent"——打断「外部网页→自动提炼→被当作用户前提」的注入链。
     """
     import threading
 
@@ -6851,6 +6854,10 @@ def _chat_harvest(reply: str, user_text: str, cfg: dict, messages=None):
     def _run():
         try:
             if not (cfg or {}).get("auto_memory", True):
+                return
+            if (cfg or {}).get("privacy_mode"):
+                return   # 隐私模式：不写任何记忆（含待确认队列）
+            if str((cfg or {}).get("memory_harvest_mode") or "pending").strip().lower() == "off":
                 return
             import deepseek_client as dc
             if not dc.MEMORY_ENABLED:
@@ -6886,16 +6893,27 @@ def _chat_harvest(reply: str, user_text: str, cfg: dict, messages=None):
                 confidence = _OC.get(origin, 0.5)
             except Exception:
                 confidence = 0.3 if origin == "web" else 0.5
-            saved = 0
-            for s in items:
-                if saved >= 3:
-                    break
-                if len(s) >= 8 and "无" not in s[:6] and not _harvest_is_low_value(s):
-                    # 自动提炼的记忆：来自外部网页则标 origin="web"（〔来自外部内容〕），
-                    # 否则标 origin="agent"（〔推断〕）——注入时模型不得把它当作用户明说的前提。
+            cleaned = [s for s in items
+                       if len(s) >= 8 and "无" not in s[:6] and not _harvest_is_low_value(s)][:3]
+            if not cleaned:
+                return
+            mode = str((cfg or {}).get("memory_harvest_mode") or "pending").strip().lower()
+            if mode == "auto":
+                # 旧行为：直接写长期记忆（来自外部网页标 web，否则 agent）。
+                for s in cleaned:
                     dc.write_memory(s, tags="自动", type="对话",
                                     origin=origin, confidence=confidence)
-                    saved += 1
+            else:
+                # 默认 pending：先进「待确认」队列，由用户裁决后再写——打断
+                # 「AI 自己推断 → 立刻变持久记忆 → 下轮被当作用户前提」的污染链。
+                try:
+                    import memory_facade as _mf
+                    _mf.add_pending(cleaned, origin=origin,
+                                    source=str(user_text or "")[:200], limit=3)
+                except Exception as e:
+                    import degrade
+                    degrade.degrade("memory.harvest.pending", e,
+                                    "本轮候选记忆未入待确认队列", critical=False)
         except Exception as e:
             import degrade
             degrade.degrade("memory.harvest", e,
@@ -8177,6 +8195,16 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, _memory_full())
 
 
+    @_get_route("/v1/memory/pending")
+    def _g_v1_memory_pending(self):
+        """待确认记忆队列（自动提炼的候选，等用户裁决）。"""
+        try:
+            import memory_facade as _mf
+            self._json(200, {"items": _mf.list_pending()})
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
+
     @_get_route("/v1/plugins")
     def _g_v1_plugins(self):
         self._json(200, _plugins())
@@ -8299,6 +8327,15 @@ class _Handler(BaseHTTPRequestHandler):
             "peak_warning": bool(cfg.get("peak_warning")),
             "suggestions_enabled": bool(cfg.get("suggestions_enabled")),
             "voice_config": _voice_cfg(),
+            # 记忆/大脑分层开关（此前未回传，导致设置页「长期记忆」等开关无法回显/持久化）
+            "memory_enabled": bool(cfg.get("memory_enabled", True)),
+            "auto_memory": bool(cfg.get("auto_memory", True)),
+            "memory_harvest_mode": str(cfg.get("memory_harvest_mode") or "pending"),
+            "memory_inject_limit": int(cfg.get("memory_inject_limit") or 6),
+            "memory_min_score": float(cfg.get("memory_min_score") or 0.0),
+            "brain_persona_enabled": bool(cfg.get("brain_persona_enabled", False)),
+            "brain_continuity_enabled": bool(cfg.get("brain_continuity_enabled", True)),
+            "quiet_mode": bool(cfg.get("quiet_mode", False)),
         })
 
 
@@ -9266,6 +9303,24 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True})
 
 
+    @_post_route("/v1/memory/pending")
+    def _p_v1_memory_pending(self):
+        """裁决待确认记忆：body {action: "accept"|"dismiss", ids: [...]}。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import memory_facade as _mf
+            ok, n, err = _mf.resolve_pending(body.get("ids") or [], body.get("action") or "accept")
+            if err:
+                self._json(400, {"error": err})
+            else:
+                self._json(200, {"ok": True, "resolved": n})
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
+
     @_post_route("/v1/config")
     def _p_v1_config(self):
         body = self._read_body()
@@ -9291,7 +9346,11 @@ class _Handler(BaseHTTPRequestHandler):
                    ("browser_headless", bool),
                    ("peak_warning", bool), ("suggestions_enabled", bool),
                    ("monthly_budget", float), ("block_on_budget", bool),
-                   ("autostart", bool), ("minimize_to_tray", bool)):
+                   ("autostart", bool), ("minimize_to_tray", bool),
+                   # 记忆/大脑分层开关（此前不在白名单 → 设置页改动无法持久化）
+                   ("memory_enabled", bool), ("auto_memory", bool), ("quiet_mode", bool),
+                   ("brain_persona_enabled", bool), ("brain_continuity_enabled", bool),
+                   ("memory_inject_limit", int), ("memory_min_score", float)):
                 if k in body and body[k] is not None:
                     v = body[k]
                     if typ is bool:
@@ -9308,6 +9367,18 @@ class _Handler(BaseHTTPRequestHandler):
                             pass
                     else:
                         cfg[k] = str(v)[:500]
+            # 记忆自动提炼落地方式：仅接受枚举值（pending/auto/off）
+            if body.get("memory_harvest_mode") is not None:
+                _hvm = str(body["memory_harvest_mode"]).strip().lower()
+                if _hvm in ("pending", "auto", "off"):
+                    cfg["memory_harvest_mode"] = _hvm
+            # memory_min_score 夹取到 [0,1]
+            if "memory_min_score" in body and body["memory_min_score"] is not None:
+                try:
+                    _ms = float(body["memory_min_score"])
+                    cfg["memory_min_score"] = max(0.0, min(1.0, _ms))
+                except (TypeError, ValueError):
+                    cfg["memory_min_score"] = 0.0
             # 温度/top_p 落原程序键
             if "temperature" in body and body["temperature"] is not None:
                 try:
@@ -10501,6 +10572,7 @@ def start_server(port=8745, token=""):
     try:
         import memory_facade as _mf
         _mf.init(MEMORY_PATH)
+        _mf.init_pending(os.path.join(DATA_DIR, "memory_pending.json"))
     except Exception:
         logger.warning("记忆门面初始化失败（可降级）：记忆仍可读写，但无血缘/作废语义")
     # 信任内核启动核对：检出「未声明的自我修改」并留痕。

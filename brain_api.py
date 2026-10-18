@@ -1041,7 +1041,8 @@ def _spaced_review_due(now_epoch: float, limit: int = 2) -> list:
 
 
 def brain_context(max_memories=4, query="", budget_chars=0, memory_enabled=True,
-                  include_goals=True, dedup_texts=None):
+                  include_goals=True, dedup_texts=None,
+                  include_persona=True, include_continuity=True):
     """注入 AI 对话的大脑上下文摘要（身份 + 断点 + 自我认知 + 未决决策 + 复习 + 相关记忆）。
 
     - query 非空按话题检索（record_hits 记录命中 → F3）；空则按重要度×时间衰减+命中取 Top-N。
@@ -1068,23 +1069,25 @@ def brain_context(max_memories=4, query="", budget_chars=0, memory_enabled=True,
             segs.append((title, rows, weight))
 
     lines0 = [f"[鲸语大脑] 我是「{name}」，一个可迁移、可备份、可恢复的思维容器。"]
-    # 创世「前史/人设」：写入 identity.json 后在此注入才真正生效（此前只写不读）。
-    # 明确标注为角色设定而非真实记忆——与创世化初始的诚实边界一致。
-    _pre = str(ident.get("prehistory") or "").strip()
-    if _pre:
-        lines0.append(f"自述前史（角色设定，非真实经历）：{_pre[:300]}")
-    _voice = str(ident.get("voice") or "").strip()
-    if _voice:
-        lines0.append(f"表达风格：{_voice[:120]}")
-    _beliefs = [str(b).strip() for b in (ident.get("formed_beliefs") or []) if str(b).strip()]
-    if _beliefs:
-        lines0.append("已形成的信念：" + "；".join(_beliefs[:4]))
-    hint = str(hb.get("resume_hint") or "").strip()
-    if hint:
-        lines0.append(f"上次思考断点：{hint}")
+    # 创世「前史/人设」：属**人格层**（include_persona 控制，默认关）——角色设定
+    # 最易盖过任务本身，故与"连续性"（目标/断点/相关记忆）解耦，可单独关闭。
+    if include_persona:
+        _pre = str(ident.get("prehistory") or "").strip()
+        if _pre:
+            lines0.append(f"自述前史（角色设定，非真实经历）：{_pre[:300]}")
+        _voice = str(ident.get("voice") or "").strip()
+        if _voice:
+            lines0.append(f"表达风格：{_voice[:120]}")
+        _beliefs = [str(b).strip() for b in (ident.get("formed_beliefs") or []) if str(b).strip()]
+        if _beliefs:
+            lines0.append("已形成的信念：" + "；".join(_beliefs[:4]))
     add("身份", lines0, 100)
+    # 上次思考断点属**连续性层**：跨会话接着做事的关键，独立于人格开关。
+    hint = str(hb.get("resume_hint") or "").strip()
+    if include_continuity and hint:
+        add("上次断点", [hint], 70)
     try:
-        if include_goals:
+        if include_goals and include_continuity:
             active_goals = [g for g in bk.load_goals() if g.get("status") == "active"]
             if active_goals:
                 add("进行中目标", [f"- {g.get('title')}" + (f"（{g.get('progress') or ''}）" if g.get("progress") else "")
@@ -1094,44 +1097,47 @@ def brain_context(max_memories=4, query="", budget_chars=0, memory_enabled=True,
         degrade.degrade("context.brain.goals", e,
                         "进行中目标未注入，AI 可能忘记当前目标", critical=True)
     try:
-        sm = bk.load_json(bk.BRAIN_DIR / "self_model.json", {})
-        cap_rows = []
-        for label, key in (("我知道", "knows"), ("我不确定", "unknowns"), ("我的局限", "limits")):
-            vals = [str(x).strip()[:70] for x in (sm.get(key) or []) if str(x or "").strip()][:2]
-            if vals:
-                cap_rows.append(f"· {label}：" + "；".join(vals))
-        if cap_rows:
-            add("自我认知", cap_rows, 50)
+        if include_continuity:
+            sm = bk.load_json(bk.BRAIN_DIR / "self_model.json", {})
+            cap_rows = []
+            for label, key in (("我知道", "knows"), ("我不确定", "unknowns"), ("我的局限", "limits")):
+                vals = [str(x).strip()[:70] for x in (sm.get(key) or []) if str(x or "").strip()][:2]
+                if vals:
+                    cap_rows.append(f"· {label}：" + "；".join(vals))
+            if cap_rows:
+                add("自我认知", cap_rows, 50)
     except Exception as e:
         import degrade
         degrade.degrade("context.brain.self_model", e,
                         "自我认知（知道/不确定/局限）未注入", critical=True)
     try:
-        open_decs = [d for d in bk.list_decisions(limit=120) if d.get("status") == "open"]
-        if open_decs:
-            rows = []
-            for d in open_decs[:3]:
-                exp = str(d.get("expected") or "").strip()
-                age_d = (now_epoch - bk._ts_epoch(d.get("ts"))) / 86400.0 if d.get("ts") else 0
-                due_tag = "（请回执结果）" if age_d >= 3 else ""
-                rows.append(f"- {str(d.get('decision') or '')[:48]}{due_tag}"
-                            + (f"（预期：{exp[:36]}）" if exp else ""))
-            add("未决决策", rows, 45)
+        if include_continuity:
+            open_decs = [d for d in bk.list_decisions(limit=120) if d.get("status") == "open"]
+            if open_decs:
+                rows = []
+                for d in open_decs[:3]:
+                    exp = str(d.get("expected") or "").strip()
+                    age_d = (now_epoch - bk._ts_epoch(d.get("ts"))) / 86400.0 if d.get("ts") else 0
+                    due_tag = "（请回执结果）" if age_d >= 3 else ""
+                    rows.append(f"- {str(d.get('decision') or '')[:48]}{due_tag}"
+                                + (f"（预期：{exp[:36]}）" if exp else ""))
+                add("未决决策", rows, 45)
     except Exception as e:
         import degrade
         degrade.degrade("context.brain.decisions", e,
                         "未决决策未注入，AI 可能不追问结果回执", critical=True)
     # F4 间隔复习
     try:
-        review = _spaced_review_due(now_epoch, limit=2)
-        if review:
-            add("复习提醒", [f"- {str(e.get('text') or '')[:60]}" for e in review], 40)
+        if include_continuity:
+            review = _spaced_review_due(now_epoch, limit=2)
+            if review:
+                add("复习提醒", [f"- {str(e.get('text') or '')[:60]}" for e in review], 40)
     except Exception as e:
         import degrade
         degrade.degrade("context.brain.review", e, "间隔复习提醒未注入", critical=True)
-    # 相关/近期记忆（memory_enabled=False 时整体跳过；secret 级一律不注入）
+    # 相关/近期记忆（memory_enabled=False 或连续性关闭时整体跳过；secret 级一律不注入）
     try:
-        if memory_enabled:
+        if memory_enabled and include_continuity:
             recent = []
             if str(query or "").strip():
                 recent = [e for e in bk.search_memories(query, max_memories, record_hits=True)

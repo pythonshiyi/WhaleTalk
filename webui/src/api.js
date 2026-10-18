@@ -923,6 +923,20 @@ export async function getMemory() {
   return api("/v1/memory");
 }
 
+/** @returns {Promise<{items:Array<{id:string,text:string,origin?:string,ts?:string}>}>} 待确认记忆队列 */
+export async function listPendingMemory() {
+  return api("/v1/memory/pending");
+}
+
+/**
+ * 裁决待确认记忆。
+ * @param {{action:"accept"|"dismiss", ids:string[]}} payload
+ * @returns {Promise<{ok:boolean, resolved:number}>}
+ */
+export async function resolvePendingMemory(payload) {
+  return api("/v1/memory/pending", { method: "POST", body: JSON.stringify(payload) });
+}
+
 /**
  * 统一记忆检索（B1/B2）：跨 memory.json + 大脑 jsonl + knowledge 文档。
  * @param {string} [query] 关键词

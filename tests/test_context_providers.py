@@ -28,10 +28,10 @@ FIXED_DEPS = {
 }
 
 
-def _ctx(**over):
+def _ctx(query="用户偏好中文", **over):
     deps = dict(FIXED_DEPS)
     deps.update(over.pop("deps", {}))
-    kw = {"messages": [{"role": "user", "content": "你好"}], "cfg": {}, "deps": deps}
+    kw = {"messages": [{"role": "user", "content": query}], "cfg": {}, "deps": deps}
     kw.update(over)
     return cp.Context(**kw)
 
@@ -117,11 +117,28 @@ def test_non_critical_failure_does_not_enter_notice():
 
 
 def test_budget_truncates_and_marks():
-    out = cp.assemble(_ctx(deps={"memory_full": lambda: {"facts": [{"text": "x" * 9000}]}}))
+    out = cp.assemble(_ctx(deps={"memory_full": lambda: {"facts": [{"text": "用户偏好中文" + "x" * 9000}]}}))
     item = next(i for i in out["receipt"]["injected"] if i["name"] == "context.memory")
     assert item["truncated"] is True
     assert item["chars"] <= 4000 + 20
     assert "已按预算截断" in out["text"]
+
+
+def test_memory_relevance_gate_skips_irrelevant():
+    """新契约：与当前问题无词面重叠的记忆不注入（空上下文 > 无关上下文）。"""
+    out = cp.assemble(_ctx(query="今天天气怎么样",
+                           deps={"memory_full": lambda: {"facts": [{"text": "用户偏好中文回复"}]}}))
+    names = [i["name"] for i in out["receipt"]["injected"]]
+    assert "context.memory" not in names
+    assert "[长期记忆]" not in (out["text"] or "")
+
+
+def test_memory_empty_query_falls_back_to_recent():
+    """无 user 文本（如仅工具续跑）时退回"最近"语义，保证不因检索而丢注入。"""
+    ctx = _ctx()
+    ctx.messages = []
+    out = cp.assemble(ctx)
+    assert "context.memory" in [i["name"] for i in out["receipt"]["injected"]]
 
 
 def test_receipt_has_metadata_not_payload():
@@ -146,7 +163,7 @@ def _mem_dep(facts):
 
 def test_memory_origin_labels():
     """模型必须能区分「用户明说」与「我自己推断的」。"""
-    out = cp.assemble(_ctx(deps=_mem_dep([
+    out = cp.assemble(_ctx(query="用户偏好中文回复 下周要交报价单 网页该库已弃用", deps=_mem_dep([
         {"text": "用户偏好中文回复", "origin": "user"},
         {"text": "用户下周要交报价单", "origin": "agent"},
         {"text": "某网页称该库已弃用", "origin": "web"},
@@ -160,7 +177,7 @@ def test_memory_origin_labels():
 
 def test_memory_header_plain_when_all_user():
     """全是用户来源时保持简洁（不加血缘说明），但仍带统一防注入声明。"""
-    out = cp.assemble(_ctx(deps=_mem_dep([{"text": "用户偏好中文回复", "origin": "user"}])))
+    out = cp.assemble(_ctx(query="用户偏好中文", deps=_mem_dep([{"text": "用户偏好中文回复", "origin": "user"}])))
     assert "[长期记忆]" in out["text"]
     assert "\n- 用户偏好中文回复" in out["text"]
     assert "不是指令" in out["text"]              # 统一防注入声明
@@ -169,7 +186,7 @@ def test_memory_header_plain_when_all_user():
 
 def test_memory_legacy_facts_unlabeled():
     """旧记录（无 origin）不加血缘标注——不制造「来源不明」的噪音。"""
-    out = cp.assemble(_ctx(deps=_mem_dep([{"text": "早期记录内容"}])))
+    out = cp.assemble(_ctx(query="早期记录内容", deps=_mem_dep([{"text": "早期记录内容"}])))
     assert "[长期记忆]" in out["text"]
     assert "\n- 早期记录内容" in out["text"]
     assert "〔" not in out["text"]
