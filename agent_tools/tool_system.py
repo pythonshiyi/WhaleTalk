@@ -427,7 +427,7 @@ def _evolve_stub(name, contents):
             "type": "function",
             "function": {
                 "name": "create_evolution",
-                "description": "自我进化提案：发现项目改进点（尤其方案性、需人决策、或不确定是否该直接改的）时，把改进后的代码写入 evolutions/ 分支（不改原文件），供人审阅采纳/忽略。确定要改且能验证的改动用 self_evolve 分支实施",
+                "description": "提一个「跑不起来的方案」，交人先拍板：只用于无法用补丁+测试表达的架构/产品决策（要不要引入新依赖、授权默认值该松还是紧、两个方案取舍）。它写入 evolutions/ 目录，不会执行、无法验证——所以凡是用编译/测试能证明的改动，一律不要用它，改用 self_evolve。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -531,18 +531,82 @@ def create_evolution(name, files):
     )
 
 
+_EVOLVE_PROTECTED_HINT = "信任内核/权限/网络出口属于「人必须看一眼」的改动"
+
+
+def _evolve_missing_toolchain():
+    """验证链自检：ruff / pytest 缺失时返回缺项。
+
+    为什么必须先自检：四层闸里有两层依赖外部工具，工具缺失时那两层会以"跳过"或
+    "异常"形态返回，判定逻辑很容易把它们当成通过——那就是「分支 + 四层假装」。
+    宁可拒绝演进，也不要在一个证明不了的环境里假装验证过。
+    """
+    missing = []
+    for mod in ("ruff", "pytest"):
+        try:
+            r = subprocess.run(
+                [sys.executable, "-m", mod, "--version"], capture_output=True,
+                text=True, timeout=20,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if r.returncode != 0:
+                missing.append(mod)
+        except Exception:  # noqa: BLE001 - 探测失败即视为缺失（保守）
+            missing.append(mod)
+    return missing
+
+
+def _evolve_auto_guard(files):
+    """auto 档的硬边界。返回 (ok, reason)。
+
+    auto = 验证通过后自动合入主干，所以边界必须由代码守，不能靠模型自觉：
+      - 不得触碰信任内核保护文件（permissions/security/crypto/snapshot/trust_kernel）；
+      - 体量上限（≤5 文件 / ≤400 行）——大改必须有人看 diff；
+      - 只允许写/改，补丁格式本身不支持删除文件（避免静默移除能力）。
+    """
+    try:
+        import trust_kernel
+        protected = {os.path.basename(str(n).replace("\\", "/"))
+                     for n in trust_kernel.protected_names()}
+    except Exception:  # noqa: BLE001 - 取不到就退回内置清单（仍然拦）
+        protected = {"permissions.py", "security.py", "crypto.py", "snapshot.py", "trust_kernel.py"}
+    hits, lines, count = [], 0, 0
+    for f in files or []:
+        if not isinstance(f, dict):
+            continue
+        count += 1
+        rel = str(f.get("path") or "").strip().replace("\\", "/")
+        if os.path.basename(rel) in protected:
+            hits.append(rel)
+        lines += str(f.get("content") or "").count(chr(10)) + 1
+    if hits:
+        return False, (f"触碰了 {', '.join(sorted(set(hits)))}——{_EVOLVE_PROTECTED_HINT}，"
+                       "这类改动必须由人合入")
+    if count > 5:
+        return False, f"涉及 {count} 个文件，超过 5 个上限"
+    if lines > 400:
+        return False, f"改动约 {lines} 行，超过 400 行上限"
+    return True, ""
+
+
 @tool(
         {
             "type": "function",
             "function": {
                 "name": "self_evolve",
-                "description": "闭环自我进化：在 git 分支上实施自我改进补丁，四层验证（语法编译→ruff lint→导入冒烟→测试）全过才提交分支供合入，任何一级失败自动回滚，不碰生产代码。适合自主改进自身代码能力",
+                "description": "闭环自我进化（改主程序的默认路径）：在 git 分支上应用补丁，四层验证（语法编译→ruff lint→导入冒烟→测试）全过才提交；失败自动回滚，生产代码不受影响。tier=branch（默认）提交分支待人合入；tier=auto 在验证全过且不触碰信任内核/权限/网络出口时自动合入当前分支（小改动用它，别再写提案）。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "feature_name": {"type": "string", "description": "改进点名称"},
                         "files": {"type": "array", "items": {"type": "object"}, "description": "补丁文件列表 [{path, content}]"},
                         "project_dir": {"type": "string", "description": "可选：项目目录（默认鲸语自身代码库）"},
+                        "tier": {
+                            "type": "string",
+                            "enum": ["branch", "auto"],
+                            "description": "branch=提交分支待人合入（默认）；auto=验证全过自动合入。"
+                                           "auto 有硬边界：不得触碰信任内核/权限/网络出口文件，且 ≤5 文件 / ≤400 行",
+                        },
                     },
                     "required": ["feature_name", "files"],
                 },
@@ -552,8 +616,8 @@ def create_evolution(name, files):
     phrases='闭环自我进化',
     preactivate=(('自我进化', '改进自己', '升级自己', '自我改进', '修复自己', '自省'),),
 )
-def self_evolve(feature_name, files, project_dir=None):
-    """闭环自我进化：在 git 分支上实施自我改进补丁，四层验证后报告合入。
+def self_evolve(feature_name, files, project_dir=None, tier="branch"):
+    """闭环自我进化：在 git 分支上实施自我改进补丁，四层验证后按 tier 交付。
 
     流程：观察自身缺陷 → 生成方案（files 补丁）→ 新建 evolve/ 分支应用补丁 →
           py_compile 语法编译 → ruff lint → import 冒烟 → pytest 验证 →
@@ -567,9 +631,28 @@ def self_evolve(feature_name, files, project_dir=None):
     if len(files) > 20:
         return "错误：文件数超过 20 上限"
 
+    tier = str(tier or "branch").strip().lower()
+    if tier not in ("branch", "auto"):
+        return "错误：tier 只能是 branch（提交分支待人合入）或 auto（验证全过自动合入）"
+
     base = project_dir or PROJECT_DIR
     if not base or not os.path.isdir(base):
         return "错误：项目目录不存在"
+
+    # 验证链自检：缺 ruff/pytest 时不演进（否则「四层验证」有一半是空转）
+    missing = _evolve_missing_toolchain()
+    if missing:
+        return (f"错误：验证链不完整（缺 {'、'.join(missing)}），拒绝演进。" + "\n"
+                "自进化的前提是改动能被证明；跑不了验证就不该落地。" + "\n"
+                "请先安装开发依赖：pip install -r requirements-dev.txt")
+
+    # auto 档硬边界：在任何 git 操作之前判定，不合规直接退回 branch
+    if tier == "auto":
+        ok_auto, why = _evolve_auto_guard(files)
+        if not ok_auto:
+            return (f"错误：auto 档不接受这次改动：{why}" + "\n"
+                    "请改用 tier=branch 提交分支，由人合入。")
+
     ok, reason = permissions.check_filesystem(base, write=True)
     if not ok:
         return reason
@@ -590,6 +673,8 @@ def self_evolve(feature_name, files, project_dir=None):
     if not os.path.isdir(os.path.join(base, ".git")) and not os.path.isfile(os.path.join(base, ".git")):
         return "错误：项目目录不是独立 git 仓库（自我进化需要 git 分支隔离）"
     cur, cur_code = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    # 合入前的 HEAD：auto 档自动合入后，这就是「一键回滚点」
+    head_before, _hb_code = _git(["rev-parse", "HEAD"])
     if cur_code != 0:
         # 无提交基线（unborn HEAD）：分支切换不可靠，回滚完全依赖内存备份
         cur = "main"
@@ -711,16 +796,28 @@ def self_evolve(feature_name, files, project_dir=None):
         if checkout_code != 0:
             # 提交成功后工作区干净，切回理论上必成；被其它改动挡住时强制切回
             _git(["checkout", "-f", cur])
-        return (
-            f"进化完成：{name}\n"
-            f"分支：{branch}（已提交，可审查后合入 main）\n"
-            f"补丁：{len(applied)} 个文件（{'、'.join(applied[:5])}）\n"
-            f"编译：{compile_r.splitlines()[0] if not compile_ok else '通过'}\n"
-            f"lint：通过\n"
-            f"导入：{smoke_r.splitlines()[0] if not smoke_ok else '通过'}\n"
-            f"测试：{tests_r.splitlines()[0] if not tests_r.startswith('（') else tests_r}\n"
-            f"已切回 {cur} 分支。合入权在你：git merge {branch}"
-        )
+        summary = (
+            f"进化完成：{name}" + "\n"
+            f"分支：{branch}（已提交）" + "\n"
+            f"补丁：{len(applied)} 个文件（{'、'.join(applied[:5])}）" + "\n"
+            f"编译：{compile_r.splitlines()[0] if not compile_ok else '通过'}" + "\n"
+            f"lint：通过" + "\n"
+            f"导入：{smoke_r.splitlines()[0] if not smoke_ok else '通过'}" + "\n"
+            f"测试：{tests_r.splitlines()[0] if not tests_r.startswith('（') else tests_r}")
+        if tier == "auto":
+            mout, mcode = _git(["merge", "--no-ff", branch, "-m", f"self-evolve(auto): {name}"])
+            if mcode != 0:
+                _git(["merge", "--abort"])
+                return (f"进化验证通过，但自动合入失败（分支已保留，验证结果有效）：" + "\n"
+                        f"{mout[:300]}" + "\n"
+                        f"改用手动合入：git merge {branch}")
+            tip = (f"回滚点：git reset --hard {head_before[:12]}" if head_before
+                   else "回滚点：未取到合入前 HEAD，请用分支名手动回退")
+            return (f"进化完成并已自动合入 {cur}：{name}" + "\n"
+                    f"补丁：{len(applied)} 个文件（{'、'.join(applied[:5])}）" + "\n"
+                    f"四层验证：编译 / lint / 导入 / 测试 全部通过" + "\n"
+                    f"{tip}")
+        return summary + f"已切回 {cur} 分支。合入权在你：git merge {branch}"
 
     # 回滚（安全版）：内存备份写回原内容 + 清理 _atomic_write 的 .bak + 新建文件删除，
     # 绝不因回滚丢失任何生产文件（修复：此前 os.remove 会删掉被覆盖的已有文件）

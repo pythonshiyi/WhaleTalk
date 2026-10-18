@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.19.0）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.20.0）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,9 +17,9 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.19.0`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.20.0`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **105 个 `/v1` 路由**、**115 个 pytest 文件 / 1150 用例 + 22 个前端 node 套件**、
+  **105 个 `/v1` 路由**、**116 个 pytest 文件 / 1159 用例 + 22 个前端 node 套件**、
   源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
   主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
@@ -47,7 +47,7 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试 ──
-python -m pytest -q                      # 后端全量（115 个文件 / 1150 用例，约 73s；CI 同款，见下方「分级验证」）
+python -m pytest -q                      # 后端全量（116 个文件 / 1159 用例，约 73s；CI 同款，见下方「分级验证」）
 python -m pytest tests/test_registry.py -q    # 只跑相关文件：日常改动的正确姿势（1–3s）
 cd webui && npm test                     # 前端 22 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
@@ -197,7 +197,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案）、`check_silent_except.py`（静默吞异常基线差分门禁 + `silent_except_baseline.txt`） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 115 个 pytest 文件 / 1150 用例 |
+| `tests/` | 后端回归 116 个 pytest 文件 / 1159 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
@@ -629,7 +629,28 @@ def my_tool(...): ...
 
 ---
 
-## 14. 测试资产速查（tests/，115 个 pytest 文件 / 1150 用例）
+## 13.5 自进化路径：按「能否被自动证明」选路
+
+两个工具的分工不是"提案 vs 实施"，而是**"能不能证明"**：
+
+| 场景 | 工具 | 为什么 |
+|---|---|---|
+| 改动能被编译/测试证明 | `self_evolve`（默认） | 产出的是**证据**：diff + 四层闸结果 + 可回滚点 |
+| 小改动且不触碰敏感面（≤5 文件 / ≤400 行） | `self_evolve(tier="auto")` | 验证全过即自动合入，省掉一次人工往返 |
+| 跑不起来的架构/产品取舍（加依赖、默认值松紧、方案二选一） | `create_evolution` | 它只写文件、不执行、无法验证——所以**只能用来说服人，不能用来证明对** |
+
+`tier="auto"` 的硬边界（由代码守，不靠模型自觉）：
+
+- 不得触碰信任内核保护文件（`permissions` / `security` / `crypto` / `snapshot` / `trust_kernel`）；
+- 文件数 ≤ 5、改动行数 ≤ 400；
+- 四层验证必须全过，失败自动回滚；
+- 合入后返回 `git reset --hard <合入前 HEAD>` 作为一键回滚点。
+
+另外 `self_evolve` 动手前会**自检验证链**：缺 `ruff` / `pytest` 直接拒绝演进。
+理由很直接——缺工具时那两层会以"跳过"形态返回，判定逻辑很容易把它们当成通过，
+那就成了「分支 + 四层假装」。宁可拒绝，也不在证明不了的环境里假装验证过。
+
+## 14. 测试资产速查（tests/，116 个 pytest 文件 / 1159 用例）
 
 按领域分组（文件名即内容）：
 
@@ -704,5 +725,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1150 用例 / 版本 3.19.0）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1159 用例 / 版本 3.20.0）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*
