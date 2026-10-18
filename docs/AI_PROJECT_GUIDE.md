@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.20）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.16.21）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,11 +17,11 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.20`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.16.21`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **111 个 `/v1` 路由**、**106 个 pytest 文件 / 1120 用例 + 22 个前端 node 套件**、
-  源码约 **7.6 万行**（根目录 3.5 万 + `agent_tools/` 1.8 万 + `webui/src` 2.1 万；
-  主力为 `api_server.py` 10,351 / `deepseek_client.py` 5,927 / `brainkit.py` 2,865）。
+  **111 个 `/v1` 路由**、**114 个 pytest 文件 / 1120 用例 + 22 个前端 node 套件**、
+  源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
+  主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
   > 下面的行数会随迭代漂移，**以该命令输出为准**。
 - **三层架构**：`web_app.py`（入口）→ `api_server.py`（本地 API）→
@@ -98,8 +98,8 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | 层 | 模块 | 一句话职责 |
 |---|---|---|
 | **入口** | `web_app.py`（989 行） | 唯一启动入口：参数解析 → 依赖自检/自动安装 → 桌面+开始菜单快捷方式 → WebUI 自动构建 → 单实例探测 → 起 API → 开浏览器 → 托盘常驻 |
-| **API 层** | `api_server.py`（10,351 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**111 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
-| **能力引擎** | `deepseek_client.py`（5,927 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步。**工具实现已迁出至 `agent_tools/`** |
+| **API 层** | `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**111 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
+| **能力引擎** | `deepseek_client.py`（6,540 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步。**工具实现已迁出至 `agent_tools/`** |
 | **工具声明** | `toolkit.py`（269 行） | **`@tool()` 装饰器 + 注册表 + 六层构建函数**——工具系统单一事实源（见 §6.1） |
 | **钩子管线** | `tool_hooks.py`（344 行） | 横切关注点收口：pre/post 钩子表 + `wrap()` 包装器；在 `@tool()` **注册处**统一包装执行体，任何调用路径都逃不掉钩子（P0-1） |
 | **上下文装配** | `context_providers.py`（456 行） | 把「往系统提示塞什么」变成 Provider 表（name/priority/budget/critical/enabled/provide），统一排序限预算记回执（P0-2） |
@@ -198,7 +198,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案）、`check_silent_except.py`（静默吞异常基线差分门禁 + `silent_except_baseline.txt`） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 106 个 pytest 文件 / 1120 用例 |
+| `tests/` | 后端回归 114 个 pytest 文件 / 1120 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
@@ -239,7 +239,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
   `("qpath",path)`（去查询串精确）。**表顺序即匹配优先级（= 源码顺序）**。
 - 兼容 `/api/v1/...` 与 `/v1/...`（Vite 代理）。
 
-### 4.3 端点分组（共 106 个 `/v1` 路由）
+### 4.3 端点分组（共 111 个 `/v1` 路由）
 
 **会话与消息**：`GET /v1/sessions` · `/v1/sessions/<id>/messages` · `POST /v1/sessions`
 (+`delete_batch`/`delete`/`pin`/`rename`/`tags`) · `POST /v1/search`
@@ -630,7 +630,7 @@ def my_tool(...): ...
 
 ---
 
-## 14. 测试资产速查（tests/，106 个 pytest 文件 / 1120 用例）
+## 14. 测试资产速查（tests/，114 个 pytest 文件 / 1120 用例）
 
 按领域分组（文件名即内容）：
 
@@ -705,5 +705,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1120 用例 / 版本 3.16.20）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1120 用例 / 版本 3.16.21）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*
