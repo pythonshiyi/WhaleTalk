@@ -169,6 +169,7 @@ def rank(query, facts, limit=6, min_score=0.0):
         return items[-lim:] if lim else list(items)
     docs = [
         _tokens(str(f.get("value") or "") + " " + str(f.get("key") or "") + " "
+                + str(f.get("tags") or "") + " "
                 + " ".join(str(x) for x in (f.get("entities") or [])))
         for f in items
     ]

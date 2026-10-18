@@ -7499,15 +7499,21 @@ class _Handler(BaseHTTPRequestHandler):
             return False, str(e)
 
     def _memory_summary(self):
+        """上下文面板的「长期记忆」摘要。
+
+        注意字段口径：memory_facade 写入的是 `value`（旧实现写 `text`），且被取代的
+        条目不应再展示——旧实现只读 `text`，导致门面写入的记忆在面板里全显示为空串。
+        """
         try:
             if os.path.exists(MEMORY_PATH):
                 with open(MEMORY_PATH, encoding="utf-8") as f:
                     d = json.load(f)
-                facts = d.get("facts") or []
+                facts = [x for x in (d.get("facts") or [])
+                         if isinstance(x, dict) and str(x.get("status") or "active") != "superseded"]
                 return {
                     "enabled": bool(d.get("enabled")),
                     "count": len(facts),
-                    "facts": [str(x.get("text") or "")[:120] for x in facts[-5:] if isinstance(x, dict)],
+                    "facts": [str(x.get("value") or x.get("text") or "")[:120] for x in facts[-5:]],
                 }
         except Exception:
             pass

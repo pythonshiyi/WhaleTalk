@@ -8,6 +8,7 @@ import { silentWarn } from "../quiet.js";
 export default function ContextPanel({ data, onClose, loading = false, err = "" }) {
   const [tab, setTab] = React.useState("工具");
   const [pending, setPending] = React.useState([]);
+  const [injection, setInjection] = React.useState((data && data.injection) || null);
   const [tip, setTip] = React.useState("");
 
   const loadPending = React.useCallback(() => {
@@ -16,8 +17,17 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
       .catch((e) => silentWarn(e, "ContextPanel"));
   }, []);
 
-  React.useEffect(() => { loadPending(); }, [loadPending]);
+  // 注入回执是「最近一次装配」的服务端快照：打开面板/切到注入页时拉一次，
+  // 否则只会停留在页面加载时的旧值（对话后不刷新 → 一直显示"暂无记录"）。
+  const loadInjection = React.useCallback(() => {
+    api.getContext()
+      .then((d) => setInjection((d && d.last_injection) || null))
+      .catch((e) => silentWarn(e, "ContextPanel"));
+  }, []);
+
+  React.useEffect(() => { loadPending(); loadInjection(); }, [loadPending, loadInjection]);
   React.useEffect(() => { if (tab === "记忆") loadPending(); }, [tab, loadPending]);
+  React.useEffect(() => { if (tab === "注入") loadInjection(); }, [tab, loadInjection]);
 
   const resolve = async (ids, action) => {
     try {
@@ -125,7 +135,7 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
           );
         })()}
         {tab === "注入" && (() => {
-          const inj = (data && data.injection) || null;
+          const inj = injection;
           if (!inj || !(inj.injected || []).length) {
             return <EmptyState compact icon="layers" title="暂无注入记录"
               hint="发起一次对话后，这里显示本轮注入了哪些上下文、各占多少字符、谁被跳过或失败。" />;
