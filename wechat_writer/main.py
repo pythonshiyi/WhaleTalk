@@ -41,14 +41,16 @@ def _init_logging():
 
 
 def run_once(dry_run=False, topic_override="", config_path=None, use_blocked=False,
-             drafts_dir=None, archive_dir=None):
+             drafts_dir=None, archive_dir=None, chars=None, audience=None):
     """每日主流程。返回 {"ok", "topic", "title", "chars", "quality", "paths", "errors"}。
 
     任何关键步骤失败都不写草稿、不记录历史（失败降级原则）。
     drafts_dir/archive_dir：指定草稿箱与存档目录（鲸语工具调用时指向工作区，
     用户从产物面板/草稿箱即可看到，无需到代码目录翻找）。
     """
-    cfg = cfg_mod.load_config(config_path or CONFIG_PATH)
+    # 单次覆盖（字数/受众）只在配置允许的范围内生效，被夹住的情况进 notes 回显给用户
+    cfg, style_notes = cfg_mod.load_config_with_notes(
+        config_path or CONFIG_PATH, {"chars": chars, "audience": audience})
     errors = []
     try:
         logger.info("=== WeChat Writer 开始（dry_run=%s）===", dry_run)
@@ -88,7 +90,7 @@ def run_once(dry_run=False, topic_override="", config_path=None, use_blocked=Fal
             return {"ok": False, "topic": topic.name, "title": article.title,
                     "chars": report.chars,
                     "quality": {"passed": False, "reasons": report.reasons, "score": report.score},
-                    "paths": {}, "errors": errors + report.reasons}
+                    "paths": {}, "errors": errors + report.reasons, "notes": style_notes}
 
         # 5 输出 + 记录历史
         if dry_run:
@@ -107,12 +109,12 @@ def run_once(dry_run=False, topic_override="", config_path=None, use_blocked=Fal
         return {"ok": True, "topic": topic.name, "title": article.title,
                 "chars": report.chars,
                 "quality": {"passed": True, "score": report.score},
-                "paths": paths, "errors": errors}
+                "paths": paths, "errors": errors, "notes": style_notes}
     except Exception as e:
         logger.exception("主流程异常")
         return {"ok": False, "topic": "", "title": "", "chars": 0,
                 "quality": {"passed": False, "reasons": [str(e)]},
-                "paths": {}, "errors": errors + [str(e)]}
+                "paths": {}, "errors": errors + [str(e)], "notes": []}
 
 
 def run_daily(notify_cb=None):

@@ -13,6 +13,7 @@ const SearchCtx = React.createContext("");
 const TAB_INDEX = [
   { id: "model", label: "🎛 模型与网关", keys: "模型 api key 网关 思考 输出 token 预设 角色" },
   { id: "service", label: "🔌 外部服务", keys: "服务 外部 连接 webhook 工作流" },
+  { id: "wechat", label: "📝 公众号写作", keys: "公众号 写作 字数 受众 风格 信源 选题 草稿" },
   { id: "persona", label: "🧠 人格与工具", keys: "人格 角色 工具 插件 提示词 能力" },
   { id: "notice", label: "🔔 通知与安全", keys: "通知 安全 提示音 朗读 语音" },
   { id: "look", label: "🎨 外观", keys: "外观 主题 密度 字号 字体 界面" },
@@ -253,6 +254,99 @@ function VoiceSettingsBlock({ cfg, saveField, onTip }) {
 }
 
 // ── 外部服务（邮件/IM/Webhook/数据库/图片/接收端）──────
+function WechatTab({ onTip }) {
+  const [d, setD] = React.useState(null);
+  const [err, setErr] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const load = React.useCallback(() => {
+    setErr("");
+    return api.wechatConfig().then((r) => r && r.ok && setD(r)).catch(() => setErr("公众号配置加载失败（后端未连接）"));
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+  if (!d) {
+    return err
+      ? <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
+      : <SkeletonList rows={3} />;
+  }
+  const style = d.config.style || {};
+  const src = d.config.sources || {};
+  const groups = d.groups || [];
+  const enabled = Array.isArray(src.enabled_groups) ? src.enabled_groups : groups;
+  const setStyle = (k, v) =>
+    setD((s) => ({ ...s, config: { ...s.config, style: { ...(s.config.style || {}), [k]: v } } }));
+  const setSrc = (k, v) =>
+    setD((s) => ({ ...s, config: { ...s.config, sources: { ...(s.config.sources || {}), [k]: v } } }));
+  const toggleGroup = (g) => {
+    const next = enabled.includes(g) ? enabled.filter((x) => x !== g) : [...enabled, g];
+    setSrc("enabled_groups", next);
+  };
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    const r = await api.saveWechatConfig({ style, sources: src }).catch(() => null);
+    if (r && r.ok && r.config) {
+      setD((s) => ({ ...s, config: r.config }));
+      onTip("公众号写作配置已保存");
+    } else {
+      onTip((r && r.error) || "保存失败");
+    }
+    setSaving(false);
+  };
+  const num = (v) => (v === "" || v === null ? 0 : Number(v));
+  return (
+    <div className="set-section">
+      <h3 className="set-h3">📝 公众号写作</h3>
+      <p className="set-desc">
+        这里定的是你的长期偏好：字数区间、受众、信源。单次任务里说“写 2000 字”只在区间内生效，
+        超出会被夹住并告诉你。发布始终需要你手动在公众号后台完成。
+      </p>
+      <Row label="正文字数区间" desc="质检按这区间判定字数是否达标（500–8000）">
+        <input className="set-select set-combo" type="number" min="500" max="8000"
+          value={style.min_chars ?? ""} onChange={(e) => setStyle("min_chars", num(e.target.value))} />
+        <span style={{ margin: "0 6px", color: "var(--color-text-tertiary)" }}>–</span>
+        <input className="set-select set-combo" type="number" min="500" max="8000"
+          value={style.max_chars ?? ""} onChange={(e) => setStyle("max_chars", num(e.target.value))} />
+      </Row>
+      <Row label="正文小节数" desc="2–10；AI 会按这个数量写小标题">
+        <input className="set-select set-combo" type="number" min="2" max="10"
+          value={style.sections ?? ""} onChange={(e) => setStyle("sections", num(e.target.value))} />
+      </Row>
+      <Row label="受众口径" desc="大众科普读起来轻；技术深度面向同行">
+        <select className="set-select set-combo" value={style.audience || "general"}
+          onChange={(e) => setStyle("audience", e.target.value)}>
+          <option value="general">大众科普</option>
+          <option value="geek">技术深度</option>
+        </select>
+      </Row>
+      <Row label="文风" desc="一句话描述语气，会写进写作提示词">
+        <input className="set-select set-combo" type="text" value={style.tone || ""}
+          onChange={(e) => setStyle("tone", e.target.value)} />
+      </Row>
+      <Row label="信源分组" desc="只从勾选的组里采集；被墙的组要配合下方代理开关">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          {groups.map((g) => (
+            <label key={g} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13 }}>
+              <input type="checkbox" checked={enabled.includes(g)} onChange={() => toggleGroup(g)} />
+              {g}
+            </label>
+          ))}
+        </div>
+      </Row>
+      <Row label="被墙信源走代理" desc="linux.do / hostloc 等需要代理通道（fetch_blocked 就绪时有效）">
+        <input type="checkbox" checked={!!src.use_blocked} onChange={(e) => setSrc("use_blocked", e.target.checked)} />
+      </Row>
+      <Row label="只看最近多少小时" desc="1–168；源站更新频率低时调大">
+        <input className="set-select set-combo" type="number" min="1" max="168"
+          value={src.since_hours ?? ""} onChange={(e) => setSrc("since_hours", num(e.target.value))} />
+      </Row>
+      <div style={{ marginTop: 12 }}>
+        <button className="btn btn-primary" disabled={saving} onClick={save}>{saving ? "保存中…" : "保存"}</button>
+      </div>
+      <p className="set-desc" style={{ marginTop: 8 }}>配置文件：{d.path}</p>
+    </div>
+  );
+}
+
 function ServicesTab({ cfg, onTip }) {
   const [svc, setSvc] = React.useState(null);
   const [err, setErr] = React.useState("");
@@ -1427,6 +1521,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
               </div>
             )}
             {tab === "service" && <ServicesTab cfg={cfg} onTip={setTip} />}
+            {tab === "wechat" && <WechatTab onTip={setTip} />}
             {tab === "persona" && (
               <div className="set-card">
               <>

@@ -620,28 +620,30 @@ def agent_mail(action="list", q="", id="", to="", subject="", body="", dir="",
             "type": "function",
             "function": {
                 "name": "run_wechat_writer",
-                "description": "运行公众号自动写作（WeChat Writer）：采集资讯→选题去重→LLM 写作→质量门禁→存草稿箱（只产草稿不发布）。dry_run 只预览，topic 指定主题，use_blocked 被墙信源走代理",
+                "description": "跑一轮公众号写作流水线：多信源采集 → 选题去重 → 三阶段写作 → 质量门禁 → 存草稿箱（只产草稿，不自动发布）。用户说『写一篇公众号文章 / 写推文 / 出稿子 / 帮我找个选题』时用它。字数与受众默认取用户配置；用户明确要求时才传 chars / audience。",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "dry_run": {"type": "boolean", "description": "可选：true 只预览不写草稿（默认 false）"},
-                        "topic": {"type": "string", "description": "可选：指定主题，跳过自动选题"},
-                        "use_blocked": {"type": "boolean", "description": "可选：true 时被墙信源自动经代理通道采集（需 fetch_blocked 能力就绪）"},
+                        "topic": {"type": "string", "description": "选题方向；留空则从信源里自行挑选"},
+                        "chars": {"type": "integer", "description": "期望字数；留空用用户配置。超出配置区间会被夹住并告知"},
+                        "audience": {"type": "string", "enum": ["general", "geek"], "description": "受众：general=大众科普（默认）/ geek=技术深度"},
+                        "dry_run": {"type": "boolean", "description": "true=只演练不落草稿（默认 false）"},
+                        "use_blocked": {"type": "boolean", "description": "true=被墙信源经代理通道采集（需已配置代理）"},
                     },
                     "required": [],
                 },
             },
         },
     groups=['📧 邮件与消息'],
-    phrases='公众号文章生成/排版',
-    preactivate=(('公众号', '公众号文章', '自动写作', '写公众号'),),
+    phrases='写公众号文章',
+    preactivate=(('公众号', '写篇文章', '推文', '选题'),),
 )
-def run_wechat_writer(dry_run=False, topic="", use_blocked=False):
+def run_wechat_writer(dry_run=False, topic="", use_blocked=False, chars=0, audience=""):
     """运行公众号自动写作工具：采集→选题→写作→质检→存草稿箱（只产草稿）。
 
     耗时可能 1-3 分钟（多次 LLM 调用）；返回结构化摘要文本。
     草稿统一写到工作区 drafts/（与 publish_draft 同目录，用户可从产物面板直达）。
-    use_blocked=True 时被墙信源（linux.do/hostloc 等）自动经代理通道采集。
+    chars / audience 是**单次覆盖**：只在用户配置允许的区间内调整，被夹住会如实回显。
     """
     try:
         from wechat_writer import run_once
@@ -659,6 +661,8 @@ def run_wechat_writer(dry_run=False, topic="", use_blocked=False):
             drafts_dir=drafts_dir,
             archive_dir=archive_dir,
             use_blocked=bool(use_blocked),
+            chars=chars or None,
+            audience=str(audience or ""),
         )
     except Exception as e:
         return f"错误：公众号写作工具运行失败: {e}"
@@ -672,6 +676,8 @@ def run_wechat_writer(dry_run=False, topic="", use_blocked=False):
         f"主题：{result.get('topic', '')}",
         f"标题：{result.get('title', '')}",
     ]
+    for note in result.get("notes") or []:
+        lines.append(f"注：{note}")
     if paths.get("draft_path"):
         lines.append(f"草稿：{paths['draft_path']}")
     if paths.get("html_path"):

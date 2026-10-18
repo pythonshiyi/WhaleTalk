@@ -103,8 +103,11 @@ DEFAULT_CONFIG = {
 
 _KNOWN_KEYS = {"schedule", "topic_domain", "style", "sources", "quality", "output"}
 
+# 单次任务可覆盖的受众（配置里只有两种口径，别让模型自由发挥）
+AUDIENCES = ("general", "geek")
 
-def load_config(path=None):
+
+def _load_base(path=None):
     """加载配置：无文件/损坏时返回默认（深拷贝，防共享可变对象）。"""
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))
     if path and os.path.exists(path):
@@ -167,3 +170,62 @@ def load_config(path=None):
     if cfg["style"]["audience"] not in ("general", "geek"):
         cfg["style"]["audience"] = "general"
     return cfg
+
+
+def apply_overrides(cfg, overrides=None):
+    """把**单次任务**的覆盖值应用到已加载的 cfg（不落盘），返回提示列表。
+
+    设计立场（三层分工）：配置是"我的公众号长期偏好"，单次参数只在它允许的范围内调整。
+    用户明确说"写 800 字"而配置下限是 1200 时，**夹到 1200 并如实告知**——既尊重长期偏好，
+    也不静默篡改用户的指令。被夹住不报错、但必须说出来。
+    """
+    notes = []
+    ov = overrides or {}
+    style = cfg.setdefault("style", {})
+    try:
+        chars = int(ov.get("chars") or 0)
+    except (TypeError, ValueError):
+        chars = 0
+    if chars > 0:
+        lo = int(style.get("min_chars") or DEFAULT_CONFIG["style"]["min_chars"])
+        hi = int(style.get("max_chars") or DEFAULT_CONFIG["style"]["max_chars"])
+        target = max(lo, min(hi, chars))
+        if target != chars:
+            notes.append(f"目标字数 {chars} 超出你的配置区间 {lo}–{hi} 字，按 {target} 字执行")
+        # 以目标为中心收窄，让质检按"这次要多少"判定，而不是按区间上限
+        style["min_chars"] = max(lo, int(target * 0.9))
+        style["max_chars"] = min(hi, max(style["min_chars"] + 50, int(target * 1.1)))
+    aud = str(ov.get("audience") or "").strip().lower()
+    if aud:
+        if aud in AUDIENCES:
+            style["audience"] = aud
+        else:
+            notes.append(f"受众只接受 general / geek，已忽略 {aud!r}")
+    tone = str(ov.get("tone") or "").strip()
+    if tone:
+        style["tone"] = tone[:120]
+    try:
+        sections = int(ov.get("sections") or 0)
+    except (TypeError, ValueError):
+        sections = 0
+    if sections > 0:
+        style["sections"] = max(2, min(10, sections))
+    return notes
+
+
+def load_config(path=None, overrides=None):
+    """加载配置并应用单次覆盖。返回 (cfg, notes) 中的 cfg；notes 见 apply_overrides。
+
+    保持向后兼容：不传 overrides 时行为与旧版完全一致（只返回 cfg）。
+    """
+    cfg = _load_base(path)
+    if overrides:
+        apply_overrides(cfg, overrides)
+    return cfg
+
+
+def load_config_with_notes(path=None, overrides=None):
+    """同 load_config，但同时返回被边界夹住的提示（给工具层回显给用户）。"""
+    cfg = _load_base(path)
+    notes = apply_overrides(cfg, overrides) if overrides else []
+    return cfg, notes

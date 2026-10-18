@@ -555,6 +555,79 @@ def _load_capabilities():
                 "errors": ["能力包目录装载失败（详情见日志）"], "packages": []}
 
 
+def _wechat_config_path():
+    """公众号写作的用户配置（放在数据目录，不污染仓库）。"""
+    return os.path.join(DATA_DIR, "wechat_writer.json")
+
+
+def _init_wechat_config():
+    """把 wechat_writer 的默认配置路径指向数据目录（可降级）。"""
+    import wechat_writer.main as _ww
+    _ww.CONFIG_PATH = _wechat_config_path()
+
+
+def _wechat_config_get():
+    """读取公众号写作配置（默认值 + 用户覆盖），供设置页。"""
+    try:
+        from wechat_writer import config as wcfg
+        path = _wechat_config_path()
+        cfg = wcfg.load_config(path)
+        return {
+            "ok": True,
+            "path": path,
+            "config": cfg,
+            "defaults": {"style": wcfg.DEFAULT_CONFIG["style"],
+                         "sources": {"enabled_groups": wcfg.DEFAULT_CONFIG["sources"]["enabled_groups"],
+                                     "use_blocked": wcfg.DEFAULT_CONFIG["sources"]["use_blocked"],
+                                     "since_hours": wcfg.DEFAULT_CONFIG["sources"]["since_hours"]},
+                         "output": wcfg.DEFAULT_CONFIG["output"]},
+            "groups": sorted((cfg.get("sources") or {}).get("rss_groups") or {}),
+            "audiences": list(wcfg.AUDIENCES),
+        }
+    except Exception:  # noqa: BLE001
+        logger.exception("读取公众号配置失败")
+        return {"ok": False, "error": "读取公众号配置失败（详情见日志）"}
+
+
+def _wechat_config_save(body):
+    """保存公众号写作配置：只接受已知键，写盘后回读归一化（越界值被钳制）。"""
+    try:
+        from wechat_writer import config as wcfg
+        from persistence import atomic_json_write
+        raw = (body or {}).get("config")
+        if not isinstance(raw, dict):
+            return {"ok": False, "error": "config 必须是对象"}
+        path = _wechat_config_path()
+        # 保留磁盘上已有的其它键，避免设置页只提交一部分时把其余配置抹掉
+        current = {}
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    current = json.load(f)
+            except Exception:  # noqa: silent-except: 旧文件损坏就当没有，随后整份重写
+                current = {}
+        if not isinstance(current, dict):
+            current = {}
+        for k, v in raw.items():
+            if k not in wcfg._KNOWN_KEYS:
+                continue
+            if isinstance(v, dict):
+                base = current.get(k) if isinstance(current.get(k), dict) else {}
+                base = dict(base)
+                base.update({kk: vv for kk, vv in v.items() if vv is not None})
+                current[k] = base
+            elif v is not None:
+                current[k] = v
+        ok = atomic_json_write(path, current, indent=2)
+        if not ok:
+            return {"ok": False, "error": "写入配置失败（详情见日志）"}
+        cfg = wcfg.load_config(path)        # 回读：归一化/钳制后的真实值
+        return {"ok": True, "path": path, "config": cfg}
+    except Exception:  # noqa: BLE001
+        logger.exception("保存公众号配置失败")
+        return {"ok": False, "error": "保存公众号配置失败（详情见日志）"}
+
+
 def _dc_call_map():
     """deepseek_client 的实时分发表（能力装载/卸载会就地改写它）。"""
     import deepseek_client as _dc
@@ -7592,6 +7665,23 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, _capability_status())
 
 
+    @_get_route("/v1/wechat/config")
+    def _g_v1_wechat_config(self):
+        """公众号写作配置（默认值 + 用户覆盖），供设置页读写。"""
+        self._json(200, _wechat_config_get())
+
+
+    @_post_route("/v1/wechat/config")
+    def _p_v1_wechat_config(self):
+        """保存公众号写作配置。body: {"config": {style/sources/output...}}"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        res = _wechat_config_save(body)
+        self._json(200 if res.get("ok") else 400, res)
+
+
     @_post_route("/v1/capabilities")
     def _p_v1_capabilities(self):
         """装载 / 卸载能力包。
@@ -9996,6 +10086,11 @@ def start_server(port=8745, token=""):
             logger.info("已迁移 %s 个旧版会话到会话库", n)
     except Exception:
         logger.warning("旧会话迁移失败（可降级）：旧版会话暂不可见，不影响新会话")
+    # ── 可降级：公众号写作配置路径指向数据目录 ──
+    try:
+        _init_wechat_config()
+    except Exception:
+        logger.warning("公众号写作配置路径未接线（可降级）：将使用模块内默认配置")
     # ── 可降级：装载运行时能力包（能力主干，v3.17）──
     # 失败只损失扩展能力，内置 169 项工具不受影响；坏包逐个报错而不是整体放弃。
     try:

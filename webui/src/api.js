@@ -629,6 +629,18 @@ export async function restoreBuiltinPrompts() {
   return api("/v1/prompts/restore_builtin", { method: "POST", body: JSON.stringify({}) });
 }
 
+// ── 公众号写作配置 ─────────────────────────────
+/** @returns {Promise<{ok:boolean, config:Object, defaults:Object, groups:string[], path:string}>} */
+export async function wechatConfig() {
+  return api("/v1/wechat/config");
+}
+
+/** @param {Object} config 只提交 style / sources / output 等已知键
+ * @returns {Promise<{ok:boolean, config?:Object, error?:string}>} 回读归一化后的配置 */
+export async function saveWechatConfig(config) {
+  return api("/v1/wechat/config", { method: "POST", body: JSON.stringify({ config }) });
+}
+
 // ── 能力（运行时装载的工具）─────────────────────────────
 /** @returns {Promise<{packages:Array<Object>, items:Array<Object>, health:Object}>} 能力包 / 清单 / 健康度 */
 export async function capabilities() {

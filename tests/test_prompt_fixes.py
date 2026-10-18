@@ -38,13 +38,20 @@ def test_wechat_run_once_passes_config_path(monkeypatch):
 
     seen = {}
 
-    def _spy(path=None):
+    # v3.19 起 run_once 走 load_config_with_notes（要拿单次覆盖的提示），
+    # 断言口径随之改为它——两条路径都必须回退到模块内 CONFIG_PATH。
+    def _spy(path=None, overrides=None):
         seen["path"] = path
-        return cfgmod.DEFAULT_CONFIG
-    monkeypatch.setattr(cfgmod, "load_config", _spy)
+        seen["overrides"] = overrides
+        return cfgmod.DEFAULT_CONFIG, []
+    monkeypatch.setattr(cfgmod, "load_config_with_notes", _spy)
     monkeypatch.setattr(srcmod, "collect_all", lambda cfg, use_blocked=False: [])
     wm.run_once(dry_run=True)
     assert seen.get("path") == wm.CONFIG_PATH
+
+    # 单次参数必须原样传到配置层（夹取逻辑在 apply_overrides 里，不在这里）
+    wm.run_once(dry_run=True, chars=1800, audience="geek")
+    assert seen.get("overrides") == {"chars": 1800, "audience": "geek"}
 
 
 def test_skill_factory_masks_secrets():

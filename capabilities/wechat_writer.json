@@ -2,7 +2,7 @@
   "api": "whaletalk.tool/1",
   "meta": {
     "name": "公众号写作",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "author": "WhaleTalk",
     "bundled": true,
     "description": "多信源采集 → 选题去重 → 三阶段写作 → 质量门禁 → 草稿箱（只产草稿，发布权在用户）"
@@ -10,13 +10,22 @@
   "capabilities": [
     {
       "name": "p_wechat_article",
-      "description": "跑完一轮公众号写作流水线：采集信源 → 选题去重 → 三阶段写作 → 质量门禁 → 存入草稿箱。只产草稿，不自动发布。用户提到「写公众号 / 写推文 / 出一篇文章 / 找个选题」时使用。",
+      "description": "跑完一轮公众号写作流水线：采集信源 → 选题去重 → 三阶段写作 → 质量门禁 → 存入草稿箱。只产草稿，不自动发布。用户提到「写公众号 / 写推文 / 出一篇文章 / 找个选题」时使用。字数与受众默认取用户配置（设置 → 公众号写作）；用户明确说了才传 chars / audience，超出配置区间会被夹住并如实告知。",
       "parameters": {
         "type": "object",
         "properties": {
           "topic": {
             "type": "string",
             "description": "选题方向；留空则由系统从信源里自行挑选"
+          },
+          "chars": {
+            "type": "integer",
+            "description": "期望字数；留空用用户配置。超出配置的字数区间会被夹住（不是报错）"
+          },
+          "audience": {
+            "type": "string",
+            "enum": ["general", "geek"],
+            "description": "受众：general=大众科普（默认）/ geek=技术深度"
           },
           "dry_run": {
             "type": "boolean",
@@ -28,7 +37,12 @@
       "exec": {
         "type": "builtin_ref",
         "tool": "run_wechat_writer",
-        "args_map": { "topic": "topic", "dry_run": "dry_run" }
+        "args_map": {
+          "topic": "topic",
+          "chars": "chars",
+          "audience": "audience",
+          "dry_run": "dry_run"
+        }
       },
       "perms": { "tools": ["run_wechat_writer"] },
       "groups": ["🧩 内置能力"],
