@@ -48,6 +48,7 @@ smart_tools 的能力地图里看不到它）、没有预激活、没有钩子�
 from __future__ import annotations
 
 import inspect
+import hashlib
 import json
 import os
 import re
@@ -127,9 +128,17 @@ def builtin_dir() -> str:
 
 
 def slugify(text: str) -> str:
-    """能力包 id 安全化（小写字母数字与 -_，空则 fallback）。"""
-    s = _SLUG_RE.sub("-", str(text or "").strip().lower()).strip("-")
-    return s[:40] or "cap"
+    """能力包 id 安全化（小写字母数字与 -_）。
+
+    中文名会被 `_SLUG_RE` 全部剔除（如「公众号写作」→ 空）。此前统一回落成 "cap"，
+    导致**同一目录下多个中文名能力包 id 相同**，后装的把先装的当"热替换"顶掉——
+    实测 3 个内置包只剩 2 个。故剥离后为空时按原名取哈希后缀，保证一一对应。
+    """
+    raw = str(text or "").strip()
+    s = _SLUG_RE.sub("-", raw.lower()).strip("-")[:40]
+    if s:
+        return s
+    return "cap-" + hashlib.md5(raw.encode("utf-8")).hexdigest()[:6]
 
 
 # ── 校验 ────────────────────────────────────────────────────────────────
@@ -758,15 +767,20 @@ def epoch_of(pid: str) -> int:
 
 
 def load_file(path: str, *, plugin_id: str = "", bundled: bool = False) -> dict:
-    """从单个 manifest 文件装载能力包。返回 register_manifest 的结果。"""
+    """从单个 manifest 文件装载能力包。返回 register_manifest 的结果。
+
+    plugin_id 缺省用**文件名**（不含扩展名）：文件名在同目录内天然唯一，
+    比 meta.name 更可靠（中文名/重名都取不到稳定的英文 id）。
+    """
     try:
         with open(path, encoding="utf-8") as f:
             manifest = json.load(f)
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "plugin_id": plugin_id, "tools": [],
                 "errors": [f"manifest 解析失败：{type(e).__name__}: {e}"]}
+    pid = plugin_id or os.path.splitext(os.path.basename(path))[0]
     return register_manifest(manifest, base_dir=os.path.dirname(os.path.abspath(path)),
-                             path=path, plugin_id=plugin_id, bundled=bundled)
+                             path=path, plugin_id=pid, bundled=bundled)
 
 
 def load_dir(directory: str, *, bundled: bool = False) -> dict:

@@ -363,3 +363,55 @@ def test_default_enabled_false_is_skipped(tmp_path):
     assert "off.json" in out["skipped"]
     assert "p_pack_on" in toolkit.registry_names()
     assert "p_pack_off" not in toolkit.registry_names()
+
+
+# ── 8. 中文能力包名不得互相顶替 ──────────────────────────────────────────
+
+def test_chinese_pack_names_get_distinct_ids(tmp_path):
+    """中文名 slug 化后不能塌成同一个 id。
+
+    真实踩过：三个内置包名分别是「公众号写作 / 音乐 MV 成片 / 每日简报」，
+    旧实现把中文全剔除后统一回落成 "cap"，后装的被当成"热替换"顶掉先装的，
+    结果 3 个包只剩 2 项能力，且没有任何报错。
+    """
+    import json as _json
+    for i, nm in enumerate(("公众号写作", "每日简报", "音乐 MV 成片")):
+        m = _manifest([_cap(name=f"p_cn_{i}")], name=nm)
+        (tmp_path / f"pack{i}.json").write_text(_json.dumps(m, ensure_ascii=False), encoding="utf-8")
+    out = capability.load_dir(str(tmp_path))
+    assert out["loaded"] == 3, out
+    ids = {p["plugin_id"] for p in capability.list_plugins()}
+    assert len(ids) == 3, f"中文名能力包 id 冲突：{ids}"
+    assert len(capability.list_capabilities()) == 3
+
+
+def test_slugify_is_stable_and_ascii_safe():
+    assert capability.slugify("公众号写作") == capability.slugify("公众号写作")
+    assert capability.slugify("公众号写作") != capability.slugify("每日简报")
+    assert capability.slugify("hello world") == "hello-world"
+
+
+# ── 8. 中文能力包名不得互相顶替 ──────────────────────────────────────────
+
+def test_chinese_pack_names_get_distinct_ids(tmp_path):
+    """中文名 slug 化后不能塌成同一个 id。
+
+    真实踩过：三个内置包名分别是「公众号写作 / 音乐 MV 成片 / 每日简报」，
+    旧实现把中文全剔除后统一回落成 "cap"，后装的被当成"热替换"顶掉先装的，
+    结果 3 个包只剩 2 项能力，且没有任何报错。
+    """
+    import json as _json
+    for i, nm in enumerate(("公众号写作", "每日简报", "音乐 MV 成片")):
+        m = _manifest([_cap(name=f"p_cn_{i}")], name=nm)
+        (tmp_path / f"pack{i}.json").write_text(_json.dumps(m, ensure_ascii=False), encoding="utf-8")
+    out = capability.load_dir(str(tmp_path))
+    assert out["loaded"] == 3, out
+    ids = {p["plugin_id"] for p in capability.list_plugins()}
+    assert len(ids) == 3, f"中文名能力包 id 冲突：{ids}"
+    assert len(capability.list_capabilities()) == 3
+
+
+def test_slugify_is_stable_and_ascii_safe():
+    assert capability.slugify("公众号写作") == capability.slugify("公众号写作")
+    assert capability.slugify("公众号写作") != capability.slugify("每日简报")
+    assert capability.slugify("hello world") == "hello-world"
