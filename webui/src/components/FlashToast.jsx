@@ -42,7 +42,8 @@ export function ToastProvider({ children }) {
     setToasts(toastsRef.current);
   }, []);
 
-  const toast = React.useCallback((text, ms = 3000) => {
+  // action（可选）：{ label, onClick } —— 用于「已删除 N 个会话 · 撤销」这类可操作提示。
+  const toast = React.useCallback((text, ms = 3000, action = null) => {
     const key = text;
     // 同文本去重：仅刷新该条并重置计时，避免快速重复操作刷屏。
     const dup = toastsRef.current.find((x) => x.text === key);
@@ -50,12 +51,12 @@ export function ToastProvider({ children }) {
     clearTimeout(timersRef.current[id]);
     timersRef.current[id] = setTimeout(() => dismiss(id), ms);
     if (dup) {
-      // 复用已有条目，位置不变，只重置计时。
-      toastsRef.current = toastsRef.current.slice();
+      // 复用已有条目，位置不变，只重置计时（并按需刷新 action）。
+      toastsRef.current = toastsRef.current.map((x) => (x.id === id ? { ...x, action } : x));
       setToasts(toastsRef.current);
     } else {
       // 上限 3 条：超出丢弃最旧，防长时间多操作堆积。
-      toastsRef.current = [...toastsRef.current, { id, text }].slice(-3);
+      toastsRef.current = [...toastsRef.current, { id, text, action }].slice(-3);
       setToasts(toastsRef.current);
     }
   }, [dismiss]);
@@ -70,7 +71,18 @@ export function ToastProvider({ children }) {
       {children}
       <div className="toast-stack" role="status" aria-live="polite">
         {toasts.map((t) => (
-          <div className="toast-item" key={t.id}>{t.text}</div>
+          <div className="toast-item" key={t.id}>
+            <span className="toast-text">{t.text}</span>
+            {t.action && (
+              <button
+                type="button"
+                className="toast-action"
+                onClick={() => { try { t.action.onClick && t.action.onClick(); } finally { dismiss(t.id); } }}
+              >
+                {t.action.label}
+              </button>
+            )}
+          </div>
         ))}
       </div>
     </ToastContext.Provider>

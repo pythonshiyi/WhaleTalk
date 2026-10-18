@@ -1,12 +1,13 @@
 import React from "react";
 import EmptyState from "./EmptyState.jsx";
 import { Icon } from "./icons.jsx";
-import { confirmDialog } from "../dialog.js";
+import { confirmDialog, promptDialog } from "../dialog.js";
+import ContextMenu, { useContextMenu } from "./ContextMenu.jsx";
 
 import { silentWarn } from "../quiet.js";
 import { tagColorClass } from "../tagColor.js";
 
-export default function SessionList({ sessions, activeId, onPick, onClose, onDelete, onPin, onRename, onEditTags, onExport, onImport, onBatchDelete }) {
+export default function SessionList({ sessions, activeId, onPick, onClose, onDelete, onPin, onRename, onEditTags, onExport, onImport, onBatchDelete, onBatchPin, onBatchTag, hasMore, total, onLoadMore }) {
   const [q, setQ] = React.useState("");
   const [tagFilter, setTagFilter] = React.useState(null);
   const [editingId, setEditingId] = React.useState(null);
@@ -15,6 +16,9 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
   const [tagValue, setTagValue] = React.useState("");
   const [multiMode, setMultiMode] = React.useState(false);
   const [selected, setSelected] = React.useState(new Set());
+  const [loadingMore, setLoadingMore] = React.useState(false);
+  const lastClickedRef = React.useRef(null);   // Shift 连选锚点
+  const menu = useContextMenu();
   const [width, setWidth] = React.useState(() => {
     try {
       return Number(localStorage.getItem("whaletalk.slwidth")) || 264;
@@ -85,10 +89,11 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
     reader.readAsText(f);
   };
 
-  // ── 多选批量降删 ──
+  // ── 多选批量操作 ──
   const toggleMulti = () => {
     setMultiMode(!multiMode);
     setSelected(new Set());
+    lastClickedRef.current = null;
   };
   const toggleSel = (id) => {
     setSelected((prev) => {
@@ -98,18 +103,74 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
       return next;
     });
   };
+  // Shift 区间连选：以最近一次点击为锚点，选中两者之间（按当前筛选顺序）的全部会话。
+  const selectRange = (id) => {
+    const ids = filtered.map((s) => s.id);
+    const a = ids.indexOf(lastClickedRef.current);
+    const b = ids.indexOf(id);
+    if (a < 0 || b < 0) { toggleSel(id); return; }
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (let i = lo; i <= hi; i++) next.add(ids[i]);
+      return next;
+    });
+  };
+  const onRowClick = (id, e) => {
+    if (e && e.shiftKey && lastClickedRef.current != null) {
+      selectRange(id);
+    } else {
+      toggleSel(id);
+      lastClickedRef.current = id;
+    }
+  };
   const selectAll = () => {
     const allIds = filtered.map((s) => s.id);
     // 用「筛选后是否已全选」判断，而非 selected.size——后者可能含被筛掉的项而误判
     const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
     setSelected(allSelected ? new Set() : new Set(allIds));
   };
+  const exitMulti = () => {
+    setMultiMode(false);
+    setSelected(new Set());
+    lastClickedRef.current = null;
+  };
   const batchDelete = async () => {
     if (!selected.size) return;
-    if (!(await confirmDialog(`删除选中的 ${selected.size} 个会话？此操作不可恢复！`, { danger: true, okText: "删除" }))) return;
+    if (!(await confirmDialog(`删除选中的 ${selected.size} 个会话？删除后可在提示中撤销。`, { danger: true, okText: "删除" }))) return;
     onBatchDelete && onBatchDelete([...selected]);
-    setSelected(new Set());
-    setMultiMode(false);
+    exitMulti();
+  };
+  const batchPin = (pinned) => {
+    if (!selected.size || !onBatchPin) return;
+    onBatchPin([...selected], pinned);
+    exitMulti();
+  };
+  const batchTag = async () => {
+    if (!selected.size || !onBatchTag) return;
+    const ans = await promptDialog(`为选中的 ${selected.size} 个会话添加标签（逗号分隔）`, "");
+    if (ans == null) return;
+    const tags = String(ans).split(/[,，]/).map((t) => t.trim()).filter(Boolean);
+    if (!tags.length) return;
+    onBatchTag([...selected], tags);
+    exitMulti();
+  };
+  const loadMore = async () => {
+    if (!onLoadMore || loadingMore) return;
+    setLoadingMore(true);
+    try { await onLoadMore(); } finally { setLoadingMore(false); }
+  };
+
+  // 会话项右键菜单（与 hover 小按钮等价，触屏/键盘更可达）
+  const openItemMenu = (e, s) => {
+    menu.open(e, [
+      { label: "打开", icon: "message", onClick: () => onPick(s.id) },
+      { label: s.pinned ? "取消置顶" : "置顶", icon: "pin", onClick: () => onPin && onPin(s.id, !s.pinned) },
+      { label: "重命名", icon: "pencil", onClick: () => { setEditingId(s.id); setEditValue(s.title); } },
+      { label: "编辑标签", icon: "filter", onClick: () => { setTaggingId(s.id); setTagValue((s.tags || []).join(",")); } },
+      { label: "多选", icon: "list", onClick: () => { setMultiMode(true); lastClickedRef.current = s.id; setSelected((prev) => new Set(prev).add(s.id)); } },
+      { label: "删除", icon: "trash", danger: true, onClick: async () => { if (await confirmDialog(`删除会话「${s.title}」？`, { danger: true, okText: "删除" })) onDelete && onDelete(s.id); } },
+    ]);
   };
 
   return (
@@ -143,10 +204,14 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
         <div className="sl-multi-bar">
           <span className="sl-multi-count">已选 {selected.size} 个</span>
           <button className="msg-op" onClick={selectAll}>全选</button>
+          {selected.size > 0 && <button className="msg-op" onClick={() => setSelected(new Set())}>清空</button>}
+          <button className="msg-op" disabled={!selected.size} onClick={() => batchPin(true)} title="置顶选中会话"><Icon name="pin" size={13} /> 置顶</button>
+          <button className="msg-op" disabled={!selected.size} onClick={() => batchPin(false)} title="取消置顶选中会话"><Icon name="pin" size={13} /> 取消置顶</button>
+          <button className="msg-op" disabled={!selected.size} onClick={batchTag} title="为选中会话添加标签"><Icon name="filter" size={13} /> 标签</button>
           <button className="msg-op" style={{ color: "var(--danger-text)" }} disabled={!selected.size} onClick={batchDelete}>
             <Icon name="trash" size={13} /> 删除（{selected.size}）
           </button>
-          <button className="msg-op" onClick={toggleMulti}><Icon name="x" size={13} /> 退出</button>
+          <button className="msg-op" onClick={exitMulti}><Icon name="x" size={13} /> 退出</button>
         </div>
       )}
 
@@ -202,12 +267,13 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
               role="button"
               tabIndex={0}
               className={`sl-item ${activeId === s.id ? "sl-item-on" : ""} ${multiMode ? "sl-item-multi" : ""} ${isSel ? "sl-item-selected" : ""}`}
-              onClick={() => (multiMode ? toggleSel(s.id) : onPick(s.id))}
+              onClick={(e) => (multiMode ? onRowClick(s.id, e) : onPick(s.id))}
+              onContextMenu={(e) => openItemMenu(e, s)}
               onKeyDown={(e) => {
                 if (e.target !== e.currentTarget) return;
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  multiMode ? toggleSel(s.id) : onPick(s.id);
+                  multiMode ? onRowClick(s.id, e) : onPick(s.id);
                 }
               }}
               onDoubleClick={() => {
@@ -279,7 +345,13 @@ export default function SessionList({ sessions, activeId, onPick, onClose, onDel
             </div>
           );
         })}
+        {hasMore && (
+          <button className="sl-loadmore" disabled={loadingMore} onClick={loadMore}>
+            {loadingMore ? "加载中…" : `加载更多${total ? `（共 ${total} 个）` : ""}`}
+          </button>
+        )}
       </div>
+      <ContextMenu menu={menu.menu} onClose={menu.close} />
     </aside>
   );
 }

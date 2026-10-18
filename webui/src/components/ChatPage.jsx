@@ -7,6 +7,7 @@ import SessionList from "./SessionList.jsx";
 import ContextPanel from "./ContextPanel.jsx";
 import StatusBar from "./StatusBar.jsx";
 import { Icon } from "./icons.jsx";
+import ContextMenu, { useContextMenu } from "./ContextMenu.jsx";
 import ConfirmGate from "./ConfirmGate.jsx";
 import AuxPanel from "./AuxPanel.jsx";
 import { BatchPanel, CmdPanel, TimelinePanel, FimPanel, VariantPanel, SearchPanel, StarPanel } from "./ChatPanels.jsx";
@@ -557,9 +558,14 @@ const toSessionItem = (s) => ({
   tags: s.tags || [],
 });
 
+const SESSIONS_PAGE_SIZE = 80;
+
 function useDataSources() {
   const [mode, setMode] = React.useState("auto");
   const [sessions, setSessions] = React.useState([]);
+  const [hasMore, setHasMore] = React.useState(false);
+  const [total, setTotal] = React.useState(0);
+  const loadedRef = React.useRef(0);   // 已加载条数（刷新时保持同等深度）
   const [ctx, setCtx] = React.useState(null);
   const [history, setHistory] = React.useState({});
   const [loadErr, setLoadErr] = React.useState("");
@@ -579,8 +585,11 @@ function useDataSources() {
       setMode("backend");
       setLoadErr("");
       try {
-        const real = await api.listSessions();
-        setSessions((real || []).map(toSessionItem));
+        const d = await api.listSessions({ offset: 0, limit: SESSIONS_PAGE_SIZE });
+        setSessions((d.sessions || []).map(toSessionItem));
+        setHasMore(d.hasMore);
+        setTotal(d.total);
+        loadedRef.current = (d.sessions || []).length;
       } catch (e) {
         setLoadErr(`会话列表加载失败：${e.message || "网络异常"}`);
       }
@@ -714,15 +723,33 @@ function useDataSources() {
   const refreshSessions = React.useCallback(async () => {
     if (mode !== "backend") return;
     try {
-      const real = await api.listSessions();
-      setSessions((real || []).map(toSessionItem));
+      // 刷新保持已加载深度（避免「加载更多」后一刷新被打回第一页）
+      const limit = Math.max(SESSIONS_PAGE_SIZE, loadedRef.current);
+      const d = await api.listSessions({ offset: 0, limit });
+      setSessions((d.sessions || []).map(toSessionItem));
+      setHasMore(d.hasMore);
+      setTotal(d.total);
+      loadedRef.current = (d.sessions || []).length;
     } catch {
       setLoadErr("会话列表刷新失败：后端未响应");
       setTimeout(() => setLoadErr((e) => (e.startsWith("会话列表刷新失败") ? "" : e)), 3000);
     }
   }, [mode]);
 
-  return { mode, sessions, ctx, history, pickSession, refreshSessions, reload: loadAll, setCtx, loadErr, peakInfo };
+  const loadMoreSessions = React.useCallback(async () => {
+    if (mode !== "backend") return;
+    const off = loadedRef.current;
+    try {
+      const d = await api.listSessions({ offset: off, limit: SESSIONS_PAGE_SIZE });
+      const more = (d.sessions || []).map(toSessionItem);
+      setSessions((prev) => [...prev, ...more]);
+      loadedRef.current = off + more.length;
+      setHasMore(d.hasMore);
+      setTotal(d.total);
+    } catch (e) { silentWarn(e, "ChatPage"); }
+  }, [mode]);
+
+  return { mode, sessions, hasMore, total, loadMoreSessions, ctx, history, pickSession, refreshSessions, reload: loadAll, setCtx, loadErr, peakInfo };
 }
 
 export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone, openSessionId, onOpenSessionDone, quietMode, onToggleQuiet, active = true }) {
@@ -791,6 +818,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [cmdPanel, setCmdPanel] = React.useState(false);
   const [moreOpen, setMoreOpen] = React.useState(false);
   const moreRef = React.useRef(null);
+  const msgMenu = useContextMenu();   // 消息右键菜单
   const [cmdQuery, setCmdQuery] = React.useState("");
   const [batchPanel, setBatchPanel] = React.useState(false);
   const [batchFiles, setBatchFiles] = React.useState("");
@@ -1148,7 +1176,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     setGenState(s);
   }, []);
 
-  const { mode: dataMode, sessions, ctx, history, pickSession, refreshSessions, reload: reloadDataSources, setCtx, loadErr, peakInfo } = useDataSources();
+  const { mode: dataMode, sessions, hasMore: sessionsHasMore, total: sessionsTotal, loadMoreSessions, ctx, history, pickSession, refreshSessions, reload: reloadDataSources, setCtx, loadErr, peakInfo } = useDataSources();
 
   React.useEffect(() => {
     setBackendNote(
@@ -1472,6 +1500,21 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSessionId, onOpenSessionDone]);
 
+  const undoDeleteSessions = (ids, n) => {
+    toast(`已删除 ${n} 个会话`, 6000, {
+      label: "撤销",
+      onClick: async () => {
+        try {
+          await api.restoreSessionsBatch(ids);
+          refreshSessions();
+          toast("已恢复会话");
+        } catch {
+          toast("恢复失败：后端未响应");
+        }
+      },
+    });
+  };
+
   const onDeleteSession = async (id) => {
     try {
       await api.deleteSession(id);
@@ -1480,7 +1523,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         setMsgs([]);
       }
       refreshSessions();
-      toast("已删除会话");
+      undoDeleteSessions([id], 1);
     } catch {
       toast(`删除失败：${"后端未响应，请确认服务在运行"}`);
     }
@@ -1488,16 +1531,65 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
 
   const onBatchDeleteSessions = async (ids) => {
     try {
-      await api.deleteSessionsBatch(ids);
+      const res = await api.deleteSessionsBatch(ids);
+      const removed = Number(res && res.removed) || 0;
       if (activeId && ids.includes(activeId)) {
         setActiveId(null);
         setMsgs([]);
       }
       refreshSessions();
-      toast(`已删除 ${ids.length} 个会话`);
+      if (removed > 0) undoDeleteSessions(ids, removed);
+      else toast("没有会话被删除");
     } catch {
       toast("删除失败：后端未响应，请确认服务在运行");
     }
+  };
+
+  const onBatchPinSessions = async (ids, pinned) => {
+    try {
+      await api.pinSessionsBatch(ids, pinned);
+      refreshSessions();
+      toast(pinned ? `已置顶 ${ids.length} 个会话` : `已取消置顶 ${ids.length} 个会话`);
+    } catch {
+      toast("批量置顶失败：后端未响应");
+    }
+  };
+
+  const onBatchTagSessions = async (ids, tags) => {
+    try {
+      await api.tagSessionsBatch(ids, tags, "add");
+      refreshSessions();
+      toast(`已为 ${ids.length} 个会话添加标签`);
+    } catch {
+      toast("批量打标签失败：后端未响应");
+    }
+  };
+
+  const onDeleteMsg = (idx) => {
+    setMsgs((m) => m.filter((_, i) => i !== idx));
+    toast("已删除该消息");
+  };
+
+  // 消息右键菜单（与 hover 操作条等价，触屏/键盘更可达）
+  const openMsgMenu = (e, gi) => {
+    const m = msgs[gi];
+    if (!m || m.streaming) return;
+    const isUser = m.role === "user";
+    const isLast = gi === msgs.length - 1;
+    msgMenu.open(e, [
+      { label: "复制", icon: "copy", onClick: () => { try { navigator.clipboard?.writeText(unwrapLongText(m.text || "")); } catch (err) { silentWarn(err, "ChatPage"); } } },
+      isUser
+        ? { label: m.pinned ? "取消固定" : "固定", icon: "pin", onClick: () => onPinMsg(gi) }
+        : { label: m.starred ? "取消收藏" : "收藏", icon: "star", onClick: () => onStarMsg(gi) },
+      { label: "引用", icon: "quote", onClick: () => onQuoteMsg(gi) },
+      isUser
+        ? { label: "编辑并重发", icon: "pencil", onClick: () => onEditMsg(gi) }
+        : (isLast ? { label: "重新生成", icon: "rotate", onClick: () => onRegenerate() } : null),
+      !isUser && isLast ? { label: "继续生成", icon: "play", onClick: () => onContinue(gi) } : null,
+      { label: "从此分叉", icon: "git-branch", onClick: () => onForkMsg(gi) },
+      { label: "多选消息", icon: "list", onClick: () => setMultiSel((prev) => new Set(prev || []).add(gi)) },
+      { label: "删除该消息", icon: "trash", danger: true, onClick: () => onDeleteMsg(gi) },
+    ]);
   };
 
   // ── 消息操作（对齐原程序右键菜单）──
@@ -1857,6 +1949,11 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             onExport={onExportSession}
             onImport={onImportSession}
             onBatchDelete={onBatchDeleteSessions}
+            onBatchPin={onBatchPinSessions}
+            onBatchTag={onBatchTagSessions}
+            hasMore={sessionsHasMore}
+            total={sessionsTotal}
+            onLoadMore={loadMoreSessions}
           />
         )}
         <div className="chat-main" onPaste={onPasteFiles}>
@@ -2016,15 +2113,19 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             {multiSel && multiSel.size > 0 && (
               <div className="multi-bar">
                 <span>已选 {multiSel.size} 条</span>
-                <button className="msg-op" onClick={multiDelete}>🗑 删除选中</button>
-                <button className="msg-op" onClick={multiExport}>📋 导出选中</button>
-                <button className="msg-op" onClick={multiStar}>⭐ 收藏选中</button>
-                <button className="msg-op" onClick={toggleMulti}>✕ 退出多选</button>
+                <button className="msg-op" onClick={multiDelete}><Icon name="trash" size={13} /> 删除选中</button>
+                <button className="msg-op" onClick={multiExport}><Icon name="download" size={13} /> 导出选中</button>
+                <button className="msg-op" onClick={multiStar}><Icon name="star" size={13} /> 收藏选中</button>
+                <button className="msg-op" onClick={toggleMulti}><Icon name="x" size={13} /> 退出多选</button>
               </div>
             )}
             {msgs.length === 0 && (
               <div className="chat-empty">
-                <div className="empty-whale" aria-hidden="true">🐳</div>
+                <div className="empty-whale" aria-hidden="true">
+                  <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 12c1.5-4 4-6 7-6 3.5 0 5.5 2 9 2 1.6 0 2.8-.6 4-1.5-1 3-3 4.5-5 4.8.6 1.4.9 2.9.9 4.5 0 .8-.1 1.6-.3 2.3-1-.4-1.8-1-2.2-1.8-.9 1-2.4 1.7-4.2 1.7s-3.3-.7-4.2-1.7c-.4.8-1.2 1.4-2.2 1.8A11 11 0 015 15c0-1.6.3-3.1.9-4.5C4.7 10.2 3.3 8.7 3 12z" />
+                  </svg>
+                </div>
                 <h1>{isTask ? "今天想做点什么？" : "随便聊聊"}</h1>
                 <p>
                   {isTask
@@ -2064,6 +2165,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                     if (e.target && e.target.closest && e.target.closest("button, a, input, textarea, select, .msg-ops")) return;
                     toggleSelect(gi);
                   } : undefined}
+                  onContextMenu={multiSel ? undefined : (e) => openMsgMenu(e, gi)}
                   onKeyDown={multiSel ? (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleSelect(gi); } } : undefined}
                 >
                   <Message
@@ -2124,6 +2226,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
           popoutEl
         )}
       </div>
+
+      <ContextMenu menu={msgMenu.menu} onClose={msgMenu.close} />
 
       <StatusBar mode={mode} onSwitchMode={switchMode} generating={genState.on} generatingText={genState.text} tps={genTps} />
 

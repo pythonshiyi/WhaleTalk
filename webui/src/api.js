@@ -450,10 +450,21 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
 
 // ── 会话 ─────────────────────────────────────────────
 
-/** @returns {Promise<SessionMeta[]>} 会话列表 */
-export async function listSessions() {
-  const d = await api("/v1/sessions");
-  return d.sessions || [];
+/**
+ * 会话列表（分页）。
+ * @param {{offset?:number, limit?:number}} [opts]
+ * @returns {Promise<{sessions:SessionMeta[], total:number, offset:number, limit:number, hasMore:boolean}>}
+ */
+export async function listSessions({ offset = 0, limit = 200 } = {}) {
+  const qs = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  const d = await api(`/v1/sessions?${qs.toString()}`);
+  return {
+    sessions: d.sessions || [],
+    total: Number(d.total) || 0,
+    offset: Number(d.offset) || 0,
+    limit: Number(d.limit) || limit,
+    hasMore: !!d.has_more,
+  };
 }
 
 /**
@@ -486,9 +497,24 @@ export async function deleteSession(id) {
   return api("/v1/sessions/delete", { method: "POST", body: JSON.stringify({ id }) });
 }
 
-/** @param {string[]} ids @returns {Promise<any>} */
+/** @param {string[]} ids @returns {Promise<{ok:boolean, removed:number}>} */
 export async function deleteSessionsBatch(ids) {
   return api("/v1/sessions/delete_batch", { method: "POST", body: JSON.stringify({ ids }) });
+}
+
+/** 从回收站恢复会话（撤销删除）。 @param {string[]} ids */
+export async function restoreSessionsBatch(ids) {
+  return api("/v1/sessions/restore_batch", { method: "POST", body: JSON.stringify({ ids }) });
+}
+
+/** 批量置顶/取消置顶。 @param {string[]} ids @param {boolean} pinned */
+export async function pinSessionsBatch(ids, pinned) {
+  return api("/v1/sessions/pin_batch", { method: "POST", body: JSON.stringify({ ids, pinned }) });
+}
+
+/** 批量打标签。 @param {string[]} ids @param {string[]} tags @param {"add"|"remove"|"set"} mode */
+export async function tagSessionsBatch(ids, tags, mode = "add") {
+  return api("/v1/sessions/tags_batch", { method: "POST", body: JSON.stringify({ ids, tags, mode }) });
 }
 
 /** @param {string} id @param {boolean} pinned @returns {Promise<any>} */

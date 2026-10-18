@@ -6499,6 +6499,9 @@ _VOICE_CACHE_DIR = os.path.join(DATA_DIR, "voice", "cache")
 _TRUST_CACHE = {}
 HISTORY_DIR = os.path.join(DATA_DIR, "history")
 SESSIONS_DIR = os.path.join(HISTORY_DIR, "sessions")
+# 会话回收站：删除改为「移入此处」而非直接 unlink，支持误删撤销；超期自动清理。
+SESSIONS_TRASH_DIR = os.path.join(HISTORY_DIR, "sessions_trash")
+_TRASH_TTL_DAYS = 7
 MEMORY_PATH = os.path.join(DATA_DIR, "memory.json")
 STATS_PATH = os.path.join(DATA_DIR, "stats.json")
 USER_ROLES_PATH = os.path.join(DATA_DIR, "user_roles.json")
@@ -6681,6 +6684,53 @@ def _drop_session_index(sid):
     global _SESSIONS_INDEX
     with _SESSIONS_INDEX_LOCK:
         _SESSIONS_INDEX.pop(str(sid), None)
+
+
+def _purge_sessions_trash(max_age_days=_TRASH_TTL_DAYS):
+    """清理回收站中超过 max_age_days 的会话文件（尽力而为，失败不影响主流程）。"""
+    try:
+        if not os.path.isdir(SESSIONS_TRASH_DIR):
+            return
+        cutoff = time.time() - max_age_days * 86400
+        for fn in os.listdir(SESSIONS_TRASH_DIR):
+            p = os.path.join(SESSIONS_TRASH_DIR, fn)
+            try:
+                if os.path.isfile(p) and os.path.getmtime(p) < cutoff:
+                    os.remove(p)
+            except OSError:
+                continue
+    except Exception as e:
+        logger.warning("清理会话回收站失败（忽略）：%s", e)
+
+
+def _trash_session_file(sid, path):
+    """把会话文件移入回收站（同盘 move），返回目标路径。"""
+    os.makedirs(SESSIONS_TRASH_DIR, exist_ok=True)
+    ts = time.strftime("%Y%m%d%H%M%S")
+    dst = os.path.join(SESSIONS_TRASH_DIR, f"{sid}.{ts}.{os.getpid()}.json")
+    shutil.move(path, dst)
+    return dst
+
+
+def _restore_session_file(sid):
+    """从回收站恢复指定 sid 的最新一份会话文件。返回 (ok, error)。"""
+    dst = os.path.join(SESSIONS_DIR, f"{sid}.json")
+    if os.path.exists(dst):
+        return True, None
+    try:
+        if not os.path.isdir(SESSIONS_TRASH_DIR):
+            return False, "回收站为空"
+        prefix = f"{sid}."
+        cands = [fn for fn in os.listdir(SESSIONS_TRASH_DIR)
+                 if fn.startswith(prefix) and fn.endswith(".json")]
+        if not cands:
+            return False, "回收站中无此会话"
+        cands.sort(reverse=True)
+        os.makedirs(SESSIONS_DIR, exist_ok=True)
+        shutil.move(os.path.join(SESSIONS_TRASH_DIR, cands[0]), dst)
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
 
 def _rebuild_session_index_locked():
@@ -7152,13 +7202,24 @@ class _Handler(BaseHTTPRequestHandler):
         """路径片段消毒（P2-1）：非法返回 None。逻辑见模块级 `_valid_name`。"""
         return _valid_name(raw, limit)
 
-    def _list_sessions(self):
+    def _list_sessions(self, offset=0, limit=200):
+        """会话列表（分页）。返回 (page_metas, total)。
+
+        分页原因：旧实现硬截断 `metas[:200]`，超过 200 个会话的老会话在列表里
+        永远不可见（只能全局搜索命中）。改为返回 total + 分页切片，前端可「加载更多」。
+        """
         _ensure_session_index()
         with _SESSIONS_INDEX_LOCK:
             metas = [v[2] for v in list(_SESSIONS_INDEX.values())
                      if isinstance(v, list) and len(v) == 3]
         metas.sort(key=lambda s: s.get("saved_at") or "", reverse=True)
-        return metas[:200]
+        total = len(metas)
+        off = max(0, _safe_int(offset))
+        lim = _safe_int(limit)
+        if lim <= 0:
+            lim = 200
+        lim = min(lim, 1000)
+        return metas[off:off + lim], total
 
     def _load_session_messages(self, sid):
         sid = self._safe_sid(sid)
@@ -7235,14 +7296,15 @@ class _Handler(BaseHTTPRequestHandler):
             return None
 
     def _delete_session(self, sid):
-        """删除会话文件。返回 (ok, error)。"""
+        """删除会话文件（软删除：移入回收站，可撤销）。返回 (ok, error)。"""
         sid = self._safe_sid(str(sid or ""))
         if not sid:
             return False, "缺少会话 id"
         try:
             path = os.path.join(SESSIONS_DIR, f"{sid}.json")
             if os.path.exists(path):
-                os.remove(path)
+                _purge_sessions_trash()   # 顺手清理超期回收站（尽力而为）
+                _trash_session_file(sid, path)
             _drop_session_index_locked(sid)
             _save_session_index()
             return True, None
@@ -7271,6 +7333,98 @@ class _Handler(BaseHTTPRequestHandler):
             if removed == 0:
                 return False, 0, f"{len(failed)} 个会话删除失败：{failed[0][1]}"
         return True, removed, None
+
+    def _restore_sessions_batch(self, sids):
+        """从回收站批量恢复会话（撤销删除）。返回（ok, restored, error）。"""
+        if not isinstance(sids, list) or not sids:
+            return False, 0, "ids 必须是列表"
+        restored = 0
+        failed = []
+        for raw in sids:
+            sid = self._safe_sid(str(raw or ""))
+            if not sid:
+                failed.append((raw, "非法 id"))
+                continue
+            ok, err = _restore_session_file(sid)
+            if ok:
+                _index_session_locked(f"{sid}.json")
+                restored += 1
+            else:
+                failed.append((sid, err))
+        if restored:
+            _save_session_index()
+        if failed and restored == 0:
+            return False, 0, f"{len(failed)} 个会话恢复失败：{failed[0][1]}"
+        return True, restored, None
+
+    def _pin_sessions_batch(self, sids, pinned):
+        """批量置顶/取消置顶。返回（ok, changed, error）。"""
+        if not isinstance(sids, list) or not sids:
+            return False, 0, "ids 必须是列表"
+        changed = 0
+        failed = []
+        for sid in sids:
+            ok, err = self._pin_session({"id": sid, "pinned": bool(pinned)})
+            if ok:
+                changed += 1
+            else:
+                failed.append((sid, err))
+        if failed:
+            logger.warning("批量置顶会话：%s/%s 失败（示例：%s）",
+                           len(failed), len(sids), failed[0][1])
+            if changed == 0:
+                return False, 0, f"{len(failed)} 个会话置顶失败：{failed[0][1]}"
+        return True, changed, None
+
+    def _tag_sessions_batch(self, sids, tags, mode="add"):
+        """批量打标签。mode: add（追加）| remove（移除）| set（覆盖）。返回（ok, changed, error）。"""
+        if not isinstance(sids, list) or not sids:
+            return False, 0, "ids 必须是列表"
+        tags = [str(t).strip() for t in (tags or []) if str(t).strip()][:20]
+        if not tags:
+            return False, 0, "标签不能为空"
+        mode = str(mode or "add")
+        if mode not in ("add", "remove", "set"):
+            mode = "add"
+        changed = 0
+        failed = []
+        for raw in sids:
+            sid = self._safe_sid(str(raw or ""))
+            if not sid:
+                failed.append((raw, "非法 id"))
+                continue
+            path = os.path.join(SESSIONS_DIR, f"{sid}.json")
+            if not os.path.exists(path):
+                failed.append((sid, "会话不存在"))
+                continue
+            try:
+                with _SESSION_SAVE_LOCK:
+                    with open(path, encoding="utf-8") as f:
+                        d = json.load(f)
+                    cur = [str(x) for x in (d.get("tags") or [])]
+                    if mode == "set":
+                        merged = list(tags)
+                    elif mode == "remove":
+                        merged = [t for t in cur if t not in tags]
+                    else:
+                        merged = cur + [t for t in tags if t not in cur]
+                    d["tags"] = merged[:20]
+                    from persistence import atomic_json_write
+                    if not atomic_json_write(path, d, compact=True):
+                        failed.append((sid, "写入失败"))
+                        continue
+                _index_session_locked(f"{sid}.json")
+                changed += 1
+            except Exception as e:
+                failed.append((sid, str(e)))
+        if changed:
+            _save_session_index()
+        if failed:
+            logger.warning("批量打标签：%s/%s 失败（示例：%s）",
+                           len(failed), len(sids), failed[0][1])
+            if changed == 0:
+                return False, 0, f"{len(failed)} 个会话打标签失败：{failed[0][1]}"
+        return True, changed, None
 
     def _pin_session(self, body):
         """置顶/取消置顶会话。body: {id, pinned}。"""
@@ -7570,9 +7724,22 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "service": "whaletalk-api", "webui": "v0.2"})
 
 
-    @_get_route("/v1/sessions")
+    @_get_route(("qpath", "/v1/sessions"))
     def _g_v1_sessions(self):
-        self._json(200, {"sessions": self._list_sessions()})
+        # 分页参数：offset / limit（缺省 limit=200，上限 1000）。返回 total/has_more 供「加载更多」。
+        from urllib.parse import parse_qs, urlparse
+        qs = parse_qs(urlparse(self.path).query)
+        offset = _safe_int((qs.get("offset") or ["0"])[0])
+        limit = _safe_int((qs.get("limit") or ["200"])[0])
+        page, total = self._list_sessions(offset, limit)
+        off = max(0, offset)
+        self._json(200, {
+            "sessions": page,
+            "total": total,
+            "offset": off,
+            "limit": limit,
+            "has_more": off + len(page) < total,
+        })
 
 
     @_get_route("/v1/models")
@@ -9297,6 +9464,46 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": err})
         else:
             self._json(200, {"ok": True, "removed": removed})
+
+
+    @_post_route("/v1/sessions/restore_batch")
+    def _p_v1_sessions_restore_batch(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        ok, restored, err = self._restore_sessions_batch(body.get("ids") or [])
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, {"ok": True, "restored": restored})
+
+
+    @_post_route("/v1/sessions/pin_batch")
+    def _p_v1_sessions_pin_batch(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        ok, changed, err = self._pin_sessions_batch(body.get("ids") or [], body.get("pinned"))
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, {"ok": True, "changed": changed})
+
+
+    @_post_route("/v1/sessions/tags_batch")
+    def _p_v1_sessions_tags_batch(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        ok, changed, err = self._tag_sessions_batch(
+            body.get("ids") or [], body.get("tags") or [], body.get("mode") or "add")
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, {"ok": True, "changed": changed})
 
 
     @_post_route("/v1/sessions/delete")

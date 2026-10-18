@@ -83,7 +83,7 @@ export default function Sidebar({ page, onPage }) {
           <span className="sb-status-dot" aria-hidden="true" />
           <span className="sb-status-model">{status ? status.model : "…"}</span>
           <span className="sb-status-sub">
-            {status ? (status.full_auto ? "🚀任务" : "💬对话") : statusErr ? "未连接" : "连接中"}
+            {status ? (status.full_auto ? "任务" : "对话") : statusErr ? "未连接" : "连接中"}
           </span>
         </button>
         <button
@@ -92,7 +92,9 @@ export default function Sidebar({ page, onPage }) {
           aria-label="打开设置"
           onClick={() => onPage("settings")}
         >
-          🐋
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 12c1.5-4 4-6 7-6 3.5 0 5.5 2 9 2 1.6 0 2.8-.6 4-1.5-1 3-3 4.5-5 4.8.6 1.4.9 2.9.9 4.5 0 .8-.1 1.6-.3 2.3-1-.4-1.8-1-2.2-1.8-.9 1-2.4 1.7-4.2 1.7s-3.3-.7-4.2-1.7c-.4.8-1.2 1.4-2.2 1.8A11 11 0 015 15c0-1.6.3-3.1.9-4.5C4.7 10.2 3.3 8.7 3 12z" />
+          </svg>
         </button>
       </div>
       </div>
