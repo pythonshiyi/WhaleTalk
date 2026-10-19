@@ -271,7 +271,7 @@ function Step({ t, index }) {
 // 而 90% 的时候用户只想知道「它跑了没、成没成」。折叠后头部一行就够：
 // 「执行过程 · 6 步 · 共 12.3s · web_search · read_file +2」。
 // 展开条件见 toolRail.shouldOpenByDefault：有失败、或挂载时正在执行。
-export function StepGroup({ steps, start = 0, streaming, onFocusActivity, showMore }) {
+export function StepGroup({ steps, start = 0, streaming, onFocusActivity, showMore, onOpenTrace }) {
   const list = (steps || []).filter((t) => t && t.tool);
   // 惰性初始化 = 只在挂载时判定一次：实时那一轮展开，历史会话折叠，
   // 且不会在两次工具调用之间（短暂的「全部完成」瞬间）来回折叠闪烁。
@@ -307,6 +307,18 @@ export function StepGroup({ steps, start = 0, streaming, onFocusActivity, showMo
           {durSum > 0 ? ` · 共 ${durSum.toFixed(1)}s` : ""}
         </span>
         {preview && <span className="rail-preview" title={preview}>{preview}</span>}
+        {onOpenTrace && (
+          <span
+            className="rail-trace"
+            role="button"
+            tabIndex={0}
+            title="在右侧「过程」时间轴中查看并定位到这一轮"
+            onClick={(e) => { e.stopPropagation(); onOpenTrace(); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onOpenTrace(); }
+            }}
+          >时间轴</span>
+        )}
         {streaming && running ? <span className="rail-live" /> : null}
         <svg className="rail-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6" /></svg>
       </div>
@@ -355,7 +367,7 @@ function SegNote({ n }) {
 }
 
 // ── 悬停操作条 ────────────────────────────────────────
-function Message({ msg, enter = false, onResend, onStar, onPin, onQuote, onFork, onEdit, onRegenerate, onContinue, onFocusActivity }) {
+function Message({ msg, enter = false, onOpenTrace, onResend, onStar, onPin, onQuote, onFork, onEdit, onRegenerate, onContinue, onFocusActivity }) {
   const [copied, setCopied] = React.useState(false);
   const copy = async () => {
     try {
@@ -465,7 +477,8 @@ function Message({ msg, enter = false, onResend, onStar, onPin, onQuote, onFork,
         {msg.think && <ThinkBlock text={msg.think} streaming={msg.streaming} />}
         {flow.map((b, i) => (b.type === "steps"
           ? <StepGroup key={`s${i}`} steps={b.steps} start={b.start || 0}
-              streaming={msg.streaming} onFocusActivity={onFocusActivity} showMore={i === lastStepBlock} />
+              streaming={msg.streaming} onFocusActivity={onFocusActivity} showMore={i === lastStepBlock}
+              onOpenTrace={onOpenTrace} />
           : (
             <React.Fragment key={`t${i}`}>
               {b.note != null && <SegNote n={b.note} />}

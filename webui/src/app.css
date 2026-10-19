@@ -240,8 +240,11 @@ button {
 .chat-header {
   display: flex; align-items: center; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-4);
-  background: var(--header-bg);
-  backdrop-filter: blur(8px);
+  /* v3.23 材质：常驻表面不再用 backdrop-filter。
+     顶栏是**一直在**的层，滚动时每帧都要重新模糊整条横带——这是低端机上
+     最稳定的一类掉帧来源。改用实色 + 分隔线表达层级；模糊只留给模态/浮层
+     （它们出现时间短、面积小，且模糊本身传达了「下方不可交互」）。 */
+  background: var(--bg-1);
   border-bottom: 1px solid var(--border);
   z-index: var(--z-panel);
 }
@@ -4244,3 +4247,140 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
    合成器动画 + 逐条布局，是「打开历史会话一顿」的元凶之一。 */
 .msg { animation: none; }
 .msg.msg-enter { animation: msgIn .22s var(--ease); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   过程时间轴（v3.23）—— 执行过程作为「仪表」常驻右栏
+   ═══════════════════════════════════════════════════════════════════ */
+.tl-wrap { display: flex; flex-direction: column; gap: 10px; padding: 10px var(--sp-3) var(--sp-5); }
+.tl-sum { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.tl-metric {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 8px 4px; border-radius: var(--r-md);
+  background: var(--bg-2); border: 1px solid var(--border);
+}
+.tl-metric b { font-size: var(--fs-lg); font-weight: 600; color: var(--text-1); font-variant-numeric: tabular-nums; }
+.tl-metric span { font-size: var(--fs-4xs); color: var(--text-3); }
+.tl-metric.is-bad { border-color: rgba(var(--danger-rgb), .45); background: var(--danger-soft); }
+.tl-metric.is-bad b { color: var(--danger-text); }
+
+.tl-filter { display: flex; gap: 4px; }
+.tl-fbtn {
+  flex: 1; padding: 5px 8px; font-size: var(--fs-2xs); cursor: pointer;
+  border-radius: var(--r-full); border: 1px solid var(--border);
+  background: transparent; color: var(--text-2);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.tl-fbtn:hover { background: var(--bg-hover); color: var(--text-1); }
+.tl-fbtn.is-on { background: var(--brand-soft); border-color: rgba(var(--brand-rgb), .45); color: var(--brand-strong); }
+
+.tl-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+.tl-empty, .tl-empty-inline {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 32px 16px; color: var(--text-3); font-size: var(--fs-sm); text-align: center;
+}
+.tl-empty-inline { padding: 20px 8px; font-size: var(--fs-xs); }
+
+.tl-turn { border-radius: var(--r-md); padding: 6px 2px; border-left: 2px solid transparent; }
+.tl-turn-focus { background: var(--brand-soft); border-left-color: var(--brand); }
+.tl-turn-bad { border-left-color: rgba(var(--danger-rgb), .55); }
+.tl-turn-head {
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  padding: 2px 6px 6px; font-size: var(--fs-2xs); color: var(--text-3);
+}
+.tl-turn-time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.tl-turn-label { color: var(--text-2); }
+.tl-turn-meta { margin-left: auto; font-family: var(--font-mono); }
+
+.tl-rail { display: flex; flex-direction: column; gap: 1px; }
+.tl-step { border-radius: var(--r-sm); }
+.tl-step:hover { background: var(--bg-hover); }
+.tl-step-head {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 5px 6px; background: transparent; border: 0; cursor: pointer;
+  text-align: left; color: inherit; font: inherit;
+}
+.tl-step-idx {
+  width: 16px; height: 16px; flex-shrink: 0; border-radius: 50%;
+  display: grid; place-items: center; font-size: var(--fs-4xs);
+  font-family: var(--font-mono); color: var(--text-3);
+  border: 1px solid var(--border-strong); background: var(--bg-2);
+}
+.tl-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.tl-dot-done { background: var(--ok); }
+.tl-dot-run { background: var(--brand-strong); animation: pulse 1.4s infinite; }
+.tl-dot-fail { background: var(--danger); }
+.tl-step-name { font-size: var(--fs-xs); font-family: var(--font-mono); color: var(--text-1); }
+.tl-step-fail .tl-step-name { color: var(--danger-text); }
+.tl-step-args {
+  font-size: var(--fs-4xs); color: var(--text-3); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%;
+}
+.tl-step-right { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.tl-dur { font-size: var(--fs-4xs); font-family: var(--font-mono); color: var(--text-3); }
+.tl-running { font-size: var(--fs-4xs); color: var(--brand-strong); }
+.tl-step-body { padding: 2px 6px 8px 28px; }
+.tl-kv { display: flex; gap: 6px; margin-bottom: 4px; font-size: var(--fs-2xs); }
+.tl-k { flex-shrink: 0; color: var(--text-3); }
+.tl-v { color: var(--text-2); word-break: break-all; }
+.tl-pre {
+  margin: 0; padding: 6px 8px; max-height: 220px; overflow: auto;
+  background: var(--code-bg); color: var(--code-text);
+  border-radius: var(--r-sm); font-size: var(--fs-2xs); font-family: var(--font-mono);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* 正文里的「时间轴」入口：一行内的小链接，点击打开右栏并定位 */
+.rail-trace {
+  margin-left: auto; margin-right: var(--sp-2); flex-shrink: 0;
+  font-size: var(--fs-4xs); color: var(--brand-strong); cursor: pointer;
+  padding: 1px 6px; border-radius: var(--r-full);
+  border: 1px solid rgba(var(--brand-rgb), .35);
+  transition: background var(--dur-fast) var(--ease);
+}
+.rail-trace:hover { background: var(--brand-soft); }
+.rail-head .rail-chev { margin-left: 0; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   意图条（v3.23）—— 授权 / 步数预算 / 时间提醒，发出前可见
+   ═══════════════════════════════════════════════════════════════════ */
+.intent { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.intent-sum {
+  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+  padding: 3px 8px; border-radius: var(--r-full);
+  background: transparent; border: 1px solid transparent;
+  color: var(--text-3); font-size: var(--fs-2xs); cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.intent-sum:hover { background: var(--bg-hover); color: var(--text-1); border-color: var(--border); }
+.intent-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); flex-shrink: 0; }
+.intent-readonly .intent-dot { background: var(--warn); }
+.intent-text { font-variant-numeric: tabular-nums; }
+
+.intent-body {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px var(--sp-3); border-radius: var(--r-md);
+  background: var(--bg-1); border: 1px solid var(--border);
+}
+.intent-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--fs-2xs); }
+.intent-k { width: 32px; flex-shrink: 0; color: var(--text-3); }
+.intent-seg { display: inline-flex; border-radius: var(--r-full); overflow: hidden; border: 1px solid var(--border); }
+.intent-opt {
+  padding: 3px 10px; background: transparent; border: 0; cursor: pointer;
+  color: var(--text-2); font-size: var(--fs-2xs);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.intent-opt:hover { background: var(--bg-hover); color: var(--text-1); }
+.intent-opt.is-on { background: var(--brand-soft); color: var(--brand-strong); }
+.intent-num {
+  width: 68px; padding: 3px 8px; border-radius: var(--r-sm);
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--text-1);
+  font-size: var(--fs-2xs); font-family: var(--font-mono);
+}
+.intent-hint { color: var(--text-3); font-size: var(--fs-4xs); }
+.intent-note { margin: 0; color: var(--text-3); font-size: var(--fs-4xs); line-height: 1.5; }
+
+/* ── 9. 阅读宽度上限（v3.23）──
+   宽屏下正文一行能拉到 1200px，中文长行极难回行定位（眼睛要横扫）。
+   72ch 是中文正文的舒适区；标题/表格不限制，否则报表会被压扁。 */
+.md > p, .md > ul, .md > ol, .md > blockquote, .md > .md-h1,
+.md > .md-h2, .md > .md-h3, .md > .md-h4 { max-width: 72ch; }

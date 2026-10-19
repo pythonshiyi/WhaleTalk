@@ -9466,6 +9466,23 @@ class _Handler(BaseHTTPRequestHandler):
         """纯净对话开关：请求级 body 优先，否则回退全局配置（不进 client.chat kwargs）。"""
         return bool(body.get("quiet_mode", cfg.get("quiet_mode", False)))
 
+    @staticmethod
+    def _round_budget(body, cfg):
+        """本轮工具轮数上限。
+
+        前端「意图面板」允许给**单次任务**设预算（如「最多 12 步」），表达的是
+        「这次别无限跑」——这是单次意图，不该改写全局配置。非法/负数按 0（不限）
+        处理：宁可退回默认预算，也不要因为一个数字挡住用户的提问。
+        """
+        raw = (body or {}).get("max_tool_rounds")
+        if raw is None:
+            return int(cfg.get("max_tool_rounds") or 0)
+        try:
+            v = int(raw)
+        except (TypeError, ValueError):
+            return int(cfg.get("max_tool_rounds") or 0)
+        return max(0, v)
+
     def _chat_kwargs(self, body, cfg):
         import deepseek_client as dc
         thinking = str(body.get("thinking") or cfg.get("thinking") or "high")
@@ -9502,8 +9519,8 @@ class _Handler(BaseHTTPRequestHandler):
             # 输出与工具模式：无条件透传（client.chat 内部判断生效场景）
             "json_output": bool(cfg.get("json_output")),
             "strict_tools": bool(cfg.get("strict_tools")),
-            # 工具轮数上限：透传用户配置（0 = 不限）
-            "max_tool_rounds": int(cfg.get("max_tool_rounds") or 0),
+            # 工具轮数上限：本轮显式预算优先，否则用配置（0 = 不限）
+            "max_tool_rounds": self._round_budget(body, cfg),
         }
 
     def _inject_system_messages(self, messages, cfg, pure_chat, quiet_mode=False):

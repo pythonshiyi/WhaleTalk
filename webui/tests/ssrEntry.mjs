@@ -5,3 +5,4 @@ import Markdown from "../src/components/Markdown.jsx";
 import { StepGroup } from "../src/components/Message.jsx";
 export default Markdown;
 export { StepGroup };
+export { default as TracePanel } from "../src/components/TracePanel.jsx";

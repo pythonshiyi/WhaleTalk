@@ -1,5 +1,6 @@
 import React from "react";
 import { usePoll } from "../usePoll.js";
+import TracePanel from "./TracePanel.jsx";
 import * as api from "../api.js";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 import { Icon } from "./icons.jsx";
@@ -1702,13 +1703,14 @@ function clampWidth(w) {
 }
 
 const TABS = [
+  { id: "trace", icon: "brain", label: "过程" },
   { id: "activity", icon: "activity", label: "活动" },
   { id: "params", icon: "sliders", label: "参数" },
   { id: "files", icon: "folder", label: "文件" },
   { id: "procs", icon: "terminal", label: "进程" },
 ];
 
-export default function AuxPanel({ onClose, onInjectFile, activity, products, sessionId, tab, onTabChange, onPopout, inPopout }) {
+export default function AuxPanel({ onClose, onInjectFile, activity, products, sessionId, tab, onTabChange, onPopout, inPopout, focusTurn = -1 }) {
   const isControlled = tab != null && typeof onTabChange === "function";
   const [internalTab, setInternalTab] = React.useState("params");
   const curTab = isControlled ? tab : internalTab;
@@ -1838,6 +1840,9 @@ export default function AuxPanel({ onClose, onInjectFile, activity, products, se
         ))}
       </div>
       <div className="aux-body">
+        <div role="tabpanel" id="auxpane-trace" aria-labelledby="auxtab-trace" className="aux-pane" hidden={curTab !== "trace"}>
+          <TracePanel activity={activity} focusTurn={focusTurn} active={curTab === "trace"} />
+        </div>
         <div role="tabpanel" id="auxpane-activity" aria-labelledby="auxtab-activity" className="aux-pane" hidden={curTab !== "activity"}>
           <ActivityTab activity={activity} products={products || []} onGoFiles={() => selectTab("files")} onInject={onInjectFile} active={curTab === "activity"} sessionId={sid} />
         </div>

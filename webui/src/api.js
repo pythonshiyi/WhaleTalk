@@ -371,8 +371,11 @@ async function api(path, opts = {}) {
  * @param {AbortSignal} [signal] 停止生成信号（前端 AbortController）
  * @returns {Promise<void>} 流结束后 resolve；HTTP 错误时 throw
  */
-export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed }, handlers, signal) {
-  const payload = JSON.stringify({ messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed });
+export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed, maxToolRounds }, handlers, signal) {
+  const body = { messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed };
+  // 本轮预算：只有用户明确设了才带，未设时后端回退到全局配置（不塞 undefined 字段）
+  if (maxToolRounds != null && Number(maxToolRounds) > 0) body.max_tool_rounds = Number(maxToolRounds);
+  const payload = JSON.stringify(body);
   /** @param {string} token */
   const attempt = (token) => fetch(`${getBase()}/v1/chat/stream`, {
     method: "POST",

@@ -50,6 +50,12 @@ export async function renderMarkdown(props) {
   return renderToStaticMarkup(React.createElement(Markdown, props));
 }
 
+/** 渲染过程时间轴（用于断言汇总/筛选/单步详情的真实 DOM 输出） */
+export async function renderTracePanel(props) {
+  const mod = await loadMarkdown();
+  return renderToStaticMarkup(React.createElement(mod.TracePanel, props));
+}
+
 /** 渲染执行过程面板（用于断言折叠/展开的真实 DOM 输出，而不只测判据函数） */
 export async function renderStepGroup(props) {
   const mod = await loadMarkdown();

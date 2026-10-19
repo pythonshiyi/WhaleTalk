@@ -20,6 +20,7 @@ import { speakText, getVoiceConfig, onSpeechState, stopSpeak, resumeSpeak } from
 import { nowClock } from "../timeFmt.js";
 import formatToolResult from "../formatToolResult.js";
 import extractProducts from "../extractProducts.js";
+import { intentToRequest, readIntent } from "../intent.js";
 
 import { silentWarn } from "../quiet.js";
 import { confirmDialog } from "../dialog.js";
@@ -330,6 +331,8 @@ function useBackendChat({
             gw_session: (gwSessionRef && gwSessionRef.current) || undefined,
             continue_prefix: isContinue,
             cost_confirmed: costConfirmed,
+            // 本轮预算（意图面板设置，未设则不带 → 后端用全局配置）
+            ...intentToRequest(readIntent()),
           },
           {
             onReasoning: (t) => {
@@ -761,6 +764,18 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const { density, fontSize } = React.useContext(DisplayContext);
   const { flash } = React.useContext(FlashContext);
   const { toast } = React.useContext(ToastContext);
+
+  // 时间预算提醒：到点只在界面上说一句，**不中断**执行。
+  // 没有后端时钟就没有真正的中止能力——与其假装能拦，不如老实提醒。
+  React.useEffect(() => {
+    if (!busy) return undefined;
+    const min = readIntent().timeBudgetMin;
+    if (!min) return undefined;
+    const timer = setTimeout(() => {
+      toast(`本次任务已运行 ${min} 分钟：可在右侧「过程」查看进度，或点停止按钮收手`, 6000);
+    }, min * 60000);
+    return () => clearTimeout(timer);
+  }, [busy, toast]);
   const [genState, setGenState] = React.useState({ on: false, text: "" });
   // 生成中的实时输出速率（tok/s，来自后端 metrics 事件），结束/停止时清零
   const [genTps, setGenTps] = React.useState(0);
@@ -797,6 +812,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const focusActivity = React.useCallback(() => setAuxTab("activity"), []);
   // 控制台弹出为独立窗口（P2）
   const [auxPop, setAuxPop] = React.useState(false);
+  // 「过程」时间轴：点击正文锚点时打开右栏并定位到该轮（-1 = 不定位）
+  const [traceTurn, setTraceTurn] = React.useState(-1);
+  const openTrace = React.useCallback((gi) => {
+    setAuxOpen(true);
+    setAuxTab("trace");
+    // 用对象包装：同一轮反复点击也能再次触发滚动高亮（数字相同 React 会跳过）
+    setTraceTurn({ turn: Number.isInteger(gi) ? gi : -1, at: Date.now() });
+  }, []);
   const [popoutEl, setPopoutEl] = React.useState(null);
   const popWinRef = React.useRef(null);
   const [promptReq, setPromptReq] = React.useState(null);
@@ -2179,6 +2202,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                   <Message
                     msg={m}
                     enter={gi >= msgs.length - 2}
+                    onOpenTrace={() => openTrace(gi)}
                     onResend={onSend}
                     onStar={() => onStarMsg(gi)}
                     onPin={() => onPinMsg(gi)}
@@ -2226,12 +2250,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         {auxOpen && !auxPop && (
           <AuxPanel onClose={() => setAuxOpen(false)} onInjectFile={onInjectFile} activity={liveActivity}
             products={liveProducts} sessionId={activeId}
-            tab={auxTab} onTabChange={setAuxTab} onPopout={() => setAuxPop(true)} />
+            tab={auxTab} onTabChange={setAuxTab} onPopout={() => setAuxPop(true)}
+            focusTurn={traceTurn} />
         )}
         {auxOpen && auxPop && popoutEl && createPortal(
           <AuxPanel onClose={() => { setAuxPop(false); setAuxOpen(false); }} onInjectFile={onInjectFile} activity={liveActivity}
             products={liveProducts} sessionId={activeId}
-            tab={auxTab} onTabChange={setAuxTab} onPopout={() => setAuxPop(false)} inPopout />,
+            tab={auxTab} onTabChange={setAuxTab} onPopout={() => setAuxPop(false)} inPopout
+            focusTurn={traceTurn} />,
           popoutEl
         )}
       </div>

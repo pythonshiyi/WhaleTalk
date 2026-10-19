@@ -3,6 +3,7 @@ import * as api from "../api.js";
 import { ToastContext } from "./FlashToast.jsx";
 import { Icon } from "./icons.jsx";
 import { promptDialog } from "../dialog.js";
+import IntentBar from "./IntentBar.jsx";
 
 import { silentWarn } from "../quiet.js";
 const SLASH_COMMANDS = [
@@ -652,6 +653,8 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
           <span>Enter 发送 · Shift+Enter 换行 · / 唤起命令 · Alt+↑↓ 历史</span>
         </div>
       )}
+      {/* 本轮的执行边界（授权 / 预算）：发出去之前就要看得见 */}
+      <IntentBar />
     </div>
   );
 });
