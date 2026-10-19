@@ -1,5 +1,6 @@
 import React from "react";
 import { getStatus, openDir } from "../api.js";
+import { usePoll } from "../usePoll.js";
 import { FlashContext } from "./FlashToast.jsx";
 import { Icon } from "./icons.jsx";
 
@@ -48,21 +49,15 @@ export default function StatusBar({ mode, onSwitchMode, generating, generatingTe
     };
   }, [panel]);
 
-  React.useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const s = await getStatus();
-        if (alive && s) setStatus(s);
-      } catch (e) { silentWarn(e, "StatusBar"); }
-    };
-    load();
-    const iv = setInterval(load, 8000);
-    return () => {
-      alive = false;
-      clearInterval(iv);
-    };
+  // 状态栏 8s 轮询：页面不可见时暂停（后台不空转、回来立刻补一次）。
+  // 之前用裸 setInterval——窗口最小化后仍在请求 + 重渲染，白耗电。
+  const loadStatus = React.useCallback(async () => {
+    try {
+      const s = await getStatus();
+      if (s) setStatus(s);
+    } catch (e) { silentWarn(e, "StatusBar"); }
   }, []);
+  usePoll(loadStatus, 8000);
 
   const u = status?.usage_total || {};
   const budget = status?.monthly_budget || 0;

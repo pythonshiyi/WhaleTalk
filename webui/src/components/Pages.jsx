@@ -1,6 +1,7 @@
 import React from "react";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
+import { usePoll } from "../usePoll.js";
 import ToolTest from "./ToolTest.jsx";
 import EmptyState from "./EmptyState.jsx";
 import PixelDocViewer from "./PixelDocViewer.jsx";
@@ -1261,11 +1262,8 @@ export function WorkbenchPage({ onApply, onPickSession }) {
     setUpdatedAt(new Date().toTimeString().slice(0, 5));
   }, []);
 
-  React.useEffect(() => {
-    refresh();
-    const iv = setInterval(refresh, 30000);
-    return () => clearInterval(iv);
-  }, [refresh]);
+  // 工作台 30s 轮询：不可见时暂停（4 个接口一起拉，后台空转代价更高）
+  usePoll(refresh, 30000);
 
   const u = (status && status.usage_total) || {};
   const running = Object.values(procs || {}).filter((p) => !p.exited);

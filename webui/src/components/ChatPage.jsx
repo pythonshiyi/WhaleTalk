@@ -1085,6 +1085,26 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const MAX_LIVE_TURNS = 40;
   const [renderStart, setRenderStart] = React.useState(0);
   const atBottomRef = React.useRef(true);
+  // 滚动处理节流：scroll 事件每秒可触发上百次，而「要不要显示回到底部按钮」的结果
+  // 只在跨过阈值时变化。原实现每个事件都 setState（React 需比对一次 + 可能重渲染
+  // 整个 60 条消息列表）。现在：atBottomRef 立刻更新（发送时依赖它，不能延迟），
+  // 而 setShowJump 合并到每帧一次、且值不变时完全不动状态。
+  const scrollRafRef = React.useRef(0);
+  const onScrollThrottled = React.useCallback((e) => {
+    const el = e.currentTarget;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 120;
+    atBottomRef.current = atBottom;
+    if (scrollRafRef.current) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = 0;
+      if (!el || !el.isConnected) return;      // 已卸载/切页：不再改状态
+      const need = !atBottomRef.current && el.scrollHeight > el.clientHeight + 240;
+      setShowJump((prev) => (prev === need ? prev : need));
+    });
+  }, []);
+  React.useEffect(() => () => {
+    if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+  }, []);
   const topSentinelRef = React.useRef(null);
   const pendingScrollRef = React.useRef(null);
   const composerRef = React.useRef(null);
@@ -2090,12 +2110,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             aria-relevant="additions text"
             data-density={density}
             style={{ fontSize: `${fontSize}px` }}
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 120;
-              atBottomRef.current = atBottom;
-              setShowJump(!atBottom && el.scrollHeight > el.clientHeight + 240);
-            }}
+            onScroll={onScrollThrottled}
           >
             {multiSel && multiSel.size > 0 && (
               <div className="multi-bar">

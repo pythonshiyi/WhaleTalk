@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.20.0）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.21.0）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,9 +17,9 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.20.0`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.21.0`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **105 个 `/v1` 路由**、**116 个 pytest 文件 / 1159 用例 + 22 个前端 node 套件**、
+  **105 个 `/v1` 路由**、**116 个 pytest 文件 / 1159 用例 + 24 个前端 node 套件**、
   源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
   主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
@@ -49,7 +49,7 @@ python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cli
 # ── 测试 ──
 python -m pytest -q                      # 后端全量（116 个文件 / 1159 用例，约 73s；CI 同款，见下方「分级验证」）
 python -m pytest tests/test_registry.py -q    # 只跑相关文件：日常改动的正确姿势（1–3s）
-cd webui && npm test                     # 前端 22 个 node 套件（runner 自动发现 tests/*.test.mjs）
+cd webui && npm test                     # 前端 24 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
 cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typedef 与后端字段对齐门禁）
 
@@ -66,7 +66,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 
 ### 1.1 分级验证（重要：不要每次都跑全量）
 
-**全量一次约 2 分钟**（1060 用例 73s + 五道门禁 + 前端 22 套件），而**最小相关集通常只有 1–3 秒**。
+**全量一次约 2 分钟**（1060 用例 73s + 五道门禁 + 前端 24 套件），而**最小相关集通常只有 1–3 秒**。
 日常改动按改动面选最小的一档，绿了就继续；**全量留给里程碑节点**，判定标准是「影响面」而非
 「心理上的安全感」。
 
@@ -87,7 +87,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 
 > **CI**：`.github/workflows/ci.yml` 含 4 个 job——`check`（ruff 关键规则 `E9,F63,F7,F82` +
 > 入口 `py_compile`）、`test-backend`（`pytest -q` + `check_docs`）、`gate-tools`（上面五道门禁）、
-> `webui`（npm ci + build + `npm test`，自动发现全部 22 个套件）。全在 `windows-latest` 上跑。
+> `webui`（npm ci + build + `npm test`，自动发现全部 24 个套件）。全在 `windows-latest` 上跑。
 
 ---
 
@@ -725,5 +725,5 @@ def my_tool(...): ...
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1159 用例 / 版本 3.20.0）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1159 用例 / 版本 3.21.0）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

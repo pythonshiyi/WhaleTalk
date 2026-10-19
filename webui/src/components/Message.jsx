@@ -447,7 +447,7 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
           : (
             <React.Fragment key={`t${i}`}>
               {b.note != null && <SegNote n={b.note} />}
-              <Markdown text={b.text} deferCode={msg.streaming} />
+              <Markdown text={b.text} deferCode={msg.streaming} streaming={msg.streaming} />
             </React.Fragment>
           )
         ))}

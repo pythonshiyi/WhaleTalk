@@ -4159,3 +4159,68 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
 .dlv-meta { font-size: var(--fs-4xs); color: var(--text-3); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dlv-ops { margin-left: auto; display: flex; gap: 2px; flex-shrink: 0; opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
 .dlv-item:hover .dlv-ops, .dlv-item:focus-within .dlv-ops { opacity: 1; }
+/* ═══════════════════════════════════════════════════════════════════
+   体验优化层（v3.21）— 动效可访问性 / 焦点一致性 / 排版细节
+   统一写在文件末尾：靠后者优先，且不与上文既有规则争夺维护权。
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── 1. 尊重系统「减少动态效果」 ──
+   此前全仓 0 处 prefers-reduced-motion：开启该设置的用户仍会被「脉动/声纳扩散/
+   浮动 logo/呼吸光标」持续动画影响（前庭敏感人群会头晕），且这些动画在低端机上
+   由合成器长时间占用。这里分两类处理：
+     · 装饰性无限动画 → 直接关掉（它们不承载信息，状态另有文字与颜色）；
+     · 一次性过渡/入场 → 压到 1ms（保留状态变化，去掉运动过程）。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .sb-status-dot,
+  .ch-live.off,
+  .ch-live.on::after,
+  .think-dot,
+  .caret,
+  .boot-float,
+  .empty-orb { animation: none !important; }
+}
+
+/* ── 2. 键盘焦点兜底 ──
+   只有 13 个控件自定义了 :focus-visible，其余（大量 msg-op / dlv-ops / 页签）
+   依赖浏览器默认轮廓：在深色底上几乎不可见，键盘操作会「失去位置感」。
+   统一为品牌色 2px 光环；已自定义的控件不受影响（同优先级但更靠后，故用
+   :where() 把特异性压到 0，避免覆盖各处的 box-shadow 焦点样式）。 */
+:where(button, a[href], input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+/* 鼠标点击不应留下焦点环（:focus-visible 已保证），但 Safari 旧版需要显式清 */
+:where(button, a[href], [tabindex]):focus:not(:focus-visible) { outline: none; }
+
+/* ── 3. 数字对齐 ──
+   状态栏的 token 数 / 费用 / 计时，以及消息时间戳都是变宽数字，数值跳动时会
+   左右抖动（"1" 比 "8" 窄）。等宽数字让它们在刷新时纹丝不动。 */
+.status-bar, .status-bar *, .msg-time, .st-metric, .st-model,
+.sl-model, .dlv-meta, .brain-metric, .test-num { font-variant-numeric: tabular-nums; }
+
+/* ── 4. 中文排版的孤行控制 ──
+   last-line 只剩一两个字的「孤字」在中文长段里尤其刺眼。pretty 让浏览器优先
+   平衡末行（不支持该值的浏览器自动忽略，无副作用）。 */
+.md p, .md li, .md blockquote { text-wrap: pretty; }
+
+/* ── 5. 按压反馈 ──
+   原来只有 send-btn / confirm-btn 有 :active 形变，其余按钮点下去毫无触感。
+   统一给「明显可点」的次要操作一个 2% 的回弹，成本为零（transform 走合成器）。 */
+.msg-op:active:not(:disabled),
+.dlv-ops button:active:not(:disabled),
+.sl-act:active:not(:disabled),
+.st-chip:active,
+.st-dir:active,
+.ch-menu-item:active,
+.ctx-item:active { transform: scale(.96); }
+
+/* ── 6. 长列表滚动条常驻，避免「出现/消失 → 内容横向跳动 10px」 ──
+   聊天区几乎总是可滚动的，但空会话/短会话时滚动条不出现；一旦流式输出越过
+   一屏，内容会整体左移。gutter 只在这一刻生效，所以对空态影响可忽略。 */
+.chat-scroll { scrollbar-gutter: stable; }

@@ -4,6 +4,7 @@ import { parseMarkdown } from "../mdParser.js";
 import { parseInline } from "../mdInline.js";
 import { highlight } from "../mdHighlight.js";
 import { parseMath, mathToReact } from "../mdMath.js";
+import { streamGateDelay } from "../renderBudget.js";
 
 import { silentWarn } from "../quiet.js";
 // ── 世界级 Markdown 渲染器（手写 · 零依赖 · 流式安全）────────────────
@@ -296,9 +297,67 @@ function Block({ b }) {
   }
 }
 
+// ── 流式解析闸门 ─────────────────────────
+// 流式输出时 text 每帧都在变；全量重解析长文本会把主线程吃满（5000 字文本的
+// parseMarkdown 是 O(n)，每秒跑 60 次），表现为掉帧、滚动发涩、输入延迟。
+// 这里按「上次解析实测耗时」自适应限流：便宜的短文本照旧每帧刷新，
+// 长文本自动降频到主线程可承受的节奏，流结束时立刻对齐终态。
+// 判据是纯函数（renderBudget.js），可单测。
+const nowMs = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
+
+function useGatedText(text, streaming, costRef) {
+  const [shown, setShown] = React.useState(text);
+  const textRef = React.useRef(text);
+  const lastAtRef = React.useRef(0);
+  const timerRef = React.useRef(null);
+  textRef.current = text;
+
+  React.useEffect(() => {
+    const t = nowMs();
+    if (!streaming) {
+      // 终态：取消排队、立刻对齐（这里解析只发生一次，值得精确）
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      lastAtRef.current = t;
+      setShown(text);
+      return undefined;
+    }
+    const wait = streamGateDelay(costRef.current, t - lastAtRef.current);
+    if (wait === 0) {
+      lastAtRef.current = t;
+      setShown(text);
+      return undefined;
+    }
+    if (timerRef.current) return undefined;   // 已排队的定时器会用最新文本重解析
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      lastAtRef.current = nowMs();
+      setShown(textRef.current);
+    }, wait);
+    return undefined;
+  }, [text, streaming, costRef]);
+
+  // 卸载时清定时器：否则晚到的回调会对已卸载组件 setState
+  React.useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+  }, []);
+
+  return shown;
+}
+
 // ── 主组件 ─────────────────────────
-export default function Markdown({ text, deferCode = false }) {
-  const blocks = useMemo(() => parseMarkdown(unwrapLongText(text)).blocks, [text]);
+export default function Markdown({ text, deferCode = false, streaming = false }) {
+  const costRef = React.useRef(0);
+  const shown = useGatedText(text, streaming, costRef);
+  const blocks = useMemo(() => {
+    const t0 = nowMs();
+    const b = parseMarkdown(unwrapLongText(shown)).blocks;
+    costRef.current = nowMs() - t0;      // 供下一次节流决策（自适应）
+    return b;
+  }, [shown]);
   return (
     <div className="md">
       {blocks.map((b, i) => {

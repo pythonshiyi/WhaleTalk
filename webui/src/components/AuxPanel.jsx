@@ -1,4 +1,5 @@
 import React from "react";
+import { usePoll } from "../usePoll.js";
 import * as api from "../api.js";
 import { ThemeContext, DisplayContext } from "../App.jsx";
 import { Icon } from "./icons.jsx";
@@ -23,26 +24,6 @@ const prefetchPromise = (() => {
       .catch(() => {});
   return Promise.all([grab("cfg", "getConfig"), grab("ctx", "getContext"), grab("st", "getStatus")]);
 })();
-
-// ── 可见感知轮询：仅在「页签激活 + 文档可见」时拉取；切回即刷新一次 ──
-function useVisiblePolling(fn, interval, active) {
-  const fnRef = React.useRef(fn);
-  fnRef.current = fn;
-  React.useEffect(() => {
-    if (!active) return undefined;
-    const tick = () => {
-      if (typeof document === "undefined" || document.visibilityState === "visible") fnRef.current();
-    };
-    tick();
-    const iv = setInterval(tick, interval);
-    const onVis = () => { if (document.visibilityState === "visible") fnRef.current(); };
-    document.addEventListener("visibilitychange", onVis);
-    return () => {
-      clearInterval(iv);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }, [active, interval]);
-}
 
 // ── 小组件 ─────────────────────────────────────────
 function MiniBtn({ icon, label, onClick, danger, active }) {
@@ -194,7 +175,7 @@ function FilesTab({ onInject, active, onBadge, sessionId }) {
   // 切换会话：清掉展开态并立即刷新（最近产物是会话级）
   React.useEffect(() => { setExpanded({}); setChildren({}); load(false); }, [sessionId, load]);
 
-  useVisiblePolling(() => load(false), 8000, active);
+  usePoll(() => load(false), 8000, { enabled: active });
 
   const flashErr = (e) => { setErr(e && e.message ? e.message : "操作失败"); setTimeout(() => setErr(""), 3000); };
   const openFile = async (path) => {
@@ -608,7 +589,7 @@ function ProcessesTab({ active, onBadge }) {
     } catch (e) { silentWarn(e, "AuxPanel"); }
   }, []);
 
-  useVisiblePolling(load, 2500, active);
+  usePoll(load, 2500, { enabled: active });
 
   const cur = current ? procs[current] : null;
   const allLines = cur?.lines || [];
@@ -1472,12 +1453,12 @@ function ActivityTab({ activity, products, onGoFiles, onInject, active, sessionI
   const [evFail, setEvFail] = React.useState(null);
   const [evOpen, setEvOpen] = React.useState(false);
   const [dlvItems, setDlvItems] = React.useState(null);
-  useVisiblePolling(() => {
+  usePoll(() => {
     api.getContext().then((d) => d && setEvCtx(d)).catch(() => {});
     api.getStatus().then((d) => d && setEvSt(d)).catch(() => {});
     api.getFailures().then((d) => d && setEvFail(d)).catch(() => {});
     api.getDeliverables(sessionId).then((d) => d && setDlvItems(d.items || [])).catch(() => {});
-  }, 10000, active);
+  }, 10000, { enabled: active });
 
   // 切换会话：交付物随会话切换（历史会话显示其自身产出）
   React.useEffect(() => {

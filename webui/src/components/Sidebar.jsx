@@ -1,4 +1,5 @@
 import React from "react";
+import { usePoll } from "../usePoll.js";
 import { getStatus } from "../api.js";
 
 // 真实导航布局（非演示数据）：会话 / 工作台 / 能力中心 / 能力 / 记忆与知识 / 设置
@@ -28,26 +29,17 @@ export default function Sidebar({ page, onPage }) {
   const [status, setStatus] = React.useState(null);
   const [statusErr, setStatusErr] = React.useState(false);
 
-  React.useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const s = await getStatus();
-        if (alive) {
-          setStatus(s);
-          setStatusErr(false);
-        }
-      } catch {
-        if (alive) setStatusErr(true);
-      }
-    };
-    load();
-    const iv = setInterval(load, 10000);
-    return () => {
-      alive = false;
-      clearInterval(iv);
-    };
+  // 侧栏状态 10s 轮询：页面不可见时暂停（usePoll 统一处理可见性与定时器清理）
+  const loadStatus = React.useCallback(async () => {
+    try {
+      const s = await getStatus();
+      setStatus(s);
+      setStatusErr(false);
+    } catch {
+      setStatusErr(true);
+    }
   }, []);
+  usePoll(loadStatus, 10000);
 
   return (
     <nav className="sidebar">
