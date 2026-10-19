@@ -4643,7 +4643,9 @@ ACTIVATE_TOOL = {
         # 若此处只写「见系统消息中的能力地图」，模型会失去能力线索，
         # 把「定义未加载」误判为「我没有这个能力」（如声称无法写文件）。
         # 真正的组名/能力总数在 TOOL_GROUPS 构建后回填（见下方 _finalize_activate_tool）。
-        "description": "加载尚未加载的能力定义（组名与能力总数见下方回填）。",
+        "description": "加载尚未加载的能力定义（组名与能力总数见下方回填）。"
+                       "可传工具名、组名，也可直接传一句中文描述（如『读文件』『发邮件』）——"
+                       "不知道确切名字时用描述，系统会返回最接近的候选并激活。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -4692,10 +4694,11 @@ def _finalize_activate_tool():
     出现「我没有写文件工具，改不了 identity.json」这类错误自述。
     """
     ACTIVATE_TOOL["function"]["description"] = (
-        "加载你拥有但尚未加载的能力定义。你共有 %d 项内置能力（另有插件/自定义工具），"
+        "加载你拥有但尚未加载的能力定义。你共有 %d 项内置能力（另可装载运行时能力包），"
         "当前工具列表只是已加载的部分，未列出的能力同样归你所有。"
-        "传工具名激活单个工具，或传组名一次激活整组（组名可带或不带 emoji）。组名：%s。"
-        "不要因为列表里看不到就声称自己没有某项能力或做不到（例如修改文件），先激活再执行。"
+        "传工具名激活单个工具，或传组名一次激活整组（组名可带或不带 emoji），"
+        "也可传中文描述（如『读文件』『生成图片』）按语义找——不知道名字时不要瞎猜名字，用描述。"
+        "组名：%s。不要因为列表里看不到就声称自己没有某项能力或做不到（例如修改文件），先激活再执行。"
         % (len(TOOLS), _GROUP_NAMES_TEXT)
     )
 
@@ -4744,8 +4747,92 @@ def refresh_capability_layers():
     _finalize_activate_tool()
 
 
+# 能力搜索索引（名字 → 可搜索文本：名称 + 描述 + 动作短语）。按 TOOLS 的对象 id
+# 缓存——能力包装载/卸载会就地重建 TOOLS，那时索引必须跟着失效。
+_HAYSTACK_CACHE = None
+_HAYSTACK_KEY = None
+
+
+def _tool_haystack():
+    """构建/返回能力搜索索引。索引只在这里生成，不注入上下文。"""
+    global _HAYSTACK_CACHE, _HAYSTACK_KEY
+    key = id(TOOLS)
+    if _HAYSTACK_CACHE is not None and _HAYSTACK_KEY == key:
+        return _HAYSTACK_CACHE
+    phrases = {}
+    try:
+        for name, ph in (_TOOL_ACTION_PHRASES or {}).items():
+            phrases[str(name)] = str(ph or "")
+    except Exception:  # noqa: BLE001 动作短语结构异常不影响搜索，退回只用名称+描述
+        phrases = {}
+    out = {}
+    for t in TOOLS:
+        fn = (t or {}).get("function") or {}
+        nm = str(fn.get("name") or "")
+        if not nm:
+            continue
+        out[nm] = " ".join([
+            nm.lower(),
+            str(fn.get("description") or "").lower(),
+            phrases.get(nm, "").lower(),
+        ])
+    _HAYSTACK_CACHE = out
+    _HAYSTACK_KEY = key
+    return out
+
+
+def _discover_tools(query, available_names, limit=8):
+    """按**自然语言**找能力：工具名没命中时，在名称/描述/动作短语里做模糊匹配。
+
+    为什么必须有这条：activate_tools 原本只接受**已知的工具名或组名**，于是
+    「我不知道有没有这个能力」这个状态无解——模型只能凭印象猜名字，猜不中就说
+    「我没有这项能力」，转头用 Python 硬做一遍。分组是为了省上下文，代价却是
+    发现性；这条把发现性补回来，且不额外注入上下文（只在这次调用时返回候选）。
+    """
+    q = str(query or "").strip().lower()
+    if not q:
+        return []
+    # 中英混合分词：英文/数字取整词，中文取**单字**（去重）。
+    # 试过中文 2-gram（"读文件" → "读文"+"文件"），结果命中不了 "读取文件"，
+    # 因为两字不相邻。单字 + 覆盖率归一化更稳，也让噪声可控。
+    toks = set(re.findall(r"[a-z0-9_]{2,}", q)) | set(re.findall(r"[一-鿿]", q))
+    if not toks:
+        return []
+    # 单个汉字（"的""了"）信息量太低，必然撞出一堆无关工具。这类 query 只接受
+    # 在**英文名**里命中（如 "pdf"），否则宁可返回空让模型换组名点菜。
+    if len(toks) == 1:
+        only = next(iter(toks))
+        if len(only) < 2:
+            return []
+    hay_map = _tool_haystack()
+    scored = []
+    for name in sorted(available_names):
+        hay = hay_map.get(name) or name.lower()
+        hit = [t for t in toks if t in hay]
+        if not hit:
+            continue
+        # 加权覆盖率：长片段权重高。"zzzz不存在" 里 "zzzz" 占 4 权重却没命中，
+        # 于是覆盖率被压到 0.43 → 自动过滤；而 "读文件" 这种短 query 不会被
+        # 通用字（文件/存在）蒙混过关。
+        cov = sum(len(t) for t in hit) / sum(len(t) for t in toks)
+        # 名称里出现英文整词（如 pdf → pdf_extract）是强信号，即使覆盖率低也采纳
+        name_hit = any(len(t) >= 2 and t in name.lower() for t in hit)
+        if cov < 0.6 and not name_hit:
+            continue
+        # 同分时：描述越短越可能是"专为此事而生"的工具（"读取文件" 比
+        # "整理归档资产" 更贴 "读文件"），避免同分下被字母序挤掉。
+        scored.append((-(cov + (1.0 if name_hit else 0.0)), len(hay), name))
+    scored.sort()
+    return [n for _s, _l, n in scored[:limit]]
+
+
 def _expand_activation(wanted, available_names, activated):
-    """展开 activate_tools 的请求：支持工具名与组名（组名展开为整组工具）。"""
+    """展开 activate_tools 的请求：工具名 / 组名 / 自然语言描述三种都接受。
+
+    返回 (activated, notes)：notes 是给模型看的说明（尤其是「没这个名字，
+    你要的可能是 X」），调用方必须把它回传——否则模型不知道自己激活了什么。
+    """
+    notes = []
     for n in wanted:
         n = str(n).strip()
         if not n:
@@ -4757,7 +4844,21 @@ def _expand_activation(wanted, available_names, activated):
                     activated.add(m)
         elif n in available_names:
             activated.add(n)
-    return activated
+        else:
+            # 名字没命中 → 当自然语言查询处理，返回候选并直接激活
+            found = _discover_tools(n, available_names)
+            if found:
+                activated.update(found)
+                # 措辞必须带"候选/可能"：这是模糊匹配，不是替模型做决定。
+                # 写死"你要的是 X"会让模型把猜测当成事实。
+                notes.append(
+                    f"没有名为「{n}」的能力；已按语义激活候选（未必精确，看描述自行判断）：{'、'.join(found)}"
+                )
+            else:
+                notes.append(
+                    f"没有匹配「{n}」的能力；可传组名整组激活（{'、'.join(_GROUP_NAMES_TEXT.split('、')[:8])}…）"
+                )
+    return activated, notes
 
 
 # 关键词预激活（chat 层兜底）：扫描最近 user 消息，命中常见意图关键词时
@@ -5928,19 +6029,21 @@ class DeepSeekClient:
                             try:
                                 args = json.loads(tc.get("args") or "{}")
                                 wanted = args.get("tools") or []
-                                # 支持工具名与组名（组名一次激活整组）
-                                _expand_activation(
+                                # 工具名 / 组名 / 自然语言描述都接受
+                                _activated, _notes = _expand_activation(
                                     wanted,
                                     {t["function"]["name"] for t in all_tools},
                                     activated,
                                 )
+                                _note_text = "\n".join(_notes)
                             except (TypeError, ValueError):
-                                pass
+                                _note_text = ""
                             work.append(
                                 {
                                     "role": "tool",
                                     "tool_call_id": tc["id"],
-                                    "content": f"已激活工具: {sorted(activated) or '（无）'}",
+                                    "content": "已激活工具: " + (", ".join(sorted(activated)) or "（无）")
+                                               + ("\n" + _note_text if _note_text else ""),
                                 }
                             )
                         # 非点菜工具也一并执行；点菜轮若有内容则保留
