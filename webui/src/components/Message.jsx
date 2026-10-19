@@ -1,5 +1,6 @@
 import React from "react";
 import Markdown from "./Markdown.jsx";
+import { initialRailOpen, railPreview, readRailPref, writeRailPref } from "../toolRail.js";
 import * as api from "../api.js";
 import { unwrapLongText } from "../longTextUtil.js";
 import { cleanForSpeech, speakText, stopSpeak, primeAudio } from "../ttsUtil.js";
@@ -263,21 +264,41 @@ function Step({ t, index }) {
   );
 }
 
-// ── 步骤组：内联在正文之间，按「发生顺序」展示（默认展开，可收起）──
+// ── 步骤组：内联在正文之间，按「发生顺序」展示 ──
 // 相邻正文段之间的工具归为一组，插到正确的时序位置——解决「所有工具堆在正文顶部」。
-function StepGroup({ steps, start = 0, streaming, onFocusActivity, showMore }) {
+//
+// v3.21 起默认折叠：一整轮下来 5–15 个步骤全摊在正文里，会把回答挤到屏幕外，
+// 而 90% 的时候用户只想知道「它跑了没、成没成」。折叠后头部一行就够：
+// 「执行过程 · 6 步 · 共 12.3s · web_search · read_file +2」。
+// 展开条件见 toolRail.shouldOpenByDefault：有失败、或挂载时正在执行。
+export function StepGroup({ steps, start = 0, streaming, onFocusActivity, showMore }) {
   const list = (steps || []).filter((t) => t && t.tool);
-  const [open, setOpen] = React.useState(true);
+  // 惰性初始化 = 只在挂载时判定一次：实时那一轮展开，历史会话折叠，
+  // 且不会在两次工具调用之间（短暂的「全部完成」瞬间）来回折叠闪烁。
+  // 用户手动展开过就记住偏好（折叠是默认值，不是教条）。
+  const [open, setOpen] = React.useState(() => initialRailOpen(list, readRailPref()));
+  // 用 ref 读当前值再切换：不在 setState 的 updater 里写存储（updater 必须纯，
+  // StrictMode 会双调用它）。收起 = 恢复默认；展开 = 记住「我习惯看过程」。
+  const openRef = React.useRef(open);
+  openRef.current = open;
+  const toggle = React.useCallback(() => {
+    const next = !openRef.current;
+    openRef.current = next;
+    writeRailPref(next);
+    setOpen(next);
+  }, []);
   if (!list.length) return null;
   const done = list.filter((t) => t.status === "done").length;
   const failed = list.filter((t) => t.status === "failed").length;
   const running = list.filter((t) => t.status === "running").length;
   const durSum = list.reduce((n, t) => n + (Number(String(t.duration || "").replace(/[^\d.]/g, "")) || 0), 0);
+  const preview = open ? "" : railPreview(list);
   return (
-    <div className={`rail ${open ? "rail-open" : ""}`}>
+    <div className={`rail ${open ? "rail-open" : "rail-collapsed"}${failed ? " rail-has-fail" : ""}`}>
       <div className="rail-head" role="button" tabIndex={0} aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }}>
+        aria-label={`执行过程，${list.length} 步${failed ? `，${failed} 步失败` : ""}，点击${open ? "收起" : "展开"}`}
+        onClick={toggle}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
         <span className="rail-ic"><Icon name="settings" size={13} /></span>
         <span className="rail-title">执行过程</span>
         <span className="rail-sub">
@@ -285,6 +306,7 @@ function StepGroup({ steps, start = 0, streaming, onFocusActivity, showMore }) {
           {failed ? ` · ${failed} 失败` : ""}
           {durSum > 0 ? ` · 共 ${durSum.toFixed(1)}s` : ""}
         </span>
+        {preview && <span className="rail-preview" title={preview}>{preview}</span>}
         {streaming && running ? <span className="rail-live" /> : null}
         <svg className="rail-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6" /></svg>
       </div>
@@ -333,7 +355,7 @@ function SegNote({ n }) {
 }
 
 // ── 悬停操作条 ────────────────────────────────────────
-function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRegenerate, onContinue, onFocusActivity }) {
+function Message({ msg, enter = false, onResend, onStar, onPin, onQuote, onFork, onEdit, onRegenerate, onContinue, onFocusActivity }) {
   const [copied, setCopied] = React.useState(false);
   const copy = async () => {
     try {
@@ -383,7 +405,7 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
   if (msg.role === "user") {
     const hasAtt = (msg.images && msg.images.length) || (msg.files && msg.files.length);
     return (
-      <div className="msg msg-user">
+      <div className={`msg msg-user${enter ? " msg-enter" : ""}`}>
         <div className="msg-user-bubble">
           {isPinned && <span className="msg-flag msg-flag-pin" aria-hidden="true"><Icon name="pin" size={12} fill="currentColor" /></span>}
           {hasAtt ? <UserAttachments images={msg.images} files={msg.files} /> : null}
@@ -417,7 +439,7 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
   const lastStepBlock = flow.reduce((acc, b, idx) => (b.type === "steps" ? idx : acc), -1);
 
   return (
-    <div className="msg msg-assistant">
+    <div className={`msg msg-assistant${enter ? " msg-enter" : ""}`}>
       <div className="msg-avatar" aria-hidden="true">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 12c1.5-4 4-6 7-6 3.5 0 5.5 2 9 2 1.6 0 2.8-.6 4-1.5-1 3-3 4.5-5 4.8.6 1.4.9 2.9.9 4.5 0 .8-.1 1.6-.3 2.3-1-.4-1.8-1-2.2-1.8-.9 1-2.4 1.7-4.2 1.7s-3.3-.7-4.2-1.7c-.4.8-1.2 1.4-2.2 1.8A11 11 0 015 15c0-1.6.3-3.1.9-4.5C4.7 10.2 3.3 8.7 3 12z" />
@@ -509,4 +531,4 @@ function Message({ msg, onResend, onStar, onPin, onQuote, onFork, onEdit, onRege
     </div>
   );
 }
-export default React.memo(Message, (a, b) => a.msg === b.msg);
+export default React.memo(Message, (a, b) => a.msg === b.msg && a.enter === b.enter);

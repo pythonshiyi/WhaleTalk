@@ -1,8 +1,8 @@
-# 模块地图（v3.21.0 Web 版）
+# 模块地图（v3.22.0 Web 版）
 
 本文档描述鲸语 WhaleTalk 当前（v3.16.21，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
 
-> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **105 /v1 端点** · 后端 116 个 pytest 文件 / 1159 用例 · 前端 24 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
+> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **105 /v1 端点** · 后端 116 个 pytest 文件 / 1159 用例 · 前端 26 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
 
 ## 分层总览
 
@@ -185,7 +185,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 4. **继续瘦身 `deepseek_client.py`**：主文件仍有 6,540 行，保留共享基建 + `_TOOL_ORDER` 等顺序常量 + 六层构建 + 薄 facade 即可，其余按领域继续收拢。配套能力已就绪（`toolkit.rebuild_layers` 多文件 AST、三门禁多文件扫描、`WhaleTalk.spec` 的 `collect_submodules`、`tests/test_tool_split.py`）。每拆一批跑 `tools/audit_tools.py --strict` + `tools/validate_tools.py` + `python -m pytest -q`。
 5. **api_server 路由分层**：`api_server.py` 约 8,700 行 / 98 端点在单个 `_Handler` 内；`_match_routes` 已是路由表，可正式化为 `api/` 包（`test_api_routes.py` 护航）。
 6. **版本与发布纪律**：把 CHANGELOG 里多批"未发版追加"收敛为真实 tag，并让 `check_docs.py` 校验 `VERSION` 与最新 CHANGELOG 标题一致——彻底消灭"构建与源码对不上"。
-7. **前端 e2e**：`npm test` 覆盖解析器/渲染器/工具函数（24 个 .mjs），无组件交互与端到端；项目已依赖 Playwright，加一个冒烟（起服务 → 发一条 → 断言 SSE 与产物条）成本很低。
+7. **前端 e2e**：`npm test` 覆盖解析器/渲染器/工具函数（26 个 .mjs），无组件交互与端到端；项目已依赖 Playwright，加一个冒烟（起服务 → 发一条 → 断言 SSE 与产物条）成本很低。
 8. **测试资产**：按领域扩充分子级用例；`pytest tests/` 已接入 CI 与 `self_evolve` 验证链。
 
 ### 明确不做

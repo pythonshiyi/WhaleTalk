@@ -2174,8 +2174,11 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                   }}
                   onKeyDown={multiSel ? (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleSelect(gi); } } : undefined}
                 >
+                  {/* 只有「新到达」的末尾消息播放入场动画：切换会话时整段历史
+                      同时动画会同时启动几十个合成器动画，正是打开旧会话卡顿的来源 */}
                   <Message
                     msg={m}
+                    enter={gi >= msgs.length - 2}
                     onResend={onSend}
                     onStar={() => onStarMsg(gi)}
                     onPin={() => onPinMsg(gi)}

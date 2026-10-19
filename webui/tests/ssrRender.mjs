@@ -40,13 +40,20 @@ async function loadMarkdown() {
   const tmp = path.join(tmpDir, `ssr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.mjs`);
   fs.writeFileSync(tmp, code);
   const mod = await import(pathToFileURL(tmp).href);
-  cached = mod.default;
+  cached = mod;
   return cached;
 }
 
 export async function renderMarkdown(props) {
-  const Markdown = await loadMarkdown();
+  const mod = await loadMarkdown();
+  const Markdown = mod.default;
   return renderToStaticMarkup(React.createElement(Markdown, props));
+}
+
+/** 渲染执行过程面板（用于断言折叠/展开的真实 DOM 输出，而不只测判据函数） */
+export async function renderStepGroup(props) {
+  const mod = await loadMarkdown();
+  return renderToStaticMarkup(React.createElement(mod.StepGroup, props));
 }
 
 export { React };

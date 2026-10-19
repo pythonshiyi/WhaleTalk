@@ -4224,3 +4224,23 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
    聊天区几乎总是可滚动的，但空会话/短会话时滚动条不出现；一旦流式输出越过
    一屏，内容会整体左移。gutter 只在这一刻生效，所以对空态影响可忽略。 */
 .chat-scroll { scrollbar-gutter: stable; }
+
+/* ── 7. 执行过程默认折叠（v3.21）──
+   折叠态保留「步数 / 耗时 / 工具名摘要」，信息不丢，只是不再占据正文高度。
+   失败组用左侧红边标记：折叠也不该让异常从视线里消失。 */
+.rail-collapsed .rail-head { padding-top: 6px; padding-bottom: 6px; }
+.rail-preview {
+  font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 42%; margin-left: var(--sp-2); opacity: .9;
+}
+.rail-has-fail { border-color: rgba(var(--danger-rgb), .45); }
+.rail-has-fail .rail-ic { background: var(--danger-soft); color: var(--danger-text); border-color: rgba(var(--danger-rgb), .35); }
+/* 窄屏不显示工具名摘要：一行里「执行过程 + 步数 + 摘要 + 箭头」会互相挤 */
+@media (max-width: 720px) { .rail-preview { display: none; } }
+
+/* ── 8. 入场动画只给「新到达」的消息 ──
+   改前每条消息挂载即播放 msgIn；切换会话时 60 条历史消息会同时启动 60 个
+   合成器动画 + 逐条布局，是「打开历史会话一顿」的元凶之一。 */
+.msg { animation: none; }
+.msg.msg-enter { animation: msgIn .22s var(--ease); }
