@@ -2,6 +2,49 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.24.1（2026-10-19）—— 🚑 修整页崩溃：TDZ（Cannot access 'busy' before initialization）
+
+**版本号 3.24.0 → 3.24.1。** v3.24.0 的首屏是白屏 + 「页面出错了」——**我的错**。
+
+### 根因
+
+时间预算的提醒 effect 被插在 `const { toast } = useContext(...)` 之后、而 `busy` 的
+`useState` 声明在 **35 行之后**。`useEffect(fn, [busy, toast])` 的**依赖数组在渲染期求值**，
+于是每次渲染都先访问尚未初始化的 `busy` → `ReferenceError: Cannot access 'B' before initialization`
+（生产包被压缩成单字母，所以报的是 `'B'`）。
+
+压缩后的名字让人无法一眼看出变量，这也是我第一轮没能定位的原因。
+
+### 修复
+
+effect 移到 `const [busy, setBusy] = React.useState(false);` **之后**。
+
+### 复现与验证（这轮真正花时间的部分）
+
+1. 用本机 Chrome 无头模式 + 探针页（覆盖 `console.error` 与 `window.onerror`，把栈写进
+   `data-log` 属性）跑真实产物，拿到带行列号的栈：`index-*.js:34:13933` → 再回读该偏移处的
+   源码，看到 `useEffect(..., [B, _])` 紧邻后面的 `let [B,V]=useState(!1)`，确认是 TDZ。
+2. 修复后同一探针复跑：无错误日志，`composer-input` / `intent-sum` / `chat-scroll` 全部渲染。
+
+### 新增回归（并已验证它真的会红）
+
+`webui/tests/chatPageSmoke.test.mjs`（2 例）：SSR 渲染 **ChatPage 首屏**，断言不抛错、
+渲染出输入框与意图条、且不是错误边界兜底页。
+
+> 为什么这个测试能抓住：`useEffect` 的依赖数组在**渲染期**求值，SSR 也会执行到。
+> 已验证：把 bug 注回去 → 测试红，报错正是 `Cannot access 'busy' before initialization`；
+> 还原 → 绿。**没有验证过「会红」的回归测试，只是装饰。**
+
+### 顺带修好的测试基础设施
+
+`tests/ssrRender.mjs` 原先把 SSR 产物只写「入口 chunk」，一旦 Rollup 抽出共享块
+（如 `quiet.js`）就会 `Cannot find module .../assets/quiet-xxx.js`。现在把**全部 chunk**
+按原相对路径落到同一个临时目录再 import 入口——这使得「渲染整页」这类测试成为可能。
+
+### 验证
+
+前端 29 → **30 套件**全绿；`npm run build` 通过；真实产物在 Chrome 无头下首屏正常。
+
 ## v3.24.0（2026-10-19）—— 🗂 执行作业落盘：任务成为一等对象
 
 **版本号 3.23.0 → 3.24.0。** v3.23 把过程搬到了仪表，但仪表只活在**当前会话的内存里**——

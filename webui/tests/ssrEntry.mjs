@@ -6,3 +6,4 @@ import { StepGroup } from "../src/components/Message.jsx";
 export default Markdown;
 export { StepGroup };
 export { default as TracePanel } from "../src/components/TracePanel.jsx";
+export { default as ChatPage } from "../src/components/ChatPage.jsx";

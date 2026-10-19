@@ -765,17 +765,6 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const { flash } = React.useContext(FlashContext);
   const { toast } = React.useContext(ToastContext);
 
-  // 时间预算提醒：到点只在界面上说一句，**不中断**执行。
-  // 没有后端时钟就没有真正的中止能力——与其假装能拦，不如老实提醒。
-  React.useEffect(() => {
-    if (!busy) return undefined;
-    const min = readIntent().timeBudgetMin;
-    if (!min) return undefined;
-    const timer = setTimeout(() => {
-      toast(`本次任务已运行 ${min} 分钟：可在右侧「过程」查看进度，或点停止按钮收手`, 6000);
-    }, min * 60000);
-    return () => clearTimeout(timer);
-  }, [busy, toast]);
   const [genState, setGenState] = React.useState({ on: false, text: "" });
   // 生成中的实时输出速率（tok/s，来自后端 metrics 事件），结束/停止时清零
   const [genTps, setGenTps] = React.useState(0);
@@ -799,7 +788,19 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   // 否则流式/保存会对着旧会话的镜像操作（历史串会话、落盘错乱）。
   React.useEffect(() => { msgsRef.current = msgs; }, [msgs]);
   const [busy, setBusy] = React.useState(false);
-  const [ctxOpen, setCtxOpen] = React.useState(false);
+  // 时间预算提醒：到点只在界面上说一句，**不中断**执行。
+  // 没有后端时钟就没有真正的中止能力——与其假装能拦，不如老实提醒。
+  // 注意：必须放在 busy 声明**之后**——依赖数组在渲染期求值，提前引用会命中 TDZ
+  // （v3.24.0 曾因此整页崩溃：Cannot access 'busy' before initialization）。
+  React.useEffect(() => {
+    if (!busy) return undefined;
+    const min = readIntent().timeBudgetMin;
+    if (!min) return undefined;
+    const timer = setTimeout(() => {
+      toast(`本次任务已运行 ${min} 分钟：可在右侧「过程」查看进度，或点停止按钮收手`, 6000);
+    }, min * 60000);
+    return () => clearTimeout(timer);
+  }, [busy, toast]);  const [ctxOpen, setCtxOpen] = React.useState(false);
   const [listOpen, setListOpen] = React.useState(() => !mq("(max-width: 860px)"));
   const [auxOpen, setAuxOpen] = React.useState(() => !mq("(max-width: 1000px)"));
   // 记忆上次停留的控制台页签（程序化切到 activity 时不覆盖，仅用户点击时由 AuxPanel 写入）

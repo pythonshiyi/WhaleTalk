@@ -33,13 +33,39 @@ async function loadMarkdown() {
       },
     },
   });
-  const code = result.output.find((o) => o.type === "chunk" && o.isEntry)?.code || result.output[0].code;
-  // 临时 bundle 必须位于项目内，否则 node 原生 import 无法向上解析到 webui/node_modules/react
+  // SSR 构建可能产出**多个 chunk**（例如 quiet.js 被抽成共享块）。早先只写入口 chunk，
+  // 一旦出现共享块就 `Cannot find module .../assets/quiet-xxx.js`——所以这里把全部
+  // 产物按原相对路径落盘，再 import 入口。
   const tmpDir = path.join(root, "tests", ".ssr_tmp");
   fs.mkdirSync(tmpDir, { recursive: true });
-  const tmp = path.join(tmpDir, `ssr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.mjs`);
-  fs.writeFileSync(tmp, code);
-  const mod = await import(pathToFileURL(tmp).href);
+  // 每次跑测都会新落一个目录：顺手清掉一小时前的，避免 .ssr_tmp 无限增长
+  try {
+    const cutoff = Date.now() - 3600 * 1000;
+    for (const name of fs.readdirSync(tmpDir)) {
+      const abs = path.join(tmpDir, name);
+      if (fs.statSync(abs).mtimeMs < cutoff) fs.rmSync(abs, { recursive: true, force: true });
+    }
+  } catch { /* 清理失败不影响本次构建 */ }
+  // 每次跑测都会新落一个目录：顺手清掉一小时前的，避免 .ssr_tmp 无限增长
+  try {
+    const cutoff = Date.now() - 3600 * 1000;
+    for (const name of fs.readdirSync(tmpDir)) {
+      const abs = path.join(tmpDir, name);
+      if (fs.statSync(abs).mtimeMs < cutoff) fs.rmSync(abs, { recursive: true, force: true });
+    }
+  } catch { /* 清理失败不影响本次构建 */ }
+  // 目录必须**只算一次**：每个 chunk 各用一个随机目录会让入口的静态 import 找不到兄弟块
+  const runDir = path.join(tmpDir, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+  let entry = "";
+  for (const o of result.output) {
+    if (o.type !== "chunk") continue;
+    const f = path.join(runDir, o.fileName);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, o.code);
+    if (o.isEntry) entry = f;
+  }
+  if (!entry) throw new Error("[ssrRender] SSR 构建没有入口 chunk");
+  const mod = await import(pathToFileURL(entry).href);
   cached = mod;
   return cached;
 }
@@ -48,6 +74,12 @@ export async function renderMarkdown(props) {
   const mod = await loadMarkdown();
   const Markdown = mod.default;
   return renderToStaticMarkup(React.createElement(Markdown, props));
+}
+
+/** 渲染会话页（首屏主体）。用于抓「渲染期就抛」的崩溃，见 chatPageSmoke 测试 */
+export async function renderChatPage(props = {}) {
+  const mod = await loadMarkdown();
+  return renderToStaticMarkup(React.createElement(mod.ChatPage, props));
 }
 
 /** 渲染过程时间轴（用于断言汇总/筛选/单步详情的真实 DOM 输出） */
