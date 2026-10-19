@@ -16,6 +16,7 @@ const LazyPages = {
   workbench: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.WorkbenchPage }))),
   abilities: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.AbilitiesPage }))),
   capabilities: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.CapabilitiesPage }))),
+  tasks: lazy(() => import("./components/TasksPage.jsx")),
   settings: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.SettingsPage }))),
   prompts: lazy(() => import("./components/PromptsPage.jsx")),
   brain: lazy(() => import("./components/BrainPage.jsx")),
@@ -257,6 +258,15 @@ export default function App() {
                     })()}
                     {page === "abilities" && <LazyPages.abilities />}
                     {page === "capabilities" && <LazyPages.capabilities />}
+                    {page === "tasks" && (
+                      <LazyPages.tasks
+                        onOpenSession={(sid) => {
+                          if (!sid) return;
+                          setOpenSessionId(sid);
+                          setPage("chat");
+                        }}
+                      />
+                    )}
                     {page === "prompts" && (() => {
                       const P = LazyPages.prompts;
                       return (

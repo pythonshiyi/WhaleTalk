@@ -7665,6 +7665,37 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, _capability_status())
 
 
+    @_get_route(("pre", "/v1/jobs", ""))
+    def _g_v1_jobs(self):
+        """执行历史：GET /v1/jobs?limit&session_id&status ；GET /v1/jobs/<id>
+
+        作业记录只含「发生了什么」（工具名/耗时/失败/用量），不含完整参数与结果
+        （可能含密钥或隐私），所以这里也不需要额外的脱敏分支。
+        """
+        from urllib.parse import parse_qs, urlparse
+        u = urlparse(self.path)
+        path = (u.path or "").rstrip("/")
+        try:
+            import jobs as _jobs_mod
+        except Exception:
+            self._json(200, {"jobs": [], "summary": {"count": 0, "failed": 0, "seconds": 0}})
+            return
+        if path in ("/v1/jobs", ""):
+            qs = parse_qs(u.query or "")
+            limit = _safe_int((qs.get("limit") or ["50"])[0])
+            sid = (qs.get("session_id") or [""])[0]
+            status = (qs.get("status") or [""])[0]
+            recs = _jobs_mod.list_jobs(limit=limit, session_id=sid, status=status)
+            self._json(200, {"jobs": recs, "summary": _jobs_mod.summary(recs)})
+            return
+        jid = path[len("/v1/jobs/"):] if path.startswith("/v1/jobs/") else ""
+        rec = _jobs_mod.get_job(jid)
+        if not rec:
+            self._json(404, {"error": "job not found"})
+        else:
+            self._json(200, rec)
+
+
     @_get_route("/v1/wechat/config")
     def _g_v1_wechat_config(self):
         """公众号写作配置（默认值 + 用户覆盖），供设置页读写。"""
@@ -9653,6 +9684,8 @@ class _Handler(BaseHTTPRequestHandler):
             return True
 
         persist_base = [dict(m) for m in messages if isinstance(m, dict)]
+        # 作业记录用的 usage 累加（on_usage 可能被多次调用，取最后一次为终值）
+        _usage_acc = []
         is_continue = bool(body.get("continue_prefix"))
         generated = []
         reply_parts = []
@@ -9750,7 +9783,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "on_tool_start": lambda n, a, cid=None: send("tool_start", {"name": n, "args": a, "id": cid}),
                 "on_tool": _on_tool,
                 "on_tool_duration": lambda n, d, cid=None: send("tool_duration", {"name": n, "duration": d, "id": cid}),
-                "on_usage": lambda u: (send("usage", u), _record_usage(u, cfg, body)),
+                "on_usage": lambda u: (send("usage", u), _record_usage(u, cfg, body), _usage_acc.append(u)),
                 "on_metrics": _on_metrics,
                 # 生成提前结束的真实原因必须回传，否则用户只看到「对话突然结束」而无从判断
                 # （此前 on_truncated / on_loop_guard 从未接线，提示全部落空）。
@@ -9837,6 +9870,22 @@ class _Handler(BaseHTTPRequestHandler):
                 for k in (job.stop_key, job.sid, job.id):
                     if k and _STREAM_STOPS.get(k) is job.stop_event:
                         _STREAM_STOPS.pop(k, None)
+            # 作业记账：把「一轮执行」落成可回看的记录（data/jobs/*.jsonl）。
+            # 只在作业线程的真正收尾处写一条，失败只记日志，绝不影响生成主流程。
+            try:
+                import jobs as _jobs
+                try:
+                    _ut = _msg_text(_user_turn[-1]) if _user_turn else ""
+                except Exception:  # noqa: BLE001 取不到用户文本不影响记账
+                    _ut = ""
+                _jobs.append_record(_jobs.build_record(
+                    job,
+                    user_text=_ut,
+                    model=str(body.get("model") or ""),
+                    usage=(_usage_acc[-1] if _usage_acc else None),
+                ))
+            except Exception:  # noqa: BLE001 作业记账失败不得影响生成
+                logger.exception("作业记录写入失败（可降级）")
             _end_job_state()
             job.trim_if_unused()
             # 兜底收口（防 stream_id 永久卡死）：`finish()` 只在 except 分支与
@@ -10103,6 +10152,13 @@ def start_server(port=8745, token=""):
             logger.info("已迁移 %s 个旧版会话到会话库", n)
     except Exception:
         logger.warning("旧会话迁移失败（可降级）：旧版会话暂不可见，不影响新会话")
+    # ── 可降级：作业记录目录（执行历史，v3.24）──
+    try:
+        import jobs as _jobs_mod
+        _jobs_mod.set_dir(os.path.join(DATA_DIR, "jobs"))
+    except Exception:
+        logger.warning("作业记录目录未接线（可降级）：执行历史不会落盘")
+
     # ── 可降级：公众号写作配置路径指向数据目录 ──
     try:
         _init_wechat_config()

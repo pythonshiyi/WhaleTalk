@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { id: "workbench", label: "工作台", icon: "home" },
   { id: "abilities", label: "能力中心", icon: "grid" },
   { id: "capabilities", label: "能力", icon: "puzzle" },
+  { id: "tasks", label: "任务", icon: "activity" },
   { id: "prompts", label: "指令库", icon: "bolt" },
   { id: "brain", label: "大脑", icon: "brain" },
   { id: "autonomy", label: "自主", icon: "spark" },

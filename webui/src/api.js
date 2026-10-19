@@ -632,6 +632,22 @@ export async function restoreBuiltinPrompts() {
   return api("/v1/prompts/restore_builtin", { method: "POST", body: JSON.stringify({}) });
 }
 
+// ── 任务 / 执行历史 ─────────────────────────────
+/** 执行历史列表。@param {{limit?:number, status?:string, session_id?:string}} q */
+export async function jobs(q = {}) {
+  const p = new URLSearchParams();
+  if (q.limit) p.set("limit", String(q.limit));
+  if (q.status) p.set("status", String(q.status));
+  if (q.session_id) p.set("session_id", String(q.session_id));
+  const qs = p.toString();
+  return api(`/v1/jobs${qs ? `?${qs}` : ""}`);
+}
+
+/** 单条执行记录 */
+export async function jobDetail(id) {
+  return api(`/v1/jobs/${encodeURIComponent(String(id))}`);
+}
+
 // ── 公众号写作配置 ─────────────────────────────
 /** @returns {Promise<{ok:boolean, config:Object, defaults:Object, groups:string[], path:string}>} */
 export async function wechatConfig() {
