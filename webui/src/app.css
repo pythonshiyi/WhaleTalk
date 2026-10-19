@@ -386,7 +386,7 @@ button {
   box-shadow: 0 0 0 4px rgba(var(--brand-rgb),.05), 0 3px 10px rgba(var(--brand-rgb),.14);
 }
 .msg-avatar svg { width: 17px; height: 17px; }
-.msg-body { flex: 1; min-width: 0; max-width: 860px; user-select: text; -webkit-user-select: text; }
+.msg-body { flex: 1; min-width: 0; max-width: min(1100px, 100%); user-select: text; -webkit-user-select: text; }
 
 /* 思考块 */
 .think-block {
@@ -4379,11 +4379,12 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
 .intent-hint { color: var(--text-3); font-size: var(--fs-4xs); }
 .intent-note { margin: 0; color: var(--text-3); font-size: var(--fs-4xs); line-height: 1.5; }
 
-/* ── 9. 阅读宽度上限（v3.23）──
-   宽屏下正文一行能拉到 1200px，中文长行极难回行定位（眼睛要横扫）。
-   72ch 是中文正文的舒适区；标题/表格不限制，否则报表会被压扁。 */
-.md > p, .md > ul, .md > ol, .md > blockquote, .md > .md-h1,
-.md > .md-h2, .md > .md-h3, .md > .md-h4 { max-width: 72ch; }
+/* ── 9.（已撤销）正文阅读宽度上限 ──
+   v3.23 曾给 `.md` 的段落加 `max-width: 72ch`（约 500px），本意是限制中文长行。
+   但 `.msg-body` 早就已经有 `max-width: 860px` 的阅读栏，再叠一层 72ch 的结果是：
+   回答只占正文栏的一半，右侧空一大片——看起来像"气泡宽度坏了"。
+   教训：**宽度上限只能有一处**，且要加在容器上，不要加在段落上。
+   若将来确实要调整阅读宽度，改 `.msg-body` 的 max-width，别再加第二条规则。 */
 
 /* ═══════════════════════════════════════════════════════════════════
    任务页（v3.24）—— 执行历史：状态 / 步数 / 耗时 / 跳回会话
