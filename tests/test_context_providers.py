@@ -24,7 +24,6 @@ FIXED_DEPS = {
     "egress_notice": lambda: "",
     "failures_text": lambda: "",
     "patterns_load": lambda: [],
-    "plugins_hint": lambda: "",
 }
 
 
@@ -111,7 +110,9 @@ def test_non_critical_failure_does_not_enter_notice():
     def boom():
         raise RuntimeError("x")
 
-    cp.assemble(_ctx(deps={"plugins_hint": boom}))
+    # v3.18 拆除插件体系后 context.plugins → context.capabilities（不再依赖 deps），
+    # 这条降级用例改用仍在依赖注入里的 patterns_load 制造抛错。
+    cp.assemble(_ctx(deps={"patterns_load": boom}))
     assert degrade.critical_notice() == ""
     assert degrade.summary()["count"] == 1
 

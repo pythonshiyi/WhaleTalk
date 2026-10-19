@@ -2926,23 +2926,81 @@ def _auto_resolve_failure(name):
         return 0
 
 
+# 成功模式库容量。20 条在实测频次下偏小：一次含 15 次 run_python 的长任务就能把库
+# 洗一遍，把低频但高价值的专业工具（image_process / publish_draft）全冲掉。
+_PATTERN_CAP = 50
+# 每个工具保底保留的最新条数：防止低频专业工具被通用逃生舱挤空。
+_PATTERN_KEEP_PER_TOOL = 3
+
+
 def _record_success_pattern(name, args, result):
-    """成功模式记录（patterns.json：复用已验证工具链，上限 20）。"""
+    """成功模式记录（patterns.json：复用已验证工具链，上限 50）。
+
+    三条准入挡掉噪声。此前一律记账：任何"没报错"的调用都进库，包括 print('1')
+    这种探路——它们没有复用价值，却会占满注入窗口（实测 20 条里 11 条是 run_python）。
+    """
     try:
+        import hashlib
         import stores
+
+        tool = str(name or "").strip()
+        # 准入 1：参数为空 → 探路/测试调用，无复用价值
+        raw_args = str(args or "").strip()
+        if not raw_args or raw_args in ("{}", "None", "null"):
+            return
+        # 准入 2：结果为空或只有 "ok" 这类无信息量回执 → 同样无价值
+        raw_result = str(result or "").strip()
+        if not raw_result or raw_result.lower() in ("ok", "success", "true", "done", "true"):
+            return
+        # 准入 3：测试残留（tool0–tool7 这类）。它们曾占满 20 条中的 8 条。
+        if tool.lower().startswith("tool") and tool[4:].isdigit():
+            return
+
         pats = stores.load_patterns(PATTERNS_PATH)
+        # 去重键 = 工具名 + **完整参数的哈希**。此前用截断到 200 字符的 args 做等值
+        # 判断：诊断类代码前 200 字符高度雷同会误合并，而超长参数的差异部分又被丢掉——
+        # 用截断值做等值判断在逻辑上不成立。
+        sig = hashlib.md5(raw_args.encode("utf-8")).hexdigest()[:12]
         entry = {
-            "tool": str(name),
-            "args": str(args or "")[:200],
-            "result": str(result or "")[:200],
+            "tool": tool,
+            "args": raw_args[:200],
+            "args_sig": sig,
+            "result": raw_result[:200],
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
-        pats = [p for p in pats if not (isinstance(p, dict) and p.get("tool") == name and p.get("args") == entry["args"])]
+        pats = [p for p in pats if not (
+            isinstance(p, dict) and p.get("tool") == tool
+            and (p.get("args_sig") or hashlib.md5(
+                str(p.get("args") or "").encode("utf-8")).hexdigest()[:12]) == sig
+        )]
         pats.append(entry)
-        pats = pats[-20:]
+
+        # 容量：先给每个工具保底，再用剩余名额按时间补齐（保证低频专业工具不被冲掉）
+        by_tool = {}
+        for p in pats:
+            by_tool.setdefault(str((p or {}).get("tool") or ""), []).append(p)
+        kept = []
+        for items in by_tool.values():
+            kept.extend(items[-_PATTERN_KEEP_PER_TOOL:])
+        if len(kept) >= _PATTERN_CAP:
+            pats = sorted(kept, key=lambda x: str((x or {}).get("ts") or ""))[-_PATTERN_CAP:]
+        else:
+            kept_ids = {id(x) for x in kept}
+            rest = sorted((p for p in pats if id(p) not in kept_ids),
+                          key=lambda x: str((x or {}).get("ts") or ""))
+            need = _PATTERN_CAP - len(kept)
+            pats = sorted(kept + rest[len(rest) - need:] if need else kept,
+                          key=lambda x: str((x or {}).get("ts") or ""))
         stores.save_patterns(PATTERNS_PATH, pats)
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        # 不再静默：此前 except: pass 把写盘失败、JSON 损坏、字段类型异常全部吞掉，
+        # 与项目"失败如实报"的原则相违，也让这类问题无法被发现。
+        try:
+            import degrade
+            degrade.degrade("api.success_pattern", e,
+                            "成功模式未记录（工具链复用提示可能不全）", critical=False)
+        except Exception:  # noqa: silent-except: degrade 自身失败不能影响记账调用方
+            pass
 
 
 def _audit(action, target, detail=""):

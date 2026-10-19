@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.25.0）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.26.0）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,9 +17,9 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.25.0`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.26.0`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **106 个 `/v1` 路由**、**119 个 pytest 文件 / 1192 用例 + 31 个前端 node 套件**、
+  **106 个 `/v1` 路由**、**120 个 pytest 文件 / 1210 用例 + 31 个前端 node 套件**、
   源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
   主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
@@ -47,7 +47,7 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试 ──
-python -m pytest -q                      # 后端全量（119 个文件 / 1192 用例，约 73s；CI 同款，见下方「分级验证」）
+python -m pytest -q                      # 后端全量（120 个文件 / 1210 用例，约 73s；CI 同款，见下方「分级验证」）
 python -m pytest tests/test_registry.py -q    # 只跑相关文件：日常改动的正确姿势（1–3s）
 cd webui && npm test                     # 前端 31 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
@@ -197,7 +197,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案）、`check_silent_except.py`（静默吞异常基线差分门禁 + `silent_except_baseline.txt`） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 119 个 pytest 文件 / 1192 用例 |
+| `tests/` | 后端回归 120 个 pytest 文件 / 1210 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
@@ -629,6 +629,26 @@ def my_tool(...): ...
 
 ---
 
+## 13.3 上下文注入：注入端必须输出可判定的信息
+
+`context_providers.py` 里的 Provider 很容易退化成「把结构化数据压成名字列表」：
+`args` / `result` / `chain` 都存了，注入时却只留工具名或标题，模型拿到后无法判断
+"这条能不能套用到当前任务"。实测事故与修法：
+
+| Provider | 问题 | 修法 |
+|---|---|---|
+| `context.success_patterns` | 只输出工具名；`- run_python` 无法判定（print 与生成 docx 天差地别）；按"最近 N 条"取窗口 → 被通用逃生舱占满（实测 11/20 是 run_python） | 倒序 + **按工具去重** + 通用工具（run_python/run_command）限 1 席 + 输出参数/结果摘要 + args 为空即跳过 |
+| `context.tasklog` | 取最近 3 条标题，无门槛 → "激活""是否真的落盘了"这类碎片占满窗口 | 长度 ≥8 + 停用词过滤；带 `chain`；凑不满就少给，不填位 |
+| `context.capabilities` | 原名 `context.plugins`，仍调 v3.18 已拆除的 `plugins_hint` → `dep()` 返回 None 后被当函数调用，**每轮抛 TypeError 并 degrade** | 改为读取 `capability.list_plugins()`，deps 置空 |
+
+记账侧（`api_server._record_success_pattern`）配套：三条准入（空参数 / 结果仅
+"ok" / 工具名形如 toolN）+ **完整参数的 md5 做去重键**（此前用截断到 200 字符的
+args 做等值判断，逻辑上不成立）+ 异常走 `degrade()` 而非 `except: pass` +
+容量 50 且**每工具保底 3 条**（防止低频专业工具被通用工具冲掉）。
+
+> 一条通用教训：**失效的 Provider 不会自己报错消失，它会安静地每轮 degrade**。
+> 拆掉某个模块后，要反过来查它的依赖方（这里是 `plugins_hint`）。
+
 ## 13.4 能力发现：activate_tools 接受自然语言
 
 smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，**分组是省上下文的
@@ -673,7 +693,7 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 理由很直接——缺工具时那两层会以"跳过"形态返回，判定逻辑很容易把它们当成通过，
 那就成了「分支 + 四层假装」。宁可拒绝，也不在证明不了的环境里假装验证过。
 
-## 14. 测试资产速查（tests/，119 个 pytest 文件 / 1192 用例）
+## 14. 测试资产速查（tests/，120 个 pytest 文件 / 1210 用例）
 
 按领域分组（文件名即内容）：
 
@@ -748,5 +768,5 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1192 用例 / 版本 3.25.0）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1210 用例 / 版本 3.26.0）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

@@ -380,15 +380,56 @@ register(Provider(
 ))
 
 
+# 通用逃生舱：任何零散操作都能往里塞，天然高频。按"最近 N 条"取窗口时，
+# 它们会稳定占满窗口，把真正有复用价值的专业工具（image_process / publish_draft …）
+# 挤出去。这是**采样策略与数据分布不匹配**，所以对它们限额。
+_GENERIC_TOOLS = frozenset({"run_python", "run_command", "run_shell", "run_powershell"})
+_MAX_GENERIC = 1
+_MAX_PATTERN_LINES = 4
+
+
 def _provide_patterns(ctx):
+    """已验证工具链：注入**可判定**的信息（工具名 + 参数摘要 + 结果摘要）。
+
+    此前只输出工具名，而 `- run_python` 这种行无法判定——同样是 run_python，
+    print('hi') 与「生成 docx 表格」的复用价值天差地别。存了 args/result 却在
+    注入时丢掉，这行提示就退化成"这些工具能用"（工具定义里本来就知道）。
+    """
     pats = ctx.dep("patterns_load")()
     if not pats:
         return None
+
+    seen, picked, generic_used = set(), [], 0
+    for p in reversed(pats):                       # 新 → 旧
+        if not isinstance(p, dict):
+            continue
+        tool = str(p.get("tool") or p.get("recipe") or "").strip()
+        if not tool or tool in seen:
+            continue
+        if tool in _GENERIC_TOOLS:
+            if generic_used >= _MAX_GENERIC:
+                continue
+            generic_used += 1
+        args = " ".join(str(p.get("args") or "").split())
+        result = " ".join(str(p.get("result") or "").split())
+        # 没有参数的记录 = 没有"这次为什么成功"的证据 → 无复用价值，跳过。
+        # 实测的测试残留 tool0–tool7 就是 args 为空、result 恒 "ok"：只判"双空"
+        # 拦不住它们（result 非空），所以这里以 args 为准。
+        if not args:
+            continue
+        seen.add(tool)
+        picked.append((tool, args, result))
+        if len(picked) >= _MAX_PATTERN_LINES:
+            break
+
+    if not picked:
+        return None
     lines = ["[已验证工具链] 以下调用曾成功（同类任务优先复用）："]
-    for p in pats[-3:]:
-        if isinstance(p, dict) and (p.get("tool") or p.get("recipe")):
-            lines.append("- " + str(p.get("tool") or p.get("recipe")))
-    return "\n".join(lines) if len(lines) > 1 else None
+    for tool, args, result in picked:
+        a = args if len(args) <= 80 else args[:80] + "…"
+        r = result if len(result) <= 40 else result[:40] + "…"
+        lines.append(f"- {tool}  {a} → {r}" if (a or r) else f"- {tool}")
+    return "\n".join(lines)
 
 
 register(Provider(
@@ -399,14 +440,36 @@ register(Provider(
 ))
 
 
-def _provide_plugins(ctx):
-    return ctx.dep("plugins_hint")() or None
+def _provide_capabilities(ctx):
+    """已装载的运行时能力包（v3.18 起取代旧插件提示）。
+
+    为什么必须改：v3.18 拆掉了 plugins.py / plugin_app.py，而本 Provider 仍写着
+    `ctx.dep("plugins_hint")()`——生产 deps 里早已没有这个键，dep() 返回 None 后
+    被当函数调用 → **每轮抛 TypeError → 每轮 degrade 记账**。一个早已失效的
+    Provider 在后台持续制造噪声，却因为"看起来还在"而无人发现。
+    """
+    try:
+        import capability
+        packs = capability.list_plugins()
+    except Exception:  # noqa: BLE001 能力主干不可用时这段上下文本来就可省
+        return None
+    if not packs:
+        return None
+    lines = ["[已装载能力] 以下为运行时装载的能力包（不是内置工具）："]
+    for info in packs[:8]:
+        pid = str(info.get("plugin_id") or "").strip()
+        tools = [str(x) for x in (info.get("tools") or [])]
+        if not pid:
+            continue
+        tail = f"（{'、'.join(tools[:3])}{'…' if len(tools) > 3 else ''}）" if tools else ""
+        lines.append(f"- {pid}{tail}")
+    return "\n".join(lines) if len(lines) > 1 else None
 
 
 register(Provider(
-    name="context.plugins", priority=70, provide=_provide_plugins,
+    name="context.capabilities", priority=70, provide=_provide_capabilities,
     enabled=_not_pure, budget=2000, critical=False,
-    deps=("plugins_hint",),
+    deps=(),
     skip_reason="对话模式不注入",
 ))
 
@@ -420,10 +483,23 @@ def _provide_tasklog(ctx):
     tasks = (tl or {}).get("tasks") or []
     if not tasks:
         return None
+    # 实测反例："激活"（单动词）、"是否真的落盘了"（无主语）、
+    # "需要你真实查看一下，避免幻觉"（指令残片）——它们占满了 3 条窗口。
+    # 真正有交接价值的是「公众号封面图（用 HTML 渲染，不调用接口）」：带决策约束。
+    _STOP = {"激活", "继续", "好的", "确认", "是", "否", "重试", "再来一次", "在吗", "你好"}
     lines = ["[项目任务记录] 跨会话交接参考："]
-    for t in tasks[-3:]:
-        if isinstance(t, dict) and t.get("title"):
-            lines.append("- " + str(t["title"])[:60])
+    for t in reversed(tasks):                       # 新 → 旧
+        if not isinstance(t, dict):
+            continue
+        title = str(t.get("title") or "").strip()
+        if len(title) < 8 or title in _STOP:        # 信息量门槛
+            continue
+        # chain 是"上次怎么做的"的证据，比标题更有交接价值——此前同样被丢弃
+        chain = [str(c) for c in (t.get("chain") or [])][:6]
+        tail = f"（步骤：{' → '.join(chain)}）" if chain else ""
+        lines.append(f"- {title[:60]}{tail}")
+        if len(lines) >= 4:                         # 1 行标题 + 最多 3 条
+            break
     return "\n".join(lines) if len(lines) > 1 else None
 
 

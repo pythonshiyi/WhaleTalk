@@ -55,3 +55,20 @@ def _isolate_brain(tmp_path, monkeypatch):
     ):
         monkeypatch.setattr(bk, name, (base / rel) if rel else base, raising=False)
     yield
+
+
+@pytest.fixture
+def isolate_patterns(tmp_path, monkeypatch):
+    """把成功模式库指到临时目录，避免测试写入生产 data/patterns.json。
+
+    历史事故：patterns.json 曾出现 8 条 tool0–tool7（args 为空、result 恒 "ok"、
+    时间戳全相同），占满 20 条中的 8 条窗口——是某个测试/冒烟脚本直接调记账函数
+    留下的。现在记账侧有三条准入（空参数 / 无信息量结果 / toolN 名）+ 注入侧按
+    args 过滤，即使写入也不会污染注入；但**新测试仍应主动隔离**，不要把赌注压在
+    下游过滤上。
+    """
+    import api_server as A
+
+    target = tmp_path / "patterns.json"
+    monkeypatch.setattr(A, "PATTERNS_PATH", str(target))
+    return str(target)
