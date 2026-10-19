@@ -2975,7 +2975,13 @@ def _record_success_pattern(name, args, result):
         )]
         pats.append(entry)
 
-        # 容量：先给每个工具保底，再用剩余名额按时间补齐（保证低频专业工具不被冲掉）
+        # 容量：先给每个工具保底（防低频专业工具被通用工具冲掉），剩余名额按时间补齐。
+        # 补齐用 rest[-need:] —— 不能用 rest[len(rest)-need:]：
+        # 当 need > len(rest) 时后者会得到 -（need-len(rest)）这个**错误的负索引**，
+        # 结果只回填最后几条而不是全部（实测 need=38 / len(rest)=30 时只回填了 8 条）。
+        def _ts(x):
+            return str((x or {}).get("ts") or "")
+
         by_tool = {}
         for p in pats:
             by_tool.setdefault(str((p or {}).get("tool") or ""), []).append(p)
@@ -2983,14 +2989,14 @@ def _record_success_pattern(name, args, result):
         for items in by_tool.values():
             kept.extend(items[-_PATTERN_KEEP_PER_TOOL:])
         if len(kept) >= _PATTERN_CAP:
-            pats = sorted(kept, key=lambda x: str((x or {}).get("ts") or ""))[-_PATTERN_CAP:]
+            kept = sorted(kept, key=_ts)[-_PATTERN_CAP:]
         else:
             kept_ids = {id(x) for x in kept}
-            rest = sorted((p for p in pats if id(p) not in kept_ids),
-                          key=lambda x: str((x or {}).get("ts") or ""))
+            rest = sorted((p for p in pats if id(p) not in kept_ids), key=_ts)
             need = _PATTERN_CAP - len(kept)
-            pats = sorted(kept + rest[len(rest) - need:] if need else kept,
-                          key=lambda x: str((x or {}).get("ts") or ""))
+            if need > 0 and rest:
+                kept = kept + rest[-need:]
+        pats = sorted(kept, key=_ts)
         stores.save_patterns(PATTERNS_PATH, pats)
     except Exception as e:  # noqa: BLE001
         # 不再静默：此前 except: pass 把写盘失败、JSON 损坏、字段类型异常全部吞掉，

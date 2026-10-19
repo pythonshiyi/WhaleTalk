@@ -216,3 +216,91 @@ def test_record_failure_is_not_silent(monkeypatch, tmp_path):
     A._record_success_pattern("run_python", {"code": "x"}, "退出码 0 且结果够长")
     assert calls, "记账失败必须走 degrade 留痕"
     assert "success_pattern" in calls[0][0]
+
+
+# ── 6. 容量回填：名额多于候选时必须全给 ───────────────────────────────
+
+def test_capacity_refill_keeps_everything_when_under_cap(monkeypatch, tmp_path):
+    """回归：曾写成 rest[len(rest)-need:]，在 need > len(rest) 时得到错误的负索引。
+
+    实测 need=38 / len(rest)=30 时只回填了 8 条（应为 30 条）——库被莫名截断到 20 条。
+    正确写法是 rest[-need:]（不足则全给）。
+    """
+    import api_server as A
+
+    # 数据必须落在 L < need <= 2L 区间才暴露这个 bug：Python 的负索引会 clamp，
+    # 当 need > 2L 时两种写法都返回全部，测不出差异。
+    #   2 个工具 × 20 条 = 40 条 → kept=6（每工具最新 3）、rest=L=34、need=50-6=44
+    #   正确 rest[-44:] → 全给 34 条 = 41 条；错误 rest[34-44:]=rest[-10:] → 只 10 条 = 17 条
+    pats = [{"tool": "t%d" % (i % 2), "args": "a%d" % i, "args_sig": "s%d" % i,
+             "result": "r", "ts": "2026-10-19 13:%02d:%02d" % (i // 60, i % 60)}
+            for i in range(40)]
+    saved = []
+    monkeypatch.setattr(A, "PATTERNS_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr(_stores(), "load_patterns", lambda p: list(pats))
+    monkeypatch.setattr(_stores(), "save_patterns", lambda p, v: saved.append(list(v)))
+    A._record_success_pattern("write_file", "{'path':'/z'}", "已写入文件")
+    assert len(saved[0]) == 41, f"容量未满时应保留全部 41 条，实际 {len(saved[0])}"
+
+
+def test_capacity_caps_at_limit(monkeypatch, tmp_path):
+    """超过 CAP 时按时间截断，且每个工具至少留得住最新 3 条。"""
+    import api_server as A
+
+    pats = [{"tool": "flood", "args": "a%d" % i, "args_sig": "s%d" % i,
+             "result": "r", "ts": "2026-10-19 13:%02d:%02d" % (i // 60, i % 60)}
+            for i in range(80)]
+    pats.append({"tool": "rare", "args": "{'x':1}", "args_sig": "rare",
+                 "result": "r", "ts": "2026-10-19 12:00:00"})
+    saved = []
+    monkeypatch.setattr(A, "PATTERNS_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr(_stores(), "load_patterns", lambda p: list(pats))
+    monkeypatch.setattr(_stores(), "save_patterns", lambda p, v: saved.append(list(v)))
+    A._record_success_pattern("write_file", "{'path':'/z'}", "已写入文件")
+    out = saved[0]
+    assert len(out) <= A._PATTERN_CAP, f"超出容量上限：{len(out)}"
+    assert any(x.get("tool") == "rare" for x in out), "低频工具必须保底留住"
+
+
+# ── 6. 容量回填：名额多于候选时必须全给 ───────────────────────────────
+
+def test_capacity_refill_keeps_everything_when_under_cap(monkeypatch, tmp_path):
+    """回归：曾写成 rest[len(rest)-need:]，在 need > len(rest) 时得到错误的负索引。
+
+    实测 need=38 / len(rest)=30 时只回填了 8 条（应为 30 条）——库被莫名截断到 20 条。
+    正确写法是 rest[-need:]（不足则全给）。
+    """
+    import api_server as A
+
+    # 数据必须落在 L < need <= 2L 区间才暴露这个 bug：Python 的负索引会 clamp，
+    # 当 need > 2L 时两种写法都返回全部，测不出差异。
+    #   2 个工具 × 20 条 = 40 条 → kept=6（每工具最新 3）、rest=L=34、need=50-6=44
+    #   正确 rest[-44:] → 全给 34 条 = 41 条；错误 rest[34-44:]=rest[-10:] → 只 10 条 = 17 条
+    pats = [{"tool": "t%d" % (i % 2), "args": "a%d" % i, "args_sig": "s%d" % i,
+             "result": "r", "ts": "2026-10-19 13:%02d:%02d" % (i // 60, i % 60)}
+            for i in range(40)]
+    saved = []
+    monkeypatch.setattr(A, "PATTERNS_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr(_stores(), "load_patterns", lambda p: list(pats))
+    monkeypatch.setattr(_stores(), "save_patterns", lambda p, v: saved.append(list(v)))
+    A._record_success_pattern("write_file", "{'path':'/z'}", "已写入文件")
+    assert len(saved[0]) == 41, f"容量未满时应保留全部 41 条，实际 {len(saved[0])}"
+
+
+def test_capacity_caps_at_limit(monkeypatch, tmp_path):
+    """超过 CAP 时按时间截断，且每个工具至少留得住最新 3 条。"""
+    import api_server as A
+
+    pats = [{"tool": "flood", "args": "a%d" % i, "args_sig": "s%d" % i,
+             "result": "r", "ts": "2026-10-19 13:%02d:%02d" % (i // 60, i % 60)}
+            for i in range(80)]
+    pats.append({"tool": "rare", "args": "{'x':1}", "args_sig": "rare",
+                 "result": "r", "ts": "2026-10-19 12:00:00"})
+    saved = []
+    monkeypatch.setattr(A, "PATTERNS_PATH", str(tmp_path / "p.json"))
+    monkeypatch.setattr(_stores(), "load_patterns", lambda p: list(pats))
+    monkeypatch.setattr(_stores(), "save_patterns", lambda p, v: saved.append(list(v)))
+    A._record_success_pattern("write_file", "{'path':'/z'}", "已写入文件")
+    out = saved[0]
+    assert len(out) <= A._PATTERN_CAP, f"超出容量上限：{len(out)}"
+    assert any(x.get("tool") == "rare" for x in out), "低频工具必须保底留住"
