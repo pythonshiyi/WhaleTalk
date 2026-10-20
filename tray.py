@@ -197,7 +197,7 @@ class TrayController:
 
     def __init__(self, port, *, open_ui, open_workspace, open_data, open_log,
                  cleanup=None, check_update=None, about=None, quit_cb=None,
-                 apply_autostart=None):
+                 apply_autostart=None, life_action=None):
         self.port = int(port)
         self.open_ui = open_ui
         self.open_workspace = open_workspace
@@ -208,6 +208,7 @@ class TrayController:
         self.about = about
         self.quit_cb = quit_cb
         self.apply_autostart = apply_autostart
+        self.life_action = life_action
         self._st = None
         self._icon = None
         self._stop = threading.Event()
@@ -331,6 +332,16 @@ class TrayController:
         items.append(MenuItem("打开数据目录", self._wrap(self.open_data)))
         items.append(MenuItem("查看日志", self._wrap(self.open_log)))
         items.append(Menu.SEPARATOR)
+        # 生命循环：不打开窗口也能暂停/唤醒/睡一觉
+        if callable(self.life_action):
+            items.append(MenuItem("生命循环", Menu(
+                MenuItem("暂停", self._wrap_life("pause")),
+                MenuItem("恢复", self._wrap_life("resume")),
+                MenuItem("唤醒", self._wrap_life("wake")),
+                MenuItem("睡眠", self._wrap_life("sleep")),
+                MenuItem("内省一次", self._wrap_life("reflect")),
+            )))
+            items.append(Menu.SEPARATOR)
         # 开关（勾选态）
         items.append(MenuItem("开机自启", self._on_toggle_autostart, checked=self._checked("autostart")))
         items.append(MenuItem("完成提示音", self._on_toggle_sound, checked=self._checked("completion_sound", True)))
@@ -347,6 +358,16 @@ class TrayController:
         items.append(Menu.SEPARATOR)
         items.append(MenuItem("退出", self._on_quit))
         return Menu(*items)
+
+    def _wrap_life(self, action):
+        def _cb(icon, item):
+            try:
+                if callable(self.life_action):
+                    self.life_action(action)
+            # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+            except Exception:
+                pass
+        return _cb
 
     @staticmethod
     def _wrap(fn):

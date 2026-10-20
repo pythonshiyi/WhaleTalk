@@ -238,6 +238,7 @@ def _start_tray(port, stop_cb):
         about=_about,
         quit_cb=stop_cb,
         apply_autostart=lambda v: api_server._apply_autostart(v),
+        life_action=lambda action: __import__("life.api", fromlist=["dispatch"]).dispatch(action),
     )
     try:
         tray_mod.set_status_provider(api_server._status)

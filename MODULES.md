@@ -2,7 +2,7 @@
 
 本文档描述鲸语 WhaleTalk 当前（v3.16.21，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
 
-> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **106 /v1 端点** · 后端 121 个 pytest 文件 / 1227 用例 · 前端 31 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
+> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **111 /v1 端点** · 后端 123 个 pytest 文件 / 1239 用例 · 前端 31 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
 
 ## 分层总览
 
@@ -10,7 +10,7 @@
 web_app.py（唯一入口：浏览器 + 托盘 + 快捷方式 + 依赖自检）
     │
     ▼
-api_server.py（本地 HTTP API：REST + SSE，106 /v1 端点）
+api_server.py（本地 HTTP API：REST + SSE，111 /v1 端点）
     │
     ▼
 deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
@@ -27,6 +27,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
     ├─ 配置体系：config_defaults / config_utils / profiles / themes / roles / templates / deps
     ├─ 扩展体系：plugins / plugin_app / user_tools / fetch_blocked（按需）/ mcp_server（MCP 出口）/ mcp_client（MCP 入口）
     ├─ 大脑：brainkit / brain_api / genesis（创世化初始）
+    ├─ 生命循环：life/（timeline / state / drives / intentions / metabolism / sleep / loop / report / scars）
     └─ 子包：wechat_writer（公众号写作）/ webui（React 前端）/ agent_tools（工具域模块）/ tools（开发门禁）
 ```
 
@@ -37,7 +38,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | 模块 | 职责 |
 |---|---|
 | `web_app.py`（989 行） | 唯一启动入口：启动本地 API、自动打开浏览器、系统托盘常驻、桌面/开始菜单快捷方式、开机自启、单实例、WebUI 自动构建（npm）、Python 依赖自检与自动安装 |
-| `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/能力包/指令库/工作台/大脑/TTS/审计/备份/更新等 **106 个 /v1 端点**（含失败记忆生命周期 `/v1/failures/resolve|reopen|forget`、技能结晶 `/v1/skills/crystallize`、文件全局搜索 `/v1/files/search` 与重命名 `/v1/files/rename`、运行时能力包 `/v1/capabilities`、大脑自主进社区 `/v1/community`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
+| `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/能力包/指令库/工作台/大脑/TTS/审计/备份/更新等 **111 个 /v1 端点**（含失败记忆生命周期 `/v1/failures/resolve|reopen|forget`、技能结晶 `/v1/skills/crystallize`、文件全局搜索 `/v1/files/search` 与重命名 `/v1/files/rename`、运行时能力包 `/v1/capabilities`、大脑自主进社区 `/v1/community`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
 
 ### 能力引擎
 
@@ -120,6 +121,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 |---|---|
 | `brainkit.py`（2,865 行） | 大脑 CLI：init/keyring-setup/mount/unmount/heartbeat/think/remember/import-memory/consolidate（睡眠巩固）/goal/decision/evolution/archive/restore/merge/merge-resolve/status/list/diff/export-key/import-key；指纹防篡改、DPAPI 免密密钥体系、RSA 快照签名验签、LCA 三路合并、prune 豁免血缘引用快照、语义检索 |
 | `brain_api.py`（1,180 行） | 大脑 → API 适配层（把 CLI 命令包装为 api_server 可调用的纯函数 + `brain_context` 注入——身份/断点/目标/自我认知/未决决策/记忆 + `consolidate_with_llm` LLM 提炼） |
+| `life/` | **生命循环**：连续 tick / 唯一时间线 / 单实例租约 / 五维内驱 / 自发意图 / 代谢预算 / 睡眠巩固 / 代价记录。设计见 [docs/LIFE.md](docs/LIFE.md)；不引入审批或权限收紧 |
 | \community_client.py\ | ⚠️ **鲸群实验（可选·默认关·非功能）**：连接独立社区站（\xperiments/鲸群实验场/\，已剥离出主程序）的一根「绳」——确保在线（可选自动拉起 server.py）→ 心跳 → 感知 → 规则决策 → 授权内行动 → 记忆回灌；由 \pi_server._brain_community_loop\（独立线程、默认关）与 \gent_tools/tool_community.py\ 消费。**当前冻结**（重启条件见实验场 README）；未配置密钥不外发，可整体删除 |
 
 ### 子包
@@ -130,7 +132,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | `webui/` | React 前端（React 19 + Vite 8，无 UI 框架）：ChatPage/工作台/指令库/自主/大脑/能力/设置；`webui/dist` 由 api_server 同源服务。渲染链路（纯数据 AST）：`longTextUtil.js`（解除 `@long-text` 包装）→ `mdParser.js`（块级 AST，流式安全 `code-open`）→ `mdInline.js`（行内 tokens，独立 RegExp 防 lastIndex 破坏）→ `mdHighlight.js`（零依赖高亮）→ `mdMath.js`（LaTeX 子集）→ `components/Markdown.jsx`（消费 AST）。**长会话渲染**：`msgUpdates.js` 提供不可变更新，配合 `Message.jsx` 的 `React.memo` 实现每帧只重渲染最后一条 |
 | `wechat_writer/` | 公众号自动写作：sources（多信源采集）/ topic（选题去重）/ writer（三阶段写作）/ quality（质检重试）/ output（草稿箱+存档）/ history / llm / config |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性，`--strict` 可入 CI）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛对账）、`check_docs.py`（文档数字 vs 源码实测） |
-| `tests/` | 自举回归套件（121 个 pytest 文件 / 1227 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
+| `tests/` | 自举回归套件（123 个 pytest 文件 / 1239 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
 
 ### 辅助脚本
 

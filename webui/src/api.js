@@ -90,6 +90,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {string} [session_name] 会话名（后端兜底落盘用）
  * @property {string} [gw_session] 网关会话 id（第三方/OpenCode Go 网关的 x-opencode-session 头）
  * @property {boolean} [cost_confirmed] 费用确认闸：已由用户确认成本，放行本次请求
+ * @property {number} [maxToolRounds] 工具轮次预算（0/缺省 = 不限）
  */
 
 /**
@@ -372,6 +373,7 @@ async function api(path, opts = {}) {
  * @returns {Promise<void>} 流结束后 resolve；HTTP 错误时 throw
  */
 export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed, maxToolRounds }, handlers, signal) {
+  /** @type {any} */
   const body = { messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed };
   // 本轮预算：只有用户明确设了才带，未设时后端回退到全局配置（不塞 undefined 字段）
   if (maxToolRounds != null && Number(maxToolRounds) > 0) body.max_tool_rounds = Number(maxToolRounds);
@@ -633,7 +635,10 @@ export async function restoreBuiltinPrompts() {
 }
 
 // ── 任务 / 执行历史 ─────────────────────────────
-/** 执行历史列表。@param {{limit?:number, status?:string, session_id?:string}} q */
+/**
+ * 执行历史列表。
+ * @param {{limit?:number, status?:string, session_id?:string}} [q]
+ */
 export async function jobs(q = {}) {
   const p = new URLSearchParams();
   if (q.limit) p.set("limit", String(q.limit));
@@ -643,7 +648,9 @@ export async function jobs(q = {}) {
   return api(`/v1/jobs${qs ? `?${qs}` : ""}`);
 }
 
-/** 单条执行记录 */
+/** 单条执行记录
+ * @param {string} id
+ */
 export async function jobDetail(id) {
   return api(`/v1/jobs/${encodeURIComponent(String(id))}`);
 }
@@ -889,6 +896,42 @@ export async function getBrain(withContext = false) {
  */
 export async function brainAction(payload) {
   return api("/v1/brain", { method: "POST", body: JSON.stringify(payload) });
+}
+
+// ── 生命循环 ────────────────────────────────────────────────────────────────
+
+/** @returns {Promise<{ok:boolean, life:Object}>} 状态 / 内驱 / 代谢 / 意图 / 最近时间线 */
+export async function getLife() {
+  return api("/v1/life");
+}
+
+/** @param {{action:string, [k:string]:any}} payload pause/resume/wake/sleep/reflect/tick/intention… */
+export async function lifeAction(payload) {
+  return api("/v1/life", { method: "POST", body: JSON.stringify(payload) });
+}
+
+/** @param {number} [limit] @param {string} [kind] @returns {Promise<{items:Array<any>}>} */
+export async function getLifeTimeline(limit = 80, kind = "") {
+  const p = new URLSearchParams({ limit: String(limit) });
+  if (kind) p.set("kind", kind);
+  return api(`/v1/life/timeline?${p.toString()}`);
+}
+
+/** @param {string} [status] @param {number} [limit] @returns {Promise<{items:Array<any>, counts:Object}>} */
+export async function getLifeIntentions(status = "", limit = 50) {
+  const p = new URLSearchParams({ limit: String(limit) });
+  if (status) p.set("status", status);
+  return api(`/v1/life/intentions?${p.toString()}`);
+}
+
+/** @param {number} [days] @returns {Promise<{ok:boolean, report:Object, markdown:string}>} */
+export async function getLifeReport(days = 7) {
+  return api(`/v1/life/report?days=${days}`);
+}
+
+/** @param {number} [limit] @returns {Promise<{items:Array<any>, summary:Object}>} */
+export async function getLifeScars(limit = 20) {
+  return api(`/v1/life/scars?limit=${limit}`);
 }
 
 /** @param {string} [query] @param {number} [limit] @returns {Promise<{items:Array<any>}>} 大脑记忆列表（支持本地检索） */

@@ -20,6 +20,7 @@ const LazyPages = {
   settings: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.SettingsPage }))),
   prompts: lazy(() => import("./components/PromptsPage.jsx")),
   brain: lazy(() => import("./components/BrainPage.jsx")),
+  life: lazy(() => import("./components/LifePage.jsx")),
   autonomy: lazy(() => import("./components/AutonomyPage.jsx")),
 };
 const PageFallback = () => (
@@ -279,6 +280,7 @@ export default function App() {
                       );
                     })()}
                     {page === "brain" && <LazyPages.brain />}
+                    {page === "life" && <LazyPages.life />}
                     {page === "autonomy" && <LazyPages.autonomy />}
                     {page === "settings" && (() => {
                       const P = LazyPages.settings;

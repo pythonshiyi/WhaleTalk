@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { id: "tasks", label: "任务", icon: "activity" },
   { id: "prompts", label: "指令库", icon: "bolt" },
   { id: "brain", label: "大脑", icon: "brain" },
+  { id: "life", label: "生命", icon: "spark" },
   { id: "autonomy", label: "自主", icon: "spark" },
   { id: "settings", label: "设置", icon: "gear" },
 ];

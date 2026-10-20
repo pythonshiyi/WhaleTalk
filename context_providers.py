@@ -297,7 +297,38 @@ register(Provider(
     name="context.brain", priority=30, provide=_provide_brain,
     enabled=_not_quiet, budget=1600, critical=True,
     deps=("brain_api",),
-    skip_reason="纯净对话已开启",
+    skip_reason="纯对话已关闭",
+))
+
+
+def _provide_life(ctx):
+    """生命循环的当前状态：状态/能量/内驱/活跃意图。
+
+    只读摘要，不触发模型调用；Life Loop 未初始化时返回空。
+    """
+    if not bool(ctx.cfg.get("life_enabled", True)):
+        return None
+    try:
+        import life.state as _life_state
+        # 没有生活状态文件 = 从未启动过生命循环，不要用默认休眠态占上下文。
+        if not _life_state.life_path().exists():
+            return None
+        import life.api as _life_api
+        return _life_api.brief() or None
+    except Exception as e:  # noqa: BLE001 - 生命循环未初始化不应影响对话
+        try:
+            import degrade
+            degrade.degrade("context.life", e, "生命循环状态未注入（不影响对话）", critical=False)
+        # noqa: silent-except: 生命状态注入失败不影响对话
+        except Exception:
+            pass
+        return None
+
+
+register(Provider(
+    name="context.life", priority=35, provide=_provide_life,
+    enabled=_not_quiet, budget=800, critical=False,
+    skip_reason="纯对话已关闭",
 ))
 
 

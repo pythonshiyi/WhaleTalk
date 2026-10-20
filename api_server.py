@@ -4274,6 +4274,7 @@ def _schedules_save(body):
 
 
 _SCHEDULER_THREAD = None
+_SCHEDULER_STOP = threading.Event()
 
 
 _BRAIN_SNAPSHOT_LAST_DATE = None
@@ -4395,18 +4396,38 @@ def _brain_community_loop():
         time.sleep(15)
 
 
+def _life_note_activity(source="chat"):
+    """用户活动唤醒生命循环；失败不影响对话。"""
+    try:
+        import life.loop as _life_loop
+        _life_loop.note_activity(source)
+    except Exception:
+        logger.debug("生命循环唤醒失败", exc_info=True)
+
+
+def _life_tick(now=None):
+    """把 30s 调度循环接到生命循环；tick 本身不调用模型。"""
+    try:
+        import life.loop as _life_loop
+        return _life_loop.tick(now)
+    except Exception:
+        logger.exception("生命循环 tick 失败，下一轮继续")
+        return None
+
+
 def _scheduler_loop():
     """定时任务调度线程（30s 轮询）。"""
     from datetime import datetime as _dt
 
     import stores
     last_checked_minute = {}
-    while True:
+    while not _SCHEDULER_STOP.is_set():
         try:
             items = stores.load_schedules(SCHEDULES_PATH)
             now = _dt.now()
             _brain_daily_snapshot(now)
             _brain_guard_tick(now)
+            _life_tick(now)
             for s in items:
                 if not s.get("enabled"):
                     continue
@@ -4462,7 +4483,7 @@ def _scheduler_loop():
                     stores.save_schedules(SCHEDULES_PATH, items)
         except Exception:
             logger.exception("调度循环异常")
-        time.sleep(30)
+        _SCHEDULER_STOP.wait(30)
 
 
 def _headless_chat(text, reply_channel=""):
@@ -7896,6 +7917,76 @@ class _Handler(BaseHTTPRequestHandler):
             self._fail_soft(e, brain=None)
 
 
+    # 生命循环：状态 / 时间线 / 意图 / 报告 / 代价。全部走独立模块，
+    # 页面每 5s 轮询只读接口；动作走 POST /v1/life。
+    @_get_route(("qpath", "/v1/life"))
+    def _g_v1_life(self):
+        try:
+            import life.api as life_api
+            self._json(200, life_api.status())
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e, life=None)
+
+    @_get_route(("qpath", "/v1/life/timeline"))
+    def _g_v1_life_timeline(self):
+        try:
+            from urllib.parse import parse_qs, urlparse
+            import life.api as life_api
+            qs = parse_qs(urlparse(self.path).query)
+            self._json(200, life_api.get_timeline(
+                (qs.get("limit") or ["80"])[0],
+                (qs.get("kind") or [""])[0] or None,
+            ))
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
+    @_get_route(("qpath", "/v1/life/intentions"))
+    def _g_v1_life_intentions(self):
+        try:
+            from urllib.parse import parse_qs, urlparse
+            import life.api as life_api
+            qs = parse_qs(urlparse(self.path).query)
+            self._json(200, life_api.get_intentions(
+                (qs.get("limit") or ["50"])[0],
+                (qs.get("status") or [""])[0] or None,
+            ))
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
+    @_get_route(("qpath", "/v1/life/report"))
+    def _g_v1_life_report(self):
+        try:
+            from urllib.parse import parse_qs, urlparse
+            import life.api as life_api
+            qs = parse_qs(urlparse(self.path).query)
+            self._json(200, life_api.get_report((qs.get("days") or ["7"])[0]))
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
+    @_get_route(("qpath", "/v1/life/scars"))
+    def _g_v1_life_scars(self):
+        try:
+            from urllib.parse import parse_qs, urlparse
+            import life.api as life_api
+            qs = parse_qs(urlparse(self.path).query)
+            self._json(200, life_api.get_scars((qs.get("limit") or ["20"])[0]))
+        except Exception as e:  # noqa: BLE001
+            self._fail_soft(e)
+
+    @_post_route("/v1/life")
+    def _p_v1_life(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import life.api as life_api
+            result = life_api.dispatch(str(body.get("action") or "status"), body)
+            self._json(200, result)
+        except Exception as e:  # noqa: BLE001
+            self._fail(500, e)
+
+
     @_get_route(("qpath", "/v1/brain/memories"))
     def _g_v1_brain_memories(self):
         # 大脑记忆列表/搜索：?query=关键词&limit=N
@@ -9684,6 +9775,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid messages"})
             return
         _sync_request_full_auto(body)
+        _life_note_activity("chat")
         _begin_job_state()
         try:
             client, cfg = self._client_from_cfg(body)
@@ -10005,6 +10097,7 @@ class _Handler(BaseHTTPRequestHandler):
         if messages is None:
             self._json(400, {"error": "invalid messages"})
             return
+        _life_note_activity("chat_stream")
         sid = str(body.get("session_id") or "").strip()
         stop_key = str(body.get("gw_session") or "").strip()
         # 一次生成的稳定标识：前端每次发送生成一个，同 id 的重复请求（重试/多标签页）
@@ -10239,8 +10332,14 @@ def start_server(port=8745, token=""):
     except Exception:
         logger.warning("能力主干初始化失败（可降级）：本次会话无运行时能力", exc_info=True)
     if _SCHEDULER_THREAD is None:
+        _SCHEDULER_STOP.clear()
         _SCHEDULER_THREAD = threading.Thread(target=_scheduler_loop, daemon=True)
         _SCHEDULER_THREAD.start()
+    try:
+        import life.loop as _life_loop
+        _life_loop.start("server")
+    except Exception:
+        logger.warning("生命循环启动失败，可稍后在「大脑/生命」里手动唤醒", exc_info=True)
     if _BRAIN_COMMUNITY_THREAD is None:
         _BRAIN_COMMUNITY_THREAD = threading.Thread(target=_brain_community_loop, daemon=True)
         _BRAIN_COMMUNITY_THREAD.start()
@@ -10326,19 +10425,36 @@ def start_server(port=8745, token=""):
 
 
 def stop_server():
-    global _SERVER, _THREAD, _INBOUND_SERVER, _INBOUND_THREAD
+    global _SERVER, _THREAD, _INBOUND_SERVER, _INBOUND_THREAD, _SCHEDULER_THREAD
+    # 先停调度循环：否则测试/重启后旧线程会继续跑定时任务与生命循环 tick。
+    _SCHEDULER_STOP.set()
+    th = _SCHEDULER_THREAD
+    if th is not None and th.is_alive():
+        try:
+            th.join(timeout=5)
+        # noqa: silent-except: 关闭流程尽力而为，不影响主流程
+        except Exception:
+            pass
+    _SCHEDULER_THREAD = None
     # 工具留痕队列排空（异步写缓冲落盘，优雅退出不丢尾部日志）
     try:
         import permissions as _perms_flush
         _perms_flush.tool_trace_flush()
     except Exception:
         pass
+    # 生命循环先收尾（释放租约、写 shutdown），再写大脑断点。
+    try:
+        import life.loop as _life_loop
+        _life_loop.stop("shutdown")
+    except Exception:
+        logger.debug("生命循环关闭失败", exc_info=True)
     # 大脑收尾钩子：服务停止前写一次心跳断点（会话生命周期与大脑对齐，
     # 下次启动 brain_context 可带回「上次思考断点」）
     try:
         import brain_api
         if brain_api.brain_status(with_context=False) is not None:
-            brain_api.brain_action("heartbeat", {"thought": "服务停止，记忆已落盘"})
+            # 不覆盖用户最后一次留下的 resume_hint；停止事实已写入 timeline。
+            brain_api.brain_action("heartbeat", {"thought": ""})
     except Exception:
         pass
     # 自主进社区：停止本进程自动拉起的社区站（不触碰用户自己启动的实例）

@@ -345,9 +345,18 @@ def refresh_self_model():
         c = dc.get_active_client()
         if c is None:
             return False
-        out = c.chat([{"role": "user", "content": prompt}], thinking="low", json_output=True)
+        buf = []
+        c.chat([{"role": "user", "content": prompt}], thinking="low", json_output=True,
+               on_content=lambda t: buf.append(t))
+        out = "".join(buf).strip()
         import json as _json
-        data = _json.loads(out) if isinstance(out, str) else out
+        try:
+            data = _json.loads(out)
+        except Exception:
+            from life.llm import parse_json
+            data = parse_json(out)
+        if not isinstance(data, dict):
+            return False
         sm = {
             "knows": [str(x)[:120] for x in (data.get("knows") or [])][:5],
             "unknowns": [str(x)[:120] for x in (data.get("unknowns") or [])][:5],
@@ -554,6 +563,13 @@ def brain_action(action, payload=None):
                          whale=str(snap), passphrase=str(payload.get("passphrase") or ""),
                          dir=str(payload["dir"]) if payload.get("dir") else None,
                          replace=bool(payload.get("replace", True)), force=False)
+        if code == 0 and payload.get("replace", True) and not payload.get("dir"):
+            try:
+                from life import state as _life_state
+                _life_state.bump_epoch("restore", note=f"brain_v{version}")
+            # noqa: silent-except: 时间线/代价记录失败不得影响主操作
+            except Exception:
+                pass
         return {"ok": code == 0, "message": out}
     if action == "keyring-setup":
         code, out = _run(bk.cmd_keyring_setup, force=False)
@@ -569,6 +585,13 @@ def brain_action(action, payload=None):
                          strategy=str(payload.get("strategy") or "auto"),
                          dir=str(out_dir),
                          passphrase=str(payload.get("passphrase") or ""))
+        if code == 0:
+            try:
+                bk.record_life_event("merge", f"merge -> {out_dir.name}", snap_a=str(a), snap_b=str(b),
+                                     conflicts=len(_load_conflicts(out_dir)))
+            # noqa: silent-except: 时间线/代价记录失败不得影响主操作
+            except Exception:
+                pass
         return {
             "ok": code == 0,
             "message": out,
@@ -631,6 +654,17 @@ def brain_action(action, payload=None):
                 shutil.copy2(item, dst)
         bk.save_json(bk.LINEAGE_FILE, {})
         bk.refresh_manifest_fingerprint()
+        try:
+            (bk.BRAIN_DIR / "life.lock").unlink(missing_ok=True)
+        # noqa: silent-except: 合并后清租约尽力而为，下次启动会按心跳接管
+        except OSError:
+            pass
+        try:
+            from life import state as _life_state
+            _life_state.bump_epoch("adopt-merge", note=src.name)
+        # noqa: silent-except: epoch 记录失败不影响采纳合并结果
+        except Exception:
+            pass
         return {"ok": True, "message": f"已采纳合并结果作为当前大脑（旧大脑备份于 {backup.name}）"}
     if action == "cleanup":
         removed = []

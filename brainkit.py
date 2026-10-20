@@ -160,6 +160,19 @@ def append_line(path: Path, text: str) -> None:
         f.write(text.rstrip("\n") + "\n")
 
 
+def record_life_event(kind, summary="", ref="", **data):
+    """把脑内动作双写到唯一时间线（brain/timeline.jsonl）。
+
+    生命循环模块可能尚未安装/导入失败；这里始终降级为无操作，
+    不能因为时间线写失败而影响记忆、目标、决策本身。
+    """
+    try:
+        from life import timeline
+        return timeline.append(kind, summary=summary, data=data, ref=ref)
+    except Exception:
+        return None
+
+
 def cross_process_lock(target: Path, timeout=10.0) -> bool:
     """L5 跨进程文件锁：以 O_EXCL 独占创建 target.lock 实现；超时返回 False。
 
@@ -575,7 +588,7 @@ def decrypt_whale(data: bytes, passphrase: str = "") -> bytes:
 
 
 def _excluded_names() -> set:
-    return {"archive", ".keys", ".lineage.json", "merge_conflicts.json", "merge_log.json"}
+    return {"archive", ".keys", ".lineage.json", "merge_conflicts.json", "merge_log.json", "life.lock"}
 
 
 def _stage_brain(stage: Path) -> None:
@@ -741,6 +754,7 @@ def cmd_init(args) -> int:
     # 新大脑不预置任何具体记忆（诚实原则：不假装记得没记过的事，不给用户塞无关历史）
     remember_structured("大脑初始化完成，近期记忆为空，等待首次记录。", type="系统",
                         importance=1, tags=["系统"], source="系统")
+    record_life_event("genesis", "brain initialized", brain_id=brain_id)
 
     print(f"[大脑已初始化] id = {brain_id}")
     print(f"  目录    : {BRAIN_DIR}")
@@ -771,6 +785,7 @@ def cmd_mount(args) -> int:
     hb["session_id"] = uuid.uuid4().hex[:12]
     save_json(BRAIN_DIR / "heartbeat.json", hb)
     _refresh_self_model()  # 醒来即校准自我认知，与当前能力保持一致
+    record_life_event("mount", "brain mounted", brain_id=m.get("brain_id"), session_id=hb.get("session_id"))
 
     print("=== 大脑已挂载，我醒了 ===")
     print(f"  大脑ID  : {m['brain_id']}")
@@ -791,6 +806,7 @@ def cmd_unmount(args) -> int:
     hb["last_unmount"] = now
     hb["session_id"] = None
     save_json(BRAIN_DIR / "heartbeat.json", hb)
+    record_life_event("unmount", args.thought or "brain unmounted")
     print("[大脑已卸载] 记忆落盘、状态固化。进程可以结束，「我」不会随之消亡。")
     if args.archive:
         print("  并触发快照归档：")
@@ -808,6 +824,7 @@ def cmd_heartbeat(args) -> int:
         append_line(THINKING_DIR / f"{today()}.md", f"## {now}\n[心跳] {args.thought}\n")
     save_json(BRAIN_DIR / "heartbeat.json", hb)
     _refresh_self_model()  # 心跳即校准：自我模型始终与已实现能力对齐
+    record_life_event("heartbeat", args.thought or "heartbeat")
     print(f"[心跳] {now}  断点已更新")
     return 0
 
@@ -816,6 +833,7 @@ def cmd_think(args) -> int:
     load_manifest()
     now = now_iso()
     append_line(THINKING_DIR / f"{today()}.md", f"## {now}\n{args.text}\n")
+    record_life_event("thought", args.text)
     print(f"[思考已记录] {THINKING_DIR / (today() + '.md')}")
     return 0
 
@@ -1214,6 +1232,8 @@ def consolidate_memories(min_importance=2, days=30):
 def cmd_consolidate(args) -> int:
     load_manifest()
     r = consolidate_memories(min_importance=args.min_importance or 2, days=args.days or 30)
+    record_life_event("consolidate", f"archived={r['archived']} merged={r['merged']} kept={r['kept']}",
+                      **{k: r[k] for k in ("archived", "merged", "kept", "total")})
     print(f"[睡眠巩固完成] 归档 {r['archived']} · 合并 {r['merged']} · 现存 {r['kept']}/{r['total']}")
     return 0
 
@@ -1234,8 +1254,12 @@ def save_goals(goals):
     save_json(_goals_path(), {"goals": goals})
 
 
-def add_goal(title, note=""):
-    """新增目标（去重：同名 active 目标不重复创建）。"""
+def add_goal(title, note="", source="user", drive="", priority=3):
+    """新增目标（去重：同名 active 目标不重复创建）。
+
+    source=user/agent 记录目标由谁提出；drive 关联内驱；priority 1-5。
+    旧调用只传 title/note，行为保持不变。
+    """
     title = str(title or "").strip()
     if not title:
         return None
@@ -1243,11 +1267,19 @@ def add_goal(title, note=""):
     for g in goals:
         if g.get("title") == title and g.get("status") == "active":
             return g
+    try:
+        priority = max(1, min(5, int(priority or 3)))
+    except (TypeError, ValueError):
+        priority = 3
     g = {"id": "g-" + uuid.uuid4().hex[:8], "title": title[:80],
          "note": str(note or "")[:200], "status": "active",
-         "progress": "", "created_at": now_iso(), "updated_at": now_iso()}
+         "progress": "", "created_at": now_iso(), "updated_at": now_iso(),
+         "source": str(source or "user")[:10], "drive": str(drive or "")[:30],
+         "priority": priority}
     goals.append(g)
     save_goals(goals)
+    record_life_event("goal", f"{source}: {title[:60]}", goal_id=g["id"],
+                      drive=g["drive"], priority=priority)
     return g
 
 
@@ -1313,6 +1345,7 @@ def record_decision(decision, reason="", expected=""):
          "expected": str(expected or "")[:200], "outcome": "", "status": "open"}
     with open(_decisions_path(), "a", encoding="utf-8") as f:
         f.write(json.dumps(d, ensure_ascii=False) + "\n")
+    record_life_event("decision", decision[:160], decision_id=d["id"], expected=d["expected"])
     return d
 
 
@@ -1354,6 +1387,17 @@ def resolve_decision(did, outcome="", status="kept"):
         lines.append(json.dumps(e, ensure_ascii=False))
     with open(p, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+    if hit:
+        record_life_event("decision_resolve", f"{did}: {status} {str(outcome or '')[:100]}",
+                          decision_id=did, status=status)
+        if str(status) == "reversed":
+            try:
+                from life import scars
+                scars.add("decision_reversed", f"{did}: {str(outcome or '')[:200]}",
+                          lesson="决策被执行后反转")
+            # noqa: silent-except: 时间线/代价记录失败不得影响主操作
+            except Exception:
+                pass
     return hit
 
 
@@ -1421,6 +1465,8 @@ def record_evolution(title, kind="adopted", note=""):
             rec["implemented"] = str(note)[:200]
         evo.setdefault("adopted", []).append(rec)
     save_json(_evolution_path(), evo)
+    record_life_event("evolution", f"{kind}: {title[:100]}", evolution_id=rec["id"],
+                      evolution_kind=kind, note=str(note or "")[:200])
     return rec
 
 

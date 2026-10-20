@@ -420,6 +420,26 @@ DEFAULT_CONFIG = {
     # continuity=目标/自我认知/未决决策/复习/相关记忆（跨会话连续性，默认开）。
     "brain_persona_enabled": False,
     "brain_continuity_enabled": True,
+    # 生命循环（Life Loop）：连续时间 + 内驱 + 代谢 + 睡眠。
+    # 默认开启，但没有 brain/manifest 时保持 dormant；tick 本身不调用模型。
+    "life_enabled": True,
+    "life_tick_seconds": 30,
+    "life_pulse_minutes": 30,
+    "life_reflect_idle_minutes": 30,
+    "life_reflect_cooldown_minutes": 60,
+    "life_reflect_min_drive": 15,
+    "life_reflect_max_tokens": 700,
+    "life_sleep_idle_minutes": 180,
+    "life_quiet_hours": "02:00-07:00",
+    "life_auto_sleep": True,
+    "life_sleep_llm": True,
+    "life_auto_archive": False,
+    "life_max_active_intentions": 3,
+    "life_budget_scope": "self",  # self=只算生命循环自身消耗；total=当日全部对话+自主
+    "life_daily_token_budget": 1000000,
+    "life_daily_cost_budget": 5.0,
+    "life_fatigue_per_action": 8.0,
+    "life_off_peak_only": False,
     "pure_chat": False,
     "web_search": False,  # 对话模式联网开关：开启后纯对话注入 search_web 等联网工具（仅搜索，克制注入）
     "quiet_mode": False,  # 纯净对话总开关：开启后停止全部个性上下文注入（长期记忆/核心自我/大脑）与对话回写，AI 只带基础系统提示
