@@ -85,6 +85,32 @@ def list_recent(limit=20) -> list:
     return out[-max(1, int(limit or 20)):]
 
 
+def prune(max_items=5000) -> int:
+    """把最旧的代价记录移入 scars_archive.jsonl，避免单文件无限增长。"""
+    p = path()
+    if not p.exists():
+        return 0
+    max_items = max(100, int(max_items or 5000))
+    try:
+        lines = [x for x in p.read_text(encoding="utf-8", errors="replace").splitlines() if x.strip()]
+    except OSError:
+        return 0
+    if len(lines) <= max_items:
+        return 0
+    moved = lines[:-max_items]
+    kept = lines[-max_items:]
+    try:
+        with (p.parent / "scars_archive.jsonl").open("a", encoding="utf-8") as f:
+            for line in moved:
+                f.write(line + "\n")
+        tmp = p.with_suffix(".jsonl.tmp")
+        tmp.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        tmp.replace(p)
+    except OSError:
+        return 0
+    return len(moved)
+
+
 def summary() -> dict:
     items = list_recent(200)
     counts = {}

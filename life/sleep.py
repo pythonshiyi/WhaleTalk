@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from . import llm, metabolism, state, timeline
 
@@ -37,6 +37,29 @@ def _now_iso(ts=None):
         return datetime.fromtimestamp(float(ts)).astimezone().isoformat(timespec="seconds")
     except Exception:
         return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _next_wake_iso(now=None, cfg=None):
+    """睡眠应醒来的时间：优先 life_wake_time（HH:MM），否则睡 life_sleep_duration_minutes。"""
+    cfg = cfg if isinstance(cfg, dict) else _cfg()
+    try:
+        if now is None:
+            base = datetime.now().astimezone()
+        elif isinstance(now, (int, float)):
+            base = datetime.fromtimestamp(float(now)).astimezone()
+        else:
+            base = now
+        raw = str(cfg.get("life_wake_time") or "").strip()
+        if raw and ":" in raw:
+            hh, mm = [int(x) for x in raw.split(":", 1)]
+            cand = base.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if cand <= base:
+                cand = cand + timedelta(days=1)
+            return cand.isoformat(timespec="seconds")
+        minutes = max(1.0, float(cfg.get("life_sleep_duration_minutes", 480) or 480))
+        return (base + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    except Exception:
+        return ""
 
 
 def _digest_text():
@@ -95,14 +118,18 @@ def _narrative(digest, tl_text, cfg):
 
 
 def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
+    t0 = time.time()
     cfg = _cfg()
     st = state.load()
     today = _today()
     if not force and str(st.get("last_sleep_day") or "") == today:
         return {"ok": True, "skipped": True, "reason": "今天已经睡过", "date": today}
 
-    state.save({"state": "sleeping", "last_sleep_day": today, "last_sleep": _now_iso(now)})
-    timeline.append("sleep_start", summary=f"睡眠开始：{reason}", data={"reason": str(reason)[:80]}, actor="system")
+    next_wake = _next_wake_iso(now, cfg)
+    state.save({"state": "sleeping", "last_sleep_day": today, "last_sleep": _now_iso(now),
+                "next_wake_at": next_wake})
+    timeline.append("sleep_start", summary=f"睡眠开始：{reason}",
+                    data={"reason": str(reason)[:80], "next_wake_at": next_wake}, actor="system")
 
     # light：本地整理（不花 token）
     consolidated = {}
@@ -116,6 +143,29 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
         # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
+
+    # light+：预算允许时用 LLM 把同类记忆压成精炼长期记忆（可选，默认开）。
+    llm_consolidated = False
+    if use_llm and bool(cfg.get("life_sleep_consolidate_llm", True)):
+        try:
+            can, _why, _met = metabolism.can_think(cfg)
+            if can:
+                import brain_api
+                extra = brain_api.consolidate_with_llm(base=consolidated)
+                if isinstance(extra, dict):
+                    consolidated = {k: v for k, v in extra.items() if k not in ("usage", "model")}
+                    if extra.get("usage"):
+                        metabolism.charge(extra.get("usage"), extra.get("model") or cfg.get("model") or "",
+                                          cfg, reflection=True)
+                    llm_consolidated = bool(extra.get("usage"))
+        except Exception as e:  # noqa: BLE001
+            try:
+                import degrade
+                degrade.degrade("life.sleep.consolidate_llm", e,
+                                "睡眠未使用 LLM 提炼记忆（保留本地整理结果）", critical=False)
+            # noqa: silent-except: 降级记账失败不影响睡眠主流程
+            except Exception:
+                pass
 
     digest = _digest_text()
     tl_text = _timeline_text(1)
@@ -137,21 +187,40 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
     except Exception:
         pass
 
-    # dream/proposal：只记录提案，不自动合并
+    # dream/proposal：只有真实增量才提提案（避免每天生成一条空日结噪声），且不自动合并。
     proposal = ""
     try:
-        import brainkit as bk
-        title = f"睡眠日结 {today}"
-        proposal = title
-        bk.record_evolution(title, kind="proposed", note=narrative[:300])
+        archived_n = int(consolidated.get("archived") or 0)
+        merged_n = int(consolidated.get("merged") or 0)
+        if archived_n or merged_n or llm_consolidated:
+            import brainkit as bk
+            proposal = f"睡眠日结 {today}"
+            note = (narrative if not (archived_n or merged_n) else
+                    f"归档 {archived_n}，合并 {merged_n}。{narrative}")[:300]
+            bk.record_evolution(proposal, kind="proposed", note=note)
     # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
 
-    # 清理过长时间线（只保留最近 20000 条）
+    # 旧投影补同步：memory.json 中尚未进入大脑的活跃事实，分批幂等补写。
+    try:
+        import memory_facade
+        memory_facade.sync_missing_to_brain(50)
+    # noqa: silent-except: 补同步失败不影响睡眠结果（下次继续）
+    except Exception:
+        pass
+
+    # 清理：时间线、命中增量、意图、指标
     try:
         timeline.prune()
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        import brainkit as bk
+        bk.compact_hits()
+        bk.prune_decisions()
+        from . import intentions, metrics, scars
+        intentions.prune()
+        scars.prune()
+        metrics.prune(int(cfg.get("life_metrics_max", 5000) or 5000))
+    # noqa: silent-except: 睡眠清理失败不影响睡眠结果
     except Exception:
         pass
 
@@ -162,11 +231,20 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
         "last_sleep": _now_iso(now),
         "last_sleep_day": today,
         "last_recover": _now_iso(now),
+        "next_wake_at": next_wake,
     })
     ev = timeline.append("sleep_end", summary=f"睡眠结束：{narrative[:120]}",
                          data={"reason": str(reason)[:80], "consolidated": consolidated,
                                "narrative": narrative[:1000], "proposal": proposal},
                          actor="system")
+    try:
+        if bool(cfg.get("life_metrics_enabled", True)):
+            from . import metrics
+            metrics.record("sleep_ms", (time.time() - t0) * 1000.0,
+                           proposal=bool(proposal), llm=bool(llm_consolidated))
+    # noqa: silent-except: 指标写入失败不影响睡眠结果
+    except Exception:
+        pass
     return {
         "ok": True,
         "date": today,

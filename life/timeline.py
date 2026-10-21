@@ -97,6 +97,35 @@ def _parse_line(line):
     return ev
 
 
+def _read_tail(limit: int) -> list:
+    """从文件末尾反向分块读取最后 N 条合法事件（避免每次全文件扫描）。"""
+    p = path()
+    if limit <= 0 or not p.exists():
+        return []
+    try:
+        with p.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            pos = f.tell()
+            buf = b""
+            while pos > 0 and buf.count(b"\n") <= limit:
+                step = min(65536, pos)
+                pos -= step
+                f.seek(pos)
+                buf = f.read(step) + buf
+            lines = buf.splitlines()
+    except OSError:
+        return []
+    out = []
+    for raw in reversed(lines):
+        ev = _parse_line(raw.decode("utf-8", "replace"))
+        if ev is not None:
+            out.append(ev)
+            if len(out) >= limit:
+                break
+    out.reverse()
+    return out
+
+
 def read(limit=None, kind=None, since=None, reverse=False) -> list:
     """读取事件。
 
@@ -111,6 +140,9 @@ def read(limit=None, kind=None, since=None, reverse=False) -> list:
     if kind:
         kinds = {kind} if isinstance(kind, str) else set(kind)
     n = max(0, int(limit)) if limit else 0
+    # 快路径：只取最后 N 条且无 kind/since 过滤时，从文件尾部读。
+    if n and not reverse and not kinds and not since:
+        return _read_tail(n)
     out = deque(maxlen=n) if (n and not reverse) else []
     try:
         with p.open("r", encoding="utf-8", errors="replace") as f:

@@ -92,6 +92,7 @@ LINEAGE_FILE = BRAIN_DIR / ".lineage.json"
 MERGE_LOG_FILE = BRAIN_DIR / "merge_log.json"
 MERGE_CONFLICT_FILE = BRAIN_DIR / "merge_conflicts.json"
 MEMORY_JSONL = BRAIN_DIR / "memories" / "memory.jsonl"
+MEMORY_HITS = BRAIN_DIR / "memories" / "hits.jsonl"  # 命中增量（append-only，睡眠时折回主文件）
 MEMORY_SOURCE_DIR = MODULE_DIR / ".workbuddy" / "memory"  # import-memory 的来源（Agent 工作日志）
 
 WHALE_MAGIC_V1 = b"WHALEBRAIN\x01"
@@ -207,7 +208,7 @@ def release_lock(target: Path) -> None:
 def set_brain_dir(p: Path) -> None:
     """全局 --dir：让工具可指向任意大脑目录（分支演化 / 模拟他机）。"""
     global BRAIN_DIR, MEMORIES_DIR, THINKING_DIR, ARCHIVE_DIR, KEYS_DIR, LINEAGE_FILE
-    global MERGE_LOG_FILE, MERGE_CONFLICT_FILE, MEMORY_JSONL
+    global MERGE_LOG_FILE, MERGE_CONFLICT_FILE, MEMORY_JSONL, MEMORY_HITS
     BRAIN_DIR = Path(p)
     MEMORIES_DIR = BRAIN_DIR / "memories"
     THINKING_DIR = BRAIN_DIR / "thinking_log"
@@ -217,6 +218,7 @@ def set_brain_dir(p: Path) -> None:
     MERGE_LOG_FILE = BRAIN_DIR / "merge_log.json"
     MERGE_CONFLICT_FILE = BRAIN_DIR / "merge_conflicts.json"
     MEMORY_JSONL = BRAIN_DIR / "memories" / "memory.jsonl"
+    MEMORY_HITS = BRAIN_DIR / "memories" / "hits.jsonl"
 
 
 # ---------------------------------------------------------------- 指纹（防篡改）
@@ -847,14 +849,126 @@ def _mem_id() -> str:
     return "m-" + uuid.uuid4().hex[:10]
 
 
-def load_memories(include_archived: bool = False) -> list:
+def _mem_paths(brain_dir=None):
+    """记忆目录与文件路径；brain_dir 为空时用当前大脑（不修改全局状态）。"""
+    bd = Path(brain_dir) if brain_dir else BRAIN_DIR
+    memories = bd / "memories"
+    return memories, memories / "memory.jsonl", memories / "hits.jsonl"
+
+
+def _stat_sig(path: Path):
+    try:
+        st = path.stat()
+        return (int(st.st_mtime_ns), int(st.st_size))
+    except OSError:
+        return (0, 0)
+
+
+_HITS_CACHE = {}
+_HITS_LOCK = threading.RLock()
+_CONTENT_INDEX = {"path": None, "sig": None, "map": {}}
+
+
+def _load_hits(path: Path) -> dict:
+    """读取命中增量（id -> {n, last}），按文件签名缓存，避免每次全量重放。"""
+    sig = _stat_sig(path)
+    key = str(path)
+    with _HITS_LOCK:
+        cached = _HITS_CACHE.get(key)
+        if cached and cached.get("sig") == sig:
+            return dict(cached.get("map") or {})
+        out = {}
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(e, dict):
+                        continue
+                    mid = str(e.get("id") or "")
+                    if not mid:
+                        continue
+                    cur = out.setdefault(mid, {"n": 0, "last": ""})
+                    cur["n"] += 1
+                    ts = str(e.get("ts") or "")
+                    if ts > cur["last"]:
+                        cur["last"] = ts
+        # noqa: silent-except: 命中增量损坏时按无命中处理，不阻塞记忆读取
+        except OSError:
+            pass
+        _HITS_CACHE[key] = {"sig": sig, "map": out}
+        return dict(out)
+
+
+def _merge_hits(entries, path: Path):
+    if not entries:
+        return entries
+    hits = _load_hits(path)
+    if not hits:
+        return entries
+    for e in entries:
+        h = hits.get(str(e.get("id") or ""))
+        if not h:
+            continue
+        try:
+            e["hit_count"] = int(e.get("hit_count") or 0) + int(h.get("n") or 0)
+        except (TypeError, ValueError):
+            e["hit_count"] = int(h.get("n") or 0)
+        last = str(e.get("last_hit") or "")
+        if str(h.get("last") or "") > last:
+            e["last_hit"] = h.get("last")
+    return entries
+
+
+def _active_text_index(brain_dir=None) -> dict:
+    """活跃记忆文本 → id 索引（按 memory.jsonl 签名缓存）。
+
+    写入去重不再每次全量解析：文件未变时直接用缓存；变化时重建一次。
+    """
+    _, mem_path, _ = _mem_paths(brain_dir)
+    sig = _stat_sig(mem_path)
+    path_key = str(mem_path)
+    with _HITS_LOCK:
+        if (_CONTENT_INDEX.get("path") == path_key
+                and _CONTENT_INDEX.get("sig") == sig):
+            return dict(_CONTENT_INDEX.get("map") or {})
+    items = load_memories(include_archived=False, brain_dir=brain_dir)
+    mapping = {}
+    for e in items:
+        text = str(e.get("text") or "")
+        if text and not e.get("archived"):
+            mapping[text] = str(e.get("id") or "")
+    with _HITS_LOCK:
+        _CONTENT_INDEX.update({"path": path_key, "sig": sig, "map": mapping})
+    return dict(mapping)
+
+
+def _index_note_write(text, mid, brain_dir=None):
+    """追加成功后增量更新去重索引，避免下一次写入重新扫全文件。"""
+    _, mem_path, _ = _mem_paths(brain_dir)
+    with _HITS_LOCK:
+        if _CONTENT_INDEX.get("path") == str(mem_path):
+            _CONTENT_INDEX.setdefault("map", {})[str(text)] = str(mid)
+            _CONTENT_INDEX["sig"] = _stat_sig(mem_path)
+
+
+def load_memories(include_archived: bool = False, brain_dir=None, apply_hits=True) -> list:
     """合并读取全部记忆：memory.jsonl 为主，旧版 memories/*.md 行自动兼容。
+
+    brain_dir 为空时读当前大脑；显式传入时不修改全局 BRAIN_DIR（供统一读取层
+    并发安全地读取其它大脑）。命中次数来自 hits.jsonl 增量并在此叠加。
 
     返回 [{id, ts, type, importance, text, tags, entities, relations, source, archived}]。
     """
+    memories_dir, memory_jsonl, hits_path = _mem_paths(brain_dir)
     out, seen = [], set()
-    if MEMORY_JSONL.exists():
-        for line in MEMORY_JSONL.read_text(encoding="utf-8", errors="ignore").splitlines():
+    if memory_jsonl.exists():
+        for line in memory_jsonl.read_text(encoding="utf-8", errors="ignore").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -877,8 +991,8 @@ def load_memories(include_archived: bool = False) -> list:
             e.setdefault("version_id", "")  # F2 版本链祖先（不变）
             out.append(e)
             seen.add(e["id"])
-    if MEMORIES_DIR.exists():
-        for f in sorted(MEMORIES_DIR.glob("*.md")):
+    if memories_dir.exists():
+        for f in sorted(memories_dir.glob("*.md")):
             for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
                 s = line.strip()
                 if not s.startswith("- "):
@@ -898,25 +1012,35 @@ def load_memories(include_archived: bool = False) -> list:
                 if e["id"] not in seen:
                     out.append(e)
                     seen.add(e["id"])
+    if apply_hits:
+        _merge_hits(out, hits_path)
     return [e for e in out if include_archived or not e.get("archived")]
 
 
-def save_memories(items: list) -> None:
+def load_memories_from(brain_dir, include_archived: bool = False) -> list:
+    """按指定大脑目录读取记忆，不切换全局 BRAIN_DIR（并发安全）。"""
+    return load_memories(include_archived=include_archived, brain_dir=brain_dir)
+
+
+def save_memories(items: list, brain_dir=None) -> None:
     """全量落盘（update/delete/consolidate 用）：tmp + os.replace 原子写，崩溃不损坏。
 
     进程内以 _MEM_LOCK 互斥；os.replace 保证读方永远看到完整文件。
     """
-    MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
+    memories_dir, memory_jsonl, _ = _mem_paths(brain_dir)
+    memories_dir.mkdir(parents=True, exist_ok=True)
     with _MEM_LOCK:
-        tmp = MEMORY_JSONL.with_suffix(".jsonl.tmp")
+        tmp = memory_jsonl.with_suffix(".jsonl.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             for e in items:
                 f.write(json.dumps(e, ensure_ascii=False) + "\n")
         try:
-            os.replace(tmp, MEMORY_JSONL)
+            os.replace(tmp, memory_jsonl)
         except OSError:
             tmp.unlink(missing_ok=True)
             raise
+        with _HITS_LOCK:
+            _CONTENT_INDEX["sig"] = None
 
 
 def remember_structured(text, type="", importance=3, tags=None, entities=None, relations=None, source="手动",
@@ -950,25 +1074,30 @@ def remember_structured(text, type="", importance=3, tags=None, entities=None, r
     }
     if origin:
         entry["origin"] = origin
+    memories_dir, memory_jsonl, _ = _mem_paths()
     with _MEM_LOCK:
         # 跨进程防重：CLI 与常驻 API(harvest 后台线程)不同进程并发写时，
         # 仅进程内锁无法互斥去重 → 用 .lock 文件跨进程串行（拿不到则退化为进程内）。
         got_cp = False
         try:
-            MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
-            got_cp = cross_process_lock(MEMORY_JSONL, timeout=3.0)
+            memories_dir.mkdir(parents=True, exist_ok=True)
+            got_cp = cross_process_lock(memory_jsonl, timeout=3.0)
         except Exception:
             got_cp = False
         try:
-            items = load_memories(include_archived=True)
-            for it in items:
-                if it.get("text") == entry["text"] and not it.get("archived"):
-                    return it
-            MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
-            append_line(MEMORY_JSONL, json.dumps(entry, ensure_ascii=False))
+            # 去重走文本索引（按文件签名缓存）：命中时只加载一次以返回完整条目。
+            dup_id = _active_text_index().get(entry["text"])
+            if dup_id:
+                for it in load_memories(include_archived=True):
+                    if str(it.get("id")) == dup_id:
+                        return it
+                return {"id": dup_id, "text": entry["text"]}
+            memories_dir.mkdir(parents=True, exist_ok=True)
+            append_line(memory_jsonl, json.dumps(entry, ensure_ascii=False))
+            _index_note_write(entry["text"], entry["id"])
         finally:
             if got_cp:
-                release_lock(MEMORY_JSONL)
+                release_lock(memory_jsonl)
     return entry
 
 
@@ -982,7 +1111,7 @@ def update_memory(mid: str, text=None, type=None, importance=None, tags=None, ar
     entities/relations：供前端记忆编辑器标注实体/关系（图谱数据源），格式与
     remember_structured 一致（entities=字符串列表；relations=dict 列表 {rel,to}）。
     """
-    items = load_memories(include_archived=True)
+    items = load_memories(include_archived=True, apply_hits=False)
     hit = next((e for e in items if e["id"] == mid), None)
     if not hit:
         return False
@@ -1053,7 +1182,7 @@ def version_replace_memory(mid: str, text: str, source="对话") -> str:
     if not text:
         return ""
     with _MEM_LOCK:
-        items = load_memories(include_archived=True)
+        items = load_memories(include_archived=True, apply_hits=False)
         old = next((e for e in items if e["id"] == mid and not e.get("archived")), None)
         if old is None:
             # 无原条目（或原已归档）→ 直接新写一条
@@ -1086,7 +1215,7 @@ def version_replace_memory(mid: str, text: str, source="对话") -> str:
 
 
 def delete_memory(mid: str) -> bool:
-    items = load_memories(include_archived=True)
+    items = load_memories(include_archived=True, apply_hits=False)
     n = len(items)
     items = [e for e in items if e["id"] != mid]
     if len(items) == n:
@@ -1151,25 +1280,64 @@ def search_memories(query: str, limit: int = 5, record_hits: bool = False) -> li
     return top
 
 
-def _record_hits(entries):
-    """F3 重要度自学习：命中条目的 hit_count+1、更新 last_hit（就地写回，避免整文件重写）。
+def _record_hits(entries, brain_dir=None):
+    """F3 重要度自学习：命中条目的 hit_count+1、更新 last_hit。
 
-    被实际注入/使用的记忆权重随命中上升——记忆"因被用而重要"，而非写时一次性判断。
+    P1 起改为**追加 hits.jsonl**（O(1)），不再每轮对话重写整个 memory.jsonl；
+    `load_memories` 读取时叠加增量，睡眠时由 `compact_hits()` 折回主文件。
     """
     if not entries:
         return
+    _, _, hits_path = _mem_paths(brain_dir)
     now = now_iso()
     with _MEM_LOCK:
-        items = load_memories(include_archived=True)
-        ids = {e.get("id") for e in entries}
-        changed = False
+        try:
+            hits_path.parent.mkdir(parents=True, exist_ok=True)
+            with hits_path.open("a", encoding="utf-8") as f:
+                for e in entries:
+                    mid = str(e.get("id") or "")
+                    if mid and not e.get("archived"):
+                        f.write(json.dumps({"id": mid, "ts": now}, ensure_ascii=False) + "\n")
+                        # 调用方本轮即可看到最新命中数（不落主文件）
+                        try:
+                            e["hit_count"] = int(e.get("hit_count") or 0) + 1
+                        except (TypeError, ValueError):
+                            e["hit_count"] = 1
+                        e["last_hit"] = now
+        except OSError:
+            return
+
+
+def compact_hits(brain_dir=None) -> int:
+    """把 hits.jsonl 的增量折回 memory.jsonl 并清空增量。返回折叠的命中条数。
+
+    由睡眠/整理调用；读取路径不必每次写放大。
+    """
+    _, _, hits_path = _mem_paths(brain_dir)
+    hits = _load_hits(hits_path)
+    if not hits:
+        return 0
+    with _MEM_LOCK:
+        items = load_memories(include_archived=True, brain_dir=brain_dir, apply_hits=False)
+        changed = 0
         for e in items:
-            if e.get("id") in ids and not e.get("archived"):
-                e["hit_count"] = int(e.get("hit_count") or 0) + 1
-                e["last_hit"] = now
-                changed = True
+            h = hits.get(str(e.get("id") or ""))
+            if not h:
+                continue
+            e["hit_count"] = int(e.get("hit_count") or 0) + int(h.get("n") or 0)
+            if str(h.get("last") or "") > str(e.get("last_hit") or ""):
+                e["last_hit"] = h.get("last")
+            changed += 1
         if changed:
-            save_memories(items)
+            save_memories(items, brain_dir=brain_dir)
+        try:
+            hits_path.write_text("", encoding="utf-8")
+        # noqa: silent-except: 清空命中增量失败时下次睡眠会重试，不阻塞整理
+        except OSError:
+            pass
+        with _HITS_LOCK:
+            _HITS_CACHE.pop(str(hits_path), None)
+        return changed
 
 
 def consolidate_memories(min_importance=2, days=30):
@@ -1177,7 +1345,7 @@ def consolidate_memories(min_importance=2, days=30):
 
     返回 {"archived": n, "merged": n, "kept": n}。LLM 增强版见 brain_api.consolidate_with_llm。
     """
-    items = load_memories(include_archived=True)
+    items = load_memories(include_archived=True, apply_hits=False)
     now_epoch = _dt.datetime.now().timestamp()
     archived = merged = 0
     # 1) 低重要度 + 超过 days 天 → 归档（不删除，保留可查）
@@ -1191,36 +1359,50 @@ def consolidate_memories(min_importance=2, days=30):
         if int(e.get("importance") or 3) < min_importance and age_days > days:
             e["archived"] = True
             archived += 1
-    # 2) 同类型相似记忆合并（token Jaccard > 0.6）：保留重要度/时间更高的一方
+    # 2) 同类型相似记忆合并（token Jaccard > 0.6）：保留重要度/时间更高的一方。
+    #    P1 优化：先用倒排索引只生成「至少共享一个 token」的候选对，
+    #    避免全量两两比较；Jaccard>0.6 必然共享 token，故结果等价。
     active = [e for e in items if not e.get("archived")]
-    for i in range(len(active)):
-        a = active[i]
-        if a.get("archived"):
+    toks = [set(_mem_tokens(e.get("text") or "")) for e in active]
+    by_type = {}
+    for i, e in enumerate(active):
+        by_type.setdefault(str(e.get("type") or ""), []).append(i)
+    pairs = set()
+    for idxs in by_type.values():
+        postings = {}
+        for i in idxs:
+            for t in toks[i]:
+                postings.setdefault(t, []).append(i)
+        for arr in postings.values():
+            if len(arr) < 2 or len(arr) > 200:
+                continue  # 超高频 token 不生成组合，避免 n²
+            for x in range(len(arr)):
+                for y in range(x + 1, len(arr)):
+                    pairs.add((arr[x], arr[y]))
+    for i, j in sorted(pairs):
+        a, b = active[i], active[j]
+        if a.get("archived") or b.get("archived"):
             continue
-        for j in range(i + 1, len(active)):
-            b = active[j]
-            if b.get("archived"):
-                continue
-            if str(a.get("type")) != str(b.get("type")):
-                continue
-            ta, tb = set(_mem_tokens(a["text"])), set(_mem_tokens(b["text"]))
-            if not ta or not tb:
-                continue
-            if len(ta & tb) / len(ta | tb) > 0.6:
-                ka = (int(a.get("importance") or 3), str(a.get("ts") or ""))
-                kb = (int(b.get("importance") or 3), str(b.get("ts") or ""))
-                keep, drop = (a, b) if ka >= kb else (b, a)
-                # 修复：近重复记忆的 text 融合只在确有互补信息时进行，且只拼接"对方独有的部分"，
-                # 避免把本就相似的标签/结论无限累加成 "X（并入:X…）（并入:X…）" 的递归垃圾。
-                keep_txt = str(keep.get("text") or "")
-                drop_txt = str(drop.get("text") or "")
-                # 对方 text 与 keep 高度重合（Jaccard>0.85）→ 视为同义噪音，只归档不拼接
-                dt, kt = set(_mem_tokens(drop_txt)), set(_mem_tokens(keep_txt))
-                nearly_same = bool(dt and kt and len(dt & kt) / len(dt | kt) > 0.85)
-                if not nearly_same and len(keep_txt) < 160:
-                    keep["text"] = keep_txt + "（并入:" + drop_txt[:36] + "…）"
-                drop["archived"] = True
-                merged += 1
+        ta, tb = toks[i], toks[j]
+        if not ta or not tb:
+            continue
+        if len(ta & tb) / len(ta | tb) > 0.6:
+            ka = (int(a.get("importance") or 3), str(a.get("ts") or ""))
+            kb = (int(b.get("importance") or 3), str(b.get("ts") or ""))
+            keep, drop = (a, b) if ka >= kb else (b, a)
+            keep_i = i if keep is a else j
+            # 修复：近重复记忆的 text 融合只在确有互补信息时进行，且只拼接"对方独有的部分"，
+            # 避免把本就相似的标签/结论无限累加成 "X（并入:X…）（并入:X…）" 的递归垃圾。
+            keep_txt = str(keep.get("text") or "")
+            drop_txt = str(drop.get("text") or "")
+            # 对方 text 与 keep 高度重合（Jaccard>0.85）→ 视为同义噪音，只归档不拼接
+            dt, kt = set(_mem_tokens(drop_txt)), set(_mem_tokens(keep_txt))
+            nearly_same = bool(dt and kt and len(dt & kt) / len(dt | kt) > 0.85)
+            if not nearly_same and len(keep_txt) < 160:
+                keep["text"] = keep_txt + "（并入:" + drop_txt[:36] + "…）"
+                toks[keep_i] = set(_mem_tokens(keep["text"]))
+            drop["archived"] = True
+            merged += 1
     save_memories(items)
     return {
         "archived": archived, "merged": merged,
@@ -1363,6 +1545,32 @@ def list_decisions(limit=20):
         except Exception:
             continue
     return out[-limit:]
+
+
+def prune_decisions(max_items=5000) -> int:
+    """把最旧的决策移入 decisions_archive.jsonl，避免单文件无限增长。"""
+    p = _decisions_path()
+    if not p.exists():
+        return 0
+    max_items = max(100, int(max_items or 5000))
+    try:
+        lines = [x for x in p.read_text(encoding="utf-8", errors="ignore").splitlines() if x.strip()]
+    except OSError:
+        return 0
+    if len(lines) <= max_items:
+        return 0
+    moved = lines[:-max_items]
+    kept = lines[-max_items:]
+    try:
+        with (BRAIN_DIR / "decisions_archive.jsonl").open("a", encoding="utf-8") as f:
+            for line in moved:
+                f.write(line + "\n")
+        tmp = p.with_suffix(".jsonl.tmp")
+        tmp.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        return 0
+    return len(moved)
 
 
 def resolve_decision(did, outcome="", status="kept"):

@@ -432,9 +432,16 @@ DEFAULT_CONFIG = {
     "life_sleep_idle_minutes": 180,
     "life_quiet_hours": "02:00-07:00",
     "life_auto_sleep": True,
+    "life_auto_wake": True,
+    "life_wake_time": "",                 # HH:MM；空=按 duration 计算醒来
+    "life_sleep_duration_minutes": 480,
     "life_sleep_llm": True,
+    "life_sleep_consolidate_llm": True,   # 睡眠时用 LLM 提炼长期记忆（预算允许时）
     "life_auto_archive": False,
     "life_max_active_intentions": 3,
+    "life_intention_archive_max": 200,    # 超出后睡眠时归档最旧的已完成意图
+    "life_metrics_enabled": True,
+    "life_metrics_max": 5000,
     "life_budget_scope": "self",  # self=只算生命循环自身消耗；total=当日全部对话+自主
     "life_daily_token_budget": 1000000,
     "life_daily_cost_budget": 5.0,

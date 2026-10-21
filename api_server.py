@@ -9081,7 +9081,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             import memory_facade as _mf
-            ok, n, err = _mf.resolve_pending(body.get("ids") or [], body.get("action") or "accept")
+            ok, n, err = _mf.resolve_pending(body.get("ids") or [], body.get("action") or "accept",
+                                             sync=True)
             if err:
                 self._json(400, {"error": err})
             else:

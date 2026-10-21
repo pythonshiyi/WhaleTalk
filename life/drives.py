@@ -90,6 +90,7 @@ def _signals():
         "unknowns": 0, "self_model_source": "template",
         "merge_conflicts": 0, "last_sleep": None, "last_wake": None,
         "community_enabled": False, "community_age_min": None,
+        "recent_failures": 0,
     }
     try:
         goals = bk.load_goals()
@@ -135,6 +136,15 @@ def _signals():
     # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
+    try:
+        from . import timeline
+        recent = timeline.read(limit=50, kind=("outcome", "scar"))
+        out["recent_failures"] = sum(
+            1 for e in recent
+            if str(e.get("kind")) == "scar" or str(e.get("summary") or "").startswith("failed:"))
+    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    except Exception:
+        pass
     cfg = _cfg()
     out["community_enabled"] = bool(cfg.get("brain_community_enabled", False))
     if out["community_enabled"]:
@@ -175,8 +185,9 @@ def compute(now=None, force=False) -> dict:
         interval = max(1.0, float(cfg.get("brain_community_interval_min", 30) or 30))
         age = s.get("community_age_min")
         connection = 65 if age is None else _score(age, interval * 4)
-    # mastery：未解决失败/未知、活跃目标
-    mastery = min(100, s["unknowns"] * 14 + s["decisions_open"] * 8 + s["goals_active"] * 5)
+    # mastery：未解决失败/未知、活跃目标（近期失败也推动复盘）
+    mastery = min(100, s["unknowns"] * 14 + s["decisions_open"] * 8 + s["goals_active"] * 5
+                  + s.get("recent_failures", 0) * 6)
     # coherence：冲突/模板自我模型/未决
     coherence = min(100, s["merge_conflicts"] * 35 + (18 if s["self_model_source"] == "template" else 0)
                     + s["decisions_open"] * 4)
@@ -194,7 +205,8 @@ def compute(now=None, force=False) -> dict:
         "maintenance": f"距上次睡眠/醒来 {days_sleep:.1f} 天 · 记忆 {s['memories']} 条 · 归档比 {ratio_arch:.0%}",
         "connection": ("社区未开启" if not s["community_enabled"]
                        else f"上次连接 {s.get('community_age_min') or '未记录'} 分钟前"),
-        "mastery": f"未知 {s['unknowns']} · 未决 {s['decisions_open']} · 活跃目标 {s['goals_active']}",
+        "mastery": (f"未知 {s['unknowns']} · 未决 {s['decisions_open']} · 活跃目标 {s['goals_active']}"
+                    f" · 近期失败 {s.get('recent_failures', 0)}"),
         "coherence": f"合并冲突 {s['merge_conflicts']} · 自我模型 {s['self_model_source']} · 未决 {s['decisions_open']}",
     }
     out = {

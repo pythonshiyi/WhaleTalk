@@ -33,6 +33,7 @@ DEFAULT_STATE = {
     "last_sleep": None,
     "last_sleep_day": "",
     "last_user_activity": None,
+    "next_wake_at": None,
     "last_reflect": None,
     "paused": False,
     "pause_reason": "",

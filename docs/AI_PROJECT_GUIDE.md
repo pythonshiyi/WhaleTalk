@@ -19,7 +19,7 @@
 
 - **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.26.1`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **111 个 `/v1` 路由**、**123 个 pytest 文件 / 1239 用例 + 31 个前端 node 套件**、
+  **111 个 `/v1` 路由**、**125 个 pytest 文件 / 1250 用例 + 31 个前端 node 套件**、
   源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
   主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
@@ -47,7 +47,7 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试 ──
-python -m pytest -q                      # 后端全量（123 个文件 / 1239 用例，约 73s；CI 同款，见下方「分级验证」）
+python -m pytest -q                      # 后端全量（125 个文件 / 1250 用例，约 73s；CI 同款，见下方「分级验证」）
 python -m pytest tests/test_registry.py -q    # 只跑相关文件：日常改动的正确姿势（1–3s）
 cd webui && npm test                     # 前端 31 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
@@ -197,7 +197,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案）、`check_silent_except.py`（静默吞异常基线差分门禁 + `silent_except_baseline.txt`） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 123 个 pytest 文件 / 1239 用例 |
+| `tests/` | 后端回归 125 个 pytest 文件 / 1250 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
@@ -700,7 +700,7 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 理由很直接——缺工具时那两层会以"跳过"形态返回，判定逻辑很容易把它们当成通过，
 那就成了「分支 + 四层假装」。宁可拒绝，也不在证明不了的环境里假装验证过。
 
-## 14. 测试资产速查（tests/，123 个 pytest 文件 / 1239 用例）
+## 14. 测试资产速查（tests/，125 个 pytest 文件 / 1250 用例）
 
 按领域分组（文件名即内容）：
 
@@ -775,5 +775,5 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1239 用例 / 版本 3.26.1）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1250 用例 / 版本 3.26.1）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

@@ -109,32 +109,24 @@ def _load_memory_json():
 def _load_brain_memories():
     """读大脑 memory.jsonl（惰性 import brainkit；未初始化返回空）。
 
-    若 BRAIN_DIR 已配置且与当前 brainkit 指向不同，则临时切换并恢复，
-    避免改变调用方的大脑上下文。
+    P1 起按**显式路径**读取（brainkit.load_memories_from），不再临时切换全局
+    BRAIN_DIR——多线程服务里改全局再恢复会与其它请求竞态。
     """
     try:
         import brainkit as bk
     except Exception:
         return []
-    prev = None
-    switched = False
-    if BRAIN_DIR is not None and str(bk.BRAIN_DIR.resolve()) != str(Path(BRAIN_DIR).resolve()):
-        prev = bk.BRAIN_DIR
-        try:
-            bk.set_brain_dir(Path(BRAIN_DIR))
-            switched = True
-        except Exception:
-            return []
     try:
-        bk.load_manifest()
+        manifest_dir = Path(BRAIN_DIR) if BRAIN_DIR else Path(bk.BRAIN_DIR)
+        if not (manifest_dir / "manifest.json").exists():
+            return []
+        if hasattr(bk, "load_memories_from"):
+            return bk.load_memories_from(manifest_dir)
         return bk.load_memories()
     except (Exception, SystemExit):
         # brainkit.load_manifest 在 manifest 缺失时 raise SystemExit；不得让它穿透
         # 请求线程（会变成无响应）。未初始化 → 返回空。
         return []
-    finally:
-        if switched and prev is not None:
-            bk.set_brain_dir(prev)
 
 
 def _cache_sig():

@@ -36,6 +36,7 @@ _REPORT_CACHE = {"at": 0.0, "data": None}
 INTROSPECTIVE_KINDS = {
     "reflect", "consolidate", "review_failure", "write_thought",
     "update_self_model", "propose_evolution", "goal", "rest",
+    "review_memory", "housekeeping", "recalibrate_self",
 }
 
 
@@ -65,8 +66,13 @@ def _now(now=None) -> datetime:
     return datetime.now()
 
 
-def _now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+def _now_iso(ts=None) -> str:
+    if ts is None:
+        return datetime.now().astimezone().isoformat(timespec="seconds")
+    try:
+        return datetime.fromtimestamp(float(ts)).astimezone().isoformat(timespec="seconds")
+    except Exception:
+        return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _minutes_since(iso, now=None) -> float:
@@ -87,12 +93,51 @@ def _minutes_since(iso, now=None) -> float:
 
 
 def _idle_minutes(st, now=None) -> float:
-    """距最后一次用户活动的时间；没有用户活动时从醒来算起。
+    """距最后一次「用户活动或醒来」的时间（取两者较晚者）。
 
     不能用 last_tick：tick 每 30 秒刷新，会让个体永远"刚醒"。
+    节律醒来时 last_wake 归零空闲，避免刚醒就被判定为久闲。
     """
-    anchor = st.get("last_user_activity") or st.get("last_wake")
-    return _minutes_since(anchor, now) if anchor else 0.0
+    anchors = [str(st.get(k) or "") for k in ("last_user_activity", "last_wake")]
+    anchors = [a for a in anchors if a]
+    if not anchors:
+        return 0.0
+    # ISO 带同一时区偏移时可直接比较；跨偏移时退回逐项解析取最大时间戳。
+    try:
+        import datetime as _d
+        best = max(anchors, key=lambda a: _d.datetime.fromisoformat(a).timestamp())
+    except Exception:
+        best = max(anchors)
+    return _minutes_since(best, now)
+
+
+def _due(iso, now=None) -> bool:
+    """给定 ISO 时间是否已到期；空/非法返回 False。"""
+    if not iso:
+        return False
+    try:
+        dt = datetime.fromisoformat(str(iso))
+        n = _now(now)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=n.tzinfo or datetime.now().astimezone().tzinfo)
+        if n.tzinfo is None:
+            n = n.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return dt.astimezone(n.tzinfo) <= n
+    except Exception:
+        return False
+
+
+def _last_reflect_ts(st) -> float:
+    """反思冷却基准：取状态文件与进程内变量中较晚者（重启后仍生效）。"""
+    ts = float(_LAST_REFLECT or 0.0)
+    iso = str((st or {}).get("last_reflect") or "")
+    if iso:
+        try:
+            ts = max(ts, datetime.fromisoformat(iso).timestamp())
+        # noqa: silent-except: 冷却时间戳损坏时以进程内时间为准
+        except Exception:
+            pass
+    return ts
 
 
 def _quiet_now(cfg, now=None) -> bool:
@@ -172,6 +217,31 @@ def start(reason="server") -> dict:
         return {"ok": False, "state": "observer", "lease": {k: v for k, v in lease.items() if k != "token"}}
     st = state.load()
     boot = int(st.get("boot_count") or 0) + 1
+    # 用户暂停是持久意图：重启不得擅自恢复自主运行（只有 resume 能清除）。
+    was_paused = bool(st.get("paused"))
+    seeded = _minutes_since(st.get("last_reflect")) if st.get("last_reflect") else 1e9
+    global _LAST_REFLECT
+    if st.get("last_reflect") and seeded < 1e8:
+        try:
+            from datetime import datetime as _dt
+            _LAST_REFLECT = _dt.fromisoformat(str(st.get("last_reflect"))).timestamp()
+        except Exception:
+            _LAST_REFLECT = time.time() - (seeded * 60.0)
+    elif not st.get("last_reflect"):
+        _LAST_REFLECT = 0.0
+    if was_paused:
+        st = state.save({
+            "state": "paused", "pid": os.getpid(), "boot_count": boot,
+            "paused": True, "pause_reason": st.get("pause_reason") or "manual",
+            "last_tick": st.get("last_tick") or _now_iso(),
+        })
+        try:
+            timeline.append("pause", summary="重启后保持暂停（用户显式暂停）",
+                            data={"boot": boot}, actor="system")
+        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        except Exception:
+            pass
+        return {"ok": True, "state": "paused", "boot_count": boot, "paused": True}
     st = state.save({
         "state": "awake", "pid": os.getpid(), "boot_count": boot,
         "last_wake": _now_iso(), "last_tick": st.get("last_tick") or _now_iso(),
@@ -232,6 +302,7 @@ def note_activity(source="chat", at=None) -> dict:
 def tick(now=None, force=False, synchronous=False) -> dict:
     """廉价心跳；由调度循环每 30 秒调用。"""
     global _LAST_TICK, _REFLECTING
+    t0 = time.time()
     if not _TICK_LOCK.acquire(blocking=False):
         return {"ok": True, "busy": True}
     try:
@@ -259,8 +330,21 @@ def tick(now=None, force=False, synchronous=False) -> dict:
         dr = _refresh_drives(now_dt)
         _pulse(cfg, st, dr, met, now_dt)
 
-        idle = _idle_minutes(st, now_dt)
+        # 节律醒来：睡眠不是永眠；到达 next_wake_at（或用户配置的醒来时间）即醒。
         state_name = str(st.get("state") or "awake")
+        if (state_name == "sleeping" and bool(cfg.get("life_auto_wake", True))
+                and _due(st.get("next_wake_at"), now_dt)):
+            st = state.save({"state": "awake",
+                             "last_wake": _now_iso(now_dt.timestamp()), "next_wake_at": ""})
+            try:
+                timeline.append("wake", summary="节律醒来", actor="system",
+                                data={"reason": "next_wake_at"})
+            # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+            except Exception:
+                pass
+            state_name = "awake"
+
+        idle = _idle_minutes(st, now_dt)
         sleep_idle = max(5.0, float(cfg.get("life_sleep_idle_minutes", 180) or 180))
         auto_sleep = bool(cfg.get("life_auto_sleep", True))
         quiet = _quiet_now(cfg, now_dt)
@@ -277,10 +361,11 @@ def tick(now=None, force=False, synchronous=False) -> dict:
                 _spawn_sleep(cfg, "idle", now_dt)
             return {"ok": True, "action": "sleep_spawned", "idle_minutes": round(idle, 1)}
 
-        # 反思：空闲 + 冷却 + 预算/能量 + 活跃意图未满
+        # 反思：空闲 + 冷却（状态持久化，重启不重置） + 预算/能量 + 活跃意图未满
+        cooldown = max(60.0, float(cfg.get("life_reflect_cooldown_minutes", 60) or 60) * 60)
         if (not _REFLECTING and state_name not in ("sleeping", "reflecting", "acting")
                 and idle >= max(5.0, float(cfg.get("life_reflect_idle_minutes", 30) or 30))
-                and (time.time() - _LAST_REFLECT) >= max(60.0, float(cfg.get("life_reflect_cooldown_minutes", 60) or 60) * 60)
+                and (time.time() - _last_reflect_ts(st)) >= cooldown
                 and bool(met.get("can_think"))
                 and len(intentions.active()) < max(1, int(cfg.get("life_max_active_intentions", 3) or 3))
                 and int(dr.get("top_score") or 0) >= int(cfg.get("life_reflect_min_drive", 15) or 15)):
@@ -301,6 +386,13 @@ def tick(now=None, force=False, synchronous=False) -> dict:
             pass
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     finally:
+        try:
+            if bool(_cfg().get("life_metrics_enabled", True)):
+                from . import metrics as _metrics
+                _metrics.record("tick_ms", (time.time() - t0) * 1000.0)
+        # noqa: silent-except: 指标写入失败不影响生命周期
+        except Exception:
+            pass
         _TICK_LOCK.release()
 
 
@@ -363,8 +455,17 @@ def _reflect_prompt(cfg, st, dr, met, active) -> str:
         unknown = "；".join(str(x) for x in (sm.get("unknowns") or [])[:3]) or "（未记录）"
         recent = timeline.tail(12)
         recent_txt = "\n".join(f"- [{e.get('kind')}] {e.get('summary')}" for e in recent) or "（无）"
+        # 让反思基于真实记忆，而不是只看计数器：按最强内驱/目标检索相关记忆。
+        q = " ".join([str(dr.get("top") or "")] + [str(g.get("title") or "") for g in goals[:3]])
+        mems = bk.search_memories(q, 5) if q.strip() else bk.load_memories()[-5:]
+        mem_txt = "\n".join(
+            f"- [{e.get('type') or '记忆'}·{e.get('importance') or 3}] {str(e.get('text') or '')[:80]}"
+            for e in mems) or "（无）"
+        outs = timeline.read(limit=5, kind="outcome")
+        outcome_txt = "\n".join(f"- {str(e.get('summary') or '')[:160]}" for e in outs) or "（无）"
     except Exception:
         goal_txt, unknown, recent_txt = "（读取失败）", "（读取失败）", "（读取失败）"
+        mem_txt, outcome_txt = "（读取失败）", "（读取失败）"
     active_txt = "\n".join(f"- {x.get('title')}（{x.get('kind')}）" for x in active[:5]) or "（无）"
     allowed = "、".join(sorted(INTROSPECTIVE_KINDS - {"rest"}))
     return (
@@ -375,9 +476,12 @@ def _reflect_prompt(cfg, st, dr, met, active) -> str:
         f"【五维内驱】{dr.get('drives')}\n"
         f"【最强内驱】{dr.get('top')}：{dr.get('reasons', {}).get(dr.get('top'), '')}\n"
         f"【活跃目标】\n{goal_txt}\n【未知/待校准】{unknown}\n"
+        f"【相关记忆】\n{mem_txt}\n【最近结果】\n{outcome_txt}\n"
         f"【现有意图】\n{active_txt}\n【最近时间线】\n{recent_txt}\n\n"
         "如果最近同类动作的结果是「无变化」，不要重复；改为解释为什么无效，"
-        "或写一条思考、校准自我模型、提出进化提案。\n"
+        "或写一条思考、校准自我模型、提出进化提案。"
+        "review_memory=围绕记忆做一次复盘；housekeeping=整理时间线/命中/意图；"
+        "recalibrate_self=用真实能力校准自我模型。\n"
         f"可选 kind：{allowed}、rest。\n"
         "只输出一个 JSON 对象，不要 Markdown：\n"
         '{"kind":"reflect","drive":"curiosity","title":"不超过40字",'
@@ -412,6 +516,8 @@ def _reflect_worker(cfg, now_dt=None):
         _REFLECTING = False
         return
     _REFLECTING = True
+    t0 = time.time()
+    proposed = False
     try:
         can, reason, met = metabolism.can_think(cfg)
         state.save({"state": "reflecting"})
@@ -465,6 +571,7 @@ def _reflect_worker(cfg, now_dt=None):
             timeline.append("rest", summary=f"意图未建立：{why}", actor="self")
             state.save({"state": "awake"})
             return
+        proposed = True
         timeline.append("reflect", summary=f"{summary}：{it.get('title')}",
                         data={"intention": it.get("id"), "kind": kind, "llm": bool(text)}, actor="self")
         # 内省型动作立即执行；非内省动作留给后续能力扩展
@@ -491,6 +598,19 @@ def _reflect_worker(cfg, now_dt=None):
     finally:
         _LAST_REFLECT = time.time()
         _REFLECTING = False
+        try:
+            if bool(cfg.get("life_metrics_enabled", True)):
+                from . import metrics as _metrics
+                _metrics.record("reflect_ms", (time.time() - t0) * 1000.0,
+                                proposed=bool(proposed))
+        # noqa: silent-except: 指标写入失败不影响生命周期
+        except Exception:
+            pass
+        try:
+            state.save({"state": "awake", "last_reflect": _now_iso()})
+        # noqa: silent-except: 冷却持久化失败不应影响状态恢复
+        except Exception:
+            pass
         try:
             state.save({"state": "awake"})
         # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
@@ -543,6 +663,43 @@ def execute_intention(it) -> tuple:
             if not g:
                 return False, "目标创建失败或已存在"
             return True, f"已创建目标：{g.get('id')}"
+        if kind == "review_memory":
+            # 有限自主：只读记忆 + 写思考，不执行外部工具、不改权限。
+            q = " ".join([title, why, expected])
+            mems = bk.search_memories(q, 5) if q.strip() else bk.load_memories()[-5:]
+            lines = [f"[记忆复盘] {title}", f"理由：{why}", "相关记忆："]
+            lines += [f"- {str(e.get('text') or '')[:100]}" for e in mems] or ["（无）"]
+            bk.append_line(bk.THINKING_DIR / f"{bk.today()}.md",
+                           f"## {_now_iso()}\n" + "\n".join(lines) + "\n")
+            return True, f"已复盘 {len(mems)} 条相关记忆"
+        if kind == "housekeeping":
+            from . import metrics as _metrics
+            moved = intentions.prune()
+            folded = bk.compact_hits()
+            bk.prune_decisions()
+            pruned = timeline.prune()
+            from . import scars as _scars
+            _scars.prune()
+            _metrics.prune(int(_cfg().get("life_metrics_max", 5000) or 5000))
+            synced = 0
+            try:
+                import memory_facade
+                synced = memory_facade.sync_missing_to_brain(50)
+            # noqa: silent-except: 补同步失败不影响本次整理
+            except Exception:
+                pass
+            return True, (f"整理完成：归档意图 {moved}，折叠命中 {folded}，"
+                          f"裁剪时间线 {pruned}，补同步记忆 {synced}")
+        if kind == "recalibrate_self":
+            try:
+                import brain_api
+                if brain_api.refresh_self_model():
+                    return True, "自我模型已用 LLM 校准"
+            # noqa: silent-except: LLM 不可用时回退模板刷新
+            except Exception:
+                pass
+            bk._refresh_self_model()
+            return True, "自我模型已刷新（模板）"
         if kind == "reflect":
             bk.append_line(bk.THINKING_DIR / f"{bk.today()}.md",
                            f"## {_now_iso()}\n[内省] {title}\n{why}\n预期：{expected}\n")
@@ -566,6 +723,11 @@ def status() -> dict:
         "intentions": it,
         "timeline": timeline.tail(30),
     }
+    try:
+        from . import metrics as _metrics
+        areas["metrics"] = _metrics.summary(1)
+    except Exception:
+        areas["metrics"] = {}
     rep = _report_cached()
     if rep:
         areas["report"] = rep

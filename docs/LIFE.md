@@ -35,8 +35,9 @@ paused：用户显式暂停
 | 文件 | 作用 |
 |---|---|
 | `timeline.jsonl` | 唯一事件流，append-only；坏行跳过 |
-| `life.json` | 当前状态、epoch、tick 计数、上次睡眠/唤醒 |
+| `life.json` | 当前状态、epoch、tick 计数、上次睡眠/唤醒、暂停、反思冷却、`next_wake_at` |
 | `life.lock` | 单实例租约（pid/host/beat/token），90 秒无心跳可接管 |
+| `metrics.jsonl` | 运行指标（tick/reflect/sleep 耗时与结果），append-only，睡眠时裁剪 |
 | `drives.json` | 五维内驱分数与计算依据 |
 | `intentions.json` | 意图生命周期：proposed/active/done/failed/abandoned |
 | `metabolism.json` | 当日疲劳、能量、动作数、累计消耗 |
@@ -80,10 +81,13 @@ paused：用户显式暂停
 - `expected`：完成后可验证的结果。
 
 执行后写入 `outcome`；失败会进入 `scars.jsonl`。同一类动作连续两次无变化时会被拒绝，
-改写成「为什么无效」的思考，避免空转。当前可执行的是内省型动作：
+改写成「为什么无效」的思考，避免空转。当前可执行的是内省/整理型动作：
 
-`reflect`、`consolidate`、`review_failure`、`write_thought`、`update_self_model`、`propose_evolution`、`goal`。
+`reflect`、`consolidate`、`review_failure`、`write_thought`、`update_self_model`、
+`propose_evolution`、`goal`、`review_memory`（检索相关记忆并复盘）、
+`housekeeping`（时间线/命中/意图/决策/代价归档）、`recalibrate_self`（LLM 校准自我模型）。
 
+反思提示会注入按内驱/目标检索到的相关记忆与最近 outcome，而不是只看计数器。
 工具型意图可以在后续扩展，不需要改权限模型。
 
 ## 6. 代谢
@@ -103,12 +107,14 @@ paused：用户显式暂停
 流程：
 
 1. light：`brainkit.consolidate_memories()`（归档低价值、合并重复）。
-2. deep：日结摘要 + `_refresh_self_model()`。
-3. dream：生成 3–5 句叙事（明确标注为生成），写入 `thinking_log/`。
-4. proposal：写入 `evolution.json` 的 `proposed`，**不自动合并**。
-5. wake：恢复能量，状态保持 sleeping，等用户活动或下一次醒来。
+2. light+：预算允许时 `brain_api.consolidate_with_llm()` 把同类记忆压成精炼长期记忆。
+3. deep：日结摘要 + `_refresh_self_model()`。
+4. dream：生成 3–5 句叙事（明确标注为生成），写入 `thinking_log/`。
+5. proposal：**只有真实增量**（归档/合并/LLM 巩固）才写入 `evolution.json` 的 `proposed`，不自动合并。
+6. housekeeping：时间线/命中增量/意图/决策/代价/指标归档裁剪。
+7. wake：恢复能量并写入 `next_wake_at`；到点由 tick 自动醒来（用户活动可提前唤醒）。
 
-同一天重复触发会跳过（除非 `force=True`）。
+同一天重复触发会跳过（除非 `force=True`）。暂停与反思冷却写入 `life.json`，重启后仍生效。
 
 ## 8. 单一自我
 
@@ -144,8 +150,15 @@ paused：用户显式暂停
   "life_sleep_idle_minutes": 180,
   "life_quiet_hours": "02:00-07:00",
   "life_auto_sleep": true,
+  "life_auto_wake": true,
+  "life_wake_time": "",
+  "life_sleep_duration_minutes": 480,
   "life_sleep_llm": true,
+  "life_sleep_consolidate_llm": true,
   "life_max_active_intentions": 3,
+  "life_intention_archive_max": 200,
+  "life_metrics_enabled": true,
+  "life_metrics_max": 5000,
   "life_budget_scope": "self",
   "life_daily_token_budget": 1000000,
   "life_daily_cost_budget": 5.0,

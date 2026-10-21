@@ -601,8 +601,29 @@ def list_pending() -> List[Dict[str, Any]]:
     return list(d.get("items") or [])
 
 
-def resolve_pending(ids, action="accept") -> Tuple[bool, int, Optional[str]]:
-    """裁决待确认项。action: accept（写入长期记忆）| dismiss（丢弃）。返回 (ok, n, error)。"""
+def _sync_item_to_brain(x):
+    """把一条 memory.json 事实镜像进大脑（与 tool_brain.write_memory 同口径）。"""
+    try:
+        import deepseek_client as dc
+        dc._brain_sync_memory(
+            str(x.get("text") or ""),
+            key=str(x.get("key") or "自动记忆"),
+            type=str(x.get("type") or ""),
+            entities=[str(e) for e in (x.get("entities") or []) if isinstance(e, str)],
+            relations=[r for r in (x.get("relations") or []) if isinstance(r, dict)],
+            origin=str(x.get("origin") or "agent"),
+        )
+        return True
+    except Exception:
+        return False
+
+
+def resolve_pending(ids, action="accept", sync=False) -> Tuple[bool, int, Optional[str]]:
+    """裁决待确认项。action: accept（写入长期记忆）| dismiss（丢弃）。返回 (ok, n, error)。
+
+    sync=True 时，accept 的条目同时镜像进大脑（默认 False 以保持纯门面语义；
+    API 端会传 True，避免「用户确认过的记忆不进快照」）。
+    """
     ids = [str(i) for i in (ids or [])]
     if not ids:
         return False, 0, "缺少 id"
@@ -618,12 +639,43 @@ def resolve_pending(ids, action="accept") -> Tuple[bool, int, Optional[str]]:
         if act == "accept":
             r = remember(str(x.get("text") or ""),
                          origin=str(x.get("origin") or "agent"),
+                         type=str(x.get("type") or ""),
                          key="自动记忆")
             if r.get("ok"):
                 n += 1
+                if sync:
+                    _sync_item_to_brain({"text": x.get("text"), "key": "自动记忆",
+                                         "origin": x.get("origin") or "agent"})
         else:
             n += 1
     return True, n, None
+
+
+def sync_missing_to_brain(limit=100) -> int:
+    """把 memory.json 中尚未进入大脑的活跃事实补写进大脑（限量，供睡眠整理）。
+
+    `memory.json` 是兼容投影/旧数据；大脑是长期层。一次性全量迁移可能很大，
+    故每次最多 limit 条，重复调用幂等（大脑按同文本去重）。
+    """
+    try:
+        import brainkit as bk
+        bk.load_manifest()
+    except (Exception, SystemExit):
+        return 0
+    try:
+        brain_texts = {str(e.get("text") or "") for e in bk.load_memories()}
+    except Exception:
+        return 0
+    n = 0
+    for f in all_facts():
+        text = str(f.get("value") or "")
+        if not text or text in brain_texts:
+            continue
+        if _sync_item_to_brain({**f, "text": text, "key": f.get("key") or "自动记忆"}):
+            n += 1
+            if n >= max(1, int(limit or 100)):
+                break
+    return n
 
 
 def reset_pending():

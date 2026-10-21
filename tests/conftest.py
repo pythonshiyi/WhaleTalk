@@ -52,6 +52,7 @@ def _isolate_brain(tmp_path, monkeypatch):
         ("MERGE_LOG_FILE", "merge_log.json"),
         ("MERGE_CONFLICT_FILE", "merge_conflicts.json"),
         ("MEMORY_JSONL", "memories/memory.jsonl"),
+        ("MEMORY_HITS", "memories/hits.jsonl"),
     ):
         monkeypatch.setattr(bk, name, (base / rel) if rel else base, raising=False)
     yield

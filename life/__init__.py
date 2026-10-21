@@ -10,6 +10,7 @@
 - ``sleep``      睡眠巩固：合并记忆、日结、自我模型刷新、进化提案。
 - ``loop``       tick 状态机，由 api_server 的 30s 调度循环驱动。
 - ``report``     连续性/自主性/完成率/成本等可量化指标。
+- ``metrics``    tick/reflect/sleep 的运行耗时与结果（brain/metrics.jsonl）。
 
 设计约定：
 - 这里不引入审批、白名单或沙箱；约束只来自内稳态（预算、疲劳、目标上限）。

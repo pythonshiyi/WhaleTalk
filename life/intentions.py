@@ -21,7 +21,8 @@ from ._atomic import write_json
 _LOCK = threading.RLock()
 STATUSES = ("proposed", "active", "done", "failed", "abandoned")
 KINDS = ("reflect", "consolidate", "review_failure", "write_thought",
-         "update_self_model", "propose_evolution", "goal", "rest")
+         "update_self_model", "propose_evolution", "goal", "rest",
+         "review_memory", "housekeeping", "recalibrate_self")
 
 
 def _brain_dir() -> Path:
@@ -34,6 +35,10 @@ def _brain_dir() -> Path:
 
 def path() -> Path:
     return _brain_dir() / "intentions.json"
+
+
+def archive_path() -> Path:
+    return _brain_dir() / "intentions_archive.jsonl"
 
 
 def _iso(ts=None) -> str:
@@ -255,6 +260,48 @@ def _after_finish(iid, status, outcome=""):
     # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
+
+
+def _archive_cap() -> int:
+    try:
+        import config_utils
+        cfg = config_utils.load_config()
+        return max(20, int(cfg.get("life_intention_archive_max", 200) or 200))
+    except Exception:
+        return 200
+
+
+def prune(max_items=None) -> int:
+    """把最旧的已完成意图移入 intentions_archive.jsonl，保留活跃意图。
+
+    单文件全量重写 + 无上限会让 intentions.json 随运行时间无限增长；
+    归档只挪位置不删除（仍可检索），返回归档条数。
+    """
+    cap = max(20, int(max_items or _archive_cap()))
+    with _LOCK:
+        data = load()
+        items = data.get("intentions") or []
+        if len(items) <= cap:
+            return 0
+        active = [x for x in items if x.get("status") in ("proposed", "active")]
+        finished = [x for x in items if x.get("status") not in ("proposed", "active")]
+        finished.sort(key=lambda x: str(x.get("finished_at") or x.get("created_at") or ""))
+        drop_n = min(len(finished), max(0, len(items) - cap))
+        if drop_n <= 0:
+            return 0
+        drop = finished[:drop_n]
+        # 先写归档再裁剪：归档失败时宁可下次重复归档，也不能丢意图。
+        try:
+            with archive_path().open("a", encoding="utf-8") as f:
+                for x in drop:
+                    f.write(json.dumps(x, ensure_ascii=False) + "\n")
+        # noqa: silent-except: 归档写入失败则本次不裁剪，保留原文件
+        except OSError:
+            return 0
+        data["intentions"] = active + finished[drop_n:]
+        data["updated_at"] = _iso()
+        save(data)
+        return drop_n
 
 
 def report(limit=10) -> dict:

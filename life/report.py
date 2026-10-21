@@ -78,6 +78,11 @@ def report(days=7) -> dict:
             continuous += 20.0
     continuous = min(100.0, continuous)
     health = round((continuous + autonomy + competence + economy + memory_score) / 5.0, 1)
+    try:
+        from . import metrics
+        ops = metrics.summary(days)
+    except Exception:
+        ops = {}
     return {
         "generated_at": _now_iso(),
         "days": days,
@@ -125,6 +130,7 @@ def report(days=7) -> dict:
         "top_drive": dr.get("top"),
         "timeline": tl,
         "scars": sc,
+        "metrics": ops,
         "health": health,
     }
 
@@ -150,4 +156,9 @@ def render_markdown(rep=None) -> str:
     lines += ["", "## 时间线", f"- 最近 {rep['timeline']['days']} 天：{rep['timeline']['events']} 个事件"]
     for k, v in sorted((rep["timeline"].get("counts") or {}).items()):
         lines.append(f"  - {k}: {v}")
+    ops = (rep.get("metrics") or {}).get("metrics") or {}
+    if ops:
+        lines += ["", "## 运行指标"]
+        for name, row in sorted(ops.items()):
+            lines.append(f"- {name}: {row.get('count')} 次，平均 {row.get('avg')}，峰值 {row.get('max')}")
     return "\n".join(lines)

@@ -31,7 +31,7 @@ a = Analysis(
         'pystray',
         # P0-1 巨石拆分：deepseek_client 经 `from agent_tools import *` 聚合导入，
         # 静态分析无法发现子模块，必须显式收集（新增域模块自动纳入）
-    ] + collect_submodules('agent_tools'),
+    ] + collect_submodules('agent_tools') + collect_submodules('life'),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

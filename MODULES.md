@@ -2,7 +2,7 @@
 
 本文档描述鲸语 WhaleTalk 当前（v3.16.21，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
 
-> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **111 /v1 端点** · 后端 123 个 pytest 文件 / 1239 用例 · 前端 31 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
+> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **111 /v1 端点** · 后端 125 个 pytest 文件 / 1250 用例 · 前端 31 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
 
 ## 分层总览
 
@@ -27,7 +27,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
     ├─ 配置体系：config_defaults / config_utils / profiles / themes / roles / templates / deps
     ├─ 扩展体系：plugins / plugin_app / user_tools / fetch_blocked（按需）/ mcp_server（MCP 出口）/ mcp_client（MCP 入口）
     ├─ 大脑：brainkit / brain_api / genesis（创世化初始）
-    ├─ 生命循环：life/（timeline / state / drives / intentions / metabolism / sleep / loop / report / scars）
+    ├─ 生命循环：life/（timeline / state / drives / intentions / metabolism / sleep / loop / report / scars / metrics）
     └─ 子包：wechat_writer（公众号写作）/ webui（React 前端）/ agent_tools（工具域模块）/ tools（开发门禁）
 ```
 
@@ -69,9 +69,9 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | `capability.py`（v3.17 新增） | **能力主干**：运行时工具与内置工具共用 `toolkit` 注册表（`source=capability`）。manifest 校验（`api`/`p_` 前缀/`groups`/`perms` 缺一拒装）、四种执行体（`builtin_ref`/`http`/`cli`/`python`）、声明式最小权限（调用期强制）、超时+熔断（连续 3 次失败冷却 60s）+ 输出截断 + `degrade` 记账、`epoch` 温和失效卸载、`adapt_legacy()` 旧插件迁移桥。六层视图由 `deepseek_client.refresh_capability_layers()` 重建 |
 | `tool_hooks.py`（344 行） | 工具钩子管线（P0-1）：横切关注点的收口接缝——pre/post 钩子表 + `wrap()`，在 `toolkit` **注册处**统一包装执行体，任何调用路径都逃不掉。内置 `trust_declare`/`trust_commit`（全局）、`snapshot`/`egress`（声明式）。钩子抛错吞掉 + `degrade` 留痕；`functools.wraps` 保证签名不变 |
 | `egress.py`（320 行） | 出网账本（P1-A）：每一次**带内容出网**留痕（通道/目的地/字节数/摘要/结果）。**不阻断**；**默认不存明文**；达阈值向模型注入「出网留痕」。`EGRESS_SPECS` 声明式抽取——新增出网工具只需加一行。落盘 `DATA_DIR/egress.jsonl` |
-| `memory_facade.py`（463 行） | 记忆门面（P1-B）：`memory.json` 唯一写入门面，为长期记忆补 **origin（血缘）+ confidence + status + supersede 双向链接**。① 血缘：非 user 来源注入时加 `〔推断〕`/`〔来自外部内容〕`标注；② 作废：同 `key` 取代旧条目——**只认显式 key，绝不按相似度**；相似度仅用于冲突提示。旧数据读时补默认值、不改写文件 |
+| `memory_facade.py`（~560 行） | 记忆门面（P1-B）：`memory.json` 唯一写入门面，为长期记忆补 **origin（血缘）+ confidence + status + supersede 双向链接**。① 血缘：非 user 来源注入时加 `〔推断〕`/`〔来自外部内容〕`标注；② 作废：同 `key` 取代旧条目——**只认显式 key，绝不按相似度**；相似度仅用于冲突提示。旧数据读时补默认值、不改写文件。`resolve_pending(sync=True)` 把用户确认的候选镜像进大脑；`sync_missing_to_brain()` 供睡眠补同步旧投影 |
 | `insight.py`（355 行） | 自我洞察（纯函数 · 仅标准库）：`build_heatmap`（能力热力图：工具使用频率/任务链长度/失败率/技能结晶/预激活命中）· `build_self_report`（自我述职）· `render_report`（Markdown）。不依赖运行时，便于单测 |
-| `memory_store.py`（399 行） | 统一记忆读取层（memory.json / knowledge_index / 大脑目录），供工具与 API 复用 |
+| `memory_store.py`（~390 行） | 统一只读记忆层（memory.json / knowledge_index / 大脑目录），按显式 brain_dir 读取（不再临时切换全局），提供置信度排序、溯源与疑似冲突检测 |
 | `mv_engine.py` | 自建 MV 引擎（不依赖任何外部程序）：`analyze`（BPM/节拍/能量）、`align_lyrics`（faster-whisper 词级 + 顺序短语映射的声学对轴）、`build_shots`（卡点分镜网格 + 选景）、`compose_frame`（**逐帧动画**：场景 + 转场 + 片头/片尾卡 + 字幕 + 角标）、`render_movie`（多进程分块 + **断点续跑** + 可选 GPU 融合 pass）、`encode_video`（帧序列 + 音轨 → mp4）、`dynamic_check`（镜内采样动感三判据）、`build_srt`、`verify_shots`；`render_frames`（旧每镜一张 PNG）保留兼容；被 `agent_tools/tool_mv.py` 的 `mv_produce` 消费 |
 | `mv_tex.py` | 程序化影像**质感积木**（题材无关 · 沉淀自《山河砚》MV）：fbm 分形噪声、高斯模糊/缩放（cv2→PIL→numpy 逐级回退）、`neon_glow`/`scanlines`/`glitch`/`holo_grid`/`data_rain`/`ink_ripple`/`mountain_wire`、**时间连续** `film_grain`、`highlight_rolloff`（治死白）、中文路径安全 `imwrite_safe/imread_safe`、字体自动发现 + 字形预检（fontTools 可选）；只依赖 numpy/Pillow，cv2/pyopencl 为可选加速 |
 | `mv_scene.py` | 题材无关**场景基元库**（12 个动画意象，`fn(H,W,t,ctx)->RGB float32`）：inkstone/mountains/sky/city/river/rain/eye/crowd/bridge/text_wall/flow/empty + `choose_scene`（按歌词关键词选景）；统一收尾（暗角→扫描线→故障→颗粒，顺序有物理含义） |
@@ -119,9 +119,9 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 
 | 模块 | 职责 |
 |---|---|
-| `brainkit.py`（2,865 行） | 大脑 CLI：init/keyring-setup/mount/unmount/heartbeat/think/remember/import-memory/consolidate（睡眠巩固）/goal/decision/evolution/archive/restore/merge/merge-resolve/status/list/diff/export-key/import-key；指纹防篡改、DPAPI 免密密钥体系、RSA 快照签名验签、LCA 三路合并、prune 豁免血缘引用快照、语义检索 |
+| `brainkit.py`（2,865 行） | 大脑 CLI：init/keyring-setup/mount/unmount/heartbeat/think/remember/import-memory/consolidate（睡眠巩固）/goal/decision/evolution/archive/restore/merge/merge-resolve/status/list/diff/export-key/import-key；指纹防篡改、DPAPI 免密密钥体系、RSA 快照签名验签、LCA 三路合并、prune 豁免血缘引用快照、语义检索。记忆写入走文本去重索引，命中写 `hits.jsonl` 增量并由睡眠折回，避免每轮重写整个 jsonl |
 | `brain_api.py`（1,180 行） | 大脑 → API 适配层（把 CLI 命令包装为 api_server 可调用的纯函数 + `brain_context` 注入——身份/断点/目标/自我认知/未决决策/记忆 + `consolidate_with_llm` LLM 提炼） |
-| `life/` | **生命循环**：连续 tick / 唯一时间线 / 单实例租约 / 五维内驱 / 自发意图 / 代谢预算 / 睡眠巩固 / 代价记录。设计见 [docs/LIFE.md](docs/LIFE.md)；不引入审批或权限收紧 |
+| `life/` | **生命循环**：连续 tick / 唯一时间线 / 单实例租约 / 五维内驱 / 自发意图（内省+整理型）/ 代谢预算 / 睡眠巩固（含 LLM 提炼）/ 代价记录 / `metrics.jsonl` 运行指标。暂停、反思冷却、`next_wake_at` 持久化；设计见 [docs/LIFE.md](docs/LIFE.md)；不引入审批或权限收紧 |
 | \community_client.py\ | ⚠️ **鲸群实验（可选·默认关·非功能）**：连接独立社区站（\xperiments/鲸群实验场/\，已剥离出主程序）的一根「绳」——确保在线（可选自动拉起 server.py）→ 心跳 → 感知 → 规则决策 → 授权内行动 → 记忆回灌；由 \pi_server._brain_community_loop\（独立线程、默认关）与 \gent_tools/tool_community.py\ 消费。**当前冻结**（重启条件见实验场 README）；未配置密钥不外发，可整体删除 |
 
 ### 子包
@@ -132,7 +132,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | `webui/` | React 前端（React 19 + Vite 8，无 UI 框架）：ChatPage/工作台/指令库/自主/大脑/能力/设置；`webui/dist` 由 api_server 同源服务。渲染链路（纯数据 AST）：`longTextUtil.js`（解除 `@long-text` 包装）→ `mdParser.js`（块级 AST，流式安全 `code-open`）→ `mdInline.js`（行内 tokens，独立 RegExp 防 lastIndex 破坏）→ `mdHighlight.js`（零依赖高亮）→ `mdMath.js`（LaTeX 子集）→ `components/Markdown.jsx`（消费 AST）。**长会话渲染**：`msgUpdates.js` 提供不可变更新，配合 `Message.jsx` 的 `React.memo` 实现每帧只重渲染最后一条 |
 | `wechat_writer/` | 公众号自动写作：sources（多信源采集）/ topic（选题去重）/ writer（三阶段写作）/ quality（质检重试）/ output（草稿箱+存档）/ history / llm / config |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性，`--strict` 可入 CI）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛对账）、`check_docs.py`（文档数字 vs 源码实测） |
-| `tests/` | 自举回归套件（123 个 pytest 文件 / 1239 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
+| `tests/` | 自举回归套件（125 个 pytest 文件 / 1250 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
 
 ### 辅助脚本
 

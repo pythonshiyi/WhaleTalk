@@ -120,12 +120,15 @@ def brain_status(with_context: bool = True):
     }
 
 
-def consolidate_with_llm():
+def consolidate_with_llm(base=None):
     """睡眠巩固（LLM 增强）：先本地巩固，再用 LLM 把同类型记忆压成精炼长期记忆。
 
-    未配置 API Key / 大脑未初始化时退化为纯本地巩固。返回统计。
+    base 传入已完成本地巩固的统计时跳过重复本地整理（供 life.sleep 复用）。
+    未配置 API Key / 大脑未初始化时退化为纯本地巩固。返回统计（含 usage/model）。
     """
-    base = bk.consolidate_memories()
+    base = base if isinstance(base, dict) else bk.consolidate_memories()
+    usage_total = {}
+    model_used = ""
     try:
         import deepseek_client as dc
         items = bk.load_memories()
@@ -151,7 +154,16 @@ def consolidate_with_llm():
                 c = dc.get_active_client()
                 if c is None:
                     continue
-                out = c.chat([{"role": "user", "content": prompt}], thinking="low")
+                usage = []
+                out = c.chat([{"role": "user", "content": prompt}], thinking="low",
+                             on_usage=lambda u, _u=usage: _u.append(u))
+                model_used = str(getattr(c, "model", "") or model_used)
+                for u in usage:
+                    if not isinstance(u, dict):
+                        continue
+                    for k, v in u.items():
+                        if isinstance(v, (int, float)):
+                            usage_total[k] = usage_total.get(k, 0) + v
                 out = str(out or "").strip()
                 summary = ""
                 try:
@@ -179,7 +191,10 @@ def consolidate_with_llm():
                             bk.update_memory(it["id"], archived=True)
             except Exception:
                 pass
-        return base
+        out = dict(base)
+        out["usage"] = usage_total
+        out["model"] = model_used
+        return out
     except Exception:
         return base
 
@@ -740,6 +755,14 @@ def brain_action(action, payload=None):
         if not d or not (Path(d) / "manifest.json").exists():
             return {"ok": False, "message": "目标目录不是有效大脑（缺 manifest.json）"}
         bk.set_brain_dir(Path(d))
+        # 统一读取层必须同步换绑，否则 /v1/brain/unified-memories 仍读旧脑。
+        try:
+            import memory_store as _ms
+            _ms.configure(brain_dir=str(Path(d)))
+            _ms.invalidate_cache()
+        # noqa: silent-except: 统一读取层重绑失败不影响大脑切换本身
+        except Exception:
+            pass
         try:
             _ACTIVE_FILE.write_text(str(Path(d).resolve()), encoding="utf-8")
         except OSError:
