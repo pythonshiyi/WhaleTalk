@@ -89,6 +89,10 @@ def _load_memory_json():
         key = str(f.get("key") or "").strip()
         # 截断上限与写入路径同源（MEMORY_MAX_TEXT；<=0 = 不限）
         text = text[:_MEMORY_MAX_TEXT] if (_MEMORY_MAX_TEXT and _MEMORY_MAX_TEXT > 0) else text
+        try:
+            conf = float(f.get("confidence"))
+        except (TypeError, ValueError):
+            conf = 1.0 if str(f.get("origin") or "") in ("user", "system") else 0.5
         out.append({
             "id": str(f.get("id") or f"mem:{abs(hash(text)):x}"),
             "text": text,
@@ -100,8 +104,13 @@ def _load_memory_json():
             "source": "memory.json",
             "ts": str(f.get("ts") or f.get("time") or ""),
             "sensitivity": str(f.get("sensitivity") or "public"),
-            "archived": False, "hit_count": 0, "last_hit": "",
-            "supersedes": "", "version_id": "",
+            "origin": str(f.get("origin") or "unknown"),
+            "confidence": max(0.0, min(1.0, conf)),
+            # superseded 记录不再进入统一读取（否则注入的是被取代的旧事实）
+            "archived": str(f.get("status") or "active") != "active",
+            "hit_count": 0, "last_hit": "",
+            "supersedes": str(f.get("supersedes") or ""),
+            "version_id": str(f.get("version_id") or ""),
         })
     return out
 

@@ -134,6 +134,9 @@ export default function LifePage() {
   const events = data.timeline || [];
   const stateName = st.state || "dormant";
   const paused = !!st.paused;
+  const ops = (data.metrics && data.metrics.metrics) || {};
+  const storage = data.storage || {};
+  const op = (name) => ops[name] || {};
 
   return (
     <div className="page life-page">
@@ -158,6 +161,7 @@ export default function LifePage() {
             </div>
             <div className="life-sub">
               纪元 {st.epoch || 1} · 第 {st.boot_count || 0} 次醒来 · tick {st.tick_count || 0} · 上次心跳 {fmtTime(st.last_tick)}
+              {st.next_wake_at ? ` · 下次醒来 ${fmtTime(st.next_wake_at)}` : ""}
             </div>
           </div>
         </div>
@@ -237,6 +241,10 @@ export default function LifePage() {
             <span>完成率</span><b>{report.competence ? report.competence.score : "—"}</b>
             <span>记忆</span><b>{report.memory ? `${report.memory.total} 条` : "—"}</b>
             <span>上次睡眠</span><b>{fmtTime(report.sleep && report.sleep.last_sleep)}</b>
+            <span>tick 平均</span><b>{op("tick_ms").avg != null ? `${op("tick_ms").avg} ms` : "—"}</b>
+            <span>反思 / 睡眠</span><b>{op("reflect_ms").count || 0} / {op("sleep_ms").count || 0}</b>
+            <span>待折命中</span><b>{storage.hits_pending || 0}</b>
+            <span>归档意图</span><b>{storage.intentions_archived || 0}</b>
           </div>
         </div>
 

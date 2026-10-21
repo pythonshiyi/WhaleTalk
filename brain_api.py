@@ -1077,7 +1077,7 @@ def _spaced_review_due(now_epoch: float, limit: int = 2) -> list:
     注入位；③ 按年龄降序取 Top-N。成熟高价值记忆得以定期回到上下文，
     抵消时间衰减的埋葬。"""
     out = []
-    for e in bk.load_memories():
+    for e in bk.raw_memories():
         if e.get("archived") or int(e.get("importance") or 3) < 4:
             continue
         if str(e.get("sensitivity") or "public") == "secret":
@@ -1099,7 +1099,8 @@ def _spaced_review_due(now_epoch: float, limit: int = 2) -> list:
 
 def brain_context(max_memories=4, query="", budget_chars=0, memory_enabled=True,
                   include_goals=True, dedup_texts=None,
-                  include_persona=True, include_continuity=True):
+                  include_persona=True, include_continuity=True,
+                  include_review=None):
     """注入 AI 对话的大脑上下文摘要（身份 + 断点 + 自我认知 + 未决决策 + 复习 + 相关记忆）。
 
     - query 非空按话题检索（record_hits 记录命中 → F3）；空则按重要度×时间衰减+命中取 Top-N。
@@ -1162,6 +1163,9 @@ def brain_context(max_memories=4, query="", budget_chars=0, memory_enabled=True,
                 if vals:
                     cap_rows.append(f"· {label}：" + "；".join(vals))
             if cap_rows:
+                # P1：两个自我模型（self_profile 与 brain/self_model）同时存在时，
+                # 给出明确优先级，避免注入两段互相矛盾的自我描述。
+                cap_rows.append("· 一致性：与核心自我状态冲突时，以核心自我状态/用户明说为准")
                 add("自我认知", cap_rows, 50)
     except Exception as e:
         import degrade
@@ -1183,9 +1187,12 @@ def brain_context(max_memories=4, query="", budget_chars=0, memory_enabled=True,
         import degrade
         degrade.degrade("context.brain.decisions", e,
                         "未决决策未注入，AI 可能不追问结果回执", critical=True)
-    # F4 间隔复习
+    # F4 间隔复习（P0：可与「近期记忆」解耦——统一记忆层接管近期记忆后，
+    # 复习提醒仍由大脑侧注入）
+    if include_review is None:
+        include_review = bool(memory_enabled)
     try:
-        if include_continuity:
+        if include_continuity and include_review:
             review = _spaced_review_due(now_epoch, limit=2)
             if review:
                 add("复习提醒", [f"- {str(e.get('text') or '')[:60]}" for e in review], 40)
@@ -1200,9 +1207,9 @@ def brain_context(max_memories=4, query="", budget_chars=0, memory_enabled=True,
                 recent = [e for e in bk.search_memories(query, max_memories, record_hits=True)
                           if str(e.get("sensitivity") or "public") != "secret"]
             else:
-                mems = [e for e in bk.load_memories()
+                # P0：走 top_memories 缓存的 Top-N，避免 5 万条时每轮全量复制+排序。
+                mems = [e for e in bk.top_memories(max_memories)
                         if str(e.get("sensitivity") or "public") != "secret"]
-                mems.sort(key=lambda e: (-_decay_with_hits(e, now_epoch), str(e.get("ts") or "")))
                 recent = mems[:max_memories]
             if dedup_texts:
                 _dd = set(dedup_texts)

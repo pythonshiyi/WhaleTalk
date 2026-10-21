@@ -86,6 +86,23 @@ def test_brain_switch_rebinds_unified_memory(tmp_path, monkeypatch):
         ms.invalidate_cache()
 
 
+def test_projection_sync_cursor_is_idempotent(tmp_path, monkeypatch):
+    import memory_facade as mf
+    mp = tmp_path / "memory.json"
+    mp.write_text(json.dumps({"enabled": True, "facts": []}, ensure_ascii=False), encoding="utf-8")
+    mf.init(memory_path=str(mp))
+    mf.init_sync_state(str(tmp_path / "sync_state.json"))
+    mf.remember("第一条投影记忆", origin="user")
+    mf.remember("第二条投影记忆", origin="agent")
+    bk.save_json(bk.BRAIN_DIR / "manifest.json", {"brain_id": "testbrain", "fingerprint": "x"})
+    calls = []
+    monkeypatch.setattr(mf, "_sync_item_to_brain", lambda x: calls.append(x.get("text")) or True)
+    assert mf.sync_missing_to_brain(0) == 2
+    assert mf.sync_missing_to_brain(0) == 0
+    assert len(calls) == 2
+    assert (tmp_path / "sync_state.json").exists()
+
+
 def test_sleep_sets_next_wake_and_gates_empty_proposal(tmp_path, monkeypatch):
     from life import sleep, state
     bk.save_json(bk.BRAIN_DIR / "manifest.json", {"brain_id": "testbrain", "fingerprint": "x"})

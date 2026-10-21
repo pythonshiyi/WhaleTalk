@@ -22,7 +22,7 @@ _LOCK = threading.RLock()
 STATUSES = ("proposed", "active", "done", "failed", "abandoned")
 KINDS = ("reflect", "consolidate", "review_failure", "write_thought",
          "update_self_model", "propose_evolution", "goal", "rest",
-         "review_memory", "housekeeping", "recalibrate_self")
+         "review_memory", "housekeeping", "recalibrate_self", "tool")
 
 
 def _brain_dir() -> Path:
@@ -101,14 +101,16 @@ def _same_title(a, b) -> bool:
     return " ".join(str(a or "").split()).lower() == " ".join(str(b or "").split()).lower()
 
 
-def _recent_noop(kind, streak=2) -> bool:
+def _recent_noop(kind, streak=2, tool="") -> bool:
     """同一类动作最近连续无效果时，不再重复。
 
     典型场景：记忆为空，模型连续提出 consolidate，结果永远是
     「归档 0、合并 0、保留 0」——这不是自主，是空转。
+    tool 非空时只统计同一只读工具的调用。
     """
     recent = [x for x in load().get("intentions", [])
-              if x.get("kind") == kind and x.get("status") in ("done", "failed")]
+              if x.get("kind") == kind and x.get("status") in ("done", "failed")
+              and (not tool or str((x.get("payload") or {}).get("tool") or "") == str(tool))]
     recent = recent[-max(1, int(streak)):]
     if len(recent) < max(1, int(streak)):
         return False
@@ -142,6 +144,10 @@ def propose(title, drive="", why="", first_step="", expected="", kind="reflect",
                 return False, x, "已有同标题的活跃意图"
         if source == "agent" and kind == "consolidate" and _recent_noop(kind, 2):
             return False, None, "同类整理连续两次无变化，先换一种观察或进入睡眠"
+        if source == "agent" and kind == "tool":
+            _tool = str((payload or {}).get("tool") or "")
+            if _tool and _recent_noop("tool", 2, _tool):
+                return False, None, f"工具 {_tool} 连续两次无变化，停止重复调用"
         act = [x for x in items if x.get("status") in ("proposed", "active")]
         if len(act) >= _max_active():
             return False, None, f"活跃意图已达上限 {_max_active()}"
@@ -260,6 +266,14 @@ def _after_finish(iid, status, outcome=""):
     # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
+
+
+def archived_count() -> int:
+    """已归档意图条数（只读统计，供状态页展示）。"""
+    try:
+        return sum(1 for x in archive_path().read_text(encoding="utf-8", errors="ignore").splitlines() if x.strip())
+    except OSError:
+        return 0
 
 
 def _archive_cap() -> int:

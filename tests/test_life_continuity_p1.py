@@ -81,6 +81,33 @@ def test_housekeeping_intention_runs_maintenance(tmp_path, monkeypatch):
     assert metrics.path().parent.exists()
 
 
+def test_tool_intent_allowlist_and_noop_guard(tmp_path, monkeypatch):
+    import deepseek_client as dc
+    from life import intentions, loop
+    _manifest()
+    monkeypatch.setattr(dc, "TOOL_CALL_MAP", {"read_memory": lambda keyword="": "同一结果"})
+    ok_bad, out_bad = loop.execute_intention({"kind": "tool", "payload": {"tool": "run_command", "args": {}}})
+    assert not ok_bad and "白名单" in out_bad
+
+    def _run():
+        ok, it, _ = intentions.propose("查记忆", kind="tool", drive="curiosity",
+                                       payload={"tool": "read_memory", "args": {"keyword": "x"}})
+        assert ok
+        intentions.start(it["id"])
+        ok2, outcome = loop.execute_intention(it)
+        intentions.complete(it["id"], outcome)
+        return ok2, outcome
+
+    ok1, out1 = _run()
+    ok2, out2 = _run()
+    ok3, out3 = _run()
+    assert ok1 and ok2 and ok3
+    assert "同一结果" in out1 and "无变化" in out2 and "无变化" in out3
+    ok4, _, why = intentions.propose("再查一次", kind="tool", drive="curiosity",
+                                     payload={"tool": "read_memory", "args": {"keyword": "x"}})
+    assert not ok4 and "无变化" in why
+
+
 def test_review_memory_intention_writes_thought(tmp_path, monkeypatch):
     from life import loop
     _manifest()

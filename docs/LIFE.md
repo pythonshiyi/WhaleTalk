@@ -87,6 +87,10 @@ paused：用户显式暂停
 `propose_evolution`、`goal`、`review_memory`（检索相关记忆并复盘）、
 `housekeeping`（时间线/命中/意图/决策/代价归档）、`recalibrate_self`（LLM 校准自我模型）。
 
+**有限工具意图**：`tool` 只允许 `read_memory` / `query_memory_graph` /
+`knowledge_search` / `project_map` 四个只读工具；带超时与输出截断，失败进 scar；
+同一工具连续两次结果无变化后拒绝再次提出。不引入审批、白名单或沙箱。
+
 反思提示会注入按内驱/目标检索到的相关记忆与最近 outcome，而不是只看计数器。
 工具型意图可以在后续扩展，不需要改权限模型。
 
@@ -130,7 +134,7 @@ paused：用户显式暂停
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/life` | 状态 / 内驱 / 代谢 / 意图 / 最近时间线 / 报告 |
+| GET | `/v1/life` | 状态 / 内驱 / 代谢 / 意图 / 最近时间线 / 报告 / 运行指标 / 存储状态 |
 | GET | `/v1/life/timeline?limit=&kind=` | 时间线 |
 | GET | `/v1/life/intentions?status=&limit=` | 意图 |
 | GET | `/v1/life/report?days=` | 健康度报告 + Markdown |
@@ -159,6 +163,8 @@ paused：用户显式暂停
   "life_intention_archive_max": 200,
   "life_metrics_enabled": true,
   "life_metrics_max": 5000,
+  "life_tool_timeout_seconds": 20,
+  "life_tool_max_output_chars": 2000,
   "life_budget_scope": "self",
   "life_daily_token_budget": 1000000,
   "life_daily_cost_budget": 5.0,

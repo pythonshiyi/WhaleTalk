@@ -64,6 +64,7 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger("whaletalk.memory")
 
 MEMORY_PATH = None
+SYNC_STATE_PATH = None         # memory.json → 大脑投影的迁移游标（幂等）
 CONFLICT_SIM = 0.55            # 冲突提示阈值（**只提示，不动作**；实测见模块文档）
 MAX_ITEMS = 2000               # 兜底默认；实际取 shared.MEMORY_MAX_ITEMS（<=0 = 不限）
 
@@ -99,6 +100,62 @@ def init(memory_path=None, *, conflict_sim=None, reset=False):
             CONFLICT_SIM = float(conflict_sim)
         if reset:
             pass
+
+
+def init_sync_state(path=None):
+    """注入投影迁移游标文件（默认与 memory.json 同目录）。"""
+    global SYNC_STATE_PATH
+    with _lock:
+        if path:
+            SYNC_STATE_PATH = str(path)
+
+
+def _sync_state_path():
+    if SYNC_STATE_PATH:
+        return SYNC_STATE_PATH
+    if MEMORY_PATH:
+        return os.path.join(os.path.dirname(MEMORY_PATH) or ".", "memory_sync_state.json")
+    return None
+
+
+def _fact_sync_key(text):
+    return hashlib.sha1(str(text or "").encode("utf-8", "ignore")).hexdigest()[:16]
+
+
+def _load_sync_state():
+    p = _sync_state_path()
+    if not p or not os.path.exists(p):
+        return {"done": []}
+    try:
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and isinstance(d.get("done"), list):
+            return d
+    except Exception:
+        logger.exception("读取记忆投影游标失败")
+    return {"done": []}
+
+
+def _save_sync_state(state):
+    p = _sync_state_path()
+    if not p:
+        return False
+    try:
+        from persistence import atomic_json_write
+        return atomic_json_write(p, state, indent=1)
+    except Exception:
+        logger.exception("保存记忆投影游标失败")
+        return False
+
+
+def _mark_synced(text):
+    key = _fact_sync_key(text)
+    state = _load_sync_state()
+    done = state.setdefault("done", [])
+    if key not in done:
+        done.append(key)
+        state["done"] = done[-5000:]
+        _save_sync_state(state)
 
 
 def _now():
@@ -643,19 +700,20 @@ def resolve_pending(ids, action="accept", sync=False) -> Tuple[bool, int, Option
                          key="自动记忆")
             if r.get("ok"):
                 n += 1
-                if sync:
-                    _sync_item_to_brain({"text": x.get("text"), "key": "自动记忆",
-                                         "origin": x.get("origin") or "agent"})
+                if sync and _sync_item_to_brain({"text": x.get("text"), "key": "自动记忆",
+                                                 "origin": x.get("origin") or "agent"}):
+                    _mark_synced(x.get("text"))
         else:
             n += 1
     return True, n, None
 
 
-def sync_missing_to_brain(limit=100) -> int:
-    """把 memory.json 中尚未进入大脑的活跃事实补写进大脑（限量，供睡眠整理）。
+def sync_missing_to_brain(limit=0) -> int:
+    """把 memory.json 中尚未进入大脑的活跃事实补写进大脑（幂等）。
 
-    `memory.json` 是兼容投影/旧数据；大脑是长期层。一次性全量迁移可能很大，
-    故每次最多 limit 条，重复调用幂等（大脑按同文本去重）。
+    `memory.json` 是兼容投影/旧数据；大脑是长期层。`limit<=0` 表示全量，
+    适合启动后台迁移；睡眠传小批量即可。游标记录已处理文本哈希，重复调用
+    不会重复扫描/写入；大脑侧仍以同文本去重兜底。
     """
     try:
         import brainkit as bk
@@ -666,15 +724,29 @@ def sync_missing_to_brain(limit=100) -> int:
         brain_texts = {str(e.get("text") or "") for e in bk.load_memories()}
     except Exception:
         return 0
+    state = _load_sync_state()
+    done = set(str(x) for x in (state.get("done") or []))
+    cap = max(0, int(limit or 0))
     n = 0
     for f in all_facts():
         text = str(f.get("value") or "")
-        if not text or text in brain_texts:
+        if not text:
+            continue
+        key = _fact_sync_key(text)
+        if key in done:
+            continue
+        if text in brain_texts:
+            done.add(key)
             continue
         if _sync_item_to_brain({**f, "text": text, "key": f.get("key") or "自动记忆"}):
+            done.add(key)
             n += 1
-            if n >= max(1, int(limit or 100)):
+            if cap and n >= cap:
                 break
+    if n or done:
+        state["done"] = list(done)[-5000:]
+        state["updated_at"] = _now()
+        _save_sync_state(state)
     return n
 
 

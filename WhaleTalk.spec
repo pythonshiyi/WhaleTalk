@@ -10,14 +10,17 @@ from PyInstaller.utils.hooks import collect_submodules
 
 import os
 
-_webui_dist = os.path.join(os.path.dirname(SPEC), 'webui', 'dist')
-_datas = [
+_root = os.path.dirname(SPEC)
+_webui_dist = os.path.join(_root, 'webui', 'dist')
+# 只收集实际存在的资源：旧 Tk 版的 static/templates/sample_plugins/evolutions
+# 已随 Web 重构移除，硬编码会让 PyInstaller 直接报错退出。
+_datas = [(name, dest) for name, dest in (
     ('static', 'static'),
     ('templates', 'templates'),
     ('sample_plugins', 'sample_plugins'),
     ('evolutions', 'evolutions'),
     ('app.ico', '.'),
-]
+) if os.path.exists(os.path.join(_root, name))]
 if os.path.isdir(_webui_dist):
     _datas.append((_webui_dist, 'webui/dist'))
 

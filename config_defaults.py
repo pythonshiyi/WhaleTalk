@@ -442,6 +442,8 @@ DEFAULT_CONFIG = {
     "life_intention_archive_max": 200,    # 超出后睡眠时归档最旧的已完成意图
     "life_metrics_enabled": True,
     "life_metrics_max": 5000,
+    "life_tool_timeout_seconds": 20,
+    "life_tool_max_output_chars": 2000,
     "life_budget_scope": "self",  # self=只算生命循环自身消耗；total=当日全部对话+自主
     "life_daily_token_budget": 1000000,
     "life_daily_cost_budget": 5.0,

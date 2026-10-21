@@ -2,7 +2,7 @@
 
 本文档描述鲸语 WhaleTalk 当前（v3.16.21，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
 
-> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **111 /v1 端点** · 后端 125 个 pytest 文件 / 1250 用例 · 前端 31 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
+> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **111 /v1 端点** · 后端 126 个 pytest 文件 / 1256 用例 · 前端 31 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
 
 ## 分层总览
 
@@ -63,7 +63,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | `snapshot.py` | 文件/数据库写操作自动快照（P2）：写/编辑/重命名/数据库写前备份原内容到 `DATA_DIR/undo/`，可列出/恢复（`list_snapshots`/`restore_snapshot` 工具）；上限 200 条自动清理 |
 | `trust_kernel.py`（1,370 行） | 信任内核（自我完整性）：让智能体对**自身授权代码**（permissions / security / crypto / snapshot / 自身）的改动**可声明 · 可见 · 可回滚**——`trust/baseline/` 可信副本（永不裁剪）+ `manifest.json` + `ledger.jsonl` + `incidents/` + `history/` + `quarantine/`；启动 `boot_check()`、工具层 `declare/commit`（经 tool_hooks 全局钩子，绝不阻断写入）、CLI `status/verify/diff/restore/accept/log`。**刻意不加限制**：能力一条不减，只让改动不可能悄悄发生（详见 [docs/信任内核.md](docs/信任内核.md)） |
 | `degrade.py`（209 行） | 退化日志（P0-3）：全项目静默 `except: pass` 的**唯一收口**——按 key 归并计数 + 节流日志 + 原子落盘；**critical 分级**（只让影响回答质量的降级进注入文本）；**永不抛出** |
-| `context_providers.py`（456 行） | 上下文装配（P0-2）：把「往系统提示里塞什么」变成**可枚举、可预算、可回执**的 Provider 表（name/priority/budget/critical/enabled/provide）；装配器统一排序、限预算截断、输出回执；失败走 `degrade` 而非静默。**注入内容与顺序与改造前一致**；回执经 `GET /v1/context` 暴露 |
+| `context_providers.py`（~500 行） | 上下文装配（P0-2）：把「往系统提示里塞什么」变成**可枚举、可预算、可回执**的 Provider 表（name/priority/budget/critical/enabled/provide）；装配器统一排序、限预算截断、输出回执；失败走 `degrade` 而非静默。P0 起记忆段落可切到 `memory_store` 统一读取（memory.json + 大脑去重），大脑侧关闭重复近期记忆、保留复习；回执经 `GET /v1/context` 暴露 |
 | `diagnostics.py`（314 行） | 诊断包（v3.16.20）：把 degrade 账本 / 错误日志尾部 / 配置差异（凭据打码） / 工具与路由规模 / 可选能力 / 数据目录占用收成一份 JSON；每段独立 try，失败进 `collection_errors`；`GET /v1/diagnostics`（支持 `?summary=1`）与 `POST /v1/diagnostics`（导出到 `DATA_DIR/diagnostics/`），CLI `python diagnostics.py --export` |
 | `jobs.py`（v3.24 新增） | **执行作业记录**：把「一轮生成」落成 `data/jobs/YYYY-MM-DD.jsonl`（只追加、不改写）。`fold_events()` 把事件流折叠成步骤（按 tool_call id 对齐，支持并行调用；无 id 时按同名最近一个合并），`build_record()` 产出状态/耗时/步数/失败数/用量，**只存参数与结果的前 200 字预览**（避免密钥/隐私落盘）；`list_jobs`/`get_job`/`summary` 供 `GET /v1/jobs`。所有 IO 失败只返回 False，绝不影响生成 |
 | `capability.py`（v3.17 新增） | **能力主干**：运行时工具与内置工具共用 `toolkit` 注册表（`source=capability`）。manifest 校验（`api`/`p_` 前缀/`groups`/`perms` 缺一拒装）、四种执行体（`builtin_ref`/`http`/`cli`/`python`）、声明式最小权限（调用期强制）、超时+熔断（连续 3 次失败冷却 60s）+ 输出截断 + `degrade` 记账、`epoch` 温和失效卸载、`adapt_legacy()` 旧插件迁移桥。六层视图由 `deepseek_client.refresh_capability_layers()` 重建 |
@@ -121,7 +121,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 |---|---|
 | `brainkit.py`（2,865 行） | 大脑 CLI：init/keyring-setup/mount/unmount/heartbeat/think/remember/import-memory/consolidate（睡眠巩固）/goal/decision/evolution/archive/restore/merge/merge-resolve/status/list/diff/export-key/import-key；指纹防篡改、DPAPI 免密密钥体系、RSA 快照签名验签、LCA 三路合并、prune 豁免血缘引用快照、语义检索。记忆写入走文本去重索引，命中写 `hits.jsonl` 增量并由睡眠折回，避免每轮重写整个 jsonl |
 | `brain_api.py`（1,180 行） | 大脑 → API 适配层（把 CLI 命令包装为 api_server 可调用的纯函数 + `brain_context` 注入——身份/断点/目标/自我认知/未决决策/记忆 + `consolidate_with_llm` LLM 提炼） |
-| `life/` | **生命循环**：连续 tick / 唯一时间线 / 单实例租约 / 五维内驱 / 自发意图（内省+整理型）/ 代谢预算 / 睡眠巩固（含 LLM 提炼）/ 代价记录 / `metrics.jsonl` 运行指标。暂停、反思冷却、`next_wake_at` 持久化；设计见 [docs/LIFE.md](docs/LIFE.md)；不引入审批或权限收紧 |
+| `life/` | **生命循环**：连续 tick / 唯一时间线 / 单实例租约 / 五维内驱 / 自发意图（内省/整理/只读工具白名单）/ 代谢预算 / 睡眠巩固（含 LLM 提炼与决策回执复盘）/ 代价记录 / `metrics.jsonl` 运行指标。暂停、反思冷却、`next_wake_at` 持久化；设计见 [docs/LIFE.md](docs/LIFE.md)；不引入审批或权限收紧 |
 | \community_client.py\ | ⚠️ **鲸群实验（可选·默认关·非功能）**：连接独立社区站（\xperiments/鲸群实验场/\，已剥离出主程序）的一根「绳」——确保在线（可选自动拉起 server.py）→ 心跳 → 感知 → 规则决策 → 授权内行动 → 记忆回灌；由 \pi_server._brain_community_loop\（独立线程、默认关）与 \gent_tools/tool_community.py\ 消费。**当前冻结**（重启条件见实验场 README）；未配置密钥不外发，可整体删除 |
 
 ### 子包
@@ -131,8 +131,8 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | `agent_tools/`（14 模块 · 167 工具） | 运行时工具域模块包（P0-1 巨石拆分完成，主文件 13,115 → 6,540 行）：<br>`tool_docs.py`（📊 数据与文档 · 30：Excel/SQLite/MySQL/PostgreSQL/PDF/Word/PPT/EPUB/MOBI/旧 doc/msg/压缩包 + HTML→PNG/PPT/PDF + 图表/设计工具）<br>`tool_files.py`（📁 文件与进程 · 21：read/write/edit/list/search_local/find_images/asset_*/clipboard/delete/archive/snapshot/batch_rename/start|stop|list_processes/environment_info）<br>`tool_desktop.py`（🖱 桌面与视觉语音 · 18：rpa_*/screen_find_click/vision_loop/tts*/speech_to_text/voice_chat_loop/image_generate/qrcode/media_ffmpeg/team_run）<br>`tool_system.py`（🔧 系统与项目 · 16：watch_files/recall_session/project_*/create_evolution/self_evolve/verify_files/git/notify_desktop/app_manage/usage_report/capability_heatmap/self_report/create_plugin/list_my_capabilities/hardware_accel）<br>`tool_brain.py`（🧠 记忆与知识 · 15：write/read/delete/update_memory/self_profile/query_memory_graph/knowledge_*/schedule_task/task_checkpoint/run_workflow/failure_memory）<br>`tool_code.py`（💻 编程与执行 · 15：run_python/run_command/run_lint/run_tests/verify_project/project_scaffold/dev_plan/get_status/project_map/find_symbol/code_lookup/write_code_project/pip_install/subagent_run/verify_output）<br>`tool_web.py`（🌐 浏览器与网页 · 14：fetch_url/download_file/search_web/search_github/search_realtime/browser_navigate/web_screenshot/net_diagnose/fetch_url_smart/rss_fetch/webdav/call_api/track_web/fetch_blocked〔实现名 `_run_fetch_blocked`〕）<br>`tool_media.py`（🎨 媒体与图像 · 10：image_process/ocr_image/image_understand/screen_capture/screen_see/chart_read/screenshot_to_html/debug_screenshot/scan_read/image_batch）<br>`tool_msg.py`（📧 邮件与消息 · 10：send_email/publish_draft/send_webhook/im_send/telegram_poll_updates/read_email/email_summary/agent_mail/run_wechat_writer/daily_brief）<br>`tool_codegen.py`（🎨 代码生图 · 6：image_codegen/image_inpaint/control_map/sprite_sheet/make_gif/image_hybrid）<br>`tool_basic.py`（🔧 2：get_date/get_weather）· `tool_data.py`（📊 2：read_csv/write_csv）· `tool_mv.py`（🎬 4：mv_compose/mv_produce/lyric_align/mv_credits_card）<br>`tool_community.py`（⚠️ 可选实验 · 4：community_post/community_save/community_status/community_cycle——默认关、未配置密钥即报错、可整体删除）<br>另主模块经 `register_tool()` 注册 2 个特殊工具（`ask_user`/`request_permission`）→ **169 个 Agent 工具** |
 | `webui/` | React 前端（React 19 + Vite 8，无 UI 框架）：ChatPage/工作台/指令库/自主/大脑/能力/设置；`webui/dist` 由 api_server 同源服务。渲染链路（纯数据 AST）：`longTextUtil.js`（解除 `@long-text` 包装）→ `mdParser.js`（块级 AST，流式安全 `code-open`）→ `mdInline.js`（行内 tokens，独立 RegExp 防 lastIndex 破坏）→ `mdHighlight.js`（零依赖高亮）→ `mdMath.js`（LaTeX 子集）→ `components/Markdown.jsx`（消费 AST）。**长会话渲染**：`msgUpdates.js` 提供不可变更新，配合 `Message.jsx` 的 `React.memo` 实现每帧只重渲染最后一条 |
 | `wechat_writer/` | 公众号自动写作：sources（多信源采集）/ topic（选题去重）/ writer（三阶段写作）/ quality（质检重试）/ output（草稿箱+存档）/ history / llm / config |
-| `tools/` | 开发门禁：`audit_tools.py`（六层一致性，`--strict` 可入 CI）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛对账）、`check_docs.py`（文档数字 vs 源码实测） |
-| `tests/` | 自举回归套件（125 个 pytest 文件 / 1250 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
+| `tools/` | 开发门禁：`audit_tools.py`（六层一致性，`--strict` 可入 CI）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛对账）、`check_docs.py`（文档数字 vs 源码实测）；`memory_bench.py`（临时大脑的记忆写入/检索/注入/巩固基准） |
+| `tests/` | 自举回归套件（126 个 pytest 文件 / 1256 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
 
 ### 辅助脚本
 

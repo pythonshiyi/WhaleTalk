@@ -66,6 +66,7 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -867,6 +868,85 @@ def _stat_sig(path: Path):
 _HITS_CACHE = {}
 _HITS_LOCK = threading.RLock()
 _CONTENT_INDEX = {"path": None, "sig": None, "map": {}}
+_RAW_CACHE = {"path": None, "sig": None, "items": []}
+_SEARCH_INDEX = {"path": None, "sig": None, "entries": [], "tokens": [], "postings": {}}
+_TOP_CACHE = {"path": None, "sig": None, "heap": [], "built_at": 0.0}
+_TOP_POOL = 500
+
+
+def _base_mem_score(e, now_epoch):
+    """重要度 × 时间衰减（约 30 天半衰），不做 datetime 解析以外的额外工作。"""
+    try:
+        imp = float(e.get("importance") or 3)
+        age_days = max(0.0, (now_epoch - _ts_epoch(e.get("ts"))) / 86400.0)
+    except Exception:
+        imp, age_days = 3.0, 0.0
+    return imp / (1.0 + age_days / 30.0)
+
+
+def _top_cache_rebuild(path: Path, items):
+    """从原始条目重建 Top 池（按基础分）。调用方持 _HITS_LOCK。"""
+    import heapq
+    now_epoch = _dt.datetime.now().timestamp()
+    heap = [( _base_mem_score(e, now_epoch), str(e.get("id") or ""), e) for e in items]
+    if len(heap) > _TOP_POOL:
+        heap = heapq.nlargest(_TOP_POOL, heap, key=lambda x: x[0])
+    heapq.heapify(heap)
+    _TOP_CACHE.update({"path": str(path), "sig": _stat_sig(path), "heap": heap,
+                       "built_at": time.time()})
+
+
+def _top_cache_note(entry, path: Path):
+    """新增一条后增量维护 Top 池，避免下一次注入全量打分。"""
+    import heapq
+    key = str(path)
+    with _HITS_LOCK:
+        if _TOP_CACHE.get("path") != key:
+            items = _RAW_CACHE.get("items") if _RAW_CACHE.get("path") == key else []
+            _top_cache_rebuild(path, list(items or []))
+        score = _base_mem_score(entry, _dt.datetime.now().timestamp())
+        heap = _TOP_CACHE.get("heap") or []
+        heapq.heappush(heap, (score, str(entry.get("id") or ""), entry))
+        if len(heap) > _TOP_POOL:
+            heapq.heappop(heap)
+        _TOP_CACHE.update({"path": key, "sig": _stat_sig(path), "heap": heap,
+                           "built_at": time.time()})
+
+
+def _read_raw_memory_jsonl(path: Path) -> list:
+    """按文件签名缓存解析后的 memory.jsonl 原始条目（返回副本由调用方持有）。"""
+    sig = _stat_sig(path)
+    key = str(path)
+    with _HITS_LOCK:
+        if _RAW_CACHE.get("path") == key and _RAW_CACHE.get("sig") == sig:
+            return list(_RAW_CACHE.get("items") or [])
+    out = []
+    if path.exists():
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            e.setdefault("id", _mem_id())
+            e.setdefault("type", "")
+            e.setdefault("importance", 3)
+            e.setdefault("tags", [])
+            e.setdefault("entities", [])
+            e.setdefault("relations", [])
+            e.setdefault("source", "手动")
+            e.setdefault("archived", False)
+            e.setdefault("sensitivity", "public")
+            e.setdefault("hit_count", 0)
+            e.setdefault("last_hit", "")
+            e.setdefault("supersedes", "")
+            e.setdefault("version_id", "")
+            out.append(e)
+    with _HITS_LOCK:
+        _RAW_CACHE.update({"path": key, "sig": sig, "items": out})
+    return list(out)
 
 
 def _load_hits(path: Path) -> dict:
@@ -957,6 +1037,16 @@ def _index_note_write(text, mid, brain_dir=None):
             _CONTENT_INDEX["sig"] = _stat_sig(mem_path)
 
 
+def _raw_cache_note(entry, path: Path):
+    """追加成功后把新条目并入原始缓存，避免下一次读取重建全部条目。"""
+    key = str(path)
+    with _HITS_LOCK:
+        if _RAW_CACHE.get("path") == key and isinstance(_RAW_CACHE.get("items"), list):
+            _RAW_CACHE["items"].append(dict(entry))
+            _RAW_CACHE["sig"] = _stat_sig(path)
+    _top_cache_note(entry, path)
+
+
 def load_memories(include_archived: bool = False, brain_dir=None, apply_hits=True) -> list:
     """合并读取全部记忆：memory.jsonl 为主，旧版 memories/*.md 行自动兼容。
 
@@ -966,31 +1056,9 @@ def load_memories(include_archived: bool = False, brain_dir=None, apply_hits=Tru
     返回 [{id, ts, type, importance, text, tags, entities, relations, source, archived}]。
     """
     memories_dir, memory_jsonl, hits_path = _mem_paths(brain_dir)
-    out, seen = [], set()
-    if memory_jsonl.exists():
-        for line in memory_jsonl.read_text(encoding="utf-8", errors="ignore").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                e = json.loads(line)
-            except Exception:
-                continue
-            e.setdefault("id", _mem_id())
-            e.setdefault("type", "")
-            e.setdefault("importance", 3)
-            e.setdefault("tags", [])
-            e.setdefault("entities", [])
-            e.setdefault("relations", [])
-            e.setdefault("source", "手动")
-            e.setdefault("archived", False)
-            e.setdefault("sensitivity", "public")  # L8 敏感度分级
-            e.setdefault("hit_count", 0)  # F3 重要度自学习：命中次数
-            e.setdefault("last_hit", "")   # F3 最近命中时间
-            e.setdefault("supersedes", "")  # F2 事实版本链：被覆盖的旧记忆 id
-            e.setdefault("version_id", "")  # F2 版本链祖先（不变）
-            out.append(e)
-            seen.add(e["id"])
+    # 原始条目按文件签名缓存；这里只做浅拷贝，避免命中增量叠加污染缓存。
+    out = [dict(e) for e in _read_raw_memory_jsonl(memory_jsonl)]
+    seen = {e["id"] for e in out}
     if memories_dir.exists():
         for f in sorted(memories_dir.glob("*.md")):
             for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -1022,6 +1090,12 @@ def load_memories_from(brain_dir, include_archived: bool = False) -> list:
     return load_memories(include_archived=include_archived, brain_dir=brain_dir)
 
 
+def raw_memories(brain_dir=None) -> list:
+    """原始条目（缓存、未叠加命中）；只读调用方使用，勿修改返回的 dict。"""
+    _, mem_path, _ = _mem_paths(brain_dir)
+    return _read_raw_memory_jsonl(mem_path)
+
+
 def save_memories(items: list, brain_dir=None) -> None:
     """全量落盘（update/delete/consolidate 用）：tmp + os.replace 原子写，崩溃不损坏。
 
@@ -1041,6 +1115,10 @@ def save_memories(items: list, brain_dir=None) -> None:
             raise
         with _HITS_LOCK:
             _CONTENT_INDEX["sig"] = None
+            _SEARCH_INDEX.update({"path": None, "sig": None, "tokens": [], "postings": {}})
+            _RAW_CACHE.update({"path": str(memory_jsonl), "sig": _stat_sig(memory_jsonl),
+                               "items": [dict(e) for e in items]})
+            _TOP_CACHE.update({"path": None, "sig": None, "heap": [], "built_at": 0.0})
 
 
 def remember_structured(text, type="", importance=3, tags=None, entities=None, relations=None, source="手动",
@@ -1095,6 +1173,7 @@ def remember_structured(text, type="", importance=3, tags=None, entities=None, r
             memories_dir.mkdir(parents=True, exist_ok=True)
             append_line(memory_jsonl, json.dumps(entry, ensure_ascii=False))
             _index_note_write(entry["text"], entry["id"])
+            _raw_cache_note(entry, memory_jsonl)
         finally:
             if got_cp:
                 release_lock(memory_jsonl)
@@ -1235,6 +1314,27 @@ def _mem_tokens(text: str) -> list:
     return out
 
 
+def _search_tokens_for(path: Path, items: list):
+    """按文件签名缓存「文档 token 集 + 倒排表」，避免每次检索重算全部 token。"""
+    sig = _stat_sig(path)
+    key = str(path)
+    with _HITS_LOCK:
+        if _SEARCH_INDEX.get("path") == key and _SEARCH_INDEX.get("sig") == sig:
+            return _SEARCH_INDEX.get("tokens") or [], _SEARCH_INDEX.get("postings") or {}
+    tokens, postings = [], {}
+    for i, e in enumerate(items):
+        corpus = (str(e.get("text") or "") + " "
+                  + " ".join(str(t) for t in (e.get("tags") or [])) + " "
+                  + " ".join(str(x) for x in (e.get("entities") or [])))
+        ts = set(_mem_tokens(corpus))
+        tokens.append(ts)
+        for t in ts:
+            postings.setdefault(t, []).append(i)
+    with _HITS_LOCK:
+        _SEARCH_INDEX.update({"path": key, "sig": sig, "tokens": tokens, "postings": postings})
+    return tokens, postings
+
+
 def search_memories(query: str, limit: int = 5, record_hits: bool = False) -> list:
     """轻量相关性检索（IDF 加权余弦 + 覆盖率），无需外部依赖。空查询返回最新。
 
@@ -1242,42 +1342,104 @@ def search_memories(query: str, limit: int = 5, record_hits: bool = False) -> li
     record_hits=True 时（对话注入用）把命中条目的 hit_count/last_hit 回写，
     供 F3 重要度自学习。
     """
-    items = load_memories()
+    _, mem_path, hits_path = _mem_paths()
+    # 检索不需要命中增量参与打分；直接用缓存原始条目，避免每次复制整表。
+    items = _read_raw_memory_jsonl(mem_path)
     if not items:
         return []
     if not str(query or "").strip():
-        return sorted(items, key=lambda e: _ts_epoch(e.get("ts")), reverse=True)[:limit]
+        top = [dict(e) for e in sorted(items, key=lambda e: _ts_epoch(e.get("ts")), reverse=True)[:limit]]
+        _merge_hits(top, hits_path)
+        return top
     import math
-    q_toks = _mem_tokens(query)
-    # L3：把 tags/entities 拼进文档语料——实体/标签命中显著提升相关性
-    doc_corpus = [str(e.get("text") or "") + " " +
-                  " ".join(str(t) for t in (e.get("tags") or [])) + " " +
-                  " ".join(str(x) for x in (e.get("entities") or [])) for e in items]
-    doc_toks = [_mem_tokens(dc) for dc in doc_corpus]
+    q_set = set(_mem_tokens(query))
+    if not q_set:
+        return []
+    # 倒排索引只对候选文档打分；10k 级记忆不再每轮全量算 token。
+    doc_toks, postings = _search_tokens_for(mem_path, items)
     n = len(items)
-    idf = {}
-    for t in set(q_toks):
-        df = sum(1 for dt in doc_toks if t in dt)
-        idf[t] = math.log((n + 1) / (df + 1)) + 1.0
+    idf = {t: math.log((n + 1) / (len(postings.get(t, ())) + 1)) + 1.0 for t in q_set}
+    # 从最稀有 token 开始收集候选，最多 cap 个；避免「常见词命中全库」时全量打分。
+    cap = 5000
+    cands = set()
+    for t in sorted(q_set, key=lambda x: len(postings.get(x, ()))):
+        arr = postings.get(t, ())
+        if not cands and len(arr) > cap:
+            cands = set(arr[:cap])
+            break
+        if len(cands | set(arr)) > cap:
+            continue
+        cands |= set(arr)
+        if len(cands) >= cap:
+            break
     scored = []
-    for e, dt in zip(items, doc_toks):
-        common = set(q_toks) & set(dt)
+    for i in cands:
+        e = items[i]
+        dt = doc_toks[i]
+        common = q_set & dt
         if not common:
             continue
         w = sum(idf.get(t, 1.0) for t in common)
-        cosine = w / (len(set(q_toks)) ** 0.5 * len(set(dt)) ** 0.5)
-        recall = len(common) / len(set(q_toks))
+        cosine = w / ((len(q_set) ** 0.5) * (len(dt) ** 0.5)) if dt else 0.0
+        recall = len(common) / len(q_set)
         # L3 元数据加权：tags/entities 命中给小幅上调（语义往往承载在实体上）
-        ent_hits = set(q_toks) & set(_mem_tokens(" ".join(str(x) for x in (e.get("entities") or []))))
-        tag_hits = set(q_toks) & set(_mem_tokens(" ".join(str(t) for t in (e.get("tags") or []))))
+        ent_hits = q_set & set(_mem_tokens(" ".join(str(x) for x in (e.get("entities") or []))))
+        tag_hits = q_set & set(_mem_tokens(" ".join(str(t) for t in (e.get("tags") or []))))
         meta_boost = 1.0 + 0.06 * len(ent_hits | tag_hits)
         score = (0.55 * cosine + 0.45 * recall) * meta_boost
         scored.append((score, e))
     scored.sort(key=lambda x: -x[0])
-    top = [e for _, e in scored[:limit]]
+    top = [dict(e) for _, e in scored[:limit]]
+    _merge_hits(top, hits_path)
     if record_hits and top:
         _record_hits(top)
     return top
+
+
+def top_memories(limit=6, pool=200) -> list:
+    """无查询注入：按「重要度 × 时间衰减」取 Top-N，避免每次全量复制/排序。
+
+    先对原始缓存做一次 nlargest（文件变化时才重建缓存），再叠加命中奖励；
+    命中增量只影响少量候选，不会让整表复制。
+    """
+    _, mem_path, hits_path = _mem_paths()
+    items = [e for e in _read_raw_memory_jsonl(mem_path) if not e.get("archived")]
+    if not items:
+        return []
+    now_epoch = _dt.datetime.now().timestamp()
+    # Top 池随写入增量维护；文件被整体重写或缓存超过 1 小时才重建。
+    with _HITS_LOCK:
+        valid = (_TOP_CACHE.get("path") == str(mem_path)
+                 and _TOP_CACHE.get("sig") == _stat_sig(mem_path)
+                 and _TOP_CACHE.get("heap"))
+    if not valid or (time.time() - float(_TOP_CACHE.get("built_at") or 0)) > 3600:
+        with _HITS_LOCK:
+            _top_cache_rebuild(mem_path, items)
+    want = max(int(limit or 6), min(int(pool or 200), max(200, int(limit or 6) * 20)))
+    import heapq
+    with _HITS_LOCK:
+        picked = heapq.nlargest(want, list(_TOP_CACHE.get("heap") or []), key=lambda x: x[0])
+    out = [dict(x[2]) for x in picked]
+    _merge_hits(out, hits_path)
+
+    def score(e):
+        s = _base_mem_score(e, now_epoch)
+        hits = int(e.get("hit_count") or 0)
+        if hits > 0:
+            s += min(0.6, 0.08 * hits)
+            last = str(e.get("last_hit") or "")
+            if last:
+                try:
+                    age_d = (now_epoch - _ts_epoch(last)) / 86400.0
+                    if 0 <= age_d <= 30:
+                        s += 0.4
+                # noqa: silent-except: 命中时间损坏只跳过奖励，不影响排序
+                except Exception:
+                    pass
+        return s
+
+    out.sort(key=score, reverse=True)
+    return out[:max(1, int(limit or 6))]
 
 
 def _record_hits(entries, brain_dir=None):
@@ -1306,6 +1468,15 @@ def _record_hits(entries, brain_dir=None):
                         e["last_hit"] = now
         except OSError:
             return
+
+
+def hits_pending(brain_dir=None) -> int:
+    """尚未折回主文件的命中增量条数（供状态页展示）。"""
+    _, _, hits_path = _mem_paths(brain_dir)
+    try:
+        return sum(1 for line in hits_path.read_text(encoding="utf-8", errors="ignore").splitlines() if line.strip())
+    except OSError:
+        return 0
 
 
 def compact_hits(brain_dir=None) -> int:
@@ -1664,9 +1835,20 @@ def record_evolution(title, kind="adopted", note=""):
     if not title:
         return None
     evo = load_json(_evolution_path(), {}) or {}
+    if kind == "proposed":
+        # 同一标题的未决提案只更新，不重复追加（睡眠日结/同类反思容易刷屏）。
+        for old in (evo.get("proposals") or []):
+            if str(old.get("title") or "") == title and old.get("status") == "proposed":
+                old["date"] = now_iso()
+                if note:
+                    old["note"] = str(note)[:300]
+                save_json(_evolution_path(), evo)
+                return old
     rec = {"id": _next_evo_id(evo), "date": now_iso(), "title": title[:120]}
     if kind == "proposed":
         rec["status"] = "proposed"
+        if note:
+            rec["note"] = str(note)[:300]
         evo.setdefault("proposals", []).append(rec)
     else:
         if note:
@@ -1676,6 +1858,22 @@ def record_evolution(title, kind="adopted", note=""):
     record_life_event("evolution", f"{kind}: {title[:100]}", evolution_id=rec["id"],
                       evolution_kind=kind, note=str(note or "")[:200])
     return rec
+
+
+def prune_evolution(max_items=500) -> int:
+    """裁剪演化账本，只保留最近 max_items 条提议/采纳；返回移除条数。"""
+    path = _evolution_path()
+    evo = load_json(path, {}) or {}
+    cap = max(50, int(max_items or 500))
+    removed = 0
+    for key in ("proposals", "adopted"):
+        items = evo.get(key) or []
+        if len(items) > cap:
+            removed += len(items) - cap
+            evo[key] = items[-cap:]
+    if removed:
+        save_json(path, evo)
+    return removed
 
 
 def cmd_evolution(args) -> int:

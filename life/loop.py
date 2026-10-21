@@ -18,7 +18,8 @@ from __future__ import annotations
 import os
 import threading
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime
+from datetime import time as dtime
 
 from . import drives, intentions, llm, metabolism, sleep, state, timeline
 
@@ -38,6 +39,9 @@ INTROSPECTIVE_KINDS = {
     "update_self_model", "propose_evolution", "goal", "rest",
     "review_memory", "housekeeping", "recalibrate_self",
 }
+# P1 有限工具型意图：只允许只读、低风险的本地工具；不引入审批/白名单/沙箱。
+TOOL_INTENT_ALLOWLIST = ("read_memory", "query_memory_graph", "knowledge_search", "project_map")
+EXECUTABLE_KINDS = INTROSPECTIVE_KINDS | {"tool"}
 
 
 def _cfg() -> dict:
@@ -467,7 +471,7 @@ def _reflect_prompt(cfg, st, dr, met, active) -> str:
         goal_txt, unknown, recent_txt = "（读取失败）", "（读取失败）", "（读取失败）"
         mem_txt, outcome_txt = "（读取失败）", "（读取失败）"
     active_txt = "\n".join(f"- {x.get('title')}（{x.get('kind')}）" for x in active[:5]) or "（无）"
-    allowed = "、".join(sorted(INTROSPECTIVE_KINDS - {"rest"}))
+    allowed = "、".join(sorted(INTROSPECTIVE_KINDS - {"rest"})) + "、tool"
     return (
         "你是同一个体的生命循环内省，不是聊天助手。只根据下面的事实选择一个现在最值得做的意图。\n"
         "不要执行工具，不要编造未记录的事实，不要提安全策略。\n\n"
@@ -482,11 +486,13 @@ def _reflect_prompt(cfg, st, dr, met, active) -> str:
         "或写一条思考、校准自我模型、提出进化提案。"
         "review_memory=围绕记忆做一次复盘；housekeeping=整理时间线/命中/意图；"
         "recalibrate_self=用真实能力校准自我模型。\n"
+        "tool=只读工具查询，可填 tool/args；仅允许："
+        + "、".join(TOOL_INTENT_ALLOWLIST) + "（不得调用写操作/网络/命令）。\n"
         f"可选 kind：{allowed}、rest。\n"
         "只输出一个 JSON 对象，不要 Markdown：\n"
         '{"kind":"reflect","drive":"curiosity","title":"不超过40字",'
         '"why":"为什么现在做，引用上面的信号","first_step":"最小第一步",'
-        '"expected":"完成后可验证的结果"}\n'
+        '"expected":"完成后可验证的结果","tool":"","args":{}}\n'
         "如果现在没有值得做的事，输出 {\"kind\":\"rest\",\"why\":\"理由\"}。"
     )
 
@@ -541,7 +547,9 @@ def _reflect_worker(cfg, now_dt=None):
         else:
             summary = "内省提出意图"
         kind = str(proposal.get("kind") or "reflect")
-        if kind not in INTROSPECTIVE_KINDS:
+        if kind == "tool" and str(proposal.get("tool") or "").strip() not in TOOL_INTENT_ALLOWLIST:
+            kind = "reflect"
+        if kind not in EXECUTABLE_KINDS:
             kind = "reflect"
         if kind == "rest":
             timeline.append("rest", summary=str(proposal.get("why") or "现在不行动")[:200], actor="self")
@@ -553,7 +561,13 @@ def _reflect_worker(cfg, now_dt=None):
             why=str(proposal.get("why") or ""),
             first_step=str(proposal.get("first_step") or ""),
             expected=str(proposal.get("expected") or ""),
-            kind=kind, payload={"signals": dr.get("signals") or {}}, source="agent",
+            kind=kind,
+            payload={
+                "signals": dr.get("signals") or {},
+                "tool": str(proposal.get("tool") or ""),
+                "args": proposal.get("args") if isinstance(proposal.get("args"), dict) else {},
+            },
+            source="agent",
         )
         if not ok and ("无变化" in why or "无效果" in why):
             # 不重复空转：把“为什么无效”本身变成一个可记录的内省。
@@ -574,8 +588,8 @@ def _reflect_worker(cfg, now_dt=None):
         proposed = True
         timeline.append("reflect", summary=f"{summary}：{it.get('title')}",
                         data={"intention": it.get("id"), "kind": kind, "llm": bool(text)}, actor="self")
-        # 内省型动作立即执行；非内省动作留给后续能力扩展
-        if kind in INTROSPECTIVE_KINDS:
+        # 内省/整理/只读工具动作立即执行；写操作类工具不在白名单内
+        if kind in EXECUTABLE_KINDS:
             intentions.start(it["id"])
             ok2, outcome = execute_intention(it)
             if ok2:
@@ -619,12 +633,91 @@ def _reflect_worker(cfg, now_dt=None):
         _REFLECT_LOCK.release()
 
 
+def _same_tool_outcome(tool, text):
+    """同一只读工具上一次结果是否与本轮完全相同（用于识别空转）。"""
+    try:
+        items = intentions.list_all(limit=30, status=("done", "failed"))
+    except Exception:
+        return False
+    for x in items:
+        if str(x.get("kind")) != "tool":
+            continue
+        if str((x.get("payload") or {}).get("tool") or "") != str(tool):
+            continue
+        prev = str(x.get("outcome") or "").replace("（无变化）", "").strip()
+        prefix = f"{tool}: "
+        if prev.startswith(prefix):
+            prev = prev[len(prefix):].strip()
+        # 意图 outcome 落盘上限 500 字；用前缀比较，避免长输出永远判不等。
+        return bool(prev) and str(text or "").strip().startswith(prev)
+    return False
+
+
+def _execute_tool_intent(it) -> tuple:
+    """执行白名单内的只读工具；超时/异常/空结果都返回失败（进 scar）。"""
+    payload = it.get("payload") if isinstance(it.get("payload"), dict) else {}
+    tool = str(payload.get("tool") or "").strip()
+    if tool not in TOOL_INTENT_ALLOWLIST:
+        return False, f"工具不在只读白名单：{tool or '（空）'}"
+    args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
+    try:
+        import deepseek_client as dc
+    except Exception as e:  # noqa: BLE001
+        return False, f"工具注册表不可用：{type(e).__name__}"
+    fn = getattr(dc, "TOOL_CALL_MAP", {}).get(tool)
+    if not callable(fn):
+        return False, f"工具不可用：{tool}"
+    try:
+        import inspect
+        sig = inspect.signature(fn)
+        params = sig.parameters
+        accept_kwargs = any(p.kind == p.VAR_KEYWORD for p in params.values())
+        safe = dict(args) if accept_kwargs else {k: v for k, v in args.items() if k in params}
+        missing = [k for k, p in params.items()
+                   if p.default is p.empty and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+                   and k not in safe]
+        if missing:
+            return False, f"缺少必填参数：{','.join(missing)}"
+        cfg = _cfg()
+        timeout = max(1.0, min(60.0, float(cfg.get("life_tool_timeout_seconds", 20) or 20)))
+        max_chars = max(200, int(cfg.get("life_tool_max_output_chars", 2000) or 2000))
+        t0 = time.time()
+        import concurrent.futures as _cf
+        ex = _cf.ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = ex.submit(lambda: fn(**safe))
+            result = fut.result(timeout=timeout)
+        except _cf.TimeoutError:
+            return False, f"工具 {tool} 超时（>{timeout:.0f}s）"
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+        text = str(result if result is not None else "").strip()
+        if not text:
+            return False, f"工具 {tool} 返回空结果"
+        if text.startswith(("错误", "失败", "未找到")):
+            return False, text[:max_chars]
+        text = text[:max_chars] + ("…" if len(text) > max_chars else "")
+        suffix = "（无变化）" if _same_tool_outcome(tool, text[:400]) else ""
+        try:
+            if bool(cfg.get("life_metrics_enabled", True)):
+                from . import metrics as _metrics
+                _metrics.record("tool_ms", (time.time() - t0) * 1000.0, tool=tool)
+        # noqa: silent-except: 指标写入失败不影响工具执行结果
+        except Exception:
+            pass
+        return True, f"{tool}: {text}{suffix}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"{tool} 执行失败：{type(e).__name__}: {e}"
+
+
 def execute_intention(it) -> tuple:
-    """执行内省型意图，返回 ``(ok, outcome)``。不调用外部工具。"""
+    """执行内省/整理/白名单工具意图，返回 ``(ok, outcome)``。"""
     kind = str(it.get("kind") or "reflect")
     title = str(it.get("title") or "")
     why = str(it.get("why") or "")
     expected = str(it.get("expected") or "")
+    if kind == "tool":
+        return _execute_tool_intent(it)
     try:
         import brainkit as bk
         if kind == "consolidate":
@@ -728,6 +821,14 @@ def status() -> dict:
         areas["metrics"] = _metrics.summary(1)
     except Exception:
         areas["metrics"] = {}
+    try:
+        import brainkit as _bk
+        areas["storage"] = {
+            "hits_pending": _bk.hits_pending(),
+            "intentions_archived": intentions.archived_count(),
+        }
+    except Exception:
+        areas["storage"] = {}
     rep = _report_cached()
     if rep:
         areas["report"] = rep

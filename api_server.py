@@ -652,6 +652,46 @@ def _capability_status():
 
 
 
+# 记忆读路径：legacy=memory.json 单独注入（兼容/测试）；unified=memory_store 统一层。
+_MEMORY_BACKEND = "legacy"
+_MEMORY_BACKFILL_STARTED = False
+
+
+def _start_memory_backfill():
+    """后台把 memory.json 旧投影分批补进大脑（幂等游标；不阻塞启动）。"""
+    global _MEMORY_BACKFILL_STARTED
+    if _MEMORY_BACKFILL_STARTED or _MEMORY_BACKEND != "unified":
+        return
+    _MEMORY_BACKFILL_STARTED = True
+
+    def _run():
+        try:
+            import memory_facade as _mf
+            n = _mf.sync_missing_to_brain(0)
+            if n:
+                logger.info("长期记忆投影补同步完成：%s 条", n)
+        except Exception:
+            logger.debug("长期记忆投影补同步失败（下次睡眠重试）", exc_info=True)
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="memory-backfill").start()
+    except Exception:
+        _MEMORY_BACKFILL_STARTED = False
+
+
+def _memory_all(query="", limit=6):
+    """统一记忆检索（memory.json + 大脑 jsonl，按文本去重）。未初始化返回 None。"""
+    try:
+        import memory_store as ms
+        if not getattr(ms, "MEMORY_JSON_PATH", None) or not getattr(ms, "BRAIN_DIR", None):
+            return None
+        return ms.search(str(query or ""), int(limit or 6))
+    except Exception as e:  # noqa: BLE001
+        import degrade as _dg
+        _dg.degrade("api.memory.unified", e, "统一记忆读取失败，回退旧注入路径", critical=True)
+        return None
+
+
 def _memory_full():
     """长期记忆全量（**只含生效条目**，带血缘）。
 
@@ -2786,6 +2826,8 @@ def _init_dc_paths():
                      knowledge_index=os.path.join(DATA_DIR, "knowledge_index.json"),
                      brain_dir=_brain_dir)
         ms.invalidate_cache()
+        global _MEMORY_BACKEND
+        _MEMORY_BACKEND = "unified"
     except Exception:
         logger.exception("memory_store 路径注入失败（可降级）：记忆统一读取层不可用，工具将回退各自独立实现")
 
@@ -9753,6 +9795,8 @@ class _Handler(BaseHTTPRequestHandler):
                 # 以下依赖刻意做成「调用时按名字解析」的入口函数：模块属性可被
                 # 测试打桩（见 tests/test_quiet_mode.py），提前缓存函数对象会让桩失效。
                 "memory_full": _memory_full,
+                "memory_backend": _MEMORY_BACKEND,
+                "memory_all": _memory_all,
                 "self_profile": _context_self_profile,
                 "brain_api": _context_brain_api,
                 "trust_notice": _context_trust_notice,
@@ -10395,6 +10439,8 @@ def start_server(port=8745, token=""):
         import memory_facade as _mf
         _mf.init(MEMORY_PATH)
         _mf.init_pending(os.path.join(DATA_DIR, "memory_pending.json"))
+        _mf.init_sync_state(os.path.join(DATA_DIR, "memory_sync_state.json"))
+        _start_memory_backfill()
     except Exception:
         logger.warning("记忆门面初始化失败（可降级）：记忆仍可读写，但无血缘/作废语义")
     # 信任内核启动核对：检出「未声明的自我修改」并留痕。

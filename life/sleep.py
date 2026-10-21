@@ -62,6 +62,27 @@ def _next_wake_iso(now=None, cfg=None):
         return ""
 
 
+def _followups(now=None):
+    """睡眠复盘：超期未回执的决策 + 停滞目标（只读，不自动改状态）。"""
+    out = []
+    try:
+        import brainkit as bk
+        now_epoch = time.time() if now is None else float(now)
+        decs = [d for d in bk.list_decisions(limit=300) if d.get("status") == "open"]
+        stale = [d for d in decs
+                 if (now_epoch - bk._ts_epoch(d.get("ts"))) / 86400.0 >= 3]
+        if stale:
+            out.append("待回执决策：" + "；".join(str(d.get("decision") or "")[:40] for d in stale[:5]))
+        stalled = [g for g in bk.load_goals()
+                   if g.get("status") == "active" and not str(g.get("progress") or "").strip()
+                   and (now_epoch - bk._ts_epoch(g.get("updated_at"))) / 86400.0 >= 7]
+        if stalled:
+            out.append("停滞目标：" + "；".join(str(g.get("title") or "")[:40] for g in stalled[:5]))
+    except Exception:
+        return ""
+    return "\n".join(out)
+
+
 def _digest_text():
     try:
         import brain_api
@@ -177,11 +198,14 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
     if not narrative:
         narrative = "睡眠完成：完成了记忆整理与日结，没有生成额外叙事。"
 
-    # deep：写日结、刷新自我模型
+    # deep：写日结、回执/停滞复盘、刷新自我模型
+    followups = _followups(now)
     try:
         import brainkit as bk
-        bk.append_line(bk.THINKING_DIR / f"{bk.today()}.md",
-                       f"## {_now_iso(now)}\n[睡眠] {narrative}\n")
+        body = f"## {_now_iso(now)}\n[睡眠] {narrative}\n"
+        if followups:
+            body += followups + "\n"
+        bk.append_line(bk.THINKING_DIR / f"{bk.today()}.md", body)
         bk._refresh_self_model()
     # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
@@ -216,6 +240,7 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
         import brainkit as bk
         bk.compact_hits()
         bk.prune_decisions()
+        bk.prune_evolution()
         from . import intentions, metrics, scars
         intentions.prune()
         scars.prune()
@@ -235,7 +260,8 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
     })
     ev = timeline.append("sleep_end", summary=f"睡眠结束：{narrative[:120]}",
                          data={"reason": str(reason)[:80], "consolidated": consolidated,
-                               "narrative": narrative[:1000], "proposal": proposal},
+                               "narrative": narrative[:1000], "proposal": proposal,
+                               "followups": followups[:500]},
                          actor="system")
     try:
         if bool(cfg.get("life_metrics_enabled", True)):
@@ -253,5 +279,6 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
         "consolidated": consolidated,
         "narrative": narrative,
         "proposal": proposal,
+        "followups": followups,
         "event": ev,
     }

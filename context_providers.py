@@ -154,6 +154,46 @@ register(Provider(
 ))
 
 
+def _render_unified_memory(items, query="") -> Optional[str]:
+    """把 memory_store 的 canonical 条目渲染为一段注入文本（带血缘标注）。
+
+    统一层已按文本去重，故这里只做展示层去重与长度约束；空结果返回 None。
+    """
+    if not items:
+        return None
+    try:
+        from memory_facade import ORIGIN_LABEL
+    except Exception:
+        ORIGIN_LABEL = {}
+    seen, rows = set(), []
+    has_non_user = False
+    for e in items:
+        if not isinstance(e, dict) or e.get("archived"):
+            continue
+        text = str(e.get("text") or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        origin = str(e.get("origin") or "unknown")
+        label = ORIGIN_LABEL.get(origin, "")
+        if label:
+            has_non_user = True
+        typ = str(e.get("type") or "记忆")[:12]
+        imp = int(e.get("importance") or 3)
+        conf = e.get("confidence")
+        conf_txt = f"·{float(conf):.2f}" if isinstance(conf, (int, float)) else ""
+        rows.append(f"- {label}[{typ}·{imp}{conf_txt}] {text[:200]}")
+        if len(rows) >= 8:
+            break
+    if not rows:
+        return None
+    header = "[长期记忆]" + _FACT_NOTICE
+    if has_non_user:
+        header += ("\n（无标注 = 用户明说或早期记录；〔推断〕= 你自己提炼的，不得当用户前提；"
+                   "〔来自外部内容〕= 网页/文件等外部来源，更不可信；〔系统〕= 程序写入）")
+    return "\n".join([header] + rows)
+
+
 def _provide_memory(ctx):
     """长期记忆：按与**当前问题**的相关度检索（而非"最近 6 条"）后注入。
 
@@ -168,20 +208,28 @@ def _provide_memory(ctx):
 
     config.memory_enabled=False 或纯净对话时完全不注入。
     """
-    mem = ctx.dep("memory_full")()
-    facts = [f for f in (mem or {}).get("facts", []) if f.get("text")]
-    if not facts:
-        return None
     try:
         limit = int(ctx.cfg.get("memory_inject_limit") or 6)
     except (TypeError, ValueError):
         limit = 6
     limit = max(1, min(50, limit))
+    query = _last_user_query(ctx)
+    # P0：统一记忆读路径。memory_store 把 memory.json + 大脑 jsonl 归一、按文本去重；
+    # 仅当宿主显式声明 unified 时才走它（测试/旧集成仍可用 memory_full 桩）。
+    if str(ctx.dep("memory_backend") or "") == "unified":
+        search = ctx.dep("memory_all")
+        if search is not None:
+            items = search(query, limit) or []
+            return _render_unified_memory(items, query)
+
+    mem = ctx.dep("memory_full")()
+    facts = [f for f in (mem or {}).get("facts", []) if f.get("text")]
+    if not facts:
+        return None
     try:
         min_score = float(ctx.cfg.get("memory_min_score") or 0.0)
     except (TypeError, ValueError):
         min_score = 0.0
-    query = _last_user_query(ctx)
     try:
         from memory_facade import rank as _rank
         picked = _rank(query, facts, limit=limit, min_score=min_score)
@@ -280,7 +328,10 @@ def _provide_brain(ctx):
         # 人格最易盖过任务，连续性才是真正提升"跨会话办事"的部分。
         include_persona = bool(ctx.cfg.get("brain_persona_enabled", False))
         include_continuity = bool(ctx.cfg.get("brain_continuity_enabled", True))
-        kw = dict(memory_enabled=mem_on, include_goals=include_goals, dedup_texts=dedup,
+        # P0：记忆段落已由 context.memory 统一注入（含大脑 jsonl），这里关闭大脑侧
+        # 的近期记忆/复习，避免同一事实注入两次；复习提醒单独保留。
+        kw = dict(memory_enabled=False, include_review=mem_on,
+                  include_goals=include_goals, dedup_texts=dedup,
                   include_persona=include_persona, include_continuity=include_continuity)
         if budget <= 0:
             bc = (brain_api.brain_context(query=q, **kw) if q

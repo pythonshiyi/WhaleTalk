@@ -134,6 +134,35 @@ def test_memory_relevance_gate_skips_irrelevant():
     assert "[长期记忆]" not in (out["text"] or "")
 
 
+def test_unified_memory_provider_uses_memory_store():
+    """P0：宿主声明 unified 时，记忆段落来自统一层（含大脑），并保留血缘标注。"""
+    out = cp.assemble(_ctx(deps={
+        "memory_backend": "unified",
+        "memory_all": lambda q, n: [
+            {"text": "用户偏好中文回复", "origin": "user", "type": "偏好", "importance": 4},
+            {"text": "某网页称该库已弃用", "origin": "web", "type": "事实", "importance": 3},
+        ],
+    }))
+    text = out["text"]
+    assert "[长期记忆]" in text and "用户偏好中文回复" in text
+    assert "〔来自外部内容〕" in text and "某网页称该库已弃用" in text
+    assert "context.memory" in [i["name"] for i in out["receipt"]["injected"]]
+
+
+def test_brain_provider_disables_duplicate_memory_but_keeps_review():
+    captured = {}
+
+    def fake_context(**kw):
+        captured.update(kw)
+        return "[大脑上下文] X"
+
+    cp.assemble(_ctx(deps={
+        "brain_api": lambda: type("B", (), {"brain_context": staticmethod(fake_context)}),
+    }))
+    assert captured.get("memory_enabled") is False
+    assert captured.get("include_review") is True
+
+
 def test_memory_empty_query_falls_back_to_recent():
     """无 user 文本（如仅工具续跑）时退回"最近"语义，保证不因检索而丢注入。"""
     ctx = _ctx()
