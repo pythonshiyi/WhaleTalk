@@ -22,6 +22,26 @@ EXCLUDE_DIRS = {".venv", "venv", "__pycache__", "dist", "build", "backups", ".gi
 EXCLUDE_EXTS = {".pyc", ".pyo", ".log", ".zip"}
 EXCLUDE_FILES = {".clean_exit"}
 
+# 浏览器 profile 里的纯缓存目录：可重建，实测占 58 MB 里约 50 MB
+# （Cache 12 MB、BrowserMetrics 12 MB、GrShaderCache 4 MB……）。
+# 只剪缓存，保留 Cookies / Login Data / Local Storage / Preferences ——
+# 恢复后登录态仍在，不必重新登录。
+BROWSER_PROFILE_PREFIX = "data/browser_profile"
+BROWSER_CACHE_DIRS = {
+    "Cache", "Code Cache", "GPUCache", "GrShaderCache", "ShaderCache",
+    "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache", "GraphiteDawnCache",
+    "BrowserMetrics", "Crashpad", "component_crx_cache", "extensions_crx_cache",
+    "Service Worker", "blob_storage", "File System",
+}
+
+
+def _prune_dirs(rel_root, dirs):
+    """按目录剪枝：全局缓存目录 + browser_profile 下的纯缓存子目录。"""
+    out = [d for d in dirs if d not in EXCLUDE_DIRS]
+    if rel_root.replace("\\", "/").startswith(BROWSER_PROFILE_PREFIX):
+        out = [d for d in out if d not in BROWSER_CACHE_DIRS]
+    return out
+
 
 def current_version():
     try:
@@ -42,9 +62,9 @@ def make_backup():
         # compresslevel=1：源码/文本压缩体积仅增 ~5%，CPU 省 2-3 倍（zip 大头是 I/O）
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
             for root, dirs, files in os.walk(BASE_DIR):
-                dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+                dirs[:] = _prune_dirs(os.path.relpath(root, BASE_DIR), dirs)
                 for fn in sorted(files):
-                    if fn in EXCLUDE_FILES or fn.endswith(tuple(EXCLUDE_EXTS)):
+                    if fn in EXCLUDE_FILES or fn.endswith(tuple(EXCLUDE_EXTS)) or fn.endswith(".pma"):
                         continue
                     full = os.path.join(root, fn)
                     arc = os.path.relpath(full, BASE_DIR)
