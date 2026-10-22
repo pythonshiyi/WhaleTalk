@@ -2138,11 +2138,15 @@ def _archive_unlocked(args) -> int:
     sig_mode = _write_snapshot_with_sig(target, data)
     if sig_mode == "signed":
         mode += "（已签名）"
+    # 落盘真实字节：签名块（WHALEBRAIN-SIG）也是快照的一部分。外部镜像与内容寻址
+    # 清单都必须对齐「文件实际字节」，否则镜像少一截签名、snapshot_index 记录的
+    # sha256 与本地文件对不上（2026-10-22 实测差 271 字节）。
+    final = target.read_bytes()
 
     # B5 异地备份钩子：把本次快照镜像到外部目录（快照脱离大脑目录独立留存）。
     mirror = _snapshot_mirror_dir() if not getattr(args, "mirror", None) else str(args.mirror)
     if mirror:
-        mirrored = _mirror_snapshot_file(target, mirror, m.get("brain_id"), data)
+        mirrored = _mirror_snapshot_file(target, mirror, m.get("brain_id"), final)
         if mirrored:
             print(f"  已镜像到外部备份: {mirrored}")
 
@@ -2150,7 +2154,7 @@ def _archive_unlocked(args) -> int:
     # （每份可独立恢复，不因依赖基快照而牺牲可靠性）；这里在 `snapshot_index.json`
     # 记录每份的 sha256 / 体积 / 记忆条目数 / 相对上一份的增量，让 N 份快照的
     # 成长与去重潜质可见。真正的分块存储会破坏"单份可独立恢复"，故不在此改格式。
-    _record_snapshot_index(n, data)
+    _record_snapshot_index(n, final)
 
     lineage = load_json(LINEAGE_FILE, {})
     # P2-3：维护完整血缘链——新版本 n 的祖先 = 旧祖先链 + 旧 last_archived
@@ -2168,7 +2172,7 @@ def _archive_unlocked(args) -> int:
     pruned, skipped = _prune_snapshots(versions, keep)
 
     print(f"[快照已归档] {target}")
-    print(f"  大小: {len(data) / 1024:.1f} KB   加密: {mode}")
+    print(f"  大小: {len(final) / 1024:.1f} KB   加密: {mode}")
     if pruned:
         print(f"  已清理 {len(pruned)} 份过期快照（保留最近 {keep} 份）")
     if skipped:
