@@ -5,8 +5,11 @@
 - curiosity   未解决的决定、没有进展的目标、久未复盘的问题
 - maintenance 距上次睡眠/整理的时间、记忆体量、归档比例
 - connection  社区/外部连接是否开启、上次互动距今多久
-- mastery     未解决的失败/未知、未完成目标
-- coherence   合并冲突、自我模型是否仍是模板、未决决定
+- mastery     尚未核实的未知（读 brain/open_questions.json 账本）、未完成目标
+- coherence   合并冲突、自我模型是否仍是模板、超期未核 / 被推翻未改的断言
+
+2026-10-22 修正：mastery 原先直接数 self_model.unknowns（纯文本列表，写进去就出不来），
+核实一条最强内驱反而掉 14 分 —— 结构性奖励无知。改为读开放问题账本，核实即核销。
 """
 from __future__ import annotations
 
@@ -88,6 +91,8 @@ def _signals():
         "decisions_open": 0, "decisions_reversed": 0,
         "memories": 0, "memories_archived": 0,
         "unknowns": 0, "self_model_source": "template",
+        "questions_total": 0, "questions_verified": 0,
+        "questions_unverified": 0, "questions_refuted": 0, "questions_stale": 0,
         "merge_conflicts": 0, "last_sleep": None, "last_wake": None,
         "community_enabled": False, "community_age_min": None,
         "recent_failures": 0,
@@ -121,6 +126,17 @@ def _signals():
         out["unknowns"] = len(sm.get("unknowns") or [])
         out["self_model_source"] = str(sm.get("source") or "template")
     # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    except Exception:
+        pass
+    try:
+        from . import questions
+        q = questions.stats()
+        out["questions_total"] = int(q.get("total") or 0)
+        out["questions_verified"] = int(q.get("verified") or 0)
+        out["questions_unverified"] = int(q.get("unverified") or 0)
+        out["questions_refuted"] = int(q.get("refuted") or 0)
+        out["questions_stale"] = int(q.get("stale") or 0)
+    # noqa: silent-except: 账本缺失时回落到 self_model 的未知计数，不影响其他信号
     except Exception:
         pass
     try:
@@ -185,12 +201,20 @@ def compute(now=None, force=False) -> dict:
         interval = max(1.0, float(cfg.get("brain_community_interval_min", 30) or 30))
         age = s.get("community_age_min")
         connection = 65 if age is None else _score(age, interval * 4)
-    # mastery：未解决失败/未知、活跃目标（近期失败也推动复盘）
-    mastery = min(100, s["unknowns"] * 14 + s["decisions_open"] * 8 + s["goals_active"] * 5
+    # mastery：只对「尚未核实的未知」计债。核实即核销，超期未核加倍计债。
+    # 无账本时回落到旧的 self_model.unknowns 口径，保证不依赖新文件也能跑。
+    unknown_debt = s.get("questions_unverified", 0) + s.get("questions_stale", 0) * 2
+    if not s.get("questions_total"):
+        unknown_debt = s["unknowns"]
+    mastery = min(100, unknown_debt * 14 + s["decisions_open"] * 8 + s["goals_active"] * 5
                   + s.get("recent_failures", 0) * 6)
-    # coherence：冲突/模板自我模型/未决
-    coherence = min(100, s["merge_conflicts"] * 35 + (18 if s["self_model_source"] == "template" else 0)
-                    + s["decisions_open"] * 4)
+    # coherence：冲突 / 模板自我模型 / 未决，加上「说的和做的不一致」的时效债。
+    # refuted 权重最高：被证据推翻却还没改的断言，意味着自我描述此刻在说谎。
+    coherence = min(100, s["merge_conflicts"] * 35
+                    + (18 if s["self_model_source"] == "template" else 0)
+                    + s["decisions_open"] * 4
+                    + s.get("questions_stale", 0) * 12
+                    + s.get("questions_refuted", 0) * 25)
 
     drives = {
         "curiosity": int(curiosity),
@@ -205,9 +229,11 @@ def compute(now=None, force=False) -> dict:
         "maintenance": f"距上次睡眠/醒来 {days_sleep:.1f} 天 · 记忆 {s['memories']} 条 · 归档比 {ratio_arch:.0%}",
         "connection": ("社区未开启" if not s["community_enabled"]
                        else f"上次连接 {s.get('community_age_min') or '未记录'} 分钟前"),
-        "mastery": (f"未知 {s['unknowns']} · 未决 {s['decisions_open']} · 活跃目标 {s['goals_active']}"
+        "mastery": (f"未核未知 {unknown_debt}（账本已核 {s.get('questions_verified', 0)} / "
+                    f"待核 {s.get('questions_unverified', 0)}）· 活跃目标 {s['goals_active']}"
                     f" · 近期失败 {s.get('recent_failures', 0)}"),
-        "coherence": f"合并冲突 {s['merge_conflicts']} · 自我模型 {s['self_model_source']} · 未决 {s['decisions_open']}",
+        "coherence": (f"合并冲突 {s['merge_conflicts']} · 自我模型 {s['self_model_source']}"
+                      f" · 超期未核 {s.get('questions_stale', 0)} · 被推翻未改 {s.get('questions_refuted', 0)}"),
     }
     out = {
         "updated_at": _now_iso(now.timestamp() if isinstance(now, datetime) else None),
