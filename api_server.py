@@ -2086,6 +2086,134 @@ def _roles():
     return {"roles": out, "current_prompt": cfg_prompt}
 
 
+def _personas():
+    """角色卡列表（内置 + 用户创建，附角色记忆条数）。"""
+    import personas as personas_mod
+    import persona_memory as persona_mem
+    items = personas_mod.list_personas()
+    for item in items:
+        try:
+            item["memory_count"] = persona_mem.count(item["id"])
+        except Exception:
+            item["memory_count"] = 0
+    return {"personas": items, "count": len(items)}
+
+
+def _qq_status():
+    import qq_onebot
+    return qq_onebot.status()
+
+
+def _qq_action(body):
+    """QQ 通道操作：save / start / stop / test。"""
+    import qq_onebot
+    body = body if isinstance(body, dict) else {}
+    action = str(body.get("action") or "save").strip().lower()
+    try:
+        if action in ("start", "stop"):
+            patch = {"enabled": action == "start"}
+            qq_onebot.save_config(patch)
+            cfg = qq_onebot.load_config()
+            qq_onebot.start(cfg)
+            return {"ok": True, "status": qq_onebot.status()}, None
+        if action == "test":
+            uid = str(body.get("user_id") or "").strip()
+            if not uid:
+                return None, "user_id 不能为空"
+            ok, err = qq_onebot.send_test(uid, str(body.get("text") or "🐋 鲸语 QQ 通道测试消息"))
+            if not ok:
+                return None, f"发送失败：{err}"
+            return {"ok": True, "status": qq_onebot.status()}, None
+        patch = body.get("config") if isinstance(body.get("config"), dict) else body
+        qq_onebot.save_config(patch)
+        cfg = qq_onebot.load_config()
+        qq_onebot.start(cfg)
+        return {"ok": True, "status": qq_onebot.status()}, None
+    except ValueError as e:
+        return None, str(e)
+    except Exception as e:
+        logger.exception("QQ 通道操作失败")
+        return None, f"QQ 通道操作失败：{e}"
+
+
+def _persona_memory_load(pid):
+    """角色记忆读取入口（供 context_providers 注入）。"""
+    import persona_memory as persona_mem
+    return persona_mem.facts(str(pid or ""))
+
+
+def _persona_memory_get(pid):
+    """角色记忆列表（最新在前，最多 200 条）。"""
+    import personas as personas_mod
+    import persona_memory as persona_mem
+    pid = str(pid or "").strip()
+    if not personas_mod.get_persona(pid):
+        return None, "角色不存在"
+    all_items = persona_mem.facts(pid)
+    items = list(reversed(all_items))[:200]
+    return {"persona_id": pid, "count": len(all_items), "facts": items}, None
+
+
+def _persona_memory_action(body):
+    """角色记忆操作：clear（清空）/ delete（删单条）。"""
+    import personas as personas_mod
+    import persona_memory as persona_mem
+    body = body if isinstance(body, dict) else {}
+    pid = str(body.get("id") or body.get("persona_id") or "").strip()
+    if not personas_mod.get_persona(pid):
+        return None, "角色不存在"
+    action = str(body.get("action") or "").strip().lower()
+    if action == "delete":
+        ok = persona_mem.delete(pid, str(body.get("fact_id") or ""))
+        if not ok:
+            return None, "记忆不存在"
+    elif action == "clear":
+        if not persona_mem.clear(pid):
+            return None, "清空角色记忆失败"
+    else:
+        return None, "action 必须是 delete 或 clear"
+    return {"ok": True, "count": persona_mem.count(pid)}, None
+
+
+def _personas_save(body):
+    """角色卡增删改：{action: save|delete|duplicate, persona?: {...}, id?: str}。"""
+    import personas as personas_mod
+    action = str((body or {}).get("action") or "save").strip().lower()
+    try:
+        if action == "delete":
+            pid = str((body or {}).get("id") or "")
+            personas_mod.delete_persona(pid)
+            try:
+                import persona_memory as _persona_mem
+                _persona_mem.clear(pid)
+            except Exception:
+                logger.warning("角色已删除，但角色记忆清理失败：%s", pid, exc_info=True)
+            return {"ok": True, "personas": _personas()["personas"]}, None
+        if action == "duplicate":
+            item = personas_mod.duplicate_persona(str((body or {}).get("id") or ""))
+            return {"ok": True, "persona": item, "personas": _personas()["personas"]}, None
+        item = personas_mod.save_persona((body or {}).get("persona") or body)
+        return {"ok": True, "persona": item, "personas": _personas()["personas"]}, None
+    except ValueError as e:
+        return None, str(e)
+    except Exception as e:
+        logger.exception("角色保存失败")
+        return None, f"角色保存失败：{e}"
+
+
+def _resolve_persona(body):
+    """从请求体解析 persona_id；不存在或为空时返回 None（普通对话）。"""
+    pid = str((body or {}).get("persona_id") or "").strip()
+    if not pid:
+        return None
+    try:
+        import personas as personas_mod
+        return personas_mod.get_persona(pid)
+    except Exception:
+        logger.exception("角色读取失败，按普通对话继续")
+        return None
+
+
 def _processes():
     """后台进程快照：{name: {pid, started, exited, code, lines, cpu, mem_mb, uptime}}。
 
@@ -4589,6 +4717,109 @@ _PROCESS_WATCHDOG_LOCK = threading.Lock()
 _process_watchdog_started = False
 
 
+def _companion_reply(text, session_id="", persona_id="", images=None):
+    """QQ 等渠道的陪伴回复：dialog 模式 + 角色 + 角色记忆，不启用工具。
+
+    复用网页对话同一套上下文装配（context_providers）与会话落盘，保证
+    「网页里聊过的人和 QQ 里聊的人」看到的是同一套角色设定与记忆边界。
+    images 为已下载到本机的图片路径（OneBot 图片段）。
+    """
+    import config_utils
+    import deepseek_client as dc
+    import personas as personas_mod
+
+    txt = str(text or "").strip()
+    if not txt:
+        raise ValueError("消息为空")
+    cfg = config_utils.load_config()
+    key = str(cfg.get("api_key") or "").strip()
+    if not key:
+        raise RuntimeError("未配置 API Key")
+
+    sid = str(session_id or "").strip() or ("qq_" + hex(int(time.time() * 1000))[2:])
+    hist = _Handler._load_session_messages(_SessionStore(), sid) if sid else None
+    history = []
+    if isinstance(hist, dict):
+        for m in list(hist.get("messages") or [])[-24:]:
+            if not isinstance(m, dict):
+                continue
+            if m.get("role") not in ("user", "assistant"):
+                continue
+            content = str(m.get("content") or "").strip()
+            if content:
+                history.append({"role": m["role"], "content": content})
+    messages = history + [{"role": "user", "content": txt}]
+    if images:
+        messages[-1]["images"] = [str(p) for p in images if str(p).strip()][:5]
+
+    persona = personas_mod.get_persona(persona_id) if persona_id else None
+    class _CompanionCtx:
+        _active_persona = persona
+
+    messages, memory_text = _Handler._inject_system_messages(
+        _CompanionCtx(), messages, cfg, True, False
+    )
+
+    client = dc.DeepSeekClient(
+        key,
+        base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
+        model=cfg.get("model") or dc.DEFAULT_MODEL,
+        timeout=float(cfg.get("timeout") or 0),
+        gateway_session=sid,
+    )
+    try:
+        dc.set_active_client(client)
+    except Exception:
+        logger.debug("QQ 陪伴绑定活动客户端失败（不影响本次回复）", exc_info=True)
+    messages, _ = _compress_messages(messages, cfg, client, session_id=sid, pure_chat=True)
+
+    parts = []
+    kwargs = {
+        "thinking": str(cfg.get("thinking") or "high"),
+        "max_tokens": min(int(cfg.get("max_tokens") or 16384), 2048),
+        "temperature": float(cfg.get("custom_temperature") or 1.0),
+        "top_p": float(cfg.get("custom_top_p") or 1.0),
+        "seed": int(cfg.get("seed") or 0) or None,
+        "pure_chat": True,
+        "tools_enabled": False,
+        "smart_tools": False,
+        "web_search": False,
+        "stop": cfg.get("stop") or None,
+        "on_content": lambda t: parts.append(t),
+        "on_usage": lambda u: _record_usage(u, cfg, {"model": cfg.get("model") or dc.DEFAULT_MODEL}),
+    }
+    if memory_text:
+        kwargs["memory_text"] = memory_text
+    client.chat(messages, **kwargs)
+    reply = "".join(parts).strip()
+    if not reply:
+        reply = "（这次没想好怎么回，再跟我说一句？）"
+
+    try:
+        _save_session_detached({
+            "id": sid,
+            "append": True,
+            "name": (hist or {}).get("name") or txt[:24] or "QQ 对话",
+            "messages": [
+                {"role": "user", "content": txt,
+                 **({"images": [str(p) for p in images if str(p).strip()][:5]} if images else {})},
+                {"role": "assistant", "content": reply},
+            ],
+            "model": cfg.get("model") or dc.DEFAULT_MODEL,
+            "persona_id": str((persona or {}).get("id") or "")[:64],
+        })
+    except Exception:
+        logger.exception("QQ 陪伴会话落盘失败")
+    if persona:
+        try:
+            _chat_harvest(reply, txt[:600], cfg, messages=messages,
+                          persona_id=str(persona.get("id") or ""))
+        except Exception:
+            logger.exception("QQ 角色记忆提炼启动失败")
+    return reply
+
+
+
 def _start_process_watchdog(interval=180, max_idle=3600):
     """空闲进程守卫生：定期清理**无输出**超过 max_idle 秒的后台子进程（AI 起的服务/浏览器等）。
 
@@ -4657,6 +4888,7 @@ def _save_session_data(body):
         "messages": clean,
         "model": str(body.get("model") or ""),
         "scenario": "通用",
+        "persona_id": str(body.get("persona_id") or "")[:64],
         "saved_at": datetime.now().isoformat(timespec="seconds"),
     }
     with _SESSION_SAVE_LOCK:
@@ -6255,6 +6487,10 @@ _TRASH_TTL_DAYS = 7
 MEMORY_PATH = os.path.join(DATA_DIR, "memory.json")
 STATS_PATH = os.path.join(DATA_DIR, "stats.json")
 USER_ROLES_PATH = os.path.join(DATA_DIR, "user_roles.json")
+PERSONAS_FILE = os.path.join(DATA_DIR, "personas.json")
+PERSONA_MEMORY_DIR = os.path.join(DATA_DIR, "persona_memory")
+QQ_CONFIG_PATH = os.path.join(DATA_DIR, "qq_onebot.json")
+QQ_STATE_PATH = os.path.join(DATA_DIR, "qq_state.json")
 PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
 SCHEDULES_PATH = os.path.join(DATA_DIR, "schedules.json")
 RECENT_PATH = os.path.join(DATA_DIR, "recent_outputs.json")
@@ -6347,6 +6583,7 @@ def _session_meta(d, fn):
         "name": str(d.get("name") or "未命名会话"),
         "model": str(d.get("model") or ""),
         "scenario": str(d.get("scenario") or ""),
+        "persona_id": str(d.get("persona_id") or ""),
         "saved_at": str(d.get("saved_at") or ""),
         "pinned": bool(d.get("top") or (isinstance(d.get("pinned"), bool) and d["pinned"])),
         "top": bool(d.get("top")),
@@ -6557,13 +6794,15 @@ def _harvest_is_low_value(line: str) -> bool:
     return len(s) <= 10
 
 
-def _chat_harvest(reply: str, user_text: str, cfg: dict, messages=None):
+def _chat_harvest(reply: str, user_text: str, cfg: dict, messages=None, persona_id=""):
     """后台线程：从本次对话提炼 0-3 条值得长期记住的信息。
 
     开关与落地方式：
     - config.auto_memory（默认开）总开关；无可用 LLM / 记忆关闭时静默跳过。
     - config.memory_harvest_mode：`pending`（默认）→ 先入「待确认」队列由用户裁决，
       防"推断污染"；`auto` → 直接写长期记忆（旧行为）；`off` → 不提炼。
+    - 角色对话（persona_id 非空）→ 只写角色自己的 `persona_memory`，**绝不写全局记忆**。
+      角色记忆物理隔离、可在「角色」页查看/清空，因此不再走全局待确认队列。
     origin 判定（P1-B 血缘自动化）：本轮工具结果中出现「外部内容开始」标记
     （即 AI 抓取了外部网页）时，提炼的记忆标 origin="web"（confidence=0.3），
     否则标 "agent"——打断「外部网页→自动提炼→被当作用户前提」的注入链。
@@ -6642,6 +6881,22 @@ def _chat_harvest(reply: str, user_text: str, cfg: dict, messages=None):
             cleaned = [s for s in items
                        if len(s) >= 8 and "无" not in s[:6] and not _harvest_is_low_value(s)][:3]
             if not cleaned:
+                return
+            pid = str(persona_id or "").strip()
+            if pid:
+                # 角色隔离：只写当前角色的记忆，不碰全局 memory.json / 大脑投影。
+                try:
+                    import personas as _personas_mod
+                    import persona_memory as _persona_mem
+                    if _personas_mod.get_persona(pid):
+                        for s in cleaned:
+                            _persona_mem.add(pid, s, origin=origin,
+                                             confidence=confidence, tags="自动", type_="对话")
+                except Exception as e:
+                    import degrade
+                    degrade.degrade("memory.harvest.persona", e,
+                                    "本轮对话未写入角色记忆（角色可能忘记这条信息）",
+                                    critical=False)
                 return
             mode = str((cfg or {}).get("memory_harvest_mode") or "pending").strip().lower()
             if mode == "auto":
@@ -7055,6 +7310,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "pinned": [str(p) for p in ((d.get("pinned") or []) if isinstance(d.get("pinned"), list) else [])][:200],
                 "top": bool(d.get("top") or (isinstance(d.get("pinned"), bool) and d["pinned"])),
                 "tags": [str(x) for x in (d.get("tags") or [])][:20],
+                "persona_id": str(d.get("persona_id") or ""),
             }
         except Exception:
             return None
@@ -7428,6 +7684,7 @@ class _Handler(BaseHTTPRequestHandler):
             "top": bool(old.get("top", False)),
             "model": str(body.get("model") or old.get("model") or ""),
             "scenario": str(body.get("scenario") or old.get("scenario") or "通用"),
+            "persona_id": str(body.get("persona_id") or old.get("persona_id") or "")[:64],
             "ephemeral": False,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
         }
@@ -7650,6 +7907,31 @@ class _Handler(BaseHTTPRequestHandler):
     @_get_route("/v1/roles")
     def _g_v1_roles(self):
         self._json(200, _roles())
+
+
+    @_get_route("/v1/personas")
+    def _g_v1_personas(self):
+        self._json(200, _personas())
+
+
+    @_get_route(("qpath", "/v1/personas/memory"))
+    def _g_v1_persona_memory(self):
+        import urllib.parse
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query, keep_blank_values=True)
+        pid = (qs.get("id") or qs.get("persona_id") or [""])[0]
+        result, err = _persona_memory_get(pid)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_get_route("/v1/qq")
+    def _g_v1_qq(self):
+        try:
+            self._json(200, _qq_status())
+        except Exception as e:
+            self._fail(500, e)
 
 
     @_get_route(("pre", "/v1/tools/", ""))
@@ -8727,6 +9009,45 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, result)
 
 
+    @_post_route("/v1/personas")
+    def _p_v1_personas(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _personas_save(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/personas/memory")
+    def _p_v1_persona_memory(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _persona_memory_action(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/qq")
+    def _p_v1_qq(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _qq_action(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
     @_post_route("/v1/schedules")
     def _p_v1_schedules(self):
         body = self._read_body()
@@ -9759,9 +10080,8 @@ class _Handler(BaseHTTPRequestHandler):
         直接解包 2 个值）。装配回执另存于 context_providers.last_receipt()，
         由 GET /v1/context 暴露：谁注入了、各占多少字符、谁被跳过、谁失败了。
 
-        改造前这里是 128 行内联代码 + 9 个 `try/except: pass`——某个来源坏掉时
-        上下文静默变少、AI 变差却没有任何信号。现在每个来源是一个 Provider，
-        失败经 degrade() 记录（含影响说明）并出现在回执里。
+        角色卡经 `self._active_persona` 传入（调用方在请求线程内设置），
+        保持本方法的参数契约不变；仅在对话模式且非 quiet_mode 时替换基础 prompt。
         """
         import config_defaults
         import stores as stores_mod
@@ -9777,6 +10097,15 @@ class _Handler(BaseHTTPRequestHandler):
         active_dir = str(cfg.get("active_dir") or "").strip()
         if not active_dir or not os.path.isdir(active_dir):
             active_dir = os.path.join(DATA_DIR, "workspace")
+        persona_prompt = ""
+        persona = getattr(self, "_active_persona", None)
+        persona_id = str((persona or {}).get("id") or "")
+        if pure_chat and not quiet_mode and persona:
+            try:
+                import personas as _personas_mod
+                persona_prompt = _personas_mod.build_prompt(persona)
+            except Exception:
+                logger.exception("角色提示词拼装失败，按普通对话继续")
         ctx = _cp.Context(
             messages=messages,
             cfg=cfg,
@@ -9790,6 +10119,10 @@ class _Handler(BaseHTTPRequestHandler):
                 "tools_on": not pure_chat,
                 "default_prompt": config_defaults.DEFAULT_SYSTEM_PROMPT,
                 "dialog_prompt": config_defaults.DIALOG_SYSTEM_PROMPT,
+                "persona_prompt": persona_prompt,
+                "persona_id": persona_id,
+                "persona_name": str((persona or {}).get("name") or ""),
+                "persona_memory_load": _persona_memory_load,
                 "data_dir": DATA_DIR,
                 "active_dir": active_dir,
                 # 以下依赖刻意做成「调用时按名字解析」的入口函数：模块属性可被
@@ -9834,6 +10167,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             kwargs = self._chat_kwargs(body, cfg)
             quiet_mode = self._quiet_mode(body, cfg)
+            self._active_persona = _resolve_persona(body)
+            _persona_id = str((self._active_persona or {}).get("id") or "")
             messages, memory_text = self._inject_system_messages(
                 messages, cfg, kwargs.get("pure_chat", False), quiet_mode
             )
@@ -9859,7 +10194,8 @@ class _Handler(BaseHTTPRequestHandler):
                 last_user = next((m.get("content") for m in reversed(messages)
                                   if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
                 if text and last_user and not quiet_mode:
-                    _chat_harvest(text, last_user[:600], cfg, messages=messages)
+                    _chat_harvest(text, last_user[:600], cfg, messages=messages,
+                                  persona_id=_persona_id)
             except Exception as e:  # noqa: BLE001
                 import degrade
                 degrade.degrade("memory.harvest", e,
@@ -9938,6 +10274,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             kwargs = self._chat_kwargs(body, cfg)
             quiet_mode = self._quiet_mode(body, cfg)
+            self._active_persona = _resolve_persona(body)
+            _persona_id = str((self._active_persona or {}).get("id") or "")
             messages, memory_text = self._inject_system_messages(
                 messages, cfg, kwargs.get("pure_chat", False), quiet_mode
             )
@@ -10034,7 +10372,8 @@ class _Handler(BaseHTTPRequestHandler):
                                   if isinstance(m, dict) and m.get("role") == "user"
                                   and isinstance(m.get("content"), str)), "")
                 if reply and last_user and not quiet_mode and not job.stop_event.is_set():
-                    _chat_harvest(reply, last_user[:600], cfg, messages=messages)
+                    _chat_harvest(reply, last_user[:600], cfg, messages=messages,
+                                  persona_id=_persona_id)
             except Exception:
                 logger.exception("自动记忆提炼启动失败")
             # 作业私有工具链随作业态回收（不再 clear 全局，避免清掉并发会话的链）
@@ -10230,6 +10569,7 @@ def _persist_job_turn(job, body, turn, upsert):
         "name": name[:80],
         "messages": turn,
         "model": str(body.get("model") or ""),
+        "persona_id": str(body.get("persona_id") or "")[:64],
     })
 
 
@@ -10366,6 +10706,19 @@ def start_server(port=8745, token=""):
         _init_wechat_config()
     except Exception:
         logger.warning("公众号写作配置路径未接线（可降级）：将使用模块内默认配置")
+    # ── 可降级：角色卡数据路径 ──
+    try:
+        import personas as _personas_mod
+        _personas_mod.init(PERSONAS_FILE)
+        import persona_memory as _persona_mem
+        _persona_mem.init(PERSONA_MEMORY_DIR)
+    except Exception:
+        logger.warning("角色卡初始化失败（可降级）：角色扮演功能不可用")
+    try:
+        import qq_onebot as _qq_onebot
+        _qq_onebot.init(QQ_CONFIG_PATH, QQ_STATE_PATH)
+    except Exception:
+        logger.warning("QQ 通道初始化失败（可降级）：QQ 陪伴不可用")
     # ── 可降级：装载运行时能力包（能力主干，v3.17）──
     # 失败只损失扩展能力，内置 169 项工具不受影响；坏包逐个报错而不是整体放弃。
     try:
@@ -10400,6 +10753,11 @@ def start_server(port=8745, token=""):
         _start_im()
     except Exception:
         logger.warning("IM 通道启动失败（可降级）：IM 远程指令不可用")
+    try:
+        import qq_onebot as _qq_onebot
+        _qq_onebot.start_if_enabled()
+    except Exception:
+        logger.warning("QQ 通道启动失败（可降级）：QQ 陪伴不可用", exc_info=True)
     try:
         import permissions as perms
         perms.init(
@@ -10483,6 +10841,11 @@ def stop_server():
         except Exception:
             pass
     _SCHEDULER_THREAD = None
+    try:
+        import qq_onebot as _qq_onebot
+        _qq_onebot.stop()
+    except Exception:
+        logger.debug("QQ 通道关闭失败", exc_info=True)
     # 工具留痕队列排空（异步写缓冲落盘，优雅退出不丢尾部日志）
     try:
         import permissions as _perms_flush

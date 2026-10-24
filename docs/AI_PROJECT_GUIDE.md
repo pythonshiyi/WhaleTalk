@@ -1,4 +1,4 @@
-# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.26.1）
+# 鲸语 WhaleTalk 项目全览 · AI 开发速查手册（v3.27.0）
 
 > **本文档的目标读者是「接手此项目的 AI 智能体」（以及一切想要快速理解本项目的开发者）。**
 > 它不是营销介绍，而是一份**可执行的地图**：读完它，你应该能回答「这是什么、怎么跑起来、
@@ -17,9 +17,9 @@
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
-- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.26.1`）。
+- **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.27.0`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **111 个 `/v1` 路由**、**126 个 pytest 文件 / 1256 用例 + 31 个前端 node 套件**、
+  **114 个 `/v1` 路由**、**130 个 pytest 文件 / 1283 用例 + 32 个前端 node 套件**、
   源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
   主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
@@ -47,7 +47,7 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试 ──
-python -m pytest -q                      # 后端全量（126 个文件 / 1256 用例，约 73s；CI 同款，见下方「分级验证」）
+python -m pytest -q                      # 后端全量（130 个文件 / 1283 用例，约 73s；CI 同款，见下方「分级验证」）
 python -m pytest tests/test_registry.py -q    # 只跑相关文件：日常改动的正确姿势（1–3s）
 cd webui && npm test                     # 前端 31 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
@@ -57,7 +57,7 @@ cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typed
 python tools/audit_tools.py --strict     # 六层一致性审计（error 级门禁，可入 CI；单跑约 1.2s）
 python tools/validate_tools.py           # smart_tools 全链路回归（描述无损等）
 python tools/island_check.py --strict    # 十层孤岛对账（工具可达性，含 __all__ re-export）
-python tools/check_docs.py               # 文档数字 vs 源码实测（169 工具 / 106 路由 / 版本）
+python tools/check_docs.py               # 文档数字 vs 源码实测（169 工具 / 114 路由 / 版本）
 python tools/check_silent_except.py      # 静默吞异常基线差分（只拦新增，见 §12 踩坑 26）
 
 # ── 出问题时的第一动作：导诊断包（不需要你翻日志）──
@@ -98,7 +98,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | 层 | 模块 | 一句话职责 |
 |---|---|---|
 | **入口** | `web_app.py`（989 行） | 唯一启动入口：参数解析 → 依赖自检/自动安装 → 桌面+开始菜单快捷方式 → WebUI 自动构建 → 单实例探测 → 起 API → 开浏览器 → 托盘常驻 |
-| **API 层** | `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**111 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
+| **API 层** | `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**114 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
 | **能力引擎** | `deepseek_client.py`（6,540 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步。**工具实现已迁出至 `agent_tools/`** |
 | **工具声明** | `toolkit.py`（269 行） | **`@tool()` 装饰器 + 注册表 + 六层构建函数**——工具系统单一事实源（见 §6.1） |
 | **钩子管线** | `tool_hooks.py`（344 行） | 横切关注点收口：pre/post 钩子表 + `wrap()` 包装器；在 `@tool()` **注册处**统一包装执行体，任何调用路径都逃不掉钩子（P0-1） |
@@ -158,6 +158,9 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `config_utils.py` | 配置加载/规范化（字段钳制、非法值回退、新工具自动合并）/DPAPI 加解密保存；**返回进程级共享对象（只读）**，改配置必须 `mutable_config()` 取深拷贝 |
 | `profiles.py` | Profile 多账号（API Key DPAPI 加密） |
 | `roles.py` / `templates.py` / `themes.py` / `deps.py` | 角色预设 / 任务模板 / 主题 token / 依赖分层清单 |
+| `personas.py` | **角色卡**（网页角色扮演）：`DATA_DIR/personas.json` 原子读写、内置角色、CRUD/复制、提示词拼装与安全规则；按会话 `persona_id` 绑定，只在 dialog 模式替换基础 system prompt |
+| `persona_memory.py` | **角色级记忆**：`DATA_DIR/persona_memory/<persona_id>.json` 原子读写、去重/检索/清空；角色对话自动提炼只写本角色，与全局 `memory.json` / 大脑物理隔离 |
+| `qq_onebot.py` | **本地 QQ 陪伴（OneBot v11 / NapCat HTTP）**：私聊事件监听（127.0.0.1）+ HTTP API 出站；联系人独立会话/角色、允许 QQ 号、限流、静默时段；文字/图片（原生视觉）/语音转写（可选 faster-whisper）；回复走 dialog 无工具 + 角色记忆；配置/状态 `DATA_DIR/qq_onebot.json` / `qq_state.json` |
 | `capability.py` | **能力主干**：manifest 校验、四种执行体、声明式最小权限、超时/熔断、温和失效卸载；内置包在仓库 `capabilities/`（不可卸载），用户包在 `data/capabilities/` |
 | `snapshot.py` | 写操作自动快照（写前备份到 `DATA_DIR/undo/`，上限 200 条，可恢复） |
 | `stats.py` | 用量统计 + 峰谷定价费用估算（按「用量发生日」选价，不被追溯改价） |
@@ -197,7 +200,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案）、`check_silent_except.py`（静默吞异常基线差分门禁 + `silent_except_baseline.txt`） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 126 个 pytest 文件 / 1256 用例 |
+| `tests/` | 后端回归 130 个 pytest 文件 / 1283 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
@@ -238,7 +241,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
   `("qpath",path)`（去查询串精确）。**表顺序即匹配优先级（= 源码顺序）**。
 - 兼容 `/api/v1/...` 与 `/v1/...`（Vite 代理）。
 
-### 4.3 端点分组（共 111 个 `/v1` 路由）
+### 4.3 端点分组（共 114 个 `/v1` 路由）
 
 **会话与消息**：`GET /v1/sessions` · `/v1/sessions/<id>/messages` · `POST /v1/sessions`
 (+`delete_batch`/`delete`/`pin`/`rename`/`tags`) · `POST /v1/search`
@@ -259,6 +262,9 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 `GET /v1/plugin_skills` · `GET /v1/plugins`(+/<name>) / `POST /v1/plugins` ·
 `GET /v1/plugin_market` / `POST /v1/plugin_market/install` · `POST /v1/plugin_studio/{generate,install}` ·
 `GET/POST /v1/capabilities`（能力包：清单 / 装载 / 卸载）
+**角色卡**：`GET /v1/personas`（清单 + memory_count）· `POST /v1/personas`（save / delete / duplicate；角色只作用于 dialog 模式，按会话绑定）·
+`GET /v1/personas/memory?id=`（角色记忆）· `POST /v1/personas/memory`（clear / delete）
+**QQ 陪伴**：`GET /v1/qq`（状态 / 配置 / 最近联系人）· `POST /v1/qq`（save / start / stop / test；仅私聊 OneBot）
 **鲸群实验（⚠️ 可选·默认关，非鲸语功能）**：`GET /v1/community`（状态）· `POST /v1/community`（onboard/run/test/stop_server）——连接独立社区站（`experiments/鲸群实验场/`）备用，冻结中。
 **任务/调度/服务**：`GET /v1/tasks` · `/v1/tasklog` · `/v1/schedules` / `POST /v1/schedules` ·
 `/v1/workflows` / `POST /v1/workflows` · `/v1/checkpoint` / `POST /v1/checkpoint` ·
@@ -424,6 +430,8 @@ def my_tool(...): ...
 |---|---|
 | `history/sessions/` + `sessions_index.json` | 会话文件 + 索引缓存（元数据 + 文件指纹 mtime_ns/size） |
 | `memory.json` | 长期记忆 facts（memory_facade 门面：origin/confidence/status/supersede） |
+| `personas.json` / `persona_memory/` | 角色卡 / 每个角色独立的长期记忆（与全局记忆隔离，可清空） |
+| `qq_onebot.json` / `qq_state.json` | QQ 通道配置（访问令牌 DPAPI）/ 联系人 ↔ 会话 ↔ 角色映射 |
 | `stats.json` | 用量统计（按天×模型 + 峰谷定价） |
 | `failures.json` / `failures_archive.json` / `patterns.json` | 失败模式（生命周期）/ 归档 / 成功模式 |
 | `schedules.json` / `workflows.json` / `checkpoint.json` | 定时任务 / 流程 / 任务检查点 |
@@ -516,7 +524,7 @@ def my_tool(...): ...
   核验同步用 `git ls-remote origin refs/heads/main` 与 `git rev-parse HEAD` 是否一致。
 - **本地不入库产物**：`能力差距分析_*.md` / `*能力报告_*.md` / `*阅读报告_*.md` 等分析文档历来
   不入库；`brain/`/`trust/`/`evolutions/`/`data/` 均在 `.gitignore`。
-- **文档数字由门禁守护**：`tools/check_docs.py` 从源码 AST 实测（169 工具 / 106 路由 / 版本），
+- **文档数字由门禁守护**：`tools/check_docs.py` 从源码 AST 实测（169 工具 / 114 路由 / 版本），
   与 README/TECH_NOTES/MODULES 比对，`--fix` 可自动修正（**保留原行尾写回**）。
   注意 README 需保留门禁匹配的固定短语（`N 项 Agent 工具` / `N Agent tools` / `（N 工具）` /
   `工具链（N 项）` / `全部 N 项工具`），重写 README 时勿丢失。
@@ -621,7 +629,7 @@ def my_tool(...): ...
 
 ## 13. 明确不做的设计边界（改代码前先确认不越线）
 
-- **不为"优雅"合并那 106 个端点**：CRUD 端点薄是特性不是缺陷。
+- **不为"优雅"合并那 114 个端点**：CRUD 端点薄是特性不是缺陷。
 - **不给 `write_file`/`run_python` 加拦截**：`run_python` 本就绕得过，工具层设卡只挡君子。
 - **不合并 `snapshot.py` 与 `trust_kernel.py`**：生命周期语义不同（200 条轮转 vs 永不裁剪）。
 - **不按相似度自动作废记忆**、**不存出网明文内容**、**不接管大脑记忆**（两套体系边界清晰）。
@@ -700,7 +708,7 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 理由很直接——缺工具时那两层会以"跳过"形态返回，判定逻辑很容易把它们当成通过，
 那就成了「分支 + 四层假装」。宁可拒绝，也不在证明不了的环境里假装验证过。
 
-## 14. 测试资产速查（tests/，126 个 pytest 文件 / 1256 用例）
+## 14. 测试资产速查（tests/，130 个 pytest 文件 / 1283 用例）
 
 按领域分组（文件名即内容）：
 
@@ -720,6 +728,7 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 - **记忆/办公/图像/其它**：`test_memory_harvest.py`、`test_memory_store.py`、`test_tools_memory.py`、
   `test_tools_storage.py`、`test_office_cap_phase1..4.py`、`test_image_codegen.py`、
   `test_image_pipeline.py`、`test_app_manage.py`、`test_model_unified.py`、`test_code_lookup.py`
+- **角色/QQ**：`test_personas.py`、`test_persona_memory.py`、`test_qq_onebot.py`
 
 > ⚠️ **导入顺序契约**：`import agent_tools.tool_code` 前必须先 `import deepseek_client`
 >（否则 `agent_tools/__init__` 循环导入导致 `TOOLS` 顺序表未注册报错）。新增测试须遵守此顺序。
@@ -734,6 +743,8 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 | 改工具行为/阈值 | 实现在 `agent_tools/tool_*.py`；阈值常量在 `shared.py` |
 | 加一个 API 端点 | `api_server.py` 用 `@_get_route`/`@_post_route` 声明 + 前端 `api.js` 加函数 + typedef |
 | 改系统提示/上下文 | `config_defaults.py`（常量）+ `context_providers.py`（Provider 表） |
+| 改角色卡/角色扮演 | `personas.py`（数据 + 提示词）+ `persona_memory.py`（角色记忆）+ `context_providers._base_prompt` / `context.persona_memory` + `webui/src/components/PersonasPage.jsx` + `ChatPage.jsx` 头部选择器 |
+| 改 QQ 陪伴 | `qq_onebot.py`（OneBot 收发 / 命令 / 限流 / 联系人状态）+ `api_server._companion_reply`（dialog + 角色记忆）+ `webui/src/components/QQPage.jsx` |
 | 改对话流程/工具循环 | `deepseek_client.py` 的 `DeepSeekClient.chat` |
 | 改记忆写入 | `memory_facade.py`（唯一门面）+ `write_memory` 工具（tool_brain.py） |
 | 改权限/网络/加密 | `permissions.py` / `security.py` / `crypto.py`（注意：信任内核会盯着你改） |
@@ -764,6 +775,7 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 | [信任内核.md](信任内核.md) | 改 `permissions`/`security`/`crypto`/`snapshot` 前必读 |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | 改前端样式：令牌体系与一致性铁律 |
 | [出网账本与记忆门面.md](出网账本与记忆门面.md) | 新增出网能力 / 改记忆写入路径 |
+| [AUTONOMY_COST.md](AUTONOMY_COST.md) | 定时任务/自主运行的成本与常驻内存账本 |
 | [架构收口-P0.md](架构收口-P0.md) | 理解 `context_providers`/`degrade`/`tool_hooks` 三个接缝的设计动机 |
 | [提案-修复self_evolve的lint闸门被基线告警卡死.md](提案-修复self_evolve的lint闸门被基线告警卡死.md) | 改 `self_evolve` 的 lint 闸门、或排查「四层全过仍判失败」前必读 |
 | [../CHANGELOG.md](../CHANGELOG.md) | 查「某个能力是哪个版本引入的、为什么」 |
@@ -775,5 +787,5 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 106 路由 / 1256 用例 / 版本 3.26.1）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 114 路由 / 1283 用例 / 版本 3.27.0）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

@@ -81,6 +81,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {string} [thinking] 思考档位 none/low/medium/high/max/auto
  * @property {boolean} [toolsEnabled] 是否启用工具（后端 tools_enabled）
  * @property {string} [mode] task / dialog（对话模式）
+ * @property {string} [persona_id] 角色卡 id（仅对话模式生效；空 = 普通对话）
  * @property {boolean} [web_search] 联网搜索开关（v3.8.1 起对话模式可用）
  * @property {boolean} [quiet_mode] 纯净对话总开关（关闭记忆/自我/大脑注入）
  * @property {string} [continue_prefix] 续写前缀（从该文本继续）
@@ -91,6 +92,25 @@ const REQUEST_TIMEOUT = 15000;
  * @property {string} [gw_session] 网关会话 id（第三方/OpenCode Go 网关的 x-opencode-session 头）
  * @property {boolean} [cost_confirmed] 费用确认闸：已由用户确认成本，放行本次请求
  * @property {number} [maxToolRounds] 工具轮次预算（0/缺省 = 不限）
+ */
+
+/**
+ * 角色卡。
+ * @typedef {Object} PersonaCard
+ * @property {string} id
+ * @property {string} name 角色名
+ * @property {string} avatar 头像（emoji）
+ * @property {string} [tagline] 一句话设定
+ * @property {string} [personality] 性格
+ * @property {string} [speaking_style] 说话方式
+ * @property {string} [background] 背景
+ * @property {string} [world] 世界/场景
+ * @property {string} [relationship] 与用户的关系
+ * @property {string} [greeting] 开场白
+ * @property {string} [examples] 对话示例
+ * @property {string} [boundaries] 角色边界
+ * @property {boolean} [builtin] 内置角色（不可删除）
+ * @property {number} [memory_count] 角色记忆条数
  */
 
 /**
@@ -111,6 +131,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {string} id
  * @property {string} name 会话标题
  * @property {string} model 模型名
+ * @property {string} [persona_id] 绑定的角色卡 id
  * @property {number} [mtime] 修改时间戳
  * @property {number} [size] 文件大小
  * @property {boolean} [pinned] 置顶
@@ -372,9 +393,9 @@ async function api(path, opts = {}) {
  * @param {AbortSignal} [signal] 停止生成信号（前端 AbortController）
  * @returns {Promise<void>} 流结束后 resolve；HTTP 错误时 throw
  */
-export async function streamChat({ messages, model, thinking, toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed, maxToolRounds }, handlers, signal) {
+export async function streamChat({ messages, model, thinking, toolsEnabled, mode, persona_id, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed, maxToolRounds }, handlers, signal) {
   /** @type {any} */
-  const body = { messages, model, thinking, tools_enabled: toolsEnabled, mode, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed };
+  const body = { messages, model, thinking, tools_enabled: toolsEnabled, mode, persona_id, web_search, quiet_mode, continue_prefix, session_id, stream_id, session_name, gw_session, cost_confirmed };
   // 本轮预算：只有用户明确设了才带，未设时后端回退到全局配置（不塞 undefined 字段）
   if (maxToolRounds != null && Number(maxToolRounds) > 0) body.max_tool_rounds = Number(maxToolRounds);
   const payload = JSON.stringify(body);
@@ -476,10 +497,10 @@ export async function listSessions({ offset = 0, limit = 200 } = {}) {
  * 保存/追加会话（带 session_id 的流式对话结束后后端也会自动落盘）。
  * `turn_id` 传本次生成的 stream_id：后端据此把生成期周期落盘的「在制回合」就地替换为
  * 最终回合，既防崩溃丢失、也不重复追加 user。
- * @param {{id?:string, name?:string, messages:ChatMessage[], model?:string, append?:boolean, turn_id?:string, stars?:number, pinned?:boolean, tags?:string[]}} p
+ * @param {{id?:string, name?:string, messages:ChatMessage[], model?:string, persona_id?:string, append?:boolean, turn_id?:string, stars?:number, pinned?:boolean, tags?:string[]}} p
  * @returns {Promise<string>} 会话 id
  */
-export async function saveSession({ id, name, messages, model, append, turn_id, stars, pinned, tags }) {
+export async function saveSession({ id, name, messages, model, persona_id, append, turn_id, stars, pinned, tags }) {
   const d = await api("/v1/sessions", {
     method: "POST",
     body: JSON.stringify({
@@ -487,6 +508,7 @@ export async function saveSession({ id, name, messages, model, append, turn_id, 
       name,
       messages,
       model,
+      persona_id,
       append,
       ...(turn_id !== undefined ? { turn_id } : {}),
       ...(stars !== undefined ? { stars } : {}),
@@ -1218,6 +1240,61 @@ export async function getRoles() {
 /** @param {Object} roles @returns {Promise<any>} */
 export async function saveRoles(roles) {
   return api("/v1/roles", { method: "POST", body: JSON.stringify({ roles }) });
+}
+
+/** @returns {Promise<{personas:PersonaCard[], count:number}>} 角色卡列表 */
+export async function listPersonas() {
+  return api("/v1/personas");
+}
+
+/** @param {Object} persona @returns {Promise<{ok:boolean, persona:PersonaCard, personas:PersonaCard[]}>} */
+export async function savePersona(persona) {
+  return api("/v1/personas", { method: "POST", body: JSON.stringify({ action: "save", persona }) });
+}
+
+/** @param {string} id @returns {Promise<{ok:boolean, personas:PersonaCard[]}>} */
+export async function deletePersona(id) {
+  return api("/v1/personas", { method: "POST", body: JSON.stringify({ action: "delete", id }) });
+}
+
+/** @param {string} id @returns {Promise<{ok:boolean, persona:PersonaCard, personas:PersonaCard[]}>} */
+export async function duplicatePersona(id) {
+  return api("/v1/personas", { method: "POST", body: JSON.stringify({ action: "duplicate", id }) });
+}
+
+/** @param {string} id @returns {Promise<{persona_id:string, count:number, facts:Object[]}>} */
+export async function getPersonaMemory(id) {
+  return api(`/v1/personas/memory?id=${encodeURIComponent(id)}`);
+}
+
+/** @param {string} id @returns {Promise<{ok:boolean, count:number}>} */
+export async function clearPersonaMemory(id) {
+  return api("/v1/personas/memory", { method: "POST", body: JSON.stringify({ action: "clear", id }) });
+}
+
+/** @param {string} id @param {string} factId @returns {Promise<{ok:boolean, count:number}>} */
+export async function deletePersonaMemory(id, factId) {
+  return api("/v1/personas/memory", { method: "POST", body: JSON.stringify({ action: "delete", id, fact_id: factId }) });
+}
+
+/** @returns {Promise<Object>} QQ OneBot 状态与配置（不含访问令牌） */
+export async function getQqStatus() {
+  return api("/v1/qq");
+}
+
+/** @param {Object} config @returns {Promise<Object>} */
+export async function saveQqConfig(config) {
+  return api("/v1/qq", { method: "POST", body: JSON.stringify({ action: "save", config }) });
+}
+
+/** @param {"start"|"stop"} action @returns {Promise<Object>} */
+export async function setQqEnabled(action) {
+  return api("/v1/qq", { method: "POST", body: JSON.stringify({ action }) });
+}
+
+/** @param {string} userId @param {string} text @returns {Promise<Object>} */
+export async function testQq(userId, text) {
+  return api("/v1/qq", { method: "POST", body: JSON.stringify({ action: "test", user_id: userId, text }) });
 }
 
 /** @returns {Promise<Array<string>>} 可用模型名 */

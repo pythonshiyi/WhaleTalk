@@ -153,7 +153,7 @@ function SpeakingPill() {
 function useBackendChat({
   busy, setBusy, setMsgs, msgsRef,
   pendingRef, historyRef,
-  chatMode, webSearch, quietMode,
+  chatMode, webSearch, quietMode, personaId,
   onFinished, stopSignalRef, onPrompt, setGenState,
   continueRef, sessionIdRef, gwSessionRef, streamIdRef, costConfirmedRef, onSession, setGenTps, toast,
 }) {
@@ -314,6 +314,8 @@ function useBackendChat({
             messages: isContinue ? history : [...history, { role: "user", content: userContent, ...(images.length ? { images } : {}) }],
             // 不传 thinking：后端 _chat_kwargs 使用 config.json 的 thinking（控制台/设置选择的档位即时生效）
             mode: chatMode,
+            // 角色卡只在对话模式生效；任务模式忽略，避免角色提示干扰工具执行。
+            persona_id: chatMode === "dialog" ? (personaId || undefined) : undefined,
             toolsEnabled: chatMode === "task",
             // 对话模式联网开关：仅对话模式生效（后端 pure_chat 分支注入 search_web）
             web_search: chatMode === "dialog" && webSearch,
@@ -716,7 +718,7 @@ function useDataSources() {
               });
             }
           });
-          return { messages: mapped, usage: d.usage_total, stars: d.stars, pinned: d.pinned, tags: d.tags };
+          return { messages: mapped, usage: d.usage_total, stars: d.stars, pinned: d.pinned, tags: d.tags, persona_id: d.persona_id || "" };
         }
       } catch (e) { silentWarn(e, "ChatPage"); }
       return null;
@@ -756,7 +758,7 @@ function useDataSources() {
   return { mode, sessions, hasMore, total, loadMoreSessions, ctx, history, pickSession, refreshSessions, reload: loadAll, setCtx, loadErr, peakInfo };
 }
 
-export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone, openSessionId, onOpenSessionDone, quietMode, onToggleQuiet, active = true }) {
+export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onApplyDone, openSessionId, onOpenSessionDone, openPersonaId, onOpenPersonaDone, quietMode, onToggleQuiet, active = true }) {
   const { mode, switchMode } = React.useContext(ModeContext);
   // 组件内统一用 chatMode 指代当前工作模式（"task" | "dialog"），与 useBackendChat
   // 的入参同名，避免组件层引用到一个不存在的变量（chatMode）而抛 ReferenceError。
@@ -769,6 +771,11 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   // 生成中的实时输出速率（tok/s，来自后端 metrics 事件），结束/停止时清零
   const [genTps, setGenTps] = React.useState(0);
   const [activeId, setActiveId] = React.useState(null);
+  // 角色卡：清单用于头部选择器；personaId 为当前会话绑定（空 = 普通对话）。
+  const [personas, setPersonas] = React.useState([]);
+  const [personaId, setPersonaId] = React.useState(() => {
+    try { return localStorage.getItem("whaletalk.persona") || ""; } catch { return ""; }
+  });
   // 最新会话 id 转发给 useBackendChat（避免 effect 闭包过期）：已有会话生成完成后由后端自动落盘
   const activeIdRef = React.useRef(null);
   activeIdRef.current = activeId;
@@ -787,6 +794,23 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   // 兜底同步：任何直接 setMsgs（onSend/onPickSession/onFork/…）都要让镜像跟上，
   // 否则流式/保存会对着旧会话的镜像操作（历史串会话、落盘错乱）。
   React.useEffect(() => { msgsRef.current = msgs; }, [msgs]);
+  // 每次回到会话页刷新角色清单（角色页新增/删除后立即可见）；持久化上次选择。
+  React.useEffect(() => {
+    if (!active) return undefined;
+    let alive = true;
+    api.listPersonas()
+      .then((d) => {
+        if (!alive) return;
+        const list = Array.isArray(d?.personas) ? d.personas : [];
+        setPersonas(list);
+        setPersonaId((prev) => (prev && !list.some((p) => p.id === prev) ? "" : prev));
+      })
+      .catch((e) => silentWarn(e, "ChatPage"));
+    return () => { alive = false; };
+  }, [active]);
+  React.useEffect(() => {
+    try { localStorage.setItem("whaletalk.persona", personaId || ""); } catch (e) { silentWarn(e, "ChatPage"); }
+  }, [personaId]);
   const [busy, setBusy] = React.useState(false);
   // 时间预算提醒：到点只在界面上说一句，**不中断**执行。
   // 没有后端时钟就没有真正的中止能力——与其假装能拦，不如老实提醒。
@@ -1254,6 +1278,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     chatMode: mode,
     webSearch,
     quietMode,
+    personaId,
     onFinished: invokeFinished,
     stopSignalRef,
     onPrompt: setPromptReq,
@@ -1291,6 +1316,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             id: activeId || undefined,
             name: activeSession?.title || userText.replace(/\s+/g, " ").slice(0, 24),
             messages: updated,
+            persona_id: personaId || undefined,
           });
           refreshSessions();
         } catch (e) { silentWarn(e, "ChatPage"); }
@@ -1319,6 +1345,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
           append: isExisting,
           // 本次生成的 stream_id：后端据此把生成期「在制回合」就地替换为最终回合
           turn_id: streamIdRef.current || undefined,
+          persona_id: personaId || undefined,
           name: isExisting
             ? (activeSession?.title || userText.replace(/\s+/g, " ").slice(0, 24))
             : userText.replace(/\s+/g, " ").slice(0, 24),
@@ -1494,6 +1521,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     }
     const got = await pickSession(id);
     if (got) {
+      setPersonaId(got.persona_id || "");
       starsRef.current = new Set((got.stars || []).map((s) => `${s.role}\u0000${s.content}`));
       pinsRef.current = new Set((got.pinned || []).map((p) => `\u0000${p}`));
       setMsgs(got.messages.map((m) => {
@@ -1530,6 +1558,15 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     onOpenSessionDone?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSessionId, onOpenSessionDone]);
+
+  // 角色页「开始对话」：切到该角色并新开一个空会话。
+  React.useEffect(() => {
+    if (!openPersonaId) return;
+    setPersonaId(openPersonaId);
+    onPickSession(null);
+    onOpenPersonaDone?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPersonaId, onOpenPersonaDone]);
 
   const undoDeleteSessions = (ids, n) => {
     toast(`已删除 ${n} 个会话`, 6000, {
@@ -1961,6 +1998,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
 
   const activeSession = sessions.find((s) => s.id === activeId);
   const isTask = mode === "task";
+  const activePersona = personas.find((p) => p.id === personaId);
 
   return (
     <div className="chat-page">
@@ -2022,6 +2060,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                   ? `${activeSession?.model || ""} · ${activeSession?.time || ""}`
                   : isTask
                   ? "任务模式：全部工具自动可用，目录内全自动"
+                  : activePersona
+                  ? `${activePersona.avatar || "🎭"} ${activePersona.name} · 角色对话`
                   : "对话模式：纯问答，不调用任何工具"}
               </span>
             </div>
@@ -2029,6 +2069,22 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             <div className="chat-header-right">
               {/* 主操作：模式切换 + 运行开关 */}
               <div className="ch-actions">
+                {!isTask && (
+                  <label className="persona-picker" title="选择角色（只影响对话模式）">
+                    <span className="persona-picker-avatar" aria-hidden="true">{activePersona?.avatar || "🎭"}</span>
+                    <select
+                      className="persona-picker-select"
+                      value={personaId}
+                      onChange={(e) => setPersonaId(e.target.value)}
+                      aria-label="选择角色"
+                    >
+                      <option value="">无角色</option>
+                      {personas.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <div className="mode-switch" role="group" aria-label="工作模式">
                   <button
                     className={`mode-btn ${!isTask ? "mode-on" : ""}`}
@@ -2152,15 +2208,22 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                     <path d="M3 12c1.5-4 4-6 7-6 3.5 0 5.5 2 9 2 1.6 0 2.8-.6 4-1.5-1 3-3 4.5-5 4.8.6 1.4.9 2.9.9 4.5 0 .8-.1 1.6-.3 2.3-1-.4-1.8-1-2.2-1.8-.9 1-2.4 1.7-4.2 1.7s-3.3-.7-4.2-1.7c-.4.8-1.2 1.4-2.2 1.8A11 11 0 015 15c0-1.6.3-3.1.9-4.5C4.7 10.2 3.3 8.7 3 12z" />
                   </svg>
                 </div>
-                <h1>{isTask ? "今天想做点什么？" : "随便聊聊"}</h1>
+                <h1>{isTask ? "今天想做点什么？" : activePersona ? `和${activePersona.name}聊聊` : "随便聊聊"}</h1>
                 <p>
                   {isTask
                     ? "看得见屏幕、听得见语音、动得了鼠标键盘与浏览器-115项能力随叫随到"
+                    : activePersona
+                    ? (activePersona.tagline || "角色对话 · 不调用工具 · 可随时在头部切换角色")
                     : "纯问答 · 不调用工具 · 适合聊天、翻译、写作、答疑"}
                 </p>
+                {!isTask && activePersona?.greeting ? (
+                  <div className="persona-empty-greeting">“{activePersona.greeting}”</div>
+                ) : null}
                 <div className="empty-suggest">
                   {(isTask
                     ? ["帮我调研一个主题并输出报告", "把这个文件夹整理成Markdown索引", "分析这张图片的内容", "帮我定时巡检一个网站"]
+                    : activePersona
+                    ? ["介绍一下你自己", "今天有点累", "陪我聊会儿天", "你记得我什么？"]
                     : ["用一句话介绍你自己", "翻译：Knowledge is power", "帮我写一首关于海的短诗", "帮我解释一个概念，比如 HTTP"]
                   ).map((s) => (
                     <button key={s} className="suggest-chip" onClick={() => onSend(s)}>

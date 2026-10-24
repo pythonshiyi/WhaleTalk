@@ -272,6 +272,71 @@ register(Provider(
 ))
 
 
+def _persona_memory_enabled(ctx):
+    return (_not_quiet(ctx)
+            and bool(ctx.dep("persona_id"))
+            and bool(ctx.cfg.get("memory_enabled", True)))
+
+
+def _provide_persona_memory(ctx):
+    """当前角色自己的长期记忆：与全局记忆/大脑物理隔离。
+
+    角色对话自动沉淀到这里；注入时按当前用户消息做相关度检索。
+    这样多个角色不会互相串记忆，也不会把角色剧情写进通用事实。
+    """
+    pid = str(ctx.dep("persona_id") or "").strip()
+    loader = ctx.dep("persona_memory_load")
+    if not pid or not callable(loader):
+        return None
+    items = loader(pid) or []
+    if not items:
+        return None
+    try:
+        limit = int(ctx.cfg.get("memory_inject_limit") or 6)
+    except (TypeError, ValueError):
+        limit = 6
+    limit = max(1, min(20, limit))
+    query = _last_user_query(ctx)
+    try:
+        from memory_facade import rank as _rank
+        picked = _rank(query, items, limit=limit, min_score=0.0)
+    except Exception as e:  # noqa: BLE001 - 检索失败退回最近条目
+        import degrade
+        degrade.degrade("context.persona_memory.rank", e,
+                        "角色记忆相关度检索失败，退回最近条目注入", critical=False)
+        picked = items[-limit:]
+    if not picked:
+        return None
+    try:
+        from memory_facade import ORIGIN_LABEL
+    except Exception:
+        ORIGIN_LABEL = {}
+
+    def _text(f):
+        return str(f.get("value") or f.get("text") or "").strip()
+
+    lines = [
+        "[角色记忆] 以下是「{}」与用户相处中记下的事，只属于当前角色；"
+        "可自然使用，但不要逐条复述，也不要当成全局事实。".format(
+            str(ctx.dep("persona_name") or "当前角色")[:40])
+    ]
+    for f in picked:
+        text = _text(f)
+        if not text:
+            continue
+        label = ORIGIN_LABEL.get(str(f.get("origin") or ""), "")
+        lines.append(f"- {label}{text[:200]}")
+    return "\n".join(lines) if len(lines) > 1 else None
+
+
+register(Provider(
+    name="context.persona_memory", priority=12, provide=_provide_persona_memory,
+    enabled=_persona_memory_enabled, budget=3000, critical=False,
+    deps=("persona_id", "persona_memory_load"),
+    skip_reason="未绑定角色、纯净对话，或 memory_enabled=False",
+))
+
+
 def _provide_self_profile(ctx):
     """核心自我状态：有实质内容才注入，空则不占 token。"""
     sp = ctx.dep("self_profile")()
@@ -597,6 +662,10 @@ register(Provider(
 
 def _base_prompt(ctx: Context) -> str:
     if ctx.pure_chat:
+        # 角色卡只作用于对话模式；quiet_mode 下调用方不传 persona_prompt。
+        persona = str(ctx.dep("persona_prompt") or "").strip()
+        if persona and not ctx.quiet_mode:
+            return persona
         return str(ctx.dep("dialog_prompt") or "")
     return str(ctx.cfg.get("system_prompt") or ctx.dep("default_prompt") or "")
 

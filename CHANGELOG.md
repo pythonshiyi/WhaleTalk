@@ -2,6 +2,75 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.27.0（2026-10-24）—— 🐋 角色扮演 + 本地 QQ 陪伴
+
+**版本号 3.26.1 → 3.27.0。** 新增「角色」与「QQ」两条产品线，并把长期陪伴需要的
+记忆隔离、媒体消息与安全边界一起补齐。QQ 通道默认关闭，不配置即不外发。
+
+### 一、角色扮演（网页版）
+
+- 新增 `personas.py`：角色卡单一事实源，`DATA_DIR/personas.json` 原子读写。
+- 角色卡字段：头像、名字、一句话设定、性格、说话方式、背景、世界场景、关系、
+  开场白、对话示例、角色边界。
+- 新增「角色」页：内置 3 个角色，支持新建 / 编辑 / 复制 / 删除；点「开始对话」直接
+  进入绑定该角色的会话。
+- 对话页头部新增角色选择器；`persona_id` 随会话保存，重新打开会话自动恢复。
+- 角色只作用于 dialog 模式；任务模式完全忽略；「纯净模式」下不注入角色。
+- 角色提示词自动附加安全底线：不冒充真人、不编造共同经历、可随时出戏、不诱导
+  排他依赖。
+
+### 二、角色级记忆（与全局记忆隔离）
+
+- 新增 `persona_memory.py`：`DATA_DIR/persona_memory/<persona_id>.json`，每个角色
+  一份独立长期记忆。
+- 角色对话自动提炼只写当前角色，不写 `memory.json` / 大脑投影，避免多角色串记忆。
+- 新增 `context.persona_memory` Provider：按当前用户消息相关度检索后注入。
+- 角色卡片显示记忆条数；「记忆」面板支持查看、单条删除、清空；删除角色时同步清理。
+
+### 三、本地 QQ 陪伴（OneBot v11 / NapCat HTTP）
+
+- 新增 `qq_onebot.py`：本地事件监听（默认 `127.0.0.1:8756`）+ OneBot HTTP API 出站，
+  不新增第三方协议依赖，也不内置 QQ 登录。
+- **仅私聊**：`message.private` 才处理，群消息忽略。
+- 每个 QQ 独立「联系人 → 会话 → 角色」映射（`DATA_DIR/qq_state.json`）；切换角色
+  自动重置会话。
+- 回复走 `api_server._companion_reply`：dialog 模式、无 Agent 工具、复用角色卡与
+  角色记忆，会话落盘后可在网页会话列表查看。
+- 安全与限额：默认关闭、访问令牌 DPAPI 加密、允许 QQ 号白名单、每联系人限流、
+  静默时段、单条回复长度上限、出站 `auto_escape=True` 防 CQ 码注入。
+- 私聊命令：`/角色 <名字>`、`/重置`、`/记忆`、`/帮助`。
+- 新增「QQ」页：连接配置、默认角色、白名单、限流、静默时段、启动/停止、测试发送、
+  最近联系人。
+
+### 四、QQ 媒体消息
+
+- 图片：下载 OneBot `image` 段到 `DATA_DIR/uploads/qq/`，经 SSRF 校验与 12MB 上限，
+  作为原生视觉输入交给模型；图片路径随会话落盘。
+- 语音：下载 `record` / `voice` 段，可选 `faster-whisper` 转写后继续对话；未安装时
+  自动降级提示，不中断通道。
+- 媒体下载上限：图片 12MB / 语音 20MB；失败只影响本条消息。
+
+### 五、接口与文档
+
+- 新增 `/v1/personas`、`/v1/personas/memory`、`/v1/qq`（GET/POST）。
+- 同步更新 `README.md`、`MODULES.md`、`docs/AI_PROJECT_GUIDE.md` 的模块地图、端点
+  清单、数据目录与测试资产索引。
+- 新增 `tests/test_personas.py`、`tests/test_persona_memory.py`、`tests/test_qq_onebot.py`，
+  前端新增 `webui/tests/personaRequest.test.mjs`。
+
+### 六、验证
+
+- 后端全量：**1282 passed, 1 skipped**（130 个 pytest 文件 / 1283 用例）。
+- 前端：**32/32** 套件通过，`typecheck`、`build` 通过。
+- 工具门禁：`audit_tools.py --strict`、`validate_tools.py`、`island_check.py --strict`
+  全通过；`check_docs.py` 文档数字一致。
+
+### 七、升级注意
+
+- 角色卡与角色记忆均为新增文件，不迁移旧数据；旧会话无 `persona_id` 时按普通对话处理。
+- QQ 通道默认关闭。使用前需在 NapCat 开启 HTTP API 与 HTTP POST 上报，并在「QQ」页
+  填写同一访问令牌；语音转写需可选安装 `faster-whisper`。
+
 ## v3.26.1（2026-10-19）—— 🧹 修容量回填切片 + 清洗历史噪声
 
 **版本号 3.26.0 → 3.26.1。** 依据一份对 v3.26.0 的复核报告。报告指出两处，一处我确认

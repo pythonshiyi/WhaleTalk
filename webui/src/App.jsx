@@ -19,6 +19,8 @@ const LazyPages = {
   tasks: lazy(() => import("./components/TasksPage.jsx")),
   settings: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.SettingsPage }))),
   prompts: lazy(() => import("./components/PromptsPage.jsx")),
+  personas: lazy(() => import("./components/PersonasPage.jsx")),
+  qq: lazy(() => import("./components/QQPage.jsx")),
   brain: lazy(() => import("./components/BrainPage.jsx")),
   life: lazy(() => import("./components/LifePage.jsx")),
   autonomy: lazy(() => import("./components/AutonomyPage.jsx")),
@@ -119,6 +121,8 @@ export default function App() {
   const [applyPrompt, setApplyPrompt] = React.useState(null);
   // 工作台「最近会话」→ 直达对应会话
   const [openSessionId, setOpenSessionId] = React.useState(null);
+  // 角色页「开始对话」→ 切到该角色并新开会话
+  const [openPersonaId, setOpenPersonaId] = React.useState(null);
 
   React.useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -237,6 +241,8 @@ export default function App() {
                         onApplyDone={() => setApplyPrompt(null)}
                         openSessionId={openSessionId}
                         onOpenSessionDone={() => setOpenSessionId(null)}
+                        openPersonaId={openPersonaId}
+                        onOpenPersonaDone={() => setOpenPersonaId(null)}
                         quietMode={quietMode}
                         onToggleQuiet={toggleQuiet}
                         active={page === "chat"}
@@ -280,6 +286,15 @@ export default function App() {
                       );
                     })()}
                     {page === "brain" && <LazyPages.brain />}
+                    {page === "personas" && (
+                      <LazyPages.personas
+                        onChat={(persona) => {
+                          setOpenPersonaId(persona.id);
+                          setPage("chat");
+                        }}
+                      />
+                    )}
+                    {page === "qq" && <LazyPages.qq />}
                     {page === "life" && <LazyPages.life />}
                     {page === "autonomy" && <LazyPages.autonomy />}
                     {page === "settings" && (() => {
