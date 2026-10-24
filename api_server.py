@@ -2144,6 +2144,48 @@ def _qq_action(body):
         return None, f"QQ 通道操作失败：{e}"
 
 
+def _qq_official_status():
+    import qq_official
+    return qq_official.status()
+
+
+def _qq_official_action(body):
+    """QQ 官方 Bot 操作：save / start / stop / probe / test。"""
+    import qq_official
+    body = body if isinstance(body, dict) else {}
+    action = str(body.get("action") or "save").strip().lower()
+    try:
+        if action in ("start", "stop"):
+            qq_official.save_config({"enabled": action == "start"})
+            qq_official.start(qq_official.load_config())
+            return {"ok": True, "status": qq_official.status()}, None
+        if action == "probe":
+            ok, msg = qq_official.probe()
+            if not ok:
+                return None, msg
+            return {"ok": True, "message": msg, "status": qq_official.status()}, None
+        if action == "test":
+            openid = str(body.get("user_id") or body.get("openid") or "").strip()
+            if not openid:
+                return None, "请填写 user_openid"
+            ok, msg = qq_official.probe()
+            if not ok:
+                return None, f"连接检测失败：{msg}"
+            ok, err = qq_official.send_test(openid, str(body.get("text") or "🐋 鲸语 QQ 官方通道测试消息"))
+            if not ok:
+                return None, f"发送失败：{err}"
+            return {"ok": True, "status": qq_official.status()}, None
+        patch = body.get("config") if isinstance(body.get("config"), dict) else body
+        qq_official.save_config(patch)
+        qq_official.start(qq_official.load_config())
+        return {"ok": True, "status": qq_official.status()}, None
+    except ValueError as e:
+        return None, str(e)
+    except Exception as e:
+        logger.exception("QQ 官方通道操作失败")
+        return None, f"QQ 官方通道操作失败：{e}"
+
+
 def _persona_memory_load(pid):
     """角色记忆读取入口（供 context_providers 注入）。"""
     import persona_memory as persona_mem
@@ -6499,6 +6541,8 @@ PERSONAS_FILE = os.path.join(DATA_DIR, "personas.json")
 PERSONA_MEMORY_DIR = os.path.join(DATA_DIR, "persona_memory")
 QQ_CONFIG_PATH = os.path.join(DATA_DIR, "qq_onebot.json")
 QQ_STATE_PATH = os.path.join(DATA_DIR, "qq_state.json")
+QQ_OFFICIAL_CONFIG_PATH = os.path.join(DATA_DIR, "qq_official.json")
+QQ_OFFICIAL_STATE_PATH = os.path.join(DATA_DIR, "qq_official_state.json")
 PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
 SCHEDULES_PATH = os.path.join(DATA_DIR, "schedules.json")
 RECENT_PATH = os.path.join(DATA_DIR, "recent_outputs.json")
@@ -7942,6 +7986,14 @@ class _Handler(BaseHTTPRequestHandler):
             self._fail(500, e)
 
 
+    @_get_route("/v1/qq-official")
+    def _g_v1_qq_official(self):
+        try:
+            self._json(200, _qq_official_status())
+        except Exception as e:
+            self._fail(500, e)
+
+
     @_get_route(("pre", "/v1/tools/", ""))
     def _g_v1_tools_item(self):
         name = self._safe_name(self.path[len("/v1/tools/"):])
@@ -9050,6 +9102,19 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid json or body too large"})
             return
         result, err = _qq_action(body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
+    @_post_route("/v1/qq-official")
+    def _p_v1_qq_official(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        result, err = _qq_official_action(body)
         if err:
             self._json(400, {"error": err})
         else:
@@ -10727,6 +10792,11 @@ def start_server(port=8745, token=""):
         _qq_onebot.init(QQ_CONFIG_PATH, QQ_STATE_PATH)
     except Exception:
         logger.warning("QQ 通道初始化失败（可降级）：QQ 陪伴不可用")
+    try:
+        import qq_official as _qq_official
+        _qq_official.init(QQ_OFFICIAL_CONFIG_PATH, QQ_OFFICIAL_STATE_PATH)
+    except Exception:
+        logger.warning("QQ 官方通道初始化失败（可降级）：官方 QQ Bot 不可用")
     # ── 可降级：装载运行时能力包（能力主干，v3.17）──
     # 失败只损失扩展能力，内置 169 项工具不受影响；坏包逐个报错而不是整体放弃。
     try:
@@ -10766,6 +10836,11 @@ def start_server(port=8745, token=""):
         _qq_onebot.start_if_enabled()
     except Exception:
         logger.warning("QQ 通道启动失败（可降级）：QQ 陪伴不可用", exc_info=True)
+    try:
+        import qq_official as _qq_official
+        _qq_official.start_if_enabled()
+    except Exception:
+        logger.warning("QQ 官方通道启动失败（可降级）：官方 QQ Bot 不可用", exc_info=True)
     try:
         import permissions as perms
         perms.init(
@@ -10854,6 +10929,11 @@ def stop_server():
         _qq_onebot.stop()
     except Exception:
         logger.debug("QQ 通道关闭失败", exc_info=True)
+    try:
+        import qq_official as _qq_official
+        _qq_official.stop()
+    except Exception:
+        logger.debug("QQ 官方通道关闭失败", exc_info=True)
     # 工具留痕队列排空（异步写缓冲落盘，优雅退出不丢尾部日志）
     try:
         import permissions as _perms_flush

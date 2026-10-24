@@ -149,7 +149,7 @@ export default function QQPage() {
     <div className="page qq-page">
       <div className="page-head">
         <h1>QQ 陪伴</h1>
-        <p>本地 OneBot / NapCat 私聊接入：每个 QQ 独立会话与角色，只走对话模式，不启用 Agent 工具；支持文字、图片与语音转写（语音需安装可选 faster-whisper）。</p>
+        <p>本地 OneBot / NapCat 私聊接入：每个 QQ 独立会话与角色，只走对话模式，不启用 Agent 工具；支持文字、图片与语音转写（语音需安装可选 faster-whisper）。官方 QQ Bot 请用左侧「QQ 官方」。</p>
       </div>
 
       {err && <div className="empty-tip is-err">{err}</div>}

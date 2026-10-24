@@ -2,6 +2,51 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## v3.28.0（2026-10-24）—— 🐧 QQ 官方 Bot 接入
+
+**版本号 3.27.0 → 3.28.0。** 在本地 OneBot/NapCat 之外，新增腾讯官方 QQ Bot API v2
+通道：不依赖 NapCat / OpenClaw / Hermes，鲸语自己完成鉴权、WebSocket 网关、
+C2C 私聊、角色与会话。
+
+### 一、官方 QQ Bot 通道
+
+- 新增 `qq_official.py`：
+  - `POST /app/getAppAccessToken`（AppID + AppSecret）获取 Access Token；
+  - `GET /gateway` 获取 WebSocket 网关；
+  - `C2C_MESSAGE_CREATE` 私聊事件；`GROUP_AND_C2C_EVENT` intent（`1<<25`）；
+  - 心跳、断线重连、消息去重、`msg_id + msg_seq` 被动回复；
+  - 单聊被动回复 60 分钟 / 每条消息最多 4 次，按官方限制截断。
+- 每个 `user_openid` 独立「联系人 → 会话 → 角色」映射
+  （`DATA_DIR/qq_official_state.json`）；切换角色自动重置会话。
+- 回复复用 `api_server._companion_reply`：dialog 模式、无 Agent 工具、角色卡 +
+  角色级记忆；会话落盘后可在网页会话列表查看。
+- 图片：下载官方附件到本地后作为原生视觉输入；语音：优先使用官方
+  `asr_refer_text`，否则下载 WAV 转写（可选 faster-whisper）。
+- 安全与限额：默认关闭、AppSecret DPAPI 加密、允许 openid 白名单、每联系人限流、
+  静默时段、回复长度上限；主动测试消息可能受官方频控限制。
+- 新增「QQ 官方」页：AppID/AppSecret、默认角色、openid 白名单、限流、静默时段、
+  启动/停止、连接检测、测试发送、最近联系人。
+
+### 二、接口与依赖
+
+- 新增 `GET/POST /v1/qq-official`（状态 / save / start / stop / probe / test）。
+- 新增核心依赖 `aiohttp>=3.9`（WebSocket），并加入 `deps.py` 自动安装清单。
+- 新增 `tests/test_qq_official.py`，覆盖配置、命令、被动回复体、路由与 API。
+- 文档同步 `README.md`、`MODULES.md`、`docs/AI_PROJECT_GUIDE.md`。
+
+### 三、官方 Bot 使用前提
+
+- 在 `q.qq.com` 创建机器人，启用单聊/C2C 与 `GROUP_AND_C2C_EVENT`；
+- 官方接口用 `user_openid`，不是 QQ 号；
+- 沙箱阶段只能接收沙箱测试入口的消息；主动消息受官方频控限制；
+- AppSecret 一旦泄露必须立即在开放平台重置。
+
+### 四、验证
+
+- 后端全量：**1286 passed, 1 skipped**（131 个 pytest 文件 / 1287 用例）。
+- 前端：**32/32** 套件通过，`typecheck`、`build` 通过。
+- 工具门禁与 `check_docs.py` 全通过；文档规模数字与源码一致。
+
 ## v3.27.0（2026-10-24）—— 🐋 角色扮演 + 本地 QQ 陪伴
 
 **版本号 3.26.1 → 3.27.0。** 新增「角色」与「QQ」两条产品线，并把长期陪伴需要的

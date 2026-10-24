@@ -1,10 +1,12 @@
-# ── 鲸语 WhaleTalk 核心依赖（32 项，与 deps.py AUTO_INSTALL_DEPS 保持一致）──
+# ── 鲸语 WhaleTalk 核心依赖（33 项，与 deps.py AUTO_INSTALL_DEPS 保持一致）──
 # 首次启动自动安装全部核心组件；大型可选能力（浏览器自动化/语音转写/Piper 语音/二维码识别/RAR）
 # 不在此清单，进入程序后在「设置 → 🔌 可选能力」按需一键安装。
 
 # 核心 API 网关
 openai>=1.75.0
 httpx>=0.27.0
+# QQ official Bot WebSocket (qq_official.py)
+aiohttp>=3.9
 # 系统托盘常驻
 pystray>=0.19.5
 pywin32>=306

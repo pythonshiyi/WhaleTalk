@@ -1,8 +1,8 @@
-# 模块地图（v3.27.0 Web 版）
+# 模块地图（v3.28.0 Web 版）
 
 本文档描述鲸语 WhaleTalk 当前（v3.16.21，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
 
-> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **114 /v1 端点** · 后端 130 个 pytest 文件 / 1283 用例 · 前端 32 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
+> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **115 /v1 端点** · 后端 131 个 pytest 文件 / 1287 用例 · 前端 32 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
 
 ## 分层总览
 
@@ -10,7 +10,7 @@
 web_app.py（唯一入口：浏览器 + 托盘 + 快捷方式 + 依赖自检）
     │
     ▼
-api_server.py（本地 HTTP API：REST + SSE，114 /v1 端点）
+api_server.py（本地 HTTP API：REST + SSE，115 /v1 端点）
     │
     ▼
 deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
@@ -38,7 +38,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | 模块 | 职责 |
 |---|---|
 | `web_app.py`（989 行） | 唯一启动入口：启动本地 API、自动打开浏览器、系统托盘常驻、桌面/开始菜单快捷方式、开机自启、单实例、WebUI 自动构建（npm）、Python 依赖自检与自动安装 |
-| `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/能力包/指令库/工作台/大脑/TTS/审计/备份/更新等 **114 个 /v1 端点**（含失败记忆生命周期 `/v1/failures/resolve|reopen|forget`、技能结晶 `/v1/skills/crystallize`、文件全局搜索 `/v1/files/search` 与重命名 `/v1/files/rename`、运行时能力包 `/v1/capabilities`、大脑自主进社区 `/v1/community`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
+| `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/能力包/指令库/工作台/大脑/TTS/审计/备份/更新等 **115 个 /v1 端点**（含失败记忆生命周期 `/v1/failures/resolve|reopen|forget`、技能结晶 `/v1/skills/crystallize`、文件全局搜索 `/v1/files/search` 与重命名 `/v1/files/rename`、运行时能力包 `/v1/capabilities`、大脑自主进社区 `/v1/community`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
 
 ### 能力引擎
 
@@ -95,6 +95,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | `personas.py` | 角色卡（网页角色扮演单一事实源）：`personas.json` 原子读写、内置角色、CRUD/复制、提示词拼装（性格/语气/背景/关系/示例/边界 + 不冒充真人等安全规则）；按会话绑定，仅注入 dialog 模式 |
 | `persona_memory.py` | 角色级记忆：`DATA_DIR/persona_memory/<persona_id>.json` 原子读写、去重、检索、清空；与全局 `memory.json` / 大脑物理隔离，角色对话的自动提炼只写本角色，不污染通用记忆 |
 | `qq_onebot.py` | **本地 QQ 陪伴（OneBot v11 / NapCat HTTP）**：仅私聊；127.0.0.1 事件监听 + OneBot HTTP API 出站；每联系人独立会话/角色（`qq_state.json`）；文字 + 图片（下载后原生视觉）+ 语音转写（可选 faster-whisper）；默认关闭、访问令牌 DPAPI 加密、限流/静默时段/允许 QQ 号；回复走 dialog（无工具）并复用角色记忆 |
+| `qq_official.py` | **QQ 官方 Bot（API v2）**：AppID + AppSecret → Access Token → WebSocket Gateway；`C2C_MESSAGE_CREATE` 私聊、`msg_id + msg_seq` 被动回复；按 `user_openid` 独立会话/角色（`qq_official_state.json`）；文字/图片/语音 ASR；默认关闭、AppSecret DPAPI、openid 白名单、限流/静默；不依赖 NapCat/OpenClaw/Hermes |
 | `templates.py` | 任务模板与试玩任务库 |
 | `deps.py` | 依赖清单（可选/自动安装/重型）+ 安装执行（清华源，状态供前端轮询） |
 
@@ -135,7 +136,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | `webui/` | React 前端（React 19 + Vite 8，无 UI 框架）：ChatPage/工作台/指令库/自主/大脑/能力/设置；`webui/dist` 由 api_server 同源服务。渲染链路（纯数据 AST）：`longTextUtil.js`（解除 `@long-text` 包装）→ `mdParser.js`（块级 AST，流式安全 `code-open`）→ `mdInline.js`（行内 tokens，独立 RegExp 防 lastIndex 破坏）→ `mdHighlight.js`（零依赖高亮）→ `mdMath.js`（LaTeX 子集）→ `components/Markdown.jsx`（消费 AST）。**长会话渲染**：`msgUpdates.js` 提供不可变更新，配合 `Message.jsx` 的 `React.memo` 实现每帧只重渲染最后一条 |
 | `wechat_writer/` | 公众号自动写作：sources（多信源采集）/ topic（选题去重）/ writer（三阶段写作）/ quality（质检重试）/ output（草稿箱+存档）/ history / llm / config |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性，`--strict` 可入 CI）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛对账）、`check_docs.py`（文档数字 vs 源码实测）；`memory_bench.py`（临时大脑的记忆写入/检索/注入/巩固基准） |
-| `tests/` | 自举回归套件（130 个 pytest 文件 / 1283 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
+| `tests/` | 自举回归套件（131 个 pytest 文件 / 1287 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
 
 ### 辅助脚本
 

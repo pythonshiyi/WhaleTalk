@@ -38,6 +38,7 @@ OPTIONAL_DEPS = [
 AUTO_INSTALL_DEPS = [
     ("openai", "openai", "核心 API 网关"),
     ("httpx", "httpx", "网络请求"),
+    ("aiohttp", "aiohttp", "QQ 官方 Bot WebSocket"),
     ("pystray", "pystray", "系统托盘图标"),
     ("win32com", "pywin32", "托盘 / 语音"),
     ("PIL", "Pillow", "图片处理 / 图标"),

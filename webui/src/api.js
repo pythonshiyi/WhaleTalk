@@ -1302,6 +1302,31 @@ export async function probeQq() {
   return api("/v1/qq", { method: "POST", body: JSON.stringify({ action: "probe" }) });
 }
 
+/** @returns {Promise<Object>} QQ 官方 Bot 状态与配置（不含 AppSecret） */
+export async function getQqOfficialStatus() {
+  return api("/v1/qq-official");
+}
+
+/** @param {Object} config @returns {Promise<Object>} */
+export async function saveQqOfficialConfig(config) {
+  return api("/v1/qq-official", { method: "POST", body: JSON.stringify({ action: "save", config }) });
+}
+
+/** @param {"start"|"stop"} action @returns {Promise<Object>} */
+export async function setQqOfficialEnabled(action) {
+  return api("/v1/qq-official", { method: "POST", body: JSON.stringify({ action }) });
+}
+
+/** @returns {Promise<{ok:boolean, message:string, status:Object}>} */
+export async function probeQqOfficial() {
+  return api("/v1/qq-official", { method: "POST", body: JSON.stringify({ action: "probe" }) });
+}
+
+/** @param {string} openid @param {string} text @returns {Promise<Object>} */
+export async function testQqOfficial(openid, text) {
+  return api("/v1/qq-official", { method: "POST", body: JSON.stringify({ action: "test", user_id: openid, text }) });
+}
+
 /** @returns {Promise<Array<string>>} 可用模型名 */
 export async function getModels() {
   return api("/v1/models");

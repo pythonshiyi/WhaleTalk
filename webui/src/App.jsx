@@ -21,6 +21,7 @@ const LazyPages = {
   prompts: lazy(() => import("./components/PromptsPage.jsx")),
   personas: lazy(() => import("./components/PersonasPage.jsx")),
   qq: lazy(() => import("./components/QQPage.jsx")),
+  qqofficial: lazy(() => import("./components/QQOfficialPage.jsx")),
   brain: lazy(() => import("./components/BrainPage.jsx")),
   life: lazy(() => import("./components/LifePage.jsx")),
   autonomy: lazy(() => import("./components/AutonomyPage.jsx")),
@@ -295,6 +296,7 @@ export default function App() {
                       />
                     )}
                     {page === "qq" && <LazyPages.qq />}
+                    {page === "qqofficial" && <LazyPages.qqofficial />}
                     {page === "life" && <LazyPages.life />}
                     {page === "autonomy" && <LazyPages.autonomy />}
                     {page === "settings" && (() => {
