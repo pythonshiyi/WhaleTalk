@@ -2105,7 +2105,7 @@ def _qq_status():
 
 
 def _qq_action(body):
-    """QQ 通道操作：save / start / stop / test。"""
+    """QQ 通道操作：save / start / stop / probe / test。"""
     import qq_onebot
     body = body if isinstance(body, dict) else {}
     action = str(body.get("action") or "save").strip().lower()
@@ -2116,10 +2116,18 @@ def _qq_action(body):
             cfg = qq_onebot.load_config()
             qq_onebot.start(cfg)
             return {"ok": True, "status": qq_onebot.status()}, None
+        if action == "probe":
+            ok, msg = qq_onebot.probe()
+            if not ok:
+                return None, msg
+            return {"ok": True, "message": msg, "status": qq_onebot.status()}, None
         if action == "test":
             uid = str(body.get("user_id") or "").strip()
             if not uid:
                 return None, "user_id 不能为空"
+            ok, msg = qq_onebot.probe()
+            if not ok:
+                return None, f"连接检测失败：{msg}"
             ok, err = qq_onebot.send_test(uid, str(body.get("text") or "🐋 鲸语 QQ 通道测试消息"))
             if not ok:
                 return None, f"发送失败：{err}"

@@ -1297,6 +1297,11 @@ export async function testQq(userId, text) {
   return api("/v1/qq", { method: "POST", body: JSON.stringify({ action: "test", user_id: userId, text }) });
 }
 
+/** @returns {Promise<{ok:boolean, message:string, status:Object}>} */
+export async function probeQq() {
+  return api("/v1/qq", { method: "POST", body: JSON.stringify({ action: "probe" }) });
+}
+
 /** @returns {Promise<Array<string>>} 可用模型名 */
 export async function getModels() {
   return api("/v1/models");

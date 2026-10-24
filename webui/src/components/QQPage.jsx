@@ -129,6 +129,20 @@ export default function QQPage() {
     }
   };
 
+  const probe = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await api.probeQq();
+      await refresh(r);
+      flash(r.message || "OneBot API 连接正常");
+    } catch (e) {
+      setErr(`连接检测失败：${e.message || e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!status && !err) return <div className="page"><SkeletonCard /></div>;
 
   return (
@@ -147,6 +161,7 @@ export default function QQPage() {
           <span>{status?.last_error || `监听 127.0.0.1:${cfg.listen_port || "—"} · API ${cfg.api_base || "—"}`}</span>
         </div>
         <div className="qq-status-actions">
+          <button className="confirm-btn" disabled={busy} onClick={probe}>检测连接</button>
           <button className="confirm-btn" disabled={busy} onClick={() => toggle("start")}>启动</button>
           <button className="confirm-btn" disabled={busy} onClick={() => toggle("stop")}>停止</button>
         </div>

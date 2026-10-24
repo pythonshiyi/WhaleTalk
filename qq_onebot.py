@@ -549,17 +549,69 @@ def _personas_brief() -> List[Dict[str, str]]:
         return []
 
 
+def _api_base(cfg: Dict[str, Any]) -> str:
+    base = str(cfg.get("api_base") or DEFAULT_API_BASE).strip().rstrip("/")
+    if base and not base.startswith(("http://", "https://")):
+        base = "http://" + base
+    return base
+
+
+def _api_headers(cfg: Dict[str, Any]) -> Dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    token = str(cfg.get("access_token") or "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def probe(cfg: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+    """探测 OneBot HTTP API 是否可达（不发送消息）。"""
+    c = cfg or load_config()
+    base = _api_base(c)
+    if not base:
+        return False, "未配置 OneBot API 地址"
+    headers = _api_headers(c)
+    last_err = ""
+    for endpoint in ("get_login_info", "get_status"):
+        try:
+            r = httpx.get(f"{base}/{endpoint}", headers=headers, timeout=5.0)
+        except httpx.ConnectError:
+            return False, (f"无法连接 OneBot API（{base}）：请确认 NapCat 已启动、"
+                           "HTTP API 已开启，且端口与这里一致")
+        except httpx.TimeoutException:
+            return False, f"连接 OneBot API 超时（{base}）：请检查 NapCat 是否卡住或端口是否正确"
+        except Exception as e:
+            return False, f"OneBot API 连接异常（{base}）：{e}"
+        if r.status_code in (401, 403):
+            return False, "OneBot API 鉴权失败：访问令牌与 NapCat 的 API 令牌不一致"
+        if r.status_code == 404:
+            last_err = "404"
+            continue
+        if r.status_code >= 400:
+            return False, f"OneBot API 返回 HTTP {r.status_code}（{base}）"
+        try:
+            data = r.json()
+        except Exception:
+            data = {}
+        if isinstance(data, dict):
+            if data.get("status") == "failed" or data.get("retcode") not in (None, 0):
+                return False, str(data.get("message") or data.get("wording") or data.get("retcode"))
+            info = data.get("data") if isinstance(data.get("data"), dict) else {}
+            who = info.get("nickname") or info.get("user_id") or ""
+            return True, f"OneBot API 连接正常（{base}）" + (f"：{who}" if who else "")
+        return True, f"OneBot API 连接正常（{base}）"
+    return False, f"已连接 {base}，但未找到 get_login_info/get_status（HTTP {last_err or '404'}）"
+
+
 # ── OneBot 出站 ──────────────────────────────────────────────────────────
 
 def send_private(user_id: Any, text: str, cfg: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
     c = cfg or load_config()
-    base = str(c.get("api_base") or DEFAULT_API_BASE).rstrip("/")
+    base = _api_base(c)
     if not base:
         return False, "未配置 OneBot API 地址"
     token = str(c.get("access_token") or "")
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    headers = _api_headers(c)
     uid: Any = int(user_id) if str(user_id or "").isdigit() else user_id
     try:
         with httpx.Client(timeout=15.0) as client:
@@ -571,8 +623,12 @@ def send_private(user_id: Any, text: str, cfg: Optional[Dict[str, Any]] = None) 
                 r = client.post(f"{base}/send_private_msg",
                                 json={"user_id": uid, "message": str(text or ""), "auto_escape": True},
                                 headers=headers, params={"access_token": token})
+        if r.status_code in (401, 403):
+            return False, "OneBot API 鉴权失败：访问令牌与 NapCat 的 API 令牌不一致"
+        if r.status_code == 404:
+            return False, f"OneBot API 未找到 send_private_msg（{base}）"
         if r.status_code >= 400:
-            return False, f"HTTP {r.status_code}"
+            return False, f"OneBot API 返回 HTTP {r.status_code}（{base}）"
         try:
             data = r.json()
         except Exception:
@@ -581,9 +637,14 @@ def send_private(user_id: Any, text: str, cfg: Optional[Dict[str, Any]] = None) 
             if data.get("status") == "failed" or (data.get("retcode") not in (None, 0)):
                 return False, str(data.get("message") or data.get("wording") or data.get("retcode"))
         return True, ""
+    except httpx.ConnectError:
+        return False, (f"无法连接 OneBot API（{base}）：请确认 NapCat 已启动、"
+                       "HTTP API 已开启，且端口与这里一致")
+    except httpx.TimeoutException:
+        return False, f"连接 OneBot API 超时（{base}）：请检查 NapCat 是否卡住或端口是否正确"
     except Exception as e:
         logger.exception("OneBot 发送失败")
-        return False, str(e)
+        return False, f"OneBot 发送异常（{base}）：{e}"
 
 
 def send_test(user_id: Any, text: str = "🐋 鲸语 QQ 通道测试消息") -> Tuple[bool, str]:
@@ -800,6 +861,7 @@ __all__ = [
     "get_active_config",
     "init",
     "load_config",
+    "probe",
     "public_config",
     "save_config",
     "send_private",
