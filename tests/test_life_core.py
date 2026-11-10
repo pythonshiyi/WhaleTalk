@@ -165,3 +165,34 @@ def test_loop_start_tick_activity_stop(tmp_path, monkeypatch):
     assert state.load()["paused"] is False
     loop.stop("test")
     assert not state.is_owner()
+
+
+def test_tick_interval_config_is_honored(tmp_path, monkeypatch):
+    """life_tick_seconds 必须真正生效（回归：配置项此前无任何读取点）。"""
+    from life import loop
+    _manifest()
+    monkeypatch.setattr(loop, "_cfg", lambda: _cfg(life_tick_seconds=3600))
+    loop.start("test")
+    loop.tick(force=True)                 # 强制跑一轮，落 last_tick
+    r = loop.tick()                       # 间隔未到 -> 跳过
+    assert r.get("skipped") == "tick_interval"
+
+
+def test_sleep_auto_archive_switch(tmp_path, monkeypatch):
+    """life_auto_archive 开启时，睡眠结束前应生成一次大脑快照。"""
+    from life import sleep
+    _manifest()
+    monkeypatch.setattr(sleep, "_cfg", lambda: _cfg(life_auto_archive=True,
+                                                   life_sleep_llm=False,
+                                                   life_sleep_consolidate_llm=False))
+    import brain_api
+    calls = []
+
+    def _fake_action(action, payload=None):
+        calls.append(action)
+        return {"ok": True, "message": "ok"}
+
+    monkeypatch.setattr(brain_api, "brain_action", _fake_action)
+    r = sleep.run(reason="test", force=True, use_llm=False)
+    assert calls == ["archive"]
+    assert r["archived"]["ok"] is True

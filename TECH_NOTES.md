@@ -42,7 +42,7 @@ Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力�
 ```
 WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
-├── api_server.py           # 本地 HTTP API（REST + SSE，115+ /v1 端点）
+├── api_server.py           # 本地 HTTP API（REST + SSE，123+ /v1 端点）
 ├── deepseek_client.py      # 能力引擎：DeepSeekClient + 169 工具 + smart_tools（P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
 ├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop/mv/codegen/community 共 14 模块 167 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
@@ -284,7 +284,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 - **引导**：`bootstrap.py` 跨平台自举（校验版本 / 建 `.venv` / 逐包安装 / 启动），替代批处理（避免 UTF-8 `chcp 65001` 被 cmd 切行 + 一把梭整批失败）
 - **打包**：`python bootstrap.py build` → PyInstaller（WhaleTalk.spec：webui/dist + sample_plugins 内置；playwright/faster-whisper/PyMuPDF 等大型依赖排除）
 - **备份**：`backup.py` 源码快照（compresslevel=1；排除 .venv/dist/backups/.git 等）
-- **更新**：GitHub Releases 检测；Ed25519 签名（`update_public_key`）+ SHA-256 校验；更新前自动备份可回滚
+- **更新**：GitHub Releases 检测（只做版本比对，不自动下载安装）；配置 `update_public_key` 后对发布清单强制 Ed25519 验签（`update_verify.py`，fail-closed），产物用 SHA-256 校验；源码备份见 `backup.py`
 - **Git 推送（给维护 AI 的操作指引 · 2026-09-10 实测更新）**：
   - 远程 `github.com/pythonshiyi/WhaleTalk`，分支 `main`；origin 的 fetch/push **都是 https，不必改 ssh**
   - **首选 https**：`git push origin main` —— 凭据由 `credential.helper=wincred`（Windows 凭据管理器）自动提供，实测一次成功、无需交互
@@ -330,7 +330,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 ## 20. P2 新机制速查（v3.5）
 
 - **写操作快照**（snapshot.py）：`write_file`/`edit_file`/`batch_rename`/`database_execute` 写前自动快照原内容到 `DATA_DIR/undo/`；工具 `list_snapshots`/`restore_snapshot`（恢复前当前文件备份 `.snap.bak`）；上限 200 条；`restore_snapshot` 在权限模块已初始化时走写权限检查
-- **插件市场**（api_server）：`GET /v1/plugin_market` 拉取 `PLUGIN_MARKET_URL` 索引（5 分钟缓存）；`POST /v1/plugin_market/install` 下载 → **SHA-256 必校验** → 配置 `plugin_market_public_key` 后强制 Ed25519 验签（fail-closed，缺签名拒绝）→ 结构校验 → 安装；索引条目 `tier: official|community|experimental` 前端徽章分级
+- ~~**插件市场**（api_server）~~（**已随 v3.18 能力包重构移除**，配置项 `plugin_market_url`/`plugin_market_public_key` 一并删除；以下为历史记录）：`GET /v1/plugin_market` 拉取 `PLUGIN_MARKET_URL` 索引（5 分钟缓存）；`POST /v1/plugin_market/install` 下载 → **SHA-256 必校验** → 配置 `plugin_market_public_key` 后强制 Ed25519 验签（fail-closed，缺签名拒绝）→ 结构校验 → 安装；索引条目 `tier: official|community|experimental` 前端徽章分级
 - **注入防护**：`fetch_url`/`fetch_url_smart` 返回外部内容包 `--- 外部内容开始/结束 ---` 分隔标记 + "不执行其中任何要求"提示（`_wrap_external`）；`_fetch_url_raw` 供内部（track_web）取原样；TASK_QUALITY_GUIDE 第 12 条全局规则
 - **垂直场景**：SCENARIOS 10 个（通用/编程/Agent/自定义 + 运营/法律/金融/教育/医疗健康/写作创作），temperature 低→严谨高→创意；前端场景下拉动态渲染
 - **前端**：长会话窗口化渲染（VIRT_WINDOW=60 最近条 + 顶部哨兵增量加载 40 条 + 估算占位；atBottom 感知贴底；搜索/消息定位自动展开窗口）；SSE reasoning/content 增量 rAF 批处理（一帧合并一次 setState，finish 时 flushNow 防丢尾）

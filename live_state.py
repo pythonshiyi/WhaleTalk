@@ -84,10 +84,19 @@ class LiveSnapshot:
         return asdict(self)
 
 
-def _today_key(now: Optional[datetime] = None) -> str:
-    """按 reset_hour 切分"业务日"（凌晨 5 点前算前一天）。"""
+def _today_key(now: Optional[datetime] = None, reset_hour: Optional[int] = None) -> str:
+    """按 reset_hour 切分"业务日"（重置时刻之前算前一天）。
+
+    reset_hour 由调用方从**实例配置**传入：模块级 DEFAULTS 只是出厂默认，
+    用户在设置里改的值不能在这里被忽略（否则该配置项形同虚设）。
+    """
     n = now or datetime.now()
-    if n.hour < int(DEFAULTS["reset_hour"]):
+    try:
+        rh = int(DEFAULTS["reset_hour"] if reset_hour is None else reset_hour)
+    except (TypeError, ValueError):
+        rh = int(DEFAULTS["reset_hour"])
+    rh = max(0, min(23, rh))
+    if n.hour < rh:
         n = n - timedelta(days=1)
     return n.strftime("%Y-%m-%d")
 
@@ -103,6 +112,10 @@ def _blank_day(day: str, quota: float) -> Dict[str, Any]:
         "last_gift": {},
         "recent": [],
         "started_at": time.time(),
+        # 剩余饱腹度（元）+ 结算时刻：每笔打赏各自从到达时刻起按 hunger_hours 流失，
+        # 而不是从当日重置时刻统一起算（后者会让下午之后任何打赏都填不饱）。
+        "satiety_yuan": 0.0,
+        "satiety_at": time.time(),
     }
 
 
@@ -148,8 +161,8 @@ class LiveState:
                 return False
 
     def _roll_day(self) -> None:
-        """跨日（按 reset_hour）自动重置今日计数。"""
-        today = _today_key()
+        """跨日（按实例配置的 reset_hour）自动重置今日计数。"""
+        today = _today_key(reset_hour=self.cfg.get("reset_hour"))
         cur = str(self._data.get("day") or "")
         if cur != today:
             quota = float(self.cfg.get("daily_quota") or 20.0)
@@ -157,19 +170,34 @@ class LiveState:
         else:
             # 配置变了要同步额度
             self._data["quota_yuan"] = float(self.cfg.get("daily_quota") or 20.0)
+            # 旧状态文件兼容：没有饱腹度字段时把当日已收金额视为「刚吃下」，
+            # 不让升级当天的角色凭空变饿。
+            self._data.setdefault("satiety_yuan", float(self._data.get("today_yuan") or 0.0))
+            self._data.setdefault("satiety_at", time.time())
 
     # ── 数值 ──
 
+    def _satiety(self, now: Optional[float] = None) -> float:
+        """当前剩余饱腹度（元）：每笔打赏各自按 hunger_hours 线性流失。
+
+        旧实现用「当日重置时刻」统一起算，导致开播 6 小时后衰减量 ≥ 1 个额度，
+        哪怕观众打赏满额度，`filled` 也只能是 0（角色永远饿着）。改为按
+        「最后一次结算」起算后，晚间的打赏照样能喂饱——这才是打赏→饱腹的本意。
+        """
+        hours = max(0.1, float(self.cfg.get("hunger_hours") or 6.0))
+        window = hours * 3600.0
+        sat = max(0.0, float(self._data.get("satiety_yuan") or 0.0))
+        at = float(self._data.get("satiety_at") or 0.0)
+        cur = time.time() if now is None else float(now)
+        if sat > 0 and at > 0 and window > 0:
+            elapsed = max(0.0, cur - at)
+            sat = sat * max(0.0, 1.0 - elapsed / window)
+        return sat
+
     def _decay_filled(self) -> float:
         """随时间线性"变饿"。返回当前吃饱度 0..1。"""
-        today_yuan = float(self._data.get("today_yuan") or 0.0)
         quota = max(0.01, float(self._data.get("quota_yuan") or 20.0))
-        hours = max(0.1, float(self.cfg.get("hunger_hours") or 6.0))
-        elapsed = max(0.0, time.time() - float(self._data.get("started_at") or time.time()))
-        # 打赏带来的饱腹感，按 hunger_hours 线性流失
-        decay = elapsed / 3600.0 / hours
-        earned = today_yuan / quota
-        return max(0.0, min(1.0, earned - decay))
+        return max(0.0, min(1.0, self._satiety() / quota))
 
     def _mood(self, filled: float) -> str:
         if filled < float(self.cfg.get("threshold_starving") or 0.2):
@@ -183,13 +211,14 @@ class LiveState:
     def snapshot(self) -> LiveSnapshot:
         with _lock:
             self._roll_day()
-            filled = self._decay_filled()
+            sat = self._satiety()
+            quota = max(0.01, float(self._data.get("quota_yuan") or 20.0))
+            filled = max(0.0, min(1.0, sat / quota))
             givers = self._data.get("givers") or {}
             top_name, top_yuan = "", 0.0
             if givers:
                 top_name, top_yuan = max(givers.items(), key=lambda kv: kv[1])
             today_yuan = float(self._data.get("today_yuan") or 0.0)
-            quota = float(self._data.get("quota_yuan") or 20.0)
             net = today_yuan * (1.0 - PLATFORM_TAKE) * (1.0 - GUILD_TAKE)
             return LiveSnapshot(
                 mood=self._mood(filled),
@@ -198,7 +227,9 @@ class LiveState:
                 today_doucoin=round(float(self._data.get("today_doucoin") or 0.0), 1),
                 today_net_yuan=round(net, 2),
                 quota_yuan=round(quota, 2),
-                remaining_yuan=round(max(0.0, quota - today_yuan), 2),
+                # 「还差多少吃饱」按当前剩余饱腹度算：与 mood/filled 同源，
+                # 否则角色饿着、HUD 却显示"还差 0 元"（旧口径按今日累计收入）。
+                remaining_yuan=round(max(0.0, quota - sat), 2),
                 gift_count=int(self._data.get("gift_count") or 0),
                 unique_givers=len(givers),
                 top_gifter=str(top_name or ""),
@@ -233,6 +264,12 @@ class LiveState:
                 doucoin, count = 0.0, 1
             total_doucoin = doucoin * count
             yuan = total_doucoin * per_yuan
+
+            # 先把这段间隔内已经发生的流失结清，再把本笔打赏加到饱腹度上：
+            # 这样「谁在什么时候喂了多少」各自计衰减，晚到的打赏不会再被白扣。
+            now_ts = time.time()
+            self._data["satiety_yuan"] = self._satiety(now_ts) + yuan
+            self._data["satiety_at"] = now_ts
 
             self._data["today_doucoin"] = float(self._data.get("today_doucoin") or 0.0) + total_doucoin
             self._data["today_yuan"] = float(self._data.get("today_yuan") or 0.0) + yuan

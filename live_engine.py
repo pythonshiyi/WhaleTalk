@@ -40,11 +40,17 @@ _FALLBACK_CHAT = "嗯，我在听，你继续说。"
 
 # 台词后置过滤：命中这些模式就丢弃重来（防止模型不听话去要礼物）
 _FORBIDDEN = re.compile(
-    r"(送礼物|刷礼物|打个赏|上票|充值|继续送|再多送|送礼|冲榜|帮我冲|还差.*元|差.*块钱)",
+    r"(送礼物|刷礼物|打个赏|上票|充值|继续送|再多送|再送一|再刷一|给我刷|送我礼物"
+    r"|送礼|冲榜|帮我冲|还差.*元|差.*块钱)",
     re.IGNORECASE,
 )
-# 绝不出现的自我暴露
-_SELF_EXPOSE = re.compile(r"(AI|人工智能|模型|程序|开发者|代码|提示词)", re.IGNORECASE)
+# 绝不出现的自我暴露。
+# 注意 AI 必须用「前后不是拉丁字母」的边界：旧的裸 AI + IGNORECASE 会把
+# said / again / main / explain 里的 "ai" 一起判违规，英文台词必然被整句丢弃。
+_SELF_EXPOSE = re.compile(
+    r"(?<![A-Za-z])AI(?![A-Za-z])|人工智能|模型|程序|开发者|代码|提示词|LLM",
+    re.IGNORECASE,
+)
 
 
 def init(config_path: Optional[str] = None,
@@ -126,7 +132,8 @@ def _call_llm(prompt: str) -> str:
             key,
             base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
             model=cfg.get("model") or dc.DEFAULT_MODEL,
-            timeout=float(cfg.get("timeout") or 30),
+            # 直播是实时场景：不为一句台词把打赏接口挂 30 秒（模型慢就降级走兜底）。
+            timeout=min(10.0, max(3.0, float(cfg.get("timeout") or 30))),
         )
         parts: List[str] = []
         client.chat(
@@ -191,7 +198,11 @@ def _speak(text: str) -> Dict[str, Any]:
 
 
 def _deliver(text: str, mood: str, *, say: bool) -> Dict[str, Any]:
-    """统一的"说一句"出口：限速 + 安全过滤 + 语音。"""
+    """统一的"说一句"出口：限速 + 安全过滤 + 语音。
+
+    语音合成放到后台线程：TTS 可能耗时数秒（Edge 在线 / SAPI 本地），
+    不能让它拖住 /v1/live/gift 这类实时接口——HUD 会从 /live/data 轮询到音频。
+    """
     st = state()
     if not st.can_speak():
         return {"text": text, "spoken": False, "reason": "rate_limited"}
@@ -199,11 +210,28 @@ def _deliver(text: str, mood: str, *, say: bool) -> Dict[str, Any]:
         logger.warning("直播台词被合规过滤：%s", text[:60])
         return {"text": text, "spoken": False, "reason": "filtered"}
     st.mark_spoken()
-    audio = _speak(text) if say else {"audio": "", "engine": ""}
-    audio_url = audio.get("audio", "")
-    _publish_line(text, audio_url)
-    return {"text": text, "spoken": True, "audio": audio_url,
-            "engine": audio.get("engine", "")}
+    seq = _publish_line(text, "")
+    if say:
+        threading.Thread(target=_speak_into_published, args=(text, seq),
+                         daemon=True, name="live-tts").start()
+    return {"text": text, "spoken": True, "audio": "", "engine": "",
+            "audio_pending": bool(say)}
+
+
+def _speak_into_published(text: str, seq: int) -> None:
+    """后台合成语音；只有台词没被更新覆盖时才回填音频（避免串台）。
+
+    `audio_seq` 单独标记「这段音频属于哪一句」：HUD 用它判重播，
+    否则台词已出、音频后到，前端按 seq 判重会永远不播。
+    """
+    audio = _speak(text)
+    url = str(audio.get("audio") or "")
+    if not url:
+        return
+    with _lock:
+        if int(_latest.get("seq") or 0) == int(seq):
+            _latest["audio"] = url
+            _latest["audio_seq"] = int(seq)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -263,16 +291,18 @@ def _persona_name() -> str:
 
 
 # ── 最新台词：HUD 拉取后显示气泡并播放语音 ──
-_latest: Dict[str, Any] = {"seq": 0, "text": "", "audio": "", "at": 0.0}
+_latest: Dict[str, Any] = {"seq": 0, "text": "", "audio": "", "audio_seq": 0, "at": 0.0}
 
 
-def _publish_line(text: str, audio: str) -> None:
-    """把刚说的台词发布出去，供 HUD 拉取。"""
+def _publish_line(text: str, audio: str) -> int:
+    """把刚说的台词发布出去，供 HUD 拉取。返回本次台词序号。"""
     with _lock:
-        _latest["seq"] = int(_latest.get("seq") or 0) + 1
+        seq = int(_latest.get("seq") or 0) + 1
+        _latest["seq"] = seq
         _latest["text"] = str(text or "")
         _latest["audio"] = str(audio or "")
         _latest["at"] = time.time()
+        return seq
 
 
 def latest_line() -> Dict[str, Any]:
@@ -285,7 +315,8 @@ def podium_data() -> Dict[str, Any]:
     """HUD 专用的只读数据聚合：一次请求拿到全部画面所需信息。
 
     ⚠️ 这个接口**不需要 token**（OBS 浏览器源无法带 Authorization 头），
-    因此只暴露画面用得到的字段，不含任何凭据、联系人身份或配置项。
+    因此只暴露画面用得到的字段，不含任何凭据或配置项。观众昵称/礼物名
+    本就要上屏（HUD 的滚动条与榜单），不属于需要隐藏的身份数据。
     """
     st = state()
     snap = st.snapshot().as_dict()

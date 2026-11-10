@@ -8,11 +8,23 @@
 - self_evolve：坏补丁回滚且生产文件复原 / 好补丁保留分支且生产文件不变（合入权在用户）
 """
 import os
+import shutil
 import subprocess
 
 import pytest
 
 import deepseek_client as dsc
+
+# self_evolve 的验证链依赖 git（分支隔离）与 ruff（lint 闸）；缺任何一个它都会
+# **按设计拒绝演进**（"跑不了验证就不该落地"），所以这两个用例只能在工具齐全时跑。
+# 用同一条 skip 条件表达两件事，避免出现「缺 git 会 skip、缺 ruff 却硬失败」的
+# 环境相关红灯（只在开发机上红的测试比没有测试更危险）。
+_MISSING_TOOLS = [n for n, ok in (("git", shutil.which("git") is not None),
+                                  ("ruff", shutil.which("ruff") is not None)) if not ok]
+_requires_chain = pytest.mark.skipif(
+    bool(_MISSING_TOOLS),
+    reason=f"缺少验证链工具：{', '.join(_MISSING_TOOLS)}（self_evolve 会按设计拒绝演进）",
+)
 
 # ---------------- _evolve_compile ----------------
 
@@ -124,8 +136,7 @@ def _evolve_branches(tmp_path):
     return out
 
 
-@pytest.mark.skipif(subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
-                    reason="本机无 git，无法测试分支隔离")
+@_requires_chain
 def test_self_evolve_rollback_on_bad_patch(tmp_path):
     _init_git_repo(tmp_path)
     r = dsc.self_evolve(
@@ -139,8 +150,7 @@ def test_self_evolve_rollback_on_bad_patch(tmp_path):
     assert "evolve/" not in _evolve_branches(tmp_path), "失败分支必须删除"
 
 
-@pytest.mark.skipif(subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
-                    reason="本机无 git，无法测试分支隔离")
+@_requires_chain
 def test_self_evolve_pass_keeps_branch_for_review(tmp_path):
     _init_git_repo(tmp_path)
     r = dsc.self_evolve(

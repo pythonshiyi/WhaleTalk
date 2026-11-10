@@ -555,6 +555,32 @@ def _load_capabilities():
                 "errors": ["能力包目录装载失败（详情见日志）"], "packages": []}
 
 
+def _load_mcp_tools():
+    """把 config.json 的 `mcp_servers` 装成运行时能力包（外部 MCP 工具）。
+
+    可降级：某个 server 起不来只损失它自己的工具；未配置时是一次 no-op。
+    由后台线程调用——外部进程握手最长 20s，不该拖住启动。
+    """
+    try:
+        import mcp_client
+        summary = mcp_client.load_into_runtime()
+    except Exception as e:
+        logger.warning("MCP 工具装载失败（可降级）：外部工具不可用", exc_info=True)
+        try:
+            import degrade
+            degrade.degrade("mcp.load", e, "外部 MCP 工具未装载，模型看不到这些工具",
+                            critical=False)
+        # noqa: silent-except: 记录降级本身失败不应影响启动
+        except Exception:
+            pass
+        return
+    if summary.get("tools"):
+        logger.info("已装载 %d 项外部 MCP 工具（%d 个 server）",
+                    len(summary["tools"]), summary.get("servers") or 0)
+    for err in summary.get("errors") or []:
+        logger.warning("MCP server 未装载：%s", err)
+
+
 def _wechat_config_path():
     """公众号写作的用户配置（放在数据目录，不污染仓库）。"""
     return os.path.join(DATA_DIR, "wechat_writer.json")
@@ -2140,7 +2166,6 @@ def _channel_action(name, body):
         mod = _channel_module(name)
     except ValueError as e:
         return None, str(e)
-    label = str(getattr(mod, "status", lambda: {}).__name__ and "") or name
     try:
         if action in ("start", "stop"):
             mod.save_config({"enabled": action == "start"})
@@ -6142,7 +6167,11 @@ def _backup_delete(name):
 
 
 def _update_check():
-    """检查更新（GitHub Releases / 自定义 UPDATE_URL）。"""
+    """检查更新（GitHub Releases / 自定义 UPDATE_URL）。
+
+    配置 `update_public_key` 后对发布清单强制 Ed25519 验签（fail-closed）：
+    缺签名/验签失败时**不报告可更新**，并把原因回给前端。
+    """
     import backup as backup_mod
     import config_utils
     cfg = config_utils.load_config()
@@ -6151,16 +6180,27 @@ def _update_check():
         rq = urllib.request.Request(url, headers={"User-Agent": "whaletalk"})
         with urllib.request.urlopen(rq, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        if not isinstance(data, dict):
+            data = {}
         ver = str(data.get("tag_name") or data.get("version") or "")
         ver = ver.lstrip("vV")
         cur = backup_mod.current_version()
+        key = str(cfg.get("update_public_key") or "").strip()
+        if key:
+            import update_verify
+            ok_sig, why_sig = update_verify.verify_release(data, key)
+            if not ok_sig:
+                logger.warning("更新清单签名校验失败：%s", why_sig)
+                return {"has_update": False, "current": cur, "latest": ver or cur,
+                        "verified": False, "error": f"更新清单校验失败：{why_sig}"}
         if ver and cur and _ver_gt(ver, cur):
-            return {"has_update": True, "current": cur, "latest": ver, "notes": str(data.get("body") or data.get("notes") or "")[:500]}
-        return {"has_update": False, "current": cur, "latest": ver or cur}
+            return {"has_update": True, "current": cur, "latest": ver, "verified": bool(key),
+                    "notes": str(data.get("body") or data.get("notes") or "")[:500]}
+        return {"has_update": False, "current": cur, "latest": ver or cur, "verified": bool(key)}
     except Exception as e:
         logger.warning("检查更新失败: %s", e)
         return {"has_update": False, "current": backup_mod.current_version(),
-                "error": _friendly_error(e)}
+                "verified": False, "error": _friendly_error(e)}
 
 
 def _ver_gt(a, b):
@@ -11088,6 +11128,9 @@ def start_server(port=8745, token=""):
             logger.warning("能力包未装载：%s", _err)
     except Exception:
         logger.warning("能力主干初始化失败（可降级）：本次会话无运行时能力", exc_info=True)
+    # ── 可降级：外部 MCP server 工具（mcp_client → 运行时能力包）──
+    # 后台线程装载：外部进程握手可能很慢，不能拖住启动；未配置时不产生任何行为。
+    threading.Thread(target=_load_mcp_tools, daemon=True, name="mcp-tools").start()
     if _SCHEDULER_THREAD is None:
         _SCHEDULER_STOP.clear()
         _SCHEDULER_THREAD = threading.Thread(target=_scheduler_loop, daemon=True)

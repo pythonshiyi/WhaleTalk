@@ -2,7 +2,7 @@
 
 本文档描述鲸语 WhaleTalk 当前（v3.16.21，Web 架构）的模块构成与职责边界，供维护、重构与新增功能时定位。与旧 Tkinter 版（main.py）相关的拆分记录已随 Web 重构归档，不再维护。
 
-> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **115 /v1 端点** · 后端 131 个 pytest 文件 / 1287 用例 · 前端 32 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
+> 规模口径（`tools/check_docs.py` 实测）：**169 个 Agent 工具**（11 组）· **123 /v1 端点** · 后端 136 个 pytest 文件 / 1349 用例 · 前端 32 个 node 套件；源码约 8.3 万行（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万）。
 
 ## 分层总览
 
@@ -10,7 +10,7 @@
 web_app.py（唯一入口：浏览器 + 托盘 + 快捷方式 + 依赖自检）
     │
     ▼
-api_server.py（本地 HTTP API：REST + SSE，115 /v1 端点）
+api_server.py（本地 HTTP API：REST + SSE，123 /v1 端点）
     │
     ▼
 deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
@@ -38,7 +38,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | 模块 | 职责 |
 |---|---|
 | `web_app.py`（989 行） | 唯一启动入口：启动本地 API、自动打开浏览器、系统托盘常驻、桌面/开始菜单快捷方式、开机自启、单实例、WebUI 自动构建（npm）、Python 依赖自检与自动安装 |
-| `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/能力包/指令库/工作台/大脑/TTS/审计/备份/更新等 **115 个 /v1 端点**（含失败记忆生命周期 `/v1/failures/resolve|reopen|forget`、技能结晶 `/v1/skills/crystallize`、文件全局搜索 `/v1/files/search` 与重命名 `/v1/files/rename`、运行时能力包 `/v1/capabilities`、大脑自主进社区 `/v1/community`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
+| `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，无 Flask）：会话/配置/上下文/工具/记忆/文件/进程/能力包/指令库/工作台/大脑/TTS/审计/备份/更新等 **123 个 /v1 端点**（含失败记忆生命周期 `/v1/failures/resolve|reopen|forget`、技能结晶 `/v1/skills/crystallize`、文件全局搜索 `/v1/files/search` 与重命名 `/v1/files/rename`、运行时能力包 `/v1/capabilities`、大脑自主进社区 `/v1/community`）；SSE 流式对话——**生成跑在独立后台作业线程**（`_ChatJob`/`_CHAT_JOBS`，见 TECH_NOTES §5.1）：切页/关标签/多标签页不打断，HTTP 线程只做订阅，无订阅者时作业兜底落盘；统一错误出口 `_fail`/`_fail_soft`（异常详情只落日志、前端收脱敏文案）；路径片段端点统一 `_valid_name` 校验；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收端 + IM 轮询 |
 
 ### 能力引擎
 
@@ -66,7 +66,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | `context_providers.py`（~500 行） | 上下文装配（P0-2）：把「往系统提示里塞什么」变成**可枚举、可预算、可回执**的 Provider 表（name/priority/budget/critical/enabled/provide）；装配器统一排序、限预算截断、输出回执；失败走 `degrade` 而非静默。P0 起记忆段落可切到 `memory_store` 统一读取（memory.json + 大脑去重），大脑侧关闭重复近期记忆、保留复习；回执经 `GET /v1/context` 暴露 |
 | `diagnostics.py`（314 行） | 诊断包（v3.16.20）：把 degrade 账本 / 错误日志尾部 / 配置差异（凭据打码） / 工具与路由规模 / 可选能力 / 数据目录占用收成一份 JSON；每段独立 try，失败进 `collection_errors`；`GET /v1/diagnostics`（支持 `?summary=1`）与 `POST /v1/diagnostics`（导出到 `DATA_DIR/diagnostics/`），CLI `python diagnostics.py --export` |
 | `jobs.py`（v3.24 新增） | **执行作业记录**：把「一轮生成」落成 `data/jobs/YYYY-MM-DD.jsonl`（只追加、不改写）。`fold_events()` 把事件流折叠成步骤（按 tool_call id 对齐，支持并行调用；无 id 时按同名最近一个合并），`build_record()` 产出状态/耗时/步数/失败数/用量，**只存参数与结果的前 200 字预览**（避免密钥/隐私落盘）；`list_jobs`/`get_job`/`summary` 供 `GET /v1/jobs`。所有 IO 失败只返回 False，绝不影响生成 |
-| `capability.py`（v3.17 新增） | **能力主干**：运行时工具与内置工具共用 `toolkit` 注册表（`source=capability`）。manifest 校验（`api`/`p_` 前缀/`groups`/`perms` 缺一拒装）、四种执行体（`builtin_ref`/`http`/`cli`/`python`）、声明式最小权限（调用期强制）、超时+熔断（连续 3 次失败冷却 60s）+ 输出截断 + `degrade` 记账、`epoch` 温和失效卸载、`adapt_legacy()` 旧插件迁移桥。六层视图由 `deepseek_client.refresh_capability_layers()` 重建 |
+| `capability.py`（v3.17 新增） | **能力主干**：运行时工具与内置工具共用 `toolkit` 注册表（`source=capability`）。manifest 校验（`api`/`p_` 前缀/`groups`/`perms` 缺一拒装）、五种执行体（`builtin_ref`/`http`/`cli`/`python`/`mcp`）、声明式最小权限（调用期强制）、超时+熔断（连续 3 次失败冷却 60s）+ 输出截断 + `degrade` 记账、`epoch` 温和失效卸载、`adapt_legacy()` 旧插件迁移桥。六层视图由 `deepseek_client.refresh_capability_layers()` 重建 |
 | `tool_hooks.py`（344 行） | 工具钩子管线（P0-1）：横切关注点的收口接缝——pre/post 钩子表 + `wrap()`，在 `toolkit` **注册处**统一包装执行体，任何调用路径都逃不掉。内置 `trust_declare`/`trust_commit`（全局）、`snapshot`/`egress`（声明式）。钩子抛错吞掉 + `degrade` 留痕；`functools.wraps` 保证签名不变 |
 | `egress.py`（320 行） | 出网账本（P1-A）：每一次**带内容出网**留痕（通道/目的地/字节数/摘要/结果）。**不阻断**；**默认不存明文**；达阈值向模型注入「出网留痕」。`EGRESS_SPECS` 声明式抽取——新增出网工具只需加一行。落盘 `DATA_DIR/egress.jsonl` |
 | `memory_facade.py`（~560 行） | 记忆门面（P1-B）：`memory.json` 唯一写入门面，为长期记忆补 **origin（血缘）+ confidence + status + supersede 双向链接**。① 血缘：非 user 来源注入时加 `〔推断〕`/`〔来自外部内容〕`标注；② 作废：同 `key` 取代旧条目——**只认显式 key，绝不按相似度**；相似度仅用于冲突提示。旧数据读时补默认值、不改写文件。`resolve_pending(sync=True)` 把用户确认的候选镜像进大脑；`sync_missing_to_brain()` 供睡眠补同步旧投影 |
@@ -117,7 +117,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 |---|---|
 | `user_tools.py` | 用户自定义工具加载（mtime+size 缓存） |
 | `mcp_server.py`（156 行） | MCP over stdio 出口：供外部 host（Claude/Cline 等）调用 WhaleTalk 工具，纯标准库最小合规子集 |
-| `mcp_client.py`（195 行） | MCP over stdio **入口**（与上者相反方向）：让鲸语**消费**外部 MCP server 的工具（`list_servers`/`list_tools`/`call_tool`）。配置 `config.json` 的 `mcp_servers`（默认 `[]` = 不连接任何外部 server），也可用环境变量 `WHALETALK_MCP_SERVERS`（JSON 字符串）覆盖；`python mcp_client.py list <cmd> [args...]` 可命令行自检 |
+| `mcp_client.py` | MCP over stdio **入口**（与上者相反方向）：让鲸语**消费**外部 MCP server 的工具（`list_servers`/`list_tools`/`call_tool`）。**已接线**：`load_into_runtime()` 在启动时把每个外部工具翻译成 `p_mcp_<server>_<tool>` 能力包（`exec.type=mcp`，后台线程装载、单 server 失败可降级）。配置 `config.json` 的 `mcp_servers`（默认 `[]` = 不连接任何外部 server），也可用环境变量 `WHALETALK_MCP_SERVERS`（JSON 字符串）覆盖；`python mcp_client.py list <cmd> [args...]` 可命令行自检 |
 
 ### 鲸语大脑
 
@@ -136,7 +136,7 @@ deepseek_client.py（能力引擎：DeepSeekClient + 169 工具 + smart_tools）
 | `webui/` | React 前端（React 19 + Vite 8，无 UI 框架）：ChatPage/工作台/指令库/自主/大脑/能力/设置；`webui/dist` 由 api_server 同源服务。渲染链路（纯数据 AST）：`longTextUtil.js`（解除 `@long-text` 包装）→ `mdParser.js`（块级 AST，流式安全 `code-open`）→ `mdInline.js`（行内 tokens，独立 RegExp 防 lastIndex 破坏）→ `mdHighlight.js`（零依赖高亮）→ `mdMath.js`（LaTeX 子集）→ `components/Markdown.jsx`（消费 AST）。**长会话渲染**：`msgUpdates.js` 提供不可变更新，配合 `Message.jsx` 的 `React.memo` 实现每帧只重渲染最后一条 |
 | `wechat_writer/` | 公众号自动写作：sources（多信源采集）/ topic（选题去重）/ writer（三阶段写作）/ quality（质检重试）/ output（草稿箱+存档）/ history / llm / config |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性，`--strict` 可入 CI）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛对账）、`check_docs.py`（文档数字 vs 源码实测）；`memory_bench.py`（临时大脑的记忆写入/检索/注入/巩固基准） |
-| `tests/` | 自举回归套件（131 个 pytest 文件 / 1287 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
+| `tests/` | 自举回归套件（136 个 pytest 文件 / 1349 用例）：注册表六层一致性、域模块拆分 re-export、进化闸、失败生命周期、上下文装配、退化日志、出网账本、记忆门面、信任内核、大脑、安全/权限/网络等；`self_evolve` 验证链自动回退跑全量 |
 
 ### 辅助脚本
 

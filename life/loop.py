@@ -326,6 +326,18 @@ def tick(now=None, force=False, synchronous=False) -> dict:
                         "lease": {k: v for k, v in lease.items() if k != "token"}}
         state.lease_renew(reason="tick")
         now_dt = _now(now)
+        # tick 间隔可配（life_tick_seconds，默认 30 = 调度循环同频）。
+        # 租约已在上面续期，所以这里跳过只是少做一次内驱/反思判断，不会掉线。
+        if not force:
+            try:
+                interval = max(1.0, min(3600.0, float(cfg.get("life_tick_seconds", 30) or 30)))
+            except (TypeError, ValueError):
+                interval = 30.0
+            elapsed = _minutes_since(st.get("last_tick"), now_dt) * 60.0
+            # 留 1s 余量：调度循环本身是 30s 一轮，太严格会让默认配置隔轮空转。
+            if elapsed < max(1.0, interval - 1.0):
+                return {"ok": True, "skipped": "tick_interval",
+                        "elapsed_seconds": round(elapsed, 1)}
         _LAST_TICK = time.time()
         tick_count = int(st.get("tick_count") or 0) + 1
         st = state.save({"state": st.get("state") if st.get("state") not in ("dormant", "observer") else "awake",

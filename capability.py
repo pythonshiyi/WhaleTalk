@@ -22,7 +22,7 @@ smart_tools 的能力地图里看不到它）、没有预激活、没有钩子�
     name         带 p_ 前缀的唯一名（禁止遮蔽内置工具）
     description  给模型看的触发场景（不是给人看的宣传语）
     parameters   OpenAI function parameters
-    exec         http / python / builtin_ref / cli 四种执行体之一
+    exec         http / python / builtin_ref / cli / mcp 五种执行体之一
     io           返回契约：最大字符数（失败一律返回「错误：…」字符串）
     budget       超时、是否写操作（决定是否自动快照）
     perms        最小权限声明；调用时**强制**校验，不是装饰
@@ -71,7 +71,7 @@ MAX_TIMEOUT = 3600.0        # 上限放宽到 1 小时：MV 成片这类长任�
 DEFAULT_MAX_CHARS = 20000
 BREAKER_FAILS = 3           # 连续失败多少次进入熔断
 BREAKER_COOLDOWN = 60.0     # 熔断冷却秒数
-EXEC_TYPES = ("http", "python", "builtin_ref", "cli")
+EXEC_TYPES = ("http", "python", "builtin_ref", "cli", "mcp")
 LEGACY_GROUP = "🧩 扩展能力"   # 旧插件迁移时的默认分组（能力地图里要有位置）
 _BUILTIN_DIR = ""   # 仓库内 capabilities/（随包分发，不可卸载）
 _USER_DIR = ""      # data/capabilities（用户自建）
@@ -226,6 +226,12 @@ def validate_manifest(manifest) -> tuple:
             entry = str(ex.get("entry") or "")
             if entry.count(":") != 1:
                 errs.append(f"{tag}.exec.entry 必须形如 module:func")
+        elif etype == "mcp":
+            srv = ex.get("server")
+            if not isinstance(srv, dict) or not str(srv.get("command") or "").strip():
+                errs.append(f"{tag}.exec.server 必须是含 command 的对象（外部 MCP server 启动命令）")
+            if not str(ex.get("tool") or "").strip():
+                errs.append(f"{tag}.exec.tool 必填（外部 MCP server 的工具名）")
         perms = _norm_perms(cap.get("perms"))
         if etype == "http" and not perms["net"]:
             errs.append(f"{tag}.perms.net 必须为 true（http 执行体要出网）")
@@ -342,6 +348,21 @@ def _exec_cli(ex: dict, args: dict, timeout: float) -> str:
 
 
 _PY_CACHE: dict = {}
+
+
+def _exec_mcp(ex: dict, args: dict, timeout: float) -> str:
+    """MCP 执行体：把调用转发给外部 MCP server（stdio JSON-RPC）。
+
+    server 配置来自 `config.json` 的 `mcp_servers`（含 command/args/env），
+    握手/调用/进程回收由 mcp_client 负责；这里只做转发与错误归一。
+    """
+    import mcp_client
+
+    server = ex.get("server") if isinstance(ex.get("server"), dict) else {}
+    tool = str(ex.get("tool") or "").strip()
+    if not tool:
+        return _fail("exec.tool 为空")
+    return mcp_client.call_tool(server, tool, args, timeout=max(5.0, float(timeout)))
 
 
 def _load_py_module(base_dir: str, module: str):
@@ -487,6 +508,12 @@ def _guard(name: str, spec: dict, epoch: int):
                 out = _exec_http(spec, kwargs, timeout)
             elif etype == "cli":
                 out = _exec_cli(spec["exec"], kwargs, timeout)
+            elif etype == "mcp":
+                fut = _POOL.submit(_exec_mcp, spec["exec"], kwargs, timeout)
+                try:
+                    out = fut.result(timeout=timeout)
+                except FutureTimeout:
+                    raise CapabilityTimeout(f"执行超时（>{timeout:.0f}s）")
             else:
                 fut = _POOL.submit(_exec_python, spec, kwargs, {"base_dir": st.get("base_dir")})
                 try:

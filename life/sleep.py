@@ -249,6 +249,28 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
     except Exception:
         pass
 
+    # 自动归档（life_auto_archive）：睡眠是天然的快照点——把当日状态固化成
+    # brain_v{n}.whale。失败只记账，绝不影响睡眠结果本身。
+    archived = {}
+    if bool(cfg.get("life_auto_archive", False)):
+        try:
+            import brain_api
+            archived = brain_api.brain_action("archive", {}) or {}
+            if not archived.get("ok"):
+                import degrade
+                degrade.degrade("life.sleep.archive", None,
+                                f"睡眠自动归档失败：{archived.get('message') or '未知原因'}",
+                                critical=False)
+        except Exception as e:  # noqa: BLE001
+            try:
+                import degrade
+                degrade.degrade("life.sleep.archive", e, "睡眠自动归档失败，睡眠结果不受影响",
+                                critical=False)
+            # noqa: silent-except: 记录降级本身失败不应影响睡眠
+            except Exception:
+                pass
+            archived = {}
+
     # 恢复能量；状态保持 sleeping，等用户活动或下一个白天唤醒
     metabolism.recover(100)
     state.save({
@@ -280,5 +302,6 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
         "narrative": narrative,
         "proposal": proposal,
         "followups": followups,
+        "archived": archived,
         "event": ev,
     }

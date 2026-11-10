@@ -74,3 +74,63 @@ def test_list_servers_from_env(monkeypatch):
 def test_missing_command_raises():
     with pytest.raises(mcp_client.MCPError):
         mcp_client.list_tools({"name": "bad"})
+
+
+# ── 接线：MCP 工具 → 运行时能力包 ──────────────────────────────────────
+
+def test_manifest_for_server_is_valid_capability(fake_server):
+    tools = mcp_client.list_tools(fake_server)
+    manifest = mcp_client.manifest_for_server(fake_server, tools)
+    import capability
+    ok, errs = capability.validate_manifest(manifest)
+    assert ok, errs
+    caps = manifest["capabilities"]
+    assert {c["name"] for c in caps} >= {"p_mcp_fake_echo", "p_mcp_fake_add"}
+    for c in caps:
+        assert c["exec"]["type"] == "mcp"
+        assert c["exec"]["tool"] in ("echo", "add")
+        assert c["parameters"]["type"] == "object"
+        assert c["groups"]
+
+
+def test_manifest_normalizes_messy_tool_names():
+    man = mcp_client.manifest_for_server(
+        {"name": "My Server", "command": "x"},
+        [{"name": "Read File!", "description": "", "inputSchema": {"type": "object"}}],
+    )
+    name = man["capabilities"][0]["name"]
+    assert name.startswith("p_mcp_my_server_") and name.islower()
+    assert len(name) <= 63
+
+
+def test_manifest_wraps_non_object_schema():
+    man = mcp_client.manifest_for_server(
+        {"name": "s", "command": "x"},
+        [{"name": "weird", "inputSchema": {"type": "string"}}],
+    )
+    assert man["capabilities"][0]["parameters"]["type"] == "object"
+
+
+def test_load_into_runtime_registers_and_unregisters(fake_server, monkeypatch):
+    """端到端：配置 → 能力包 → 工具注册表（并清理，避免污染其它用例）。"""
+    monkeypatch.setenv("WHALETALK_MCP_SERVERS", json.dumps([fake_server]))
+    import capability
+    import toolkit
+
+    res = mcp_client.load_into_runtime()
+    try:
+        assert res["ok"], res
+        assert len(res["tools"]) == 2
+        for name in res["tools"]:
+            assert toolkit.is_registered(name), name
+            assert toolkit.executor_for(name) is not None
+    finally:
+        capability.unregister_plugin("mcp_fake", reason="test cleanup")
+    for name in res["tools"]:
+        assert not toolkit.is_registered(name)
+
+
+def test_load_into_runtime_noop_without_config(monkeypatch):
+    monkeypatch.delenv("WHALETALK_MCP_SERVERS", raising=False)
+    monkeypatch.setattr(mcp_client, "list_servers", lambda: [])
+    assert mcp_client.load_into_runtime()["tools"] == []

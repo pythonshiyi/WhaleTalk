@@ -2,6 +2,61 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## 未发版（2026-11-10）—— 🩹 直播玩法与「配置项空转」修复
+
+本轮来自一次真实排障：修的都是**能复现的功能缺陷**，不是风格问题。每条都带回归用例。
+
+### 一、直播角色（`live_state` / `live_engine`）
+
+- **饱腹衰减改为按每笔打赏计时**：旧实现用「当日重置时刻」统一起算衰减，
+  开播 6 小时后衰减量就 ≥ 1 个额度——观众打赏满当日额度，`filled` 仍是 0、
+  角色永远显示"极度饥饿"，付费玩法下午直接失效。现在每笔打赏从到达时刻起
+  按 `hunger_hours` 线性流失（新增 `satiety_yuan`/`satiety_at`，旧状态文件自动迁移）。
+- **`reset_hour` 配置真正生效**：`_today_key()` 改为接收实例配置，不再读模块级
+  `DEFAULTS`（此前在设置里改重置时刻毫无效果）。
+- **合规过滤不再误杀英文**：`_SELF_EXPOSE` 的 `AI` 改为带拉丁字母边界
+  （`(?<![A-Za-z])AI(?![A-Za-z])`）。此前 `said` / `again` / `main` 都会命中，
+  任何英文台词必然被丢弃并回退成兜底句。
+- **打赏/弹幕接口不再被 TTS 拖住**：语音合成移入后台线程，台词立即发布供 HUD
+  轮询（响应新增 `audio_pending`）；LLM 超时上限收敛到 10s（模型慢即降级兜底）。
+  HUD 端改用 `audio_seq` 判重播，异步语音后到也能正常播放（按 `seq` 判重会永远不播）。
+
+### 二、配置项不再是摆设
+
+- **`life_tick_seconds` 生效**：生命循环 `tick()` 按配置节流（租约仍每轮续期，
+  不会因此掉线；`force=True` 不受限）。
+- **`life_auto_archive` 生效**：睡眠结束前自动生成一次大脑快照（`brain_v{n}.whale`），
+  失败只记 degrade，不影响睡眠结果。
+- **删除死配置**：`plugin_market_url` / `plugin_market_public_key` / `PLUGIN_MARKET_URL`
+  ——在线插件市场已随 v3.18 能力包重构移除，这些键没有任何读取点；
+  文档同步删除过时的 `/v1/plugin_market*`、`/v1/plugin_studio*` 端点清单。
+
+### 三、MCP 入口接线（此前是死代码）
+
+- 新增能力执行体 `exec.type = "mcp"`（[docs/能力协议.md](docs/能力协议.md) §4.5）。
+- `mcp_client.load_into_runtime()`：把 `config.json` 的 `mcp_servers` 里每个外部工具
+  翻译成 `p_mcp_<server>_<tool>` 能力包（工具名归一化、schema 兜底为 object）。
+- `api_server.start_server()` 在能力包装载后用**后台线程**调用它（未配置=no-op，
+  单 server 失败只降级）。外部 MCP 工具因此真正进入能力地图并享受超时/熔断/卸载。
+
+### 四、更新链路验签落地
+
+- 新增 `update_verify.py`：Ed25519 签名（公钥支持 base64 原始公钥或 PEM）+
+  产物 SHA-256 校验；`verify_release()` 对"去掉 signature 字段的规范化 JSON"验签。
+- `GET /v1/update/check` 接上它：配置 `update_public_key` 后**fail-closed**
+  （缺签名/验签失败不报告可更新，并把原因回给前端）；响应新增 `verified`。
+- README / AI 指南 / TECH_NOTES 更正为真实能力：检查更新只做版本比对，
+  不自动下载安装；签名校验针对**发布清单**，产物用 `verify_sha256()`。
+
+### 五、门禁与测试卫生
+
+- `tools/check_docs.py` 的 23 处数字漂移已对齐（路由 123 / 测试文件与用例数随本轮更新）。
+- `tests/test_evolve_guard.py` 的 skip 条件改为「git 与 ruff 都齐全才跑」：
+  此前缺 git 会 skip、缺 ruff 却硬失败，形成只在开发机上红的测试。
+- 新增回归：`tests/test_live_engine.py`、`tests/test_update_verify.py`，
+  并给 `test_live_state.py` / `test_life_core.py` / `test_mcp_client.py` 补用例。
+- 修掉 `api_server._channel_action` 中恒等于 name 且从未使用的 `label` 表达式。
+
 ## v3.28.0（2026-10-24）—— 🐧 QQ 官方 Bot 接入
 
 **版本号 3.27.0 → 3.28.0。** 在本地 OneBot/NapCat 之外，新增腾讯官方 QQ Bot API v2

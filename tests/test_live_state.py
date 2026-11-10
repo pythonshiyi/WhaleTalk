@@ -61,14 +61,50 @@ def test_mood_transitions():
 
 
 def test_hunger_decay_over_time():
-    """时间流逝应该让角色变饿。"""
+    """时间流逝应该让角色变饿（饱腹度从打赏到达时刻起算）。"""
     st = _fresh(daily_quota=20.0, hunger_hours=1.0)
     st.feed("x", doucoin=200)     # 20元 = 满
     assert st.snapshot().filled == 1.0
-    # 手动把开始时间往前拨 30 分钟 -> 应衰减一半
-    st._data["started_at"] = time.time() - 1800
+    # 手动把「最后一次结算」往前拨 30 分钟 -> 应衰减一半
+    st._data["satiety_at"] = time.time() - 1800
     filled = st.snapshot().filled
     assert 0.4 < filled < 0.6, filled
+
+
+def test_late_day_gift_can_still_fill():
+    """开播 8 小时后的打赏仍应能喂饱。
+
+    回归：旧实现把衰减基准挂在「当日重置时刻」上，开播超过 hunger_hours 后
+    衰减量 ≥ 1 个额度，观众打赏满额度也只会显示 starving（核心玩法失效）。
+    """
+    st = _fresh(daily_quota=20.0, hunger_hours=6.0)
+    st._data["started_at"] = time.time() - 8 * 3600
+    r = st.feed("观众", doucoin=200)      # 200 抖币 = 20 元 = 100% 额度
+    assert r["after"]["filled"] == 1.0
+    assert r["after"]["mood"] == "full"
+    assert r["just_full"] is True
+
+
+def test_remaining_yuan_follows_decay():
+    """「还差多少吃饱」必须与 filled 同源（回归：旧口径按今日累计收入）。"""
+    st = _fresh(daily_quota=20.0, hunger_hours=1.0)
+    st.feed("x", doucoin=200)                    # 满额度
+    st._data["satiety_at"] = time.time() - 3600  # 一整小时 -> 饱腹度归零
+    snap = st.snapshot()
+    assert snap.filled == 0.0
+    assert snap.remaining_yuan == 20.0
+
+
+def test_reset_hour_from_instance_config_is_honored():
+    """reset_hour 必须取实例配置，而不是模块级 DEFAULTS（回归：曾完全被忽略）。"""
+    import datetime as _dt
+    now = _dt.datetime.now().replace(hour=4, minute=0, second=0, microsecond=0)
+    # 实例把重置改成 03:00，04:00 应仍属「今天」
+    assert live_state._today_key(now, reset_hour=3) == now.strftime("%Y-%m-%d")
+    # 不传实例配置时回落到出厂默认（05:00），04:00 属前一天
+    assert live_state._today_key(now) == (now - _dt.timedelta(days=1)).strftime("%Y-%m-%d")
+    st = _fresh(reset_hour=3)
+    assert int(st.cfg["reset_hour"]) == 3
 
 
 def test_top_gifter_tracked():

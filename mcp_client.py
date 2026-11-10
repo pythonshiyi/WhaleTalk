@@ -16,15 +16,125 @@ Python API：
     list_servers()                  → 配置中的 server 列表
     list_tools(server, timeout=20)  → [{name, description, inputSchema}]
     call_tool(server, tool, args)   → tools/call 结果（文本化）
+    load_into_runtime(timeout=20)   → 把上面这些工具装成运行时能力包（启动时调用）
+
+接线位置：`api_server.start_server()` 在装载完内置/用户能力包后，用后台线程调用
+`load_into_runtime()`；每个外部工具变成 `p_mcp_<server>_<tool>` 能力，走
+capability 的校验 / 超时 / 熔断 / 卸载，模型在能力地图里能看到并调用它们。
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 
 _PROTOCOL_VERSION = "2024-11-05"
+
+# 能力名契约（capability.NAME_PREFIX + 小写字母数字下划线，总长 ≤ 63）
+_MCP_NAME_RE = re.compile(r"^p_[a-z][a-z0-9_]{0,60}$")
+
+
+def _slug(text: str) -> str:
+    """把任意 server/tool 名压成能力名可用片段。"""
+    s = re.sub(r"[^0-9a-z]+", "_", str(text or "").lower()).strip("_")
+    return s or "x"
+
+
+def _cap_name(server_name: str, tool_name: str, used: set) -> str:
+    """生成不冲突的能力名：p_mcp_<server>_<tool>（超长截断后补序号）。"""
+    base = f"p_mcp_{_slug(server_name)}_{_slug(tool_name)}"
+    base = base[:63].rstrip("_")
+    if not _MCP_NAME_RE.match(base):
+        base = f"p_mcp_{_slug(tool_name)}"[:63].rstrip("_")
+    cand, i = base, 2
+    while cand in used:
+        suffix = f"_{i}"
+        cand = base[: 63 - len(suffix)].rstrip("_") + suffix
+        i += 1
+    used.add(cand)
+    return cand
+
+
+def _schema_of(tool: dict) -> dict:
+    """把 MCP inputSchema 归一成 OpenAI function parameters（必须是 type=object）。"""
+    schema = tool.get("inputSchema") if isinstance(tool, dict) else None
+    if not isinstance(schema, dict):
+        return {"type": "object", "properties": {}}
+    out = dict(schema)
+    out.setdefault("type", "object")
+    if out.get("type") != "object":
+        # 少数 server 返回非对象 schema：包一层，别把非法 schema 交给模型（会被 API 400）。
+        out = {"type": "object", "properties": {"input": out}}
+    out.setdefault("properties", {})
+    return out
+
+
+def manifest_for_server(server: dict, tools) -> dict:
+    """把「一个 server + 它的 tools/list」翻译成能力包 manifest（纯函数，便于单测）。"""
+    name = str(server.get("name") or server.get("command") or "server")
+    used: set = set()
+    caps = []
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        tool_name = str(t.get("name") or "").strip()
+        if not tool_name:
+            continue
+        desc = str(t.get("description") or "").strip()
+        caps.append({
+            "name": _cap_name(name, tool_name, used),
+            "description": (f"[MCP:{name}] {desc}" if desc
+                            else f"[MCP:{name}] 调用外部工具 {tool_name}")[:300],
+            "parameters": _schema_of(t),
+            "exec": {"type": "mcp", "server": dict(server), "tool": tool_name},
+            "groups": ["🧩 扩展能力"],
+            "phrases": f"调用外部 MCP 工具 {tool_name}",
+            "preactivate": [(name.lower(), tool_name.lower())],
+            "budget": {"timeout": 60, "write": False},
+            "io": {"max_chars": 20000},
+        })
+    return {"api": "whaletalk.tool/1", "meta": {"name": f"MCP: {name}"}, "capabilities": caps}
+
+
+def load_into_runtime(timeout: float = 20.0) -> dict:
+    """把配置里的外部 MCP 工具装成运行时能力包（幂等；单 server 失败不影响其余）。
+
+    返回 {ok, servers, tools, errors}。未配置 `mcp_servers` 时是一次 no-op。
+    """
+    servers = list_servers()
+    out = {"ok": True, "servers": len(servers), "tools": [], "errors": []}
+    if not servers:
+        return out
+    import capability
+
+    for srv in servers:
+        label = str(srv.get("name") or srv.get("command") or "server")
+        try:
+            tools = list_tools(srv, timeout=timeout)
+        except Exception as e:  # noqa: BLE001 - 外部进程失败只损失该 server
+            out["ok"] = False
+            out["errors"].append(f"{label}: {e}")
+            continue
+        if not tools:
+            continue
+        manifest = manifest_for_server(srv, tools)
+        if not manifest["capabilities"]:
+            continue
+        pid = "mcp_" + _slug(label)
+        try:
+            res = capability.register_manifest(manifest, plugin_id=pid)
+        except Exception as e:  # noqa: BLE001
+            out["ok"] = False
+            out["errors"].append(f"{label}: 装载异常 {e}")
+            continue
+        if res.get("ok"):
+            out["tools"].extend(res.get("tools") or [])
+        else:
+            out["ok"] = False
+            out["errors"].extend(f"{label}: {x}" for x in (res.get("errors") or []))
+    return out
 
 
 class MCPError(RuntimeError):

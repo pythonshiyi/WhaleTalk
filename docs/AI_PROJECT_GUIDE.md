@@ -19,7 +19,7 @@
 
 - **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.28.0`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **115 个 `/v1` 路由**、**131 个 pytest 文件 / 1287 用例 + 32 个前端 node 套件**、
+  **123 个 `/v1` 路由**、**136 个 pytest 文件 / 1349 用例 + 32 个前端 node 套件**、
   源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
   主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
@@ -47,7 +47,7 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试 ──
-python -m pytest -q                      # 后端全量（131 个文件 / 1287 用例，约 73s；CI 同款，见下方「分级验证」）
+python -m pytest -q                      # 后端全量（136 个文件 / 1349 用例，约 73s；CI 同款，见下方「分级验证」）
 python -m pytest tests/test_registry.py -q    # 只跑相关文件：日常改动的正确姿势（1–3s）
 cd webui && npm test                     # 前端 31 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
@@ -98,7 +98,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | 层 | 模块 | 一句话职责 |
 |---|---|---|
 | **入口** | `web_app.py`（989 行） | 唯一启动入口：参数解析 → 依赖自检/自动安装 → 桌面+开始菜单快捷方式 → WebUI 自动构建 → 单实例探测 → 起 API → 开浏览器 → 托盘常驻 |
-| **API 层** | `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**115 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
+| **API 层** | `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**123 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
 | **能力引擎** | `deepseek_client.py`（6,540 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步。**工具实现已迁出至 `agent_tools/`** |
 | **工具声明** | `toolkit.py`（269 行） | **`@tool()` 装饰器 + 注册表 + 六层构建函数**——工具系统单一事实源（见 §6.1） |
 | **钩子管线** | `tool_hooks.py`（344 行） | 横切关注点收口：pre/post 钩子表 + `wrap()` 包装器；在 `@tool()` **注册处**统一包装执行体，任何调用路径都逃不掉钩子（P0-1） |
@@ -162,7 +162,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `persona_memory.py` | **角色级记忆**：`DATA_DIR/persona_memory/<persona_id>.json` 原子读写、去重/检索/清空；角色对话自动提炼只写本角色，与全局 `memory.json` / 大脑物理隔离 |
 | `qq_onebot.py` | **本地 QQ 陪伴（OneBot v11 / NapCat HTTP）**：私聊事件监听（127.0.0.1）+ HTTP API 出站；联系人独立会话/角色、允许 QQ 号、限流、静默时段；文字/图片（原生视觉）/语音转写（可选 faster-whisper）；回复走 dialog 无工具 + 角色记忆；配置/状态 `DATA_DIR/qq_onebot.json` / `qq_state.json` |
 | `qq_official.py` | **QQ 官方 Bot（API v2）**：AppID/AppSecret → Access Token → WebSocket Gateway；`C2C_MESSAGE_CREATE`、`msg_id + msg_seq` 被动回复；按 `user_openid` 独立会话/角色；配置/状态 `DATA_DIR/qq_official.json` / `qq_official_state.json`；依赖 `aiohttp` |
-| `capability.py` | **能力主干**：manifest 校验、四种执行体、声明式最小权限、超时/熔断、温和失效卸载；内置包在仓库 `capabilities/`（不可卸载），用户包在 `data/capabilities/` |
+| `capability.py` | **能力主干**：manifest 校验、五种执行体（含 `mcp`）、声明式最小权限、超时/熔断、温和失效卸载；内置包在仓库 `capabilities/`（不可卸载），用户包在 `data/capabilities/` |
 | `snapshot.py` | 写操作自动快照（写前备份到 `DATA_DIR/undo/`，上限 200 条，可恢复） |
 | `stats.py` | 用量统计 + 峰谷定价费用估算（按「用量发生日」选价，不被追溯改价） |
 | `tokens.py` | token 估算（tiktoken o200k_base，缺省回退 1.5 字符/token） |
@@ -201,7 +201,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案）、`check_silent_except.py`（静默吞异常基线差分门禁 + `silent_except_baseline.txt`） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 131 个 pytest 文件 / 1287 用例 |
+| `tests/` | 后端回归 136 个 pytest 文件 / 1349 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
@@ -242,7 +242,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
   `("qpath",path)`（去查询串精确）。**表顺序即匹配优先级（= 源码顺序）**。
 - 兼容 `/api/v1/...` 与 `/v1/...`（Vite 代理）。
 
-### 4.3 端点分组（共 115 个 `/v1` 路由）
+### 4.3 端点分组（共 123 个 `/v1` 路由）
 
 **会话与消息**：`GET /v1/sessions` · `/v1/sessions/<id>/messages` · `POST /v1/sessions`
 (+`delete_batch`/`delete`/`pin`/`rename`/`tags`) · `POST /v1/search`
@@ -260,9 +260,8 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 `GET /v1/evolve_branches` · `POST /v1/evolve_branches/{detail,merge,delete}` ·
 `GET /v1/self_profile` · `POST /v1/skills/crystallize`
 **指令库 / 能力包**：`GET /v1/prompts`(+export) · `POST /v1/prompts`(save/delete/reorder/import/use/restore_builtin) ·
-`GET /v1/plugin_skills` · `GET /v1/plugins`(+/<name>) / `POST /v1/plugins` ·
-`GET /v1/plugin_market` / `POST /v1/plugin_market/install` · `POST /v1/plugin_studio/{generate,install}` ·
 `GET/POST /v1/capabilities`（能力包：清单 / 装载 / 卸载）
+> 在线插件市场（`/v1/plugin_market*`、`/v1/plugin_studio*`、`/v1/plugins*`）已随 v3.18 能力包重构移除，配置项一并删除；第三方市场未开放（见 [SECURITY.md](../SECURITY.md)）。
 **角色卡**：`GET /v1/personas`（清单 + memory_count）· `POST /v1/personas`（save / delete / duplicate；角色只作用于 dialog 模式，按会话绑定）·
 `GET /v1/personas/memory?id=`（角色记忆）· `POST /v1/personas/memory`（clear / delete）
 **QQ 陪伴**：`GET /v1/qq`（状态 / 配置 / 最近联系人）· `POST /v1/qq`（save / start / stop / probe / test；仅私聊 OneBot）
@@ -531,7 +530,7 @@ def my_tool(...): ...
   与 README/TECH_NOTES/MODULES 比对，`--fix` 可自动修正（**保留原行尾写回**）。
   注意 README 需保留门禁匹配的固定短语（`N 项 Agent 工具` / `N Agent tools` / `（N 工具）` /
   `工具链（N 项）` / `全部 N 项工具`），重写 README 时勿丢失。
-- **更新纪律**：CHANGELOG 标题与 `config_defaults.VERSION` 一致；更新包 Ed25519 签名 + SHA-256 校验；
+- **更新纪律**：CHANGELOG 标题与 `config_defaults.VERSION` 一致；发布**清单**支持 Ed25519 签名 + 产物 SHA-256 校验（`update_verify.py`，配置 `update_public_key` 后 fail-closed）；
   更新前自动备份 `backups/WhaleTalk_v<版本>_<时间戳>.zip`。
 - **引导/打包**：`python bootstrap.py`（建 `.venv` + 逐包装依赖 + 启动）· `python bootstrap.py build`
   → PyInstaller（`WhaleTalk.spec`：webui/dist + sample_plugins 内置，
@@ -711,7 +710,7 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 理由很直接——缺工具时那两层会以"跳过"形态返回，判定逻辑很容易把它们当成通过，
 那就成了「分支 + 四层假装」。宁可拒绝，也不在证明不了的环境里假装验证过。
 
-## 14. 测试资产速查（tests/，131 个 pytest 文件 / 1287 用例）
+## 14. 测试资产速查（tests/，136 个 pytest 文件 / 1349 用例）
 
 按领域分组（文件名即内容）：
 
@@ -775,7 +774,7 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 | [../TECH_NOTES.md](../TECH_NOTES.md) | 改架构前的设计取舍与历史踩坑 |
 | [../MODULES.md](../MODULES.md) | 查「某个文件负责什么」的逐模块清单 |
 | [配置与上限.md](配置与上限.md) | 调上限/开关（全部 `WHALETALK_*` 环境变量速查） |
-| [能力协议.md](能力协议.md) | 写能力包（四执行体 + 权限 + 预算 + 自检清单） |
+| [能力协议.md](能力协议.md) | 写能力包（五执行体 + 权限 + 预算 + 自检清单） |
 | [信任内核.md](信任内核.md) | 改 `permissions`/`security`/`crypto`/`snapshot` 前必读 |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | 改前端样式：令牌体系与一致性铁律 |
 | [出网账本与记忆门面.md](出网账本与记忆门面.md) | 新增出网能力 / 改记忆写入路径 |
@@ -791,5 +790,5 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 115 路由 / 1287 用例 / 版本 3.28.0）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 115 路由 / 1349 用例 / 版本 3.28.0）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

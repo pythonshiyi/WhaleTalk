@@ -252,8 +252,7 @@ def normalize_config(cfg):
     except (TypeError, ValueError):
         cfg["brain_community_interval_min"] = 30
     cfg["update_url"] = str(cfg.get("update_url", "") or "").strip()
-    cfg["plugin_market_url"] = str(cfg.get("plugin_market_url", "") or "").strip()
-    cfg["plugin_market_public_key"] = str(cfg.get("plugin_market_public_key", "") or "").strip()
+    cfg["update_public_key"] = str(cfg.get("update_public_key", "") or "").strip()
     # 语音引擎配置规范化：engine 限 auto/sapi/edge/piper；piper_voice 限长度
     try:
         vc = cfg.get("voice_config") or {}

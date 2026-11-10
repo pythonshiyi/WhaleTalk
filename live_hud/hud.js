@@ -1,4 +1,4 @@
-﻿/* 直播 HUD 前端
+/* 直播 HUD 前端
    职责：轮询状态 → 更新画面 → 播放语音 → 触发动画。
    零依赖，OBS 浏览器源直接加载。 */
 
@@ -40,6 +40,7 @@
   let prev = null;
   let lastEventTs = 0;
   let lastLineSeq = 0;
+  let lastAudioSeq = 0;
   let seenEventKeys = new Set();
   let bubbleTimer = null;
 
@@ -402,7 +403,12 @@
         if (seq > lastLineSeq && line.text) {
           lastLineSeq = seq;
           showBubble(line.text);
-          if (line.audio) playVoice(line.audio);
+        }
+        // 语音是后台合成后回填的（不改 seq，避免重复出气泡），用 audio_seq 单独判重。
+        const audioSeq = Number(line.audio_seq) || 0;
+        if (line.audio && audioSeq > lastAudioSeq) {
+          lastAudioSeq = audioSeq;
+          playVoice(line.audio);
         }
       }
     } catch (e) { /* 后端重启中，保持画面 */ }
@@ -411,7 +417,7 @@
 
   window.__hud = {
     say(text, audioUrl) { showBubble(text); if (audioUrl) playVoice(audioUrl); },
-    reset() { lastEventTs = 0; lastLineSeq = 0; seenEventKeys = new Set(); },
+    reset() { lastEventTs = 0; lastLineSeq = 0; lastAudioSeq = 0; seenEventKeys = new Set(); },
   };
 
   buildStars(110);
