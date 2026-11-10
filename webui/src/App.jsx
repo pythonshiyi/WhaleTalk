@@ -20,8 +20,8 @@ const LazyPages = {
   settings: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.SettingsPage }))),
   prompts: lazy(() => import("./components/PromptsPage.jsx")),
   personas: lazy(() => import("./components/PersonasPage.jsx")),
-  qq: lazy(() => import("./components/QQPage.jsx")),
-  qqofficial: lazy(() => import("./components/QQOfficialPage.jsx")),
+  live: lazy(() => import("./components/LivePage.jsx")),
+  channels: lazy(() => import("./components/ChannelsPage.jsx")),
   brain: lazy(() => import("./components/BrainPage.jsx")),
   life: lazy(() => import("./components/LifePage.jsx")),
   autonomy: lazy(() => import("./components/AutonomyPage.jsx")),
@@ -295,8 +295,8 @@ export default function App() {
                         }}
                       />
                     )}
-                    {page === "qq" && <LazyPages.qq />}
-                    {page === "qqofficial" && <LazyPages.qqofficial />}
+                    {page === "live" && <LazyPages.live />}
+                    {page === "channels" && <LazyPages.channels />}
                     {page === "life" && <LazyPages.life />}
                     {page === "autonomy" && <LazyPages.autonomy />}
                     {page === "settings" && (() => {

@@ -32,6 +32,20 @@ def _jline(e):
     return json.dumps(e, ensure_ascii=False)
 
 
+def _days_ago(days, hour=10):
+    """生成「相对今天 N 天前」的东八区时间戳。
+
+    时间衰减与复习窗口都按「距今多少天」判定，若测试写死绝对日期，会随日历
+    推移自然失效（如 2026-09-03 到 11 月已不再算"新鲜"）。改用相对时间后，
+    测试在任何日期运行都成立。
+    """
+    from datetime import datetime, timedelta, timezone
+    dt = datetime.now(timezone.utc) - timedelta(days=days)
+    # 换算为东八区的 hour 点（UTC + 8）
+    dt = dt.replace(hour=(hour - 8) % 24, minute=0, second=0, microsecond=0)
+    return dt.isoformat()
+
+
 @pytest.fixture
 def brain_tmp():
     """临时大脑目录：构造合法 manifest，测试期间让 brainkit 指向它。"""
@@ -194,9 +208,10 @@ def test_brain_context_injects_self_model_and_decisions(brain_tmp):
 
 
 def test_brain_context_decay_prefers_fresh_over_stale_high_imp(brain_tmp):
-    # 120 天前的 imp5 记忆 vs 今日 imp2 记忆：衰减后今日记忆应排前（破陈旧固化）
-    old = _mk_entry("m-old", "过时的高价值结论", ts="2026-05-01T10:00:00+08:00", imp=5)
-    fresh = _mk_entry("m-new", "今天的新约定", ts="2026-09-03T10:00:00+08:00", imp=2)
+    # 120 天前的 imp5 记忆 vs 今日 imp2 记忆：衰减后今日记忆应排前（破陈旧固化）。
+    # 用相对时间构造，避免测试随日历推移失效（曾因写死 2026-09-03 而在 11 月变红）。
+    old = _mk_entry("m-old", "过时的高价值结论", ts=_days_ago(120), imp=5)
+    fresh = _mk_entry("m-new", "今天的新约定", ts=_days_ago(0), imp=2)
     with open(bk.MEMORY_JSONL, "a", encoding="utf-8") as f:
         f.write(_jline(old) + "\n" + _jline(fresh) + "\n")
     ctx = __import__("brain_api").brain_context(max_memories=1)

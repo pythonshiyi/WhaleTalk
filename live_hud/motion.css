@@ -1,0 +1,255 @@
+﻿/* ══════════════════════════════════════════════════════════════
+   动效质感层 · v2
+   ──────────────────────────────────────────────────────────────
+   之前的动画问题：全是匀速循环，机械、没有生命感。
+   真实生物的动效有四个特征，这里逐一实现：
+
+   1. **非匀速**（ease-in-out 不够，要加速度变化）
+   2. **不同步**（呼吸/眨眼/尾巴各自周期，永不整齐对齐）
+   3. **有重量**（动作起停有惯性，不瞬间开关）
+   4. **有环境反应**（光线、粒子会跟着角色动）
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 1. 呼吸：双轴不同步，胸腔先起、身体后跟 ── */
+.char {
+  animation: breatheV2 4.6s cubic-bezier(.45, .05, .55, .95) infinite;
+}
+@keyframes breatheV2 {
+  0%   { transform: translateY(0) scale(1, 1); }
+  28%  { transform: translateY(-8px) scale(.985, 1.022); }
+  46%  { transform: translateY(-9px) scale(.99, 1.018); }
+  72%  { transform: translateY(-2px) scale(1.006, .996); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+
+/* ── 2. 眨眼：两次快速连眨 + 长间隔，像真人 ── */
+.eye-shine {
+  animation: blinkV2 6.4s cubic-bezier(.4, 0, .6, 1) infinite;
+  transform-origin: center;
+}
+@keyframes blinkV2 {
+  0%, 86%       { transform: scaleY(1); }
+  87.5%         { transform: scaleY(.06); }
+  89%           { transform: scaleY(1); }
+  90.5%         { transform: scaleY(.06); }   /* 连眨第二下 */
+  92%           { transform: scaleY(1); }
+  100%          { transform: scaleY(1); }
+}
+
+/* ── 3. 尾巴：8 字摆动（横向位移 + 旋转，不是单纯旋转）── */
+.tail {
+  transform-origin: 74px 152px;
+  animation: tailWagV2 3.4s cubic-bezier(.42, 0, .58, 1) infinite;
+}
+@keyframes tailWagV2 {
+  0%   { transform: rotate(-6deg) translateX(0); }
+  25%  { transform: rotate(2deg) translateX(-3px); }
+  50%  { transform: rotate(8deg) translateX(0); }
+  75%  { transform: rotate(1deg) translateX(3px); }
+  100% { transform: rotate(-6deg) translateX(0); }
+}
+body.mood-full .tail     { animation-duration: 1.9s; }
+body.mood-starving .tail { animation-duration: 6.2s; }
+
+/* ── 4. 胸鳍：跟着尾巴反向摆（自然抵消感）── */
+.pectoral {
+  transform-origin: 140px 196px;
+  animation: finWaveV2 3.4s cubic-bezier(.42, 0, .58, 1) infinite;
+}
+@keyframes finWaveV2 {
+  0%   { transform: rotate(4deg); }
+  50%  { transform: rotate(-8deg); }
+  100% { transform: rotate(4deg); }
+}
+
+/* ── 5. 光晕：双频叠加，制造"呼吸的光" ── */
+.char-glow {
+  animation: glowV2 3.8s ease-in-out infinite, glowHue 9s linear infinite;
+}
+@keyframes glowV2 {
+  0%, 100% { opacity: .55; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.12); }
+}
+@keyframes glowHue {
+  0%   { filter: blur(24px) hue-rotate(0deg); }
+  50%  { filter: blur(28px) hue-rotate(18deg); }
+  100% { filter: blur(24px) hue-rotate(0deg); }
+}
+
+/* ── 6. 饥饿标记：更明显，带抖动 ── */
+.hunger-mark {
+  transition: opacity .8s ease;
+}
+body.mood-starving .hunger-mark {
+  opacity: 1;
+  animation: markAlarm 1.6s ease-in-out infinite;
+}
+body.mood-hungry .hunger-mark {
+  opacity: .5;
+  animation: markFloatV2 2.8s ease-in-out infinite;
+}
+@keyframes markAlarm {
+  0%, 100% { transform: translateY(0) scale(1); }
+  15%      { transform: translateY(-2px) scale(1.06) rotate(-3deg); }
+  30%      { transform: translateY(0) scale(1) rotate(3deg); }
+  55%      { transform: translateY(-1px) scale(1.02); }
+}
+@keyframes markFloatV2 {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-5px); }
+}
+
+/* ══ 7. 眼神微动 ══
+   注意：blink 用 transform:scaleY，游移用 translate（独立属性），
+   两者互不覆盖，才能同时生效。若都写 transform 会互相冲掉导致眼睛消失。 */
+@keyframes eyeWander {
+  0%, 100% { translate: 0 0; }
+  18%      { translate: 2.4px 0.6px; }
+  38%      { translate: 3px -0.8px; }
+  58%      { translate: -1.6px 0.4px; }
+  78%      { translate: -2.2px -0.6px; }
+}
+
+/* ══ 8. 星场：三层视差（远慢近快）══ */
+.bg-stars i:nth-child(3n) {
+  animation-duration: 9s !important;   /* 远景慢 */
+  opacity: .35 !important;
+}
+.bg-stars i:nth-child(3n+1) {
+  animation-duration: 4.5s !important; /* 近景快 */
+}
+
+/* ══ 9. 角色粒子：螺旋上升 ══ */
+.char-particles i {
+  animation: particleV2 ease-out infinite;
+}
+@keyframes particleV2 {
+  0%   { opacity: 0; transform: translate(0, 0) scale(.3); }
+  15%  { opacity: .9; }
+  70%  { opacity: .5; }
+  100% { opacity: 0; transform: translate(var(--dx, 12px), -96px) scale(1.15); }
+}
+
+/* ══ 10. 底部信息带：数值变化时的涟漪扩散 ══ */
+.hunger-fill::after {
+  content: "";
+  position: absolute;
+  right: 0; top: 50%;
+  width: 20px; height: 20px;
+  margin: -10px -10px 0 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .9);
+  filter: blur(6px);
+  opacity: 0;
+}
+.hunger-fill.gain::after {
+  animation: tipSpark 1.1s ease-out;
+}
+@keyframes tipSpark {
+  0%   { opacity: .95; transform: scale(.4); }
+  60%  { opacity: .6; transform: scale(1.6); }
+  100% { opacity: 0; transform: scale(2.4); }
+}
+
+/* ══ 11. 角色被点击/送礼时的"视线聚焦"：眼睛放大 ══ */
+@keyframes focusEyes {
+  0%, 100% { transform: scale(1); }
+  40%      { transform: scale(1.14); }
+}
+.char.happy .eye-shine {
+  animation: blinkV2 6.4s infinite, focusEyes 1.2s ease-out;
+}
+
+/* ══ 12. 情绪转换：整个画面的色温过渡更慢更有戏剧性 ══ */
+.bg-aurora { transition: background 2.2s cubic-bezier(.4, 0, .2, 1); }
+body { transition: background 2s ease; }
+
+/* ══ 13. 吃饱后的持续微光呼吸 ══ */
+body.mood-full .char-glow {
+  animation: glowV2 2.0s ease-in-out infinite, glowHue 6s linear infinite;
+}
+
+
+
+
+/* ══ 14. 饿到极致的虚弱颤抖（很轻，但能感觉到）══ */
+body.mood-starving .char {
+  animation:
+    breatheV2 6.6s cubic-bezier(.45, .05, .55, .95) infinite,
+    weakTremble 5.5s ease-in-out infinite;
+}
+@keyframes weakTremble {
+  0%, 100% { translate: 0 0; }
+  12%      { translate: .6px 0; }
+  25%      { translate: -.5px .3px; }
+  37%      { translate: .4px -.2px; }
+  50%      { translate: -.3px 0; }
+  62%      { translate: .5px .2px; }
+  75%      { translate: -.4px -.3px; }
+  87%      { translate: .3px .1px; }
+}
+
+/* ══ 15. 底部信息带入场 ══ */
+.dock {
+  animation: dockIn 1.1s cubic-bezier(.22, 1, .36, 1) both;
+}
+@keyframes dockIn {
+  from { opacity: 0; transform: translateY(26px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ══ 16. 角色入场：从下方浮起 ══ */
+.char-stage {
+  animation: charIn 1.3s cubic-bezier(.22, 1, .36, 1) both;
+}
+@keyframes charIn {
+  from { opacity: 0; transform: translateY(50px) scale(.86); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ══ 17. 震屏：大额礼物落地时的物理反馈 ══ */
+@keyframes shakeScreen {
+  0%, 100% { transform: translate(0, 0); }
+  12%  { transform: translate(calc(var(--shake, 4) * -1px), calc(var(--shake, 4) * .4px)); }
+  28%  { transform: translate(calc(var(--shake, 4) * .9px), calc(var(--shake, 4) * -.5px)); }
+  46%  { transform: translate(calc(var(--shake, 4) * -.6px), calc(var(--shake, 4) * .3px)); }
+  64%  { transform: translate(calc(var(--shake, 4) * .35px), calc(var(--shake, 4) * -.2px)); }
+  82%  { transform: translate(calc(var(--shake, 4) * -.15px), 0); }
+}
+
+/* ══ 18. 角色轻微浮动（在呼吸之上的慢速漂移，制造"悬在水中"）══ */
+.char-stage {
+  animation: charIn 1.3s cubic-bezier(.22, 1, .36, 1) both,
+             floatDrift 8.5s ease-in-out infinite;
+}
+@keyframes floatDrift {
+  0%, 100% { transform: translate(0, 0); }
+  33%      { transform: translate(3px, -5px); }
+  66%      { transform: translate(-3px, -3px); }
+}
+
+
+/* ══ 19. 情绪化的眼睛 ══
+   不用遮罩（容易做坏），而是让眨眼节奏、眼神游移反映状态：
+   - 饿：眨眼变慢、游移变慢（没精神）
+   - 饱：眨眼变快、游移活跃（精神好）
+   这是"活着"的关键——眼睛是唯一让观众相信它有意识的部位。 */
+body.mood-starving .eye-shine {
+  animation-duration: 11s, 15s;      /* 眨眼很慢、游移很慢 */
+}
+body.mood-hungry .eye-shine {
+  animation-duration: 8s, 9s;
+}
+body.mood-full .eye-shine {
+  animation-duration: 3.4s, 4.2s;    /* 精神抖擞 */
+}
+
+/* ══ 20. 瞳孔（眼白高光）随情绪变化亮度 ══ */
+.eye-shine { transition: fill .8s ease; }
+body.mood-starving .eye-shine { fill: #1a2233; }   /* 眼神黯淡 */
+body.mood-full .eye-shine     { fill: #05080f; }   /* 眼神明亮 */
+
+/* ══ 21. 嘴巴张开（吃饱/开心时嘴巴会动）══ */
+.face-normal path[stroke="#1e3a5f"] {
+  transition: d .6s ease;
+}

@@ -164,7 +164,20 @@ class _DaemonThreadPool(ThreadPoolExecutor):
     这里复刻 _adjust_thread_count 并在 start 前设置 daemon，同时避免两个问题：
     - 非 daemon worker 在解释器退出时阻塞（进程挂起）；
     - 每次工具轮新建线程池的创建开销。
+
+    Python 版本兼容（重要）
+    -----------------------
+    CPython 3.15 重构了线程池内部结构：
+      - 3.9~3.14：_worker 参数为 (weakref, work_queue, initializer, initargs)
+      - 3.15+   ：_worker 参数为 (weakref, worker_context, work_queue)，
+                  初始化器通过 self._create_worker_context() 取得
+    旧代码硬编码了前者的属性（self._initializer），在 3.15 上抛
+    AttributeError: '_DaemonThreadPool' object has no attribute '_initializer'，
+    表现为「任务模式第一次能跑、第二次对话中断」。这里按运行时能力自适应。
     """
+
+    # 版本侦察：3.15+ 用 self._create_worker_context()，旧版用 self._initializer。
+    # 两者都挂在实例上，因此运行时用 hasattr(self, ...) 判断（见 _adjust_thread_count）。
 
     def _adjust_thread_count(self):
         if self._idle_semaphore.acquire(timeout=0):
@@ -174,17 +187,33 @@ class _DaemonThreadPool(ThreadPoolExecutor):
             q.put(None)
 
         num_threads = len(self._threads)
-        if num_threads < self._max_workers:
+        if num_threads >= self._max_workers:
+            return
+
+        name = "%s_%d" % (self._thread_name_prefix or self, num_threads)
+        # ⚠️ _create_worker_context 是 __init__ 里挂到 _实例_ 上的，不是类属性，
+        # 所以必须在实例上探测（用 hasattr(self, ...)），探测类会永远为 False，
+        # 进而误走旧分支 → "_worker() takes 3 positional arguments but 4 were given"。
+        if hasattr(self, "_create_worker_context"):
+            t = threading.Thread(                 # Python 3.15+
+                name=name,
+                target=_worker,
+                args=(weakref.ref(self, weakref_cb),
+                      self._create_worker_context(),
+                      self._work_queue),
+            )
+        else:                                     # Python 3.9 ~ 3.14
             t = threading.Thread(
-                name="%s_%d" % (self._thread_name_prefix or self, num_threads),
+                name=name,
                 target=_worker,
                 args=(weakref.ref(self, weakref_cb), self._work_queue,
-                      self._initializer, self._initargs),
+                      getattr(self, "_initializer", None),
+                      getattr(self, "_initargs", ())),
             )
-            t.daemon = True  # 必须在 start() 之前
-            t.start()
-            self._threads.add(t)
-            _threads_queues[t] = self._work_queue
+        t.daemon = True  # 必须在 start() 之前
+        t.start()
+        self._threads.add(t)
+        _threads_queues[t] = self._work_queue
 
 
 _TOOL_EXECUTOR = _DaemonThreadPool(max_workers=4, thread_name_prefix="tool")

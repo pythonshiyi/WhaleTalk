@@ -1,0 +1,239 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>大肥鱼 · 直播间</title>
+<link rel="stylesheet" href="hud.css" />
+<link rel="stylesheet" href="char.css" />
+<link rel="stylesheet" href="play.css" />
+<link rel="stylesheet" href="motion.css" />
+</head>
+<body class="mood-normal">
+  <div class="stage">
+
+    <!-- ══ 背景：深空星场 ══ -->
+    <div class="bg-aurora"></div>
+    <div class="bg-stars" id="bgStars" aria-hidden="true"></div>
+    <div class="bg-vignette"></div>
+
+    <!-- ══ 合规标识：常驻、不透明、不闪烁 ══ -->
+    <div class="ai-badge">
+      <span class="ai-dot"></span>
+      <span>AI 虚拟角色</span>
+    </div>
+
+    <!-- ══ 角色舞台 ══ -->
+    <div class="avatar-wrap">
+      <div class="bubble" id="bubble" hidden><span id="bubbleText"></span></div>
+
+      <div class="char-stage">
+        <div class="char-glow"></div>
+        <div class="char" id="char">
+          <div class="char-particles" id="charParticles" aria-hidden="true"></div>
+          <svg class="char-svg" viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="虚拟角色大肥鱼">
+<defs>
+    <!-- 身体渐变：赛博蓝紫 -->
+    <radialGradient id="bodyGrad" cx="42%" cy="34%" r="68%">
+      <stop offset="0%"   stop-color="#7dd3fc"/>
+      <stop offset="38%"  stop-color="#38bdf8"/>
+      <stop offset="72%"  stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#4338ca"/>
+    </radialGradient>
+
+    <!-- 腹部高光 -->
+    <radialGradient id="bellyGrad" cx="50%" cy="42%" r="58%">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity=".92"/>
+      <stop offset="55%"  stop-color="#e0f2fe" stop-opacity=".55"/>
+      <stop offset="100%" stop-color="#bae6fd" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- 尾巴渐变 -->
+    <linearGradient id="tailGrad" x1="0%" y1="0%" x2="100%" y2="60%">
+      <stop offset="0%"   stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+
+    <!-- 鱼鳍渐变 -->
+    <linearGradient id="finGrad" x1="10%" y1="0%" x2="90%" y2="100%">
+      <stop offset="0%"   stop-color="#a5b4fc"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+
+    <!-- 边缘光 -->
+    <filter id="rimGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- 内发光 -->
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+
+    <clipPath id="bodyClip">
+      <ellipse cx="152" cy="158" rx="86" ry="74"/>
+    </clipPath>
+  </defs>
+
+  <!-- ══ 尾巴（在身后，独立摆动）══ -->
+  <g class="tail">
+    <path d="M78 148 C36 112, 8 128, 14 158 C8 188, 36 204, 78 168 Z"
+          fill="url(#tailGrad)" opacity=".92"/>
+    <!-- 尾鳍纹理 -->
+    <path d="M74 152 C48 132, 28 138, 26 158 C28 178, 48 184, 74 164"
+          fill="none" stroke="#c7d2fe" stroke-width="1.6" opacity=".55"/>
+    <path d="M70 156 C52 144, 40 148, 38 158 C40 168, 52 172, 70 160"
+          fill="none" stroke="#e0e7ff" stroke-width="1.2" opacity=".35"/>
+  </g>
+
+  <!-- ══ 背鳍 ══ -->
+  <path d="M150 86 C168 60, 196 62, 206 92 C190 88, 170 88, 150 86 Z"
+        fill="url(#finGrad)" opacity=".9"/>
+
+  <!-- ══ 身体 ══ -->
+  <path d="M58 158 C58 118 102 92 152 92 C210 92 252 120 254 158 C252 196 210 224 152 224 C102 224 58 198 58 158 Z" fill="url(#bodyGrad)" filter="url(#rimGlow)"/>
+  <!-- 侧腹阴影：让身体有体积感 -->
+  <path d="M58 158 C58 198 102 224 152 224 C210 224 252 196 254 158 C246 190 204 214 152 214 C100 214 64 190 58 158 Z" fill="#312e81" opacity=".32"/>
+  <!-- 头顶高光 -->
+  <path d="M108 122 Q140 100 178 112 Q140 110 108 122 Z" fill="#e0f2fe" opacity=".30"/>
+
+  <!-- ══ 腹部高光 ══ -->
+  <ellipse cx="162" cy="184" rx="46" ry="32" fill="url(#bellyGrad)" opacity=".55"/>
+
+  <!-- ══ 身体上的赛博纹路 ══ -->
+  <g clip-path="url(#bodyClip)" opacity=".5">
+    <path d="M96 196 Q140 176 196 194" fill="none" stroke="#a5f3fc" stroke-width="1.8" opacity=".6"/>
+    <path d="M104 212 Q146 194 200 210" fill="none" stroke="#a5f3fc" stroke-width="1.4" opacity=".45"/>
+    <path d="M116 226 Q152 212 190 224" fill="none" stroke="#a5f3fc" stroke-width="1.1" opacity=".3"/>
+    <!-- 发光斑点 -->
+    <circle cx="118" cy="150" r="2.4" fill="#e0f2fe" opacity=".7"/>
+    <circle cx="132" cy="128" r="1.8" fill="#e0f2fe" opacity=".55"/>
+    <circle cx="196" cy="140" r="2.1" fill="#e0f2fe" opacity=".6"/>
+    <circle cx="210" cy="168" r="1.6" fill="#e0f2fe" opacity=".45"/>
+  </g>
+
+  <!-- ══ 胸鳍（轻微摆动）══ -->
+  <path class="pectoral" d="M136 188 C120 208 134 230 162 224 C148 216 140 204 136 188 Z" fill="url(#finGrad)" opacity=".85"/>
+
+  <!-- ══ 脸颊腮红 ══ -->
+  <ellipse class="cheek" cx="118" cy="170" rx="13" ry="8.5" fill="#fb7185" filter="url(#softGlow)"/>
+  <ellipse class="cheek" cx="202" cy="168" rx="12" ry="8" fill="#fb7185" filter="url(#softGlow)"/>
+
+  <!-- ══ 眼睛 ══ -->
+  <!-- 眼睛：所有状态都可见，只切嘴型 -->
+    <g id="faceEyes" class="face-eyes">
+      <!-- 左眼 -->
+      <ellipse cx="130" cy="146" rx="12" ry="13.5" fill="#0b1220"/>
+      <ellipse class="eye-shine" cx="130" cy="146" rx="12" ry="13.5" fill="#0b1220"/>
+      <circle cx="134" cy="141" r="5.2" fill="#ffffff"/>
+      <circle cx="125" cy="151" r="2.4" fill="#a5f3fc" opacity=".9"/>
+      <circle cx="137" cy="148" r="1.6" fill="#ffffff" opacity=".7"/>
+      <!-- 右眼 -->
+      <ellipse class="eye-shine" cx="190" cy="144" rx="12" ry="13.5" fill="#0b1220" style="animation-delay:.1s"/>
+      <circle cx="194" cy="139" r="5.2" fill="#ffffff"/>
+      <circle cx="185" cy="149" r="2.4" fill="#a5f3fc" opacity=".9"/>
+      <circle cx="197" cy="146" r="1.6" fill="#ffffff" opacity=".7"/>
+    </g>
+
+    <!-- 嘴型：按情绪切换，默认微笑 -->
+    <g class="face-neutral">
+      <path d="M146 190 Q158 200 172 189" fill="none" stroke="#1e3a5f"
+            stroke-width="3.4" stroke-linecap="round"/>
+    </g>
+
+  <!-- 开心脸（吃饱）-->
+  <g class="face-happy" opacity="0">
+      <!-- 先完全遮住真眼（用身体色实心块，略大于眼球）-->
+      <ellipse cx="130" cy="146" rx="15" ry="16" fill="url(#bodyGrad)"/>
+      <ellipse cx="190" cy="144" rx="15" ry="16" fill="url(#bodyGrad)"/>
+      <!-- 开心弯眼：弧口朝上（∩形），表示笑眯眼 -->
+      <path d="M117 150 Q130 139 143 150" fill="none" stroke="#0b1220" stroke-width="4.4" stroke-linecap="round"/>
+      <path d="M177 148 Q190 137 203 148" fill="none" stroke="#0b1220" stroke-width="4.4" stroke-linecap="round"/>
+      <!-- 张嘴笑 -->
+      <path d="M141 175 Q160 202 179 174 Q160 187 141 175 Z" fill="#1e3a5f"/>
+      <ellipse cx="160" cy="187" rx="7.5" ry="4" fill="#fb7185" opacity=".9"/>
+    </g>
+
+  <!-- 难过/饿脸 -->
+  <g class="face-sad" opacity="0">
+      <!-- 眉眼低垂（画在眼睛上方）-->
+      <path d="M117 128 Q130 124 143 130" fill="none" stroke="#0b1220" stroke-width="3.4" stroke-linecap="round" opacity=".85"/>
+      <path d="M177 126 Q190 122 203 128" fill="none" stroke="#0b1220" stroke-width="3.4" stroke-linecap="round" opacity=".85"/>
+      <!-- 下垂的嘴 -->
+      <path d="M148 184 Q160 174 172 184" fill="none" stroke="#1e3a5f" stroke-width="3.6" stroke-linecap="round"/>
+    </g>
+
+  <!-- ══ 头顶图标：饥饿时出现的小符号 ══ -->
+  <g class="hunger-mark" opacity="0">
+    <circle cx="248" cy="74" r="17" fill="rgba(239,68,68,.22)"/>
+    <path d="M248 64 L248 78 M248 84 L248 86" stroke="#fca5a5"
+          stroke-width="3.4" stroke-linecap="round"/>
+  </g>
+
+          </svg>
+        </div>
+      </div>
+
+      <!-- 喂食特效层 -->
+      <div class="feed-fx" id="feedFx" aria-hidden="true"></div>
+    </div>
+
+    <!-- ══ 底部信息带 ══ -->
+    <div class="dock">
+      <div class="dock-left">
+        <div class="char-name">大肥鱼</div>
+        <div class="mood-tag" id="moodTag">有点饿</div>
+      </div>
+
+      <div class="dock-center">
+        <div class="hunger-track">
+          <div class="hunger-glow" id="barGlow"></div>
+          <div class="hunger-fill" id="barFill"></div>
+        </div>
+        <div class="hunger-meta">
+          <span class="pct" id="filledText">0%</span>
+          <span class="sep">·</span>
+          <span id="remainingText">还差 ¥20.0 吃饱</span>
+        </div>
+      </div>
+
+      <div class="dock-right">
+        <div class="money">
+          <span class="money-label">今日打赏</span>
+          <span class="money-value" id="todayYuan">¥0.0</span>
+        </div>
+        <div class="mini-stats">
+          <span><b id="giftCount">0</b> 次礼物</span>
+          <span><b id="uniqueGivers">0</b> 人投喂</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ 右侧事件流 ══ -->
+    <div class="feed-list" id="feedList"></div>
+
+    <!-- ══ 吃饱庆祝 ══ -->
+    <div class="celebrate" id="celebrate" hidden>
+      <div class="celebrate-text">吃饱啦！</div>
+    </div>
+
+    <audio id="voice" preload="auto"></audio>
+  </div>
+
+  <script src="hud.js"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+

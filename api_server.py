@@ -2099,6 +2099,80 @@ def _personas():
     return {"personas": items, "count": len(items)}
 
 
+def _channels_list():
+    """全部通道的能力与运行状态（统一入口，新增平台自动出现）。"""
+    import channel_registry as cr
+    # 确保各通道模块已导入（模块导入即向注册表登记）。
+    # 缺任何一个都只损失该通道，不影响其余通道的可见性。
+    for _mod in ("qq_onebot", "qq_official", "channel_telegram"):
+        try:
+            __import__(_mod)
+        except Exception:
+            logger.warning("通道模块 %s 导入失败（可降级）", _mod, exc_info=True)
+    return {"channels": cr.registry.describe(), "count": len(cr.registry.names())}
+
+
+def _channel_module(name):
+    """按通道名取回其模块（保持各模块自己的配置读写语义）。
+
+    导入该模块即触发向注册表登记，因此这里同时也是「确保通道已注册」的入口。
+    """
+    mapping = {
+        "qq": "qq_onebot",
+        "qq_official": "qq_official",
+        "telegram": "channel_telegram",
+    }
+    mod = mapping.get(str(name or "").strip())
+    if not mod:
+        raise ValueError(f"未知通道：{name}")
+    return __import__(mod)
+
+
+def _channel_action(name, body):
+    """统一通道操作：save / start / stop / probe / test。
+
+    与 `_qq_action` / `_qq_official_action` 语义一致，只是把「哪条通道」
+    参数化了，因此新增平台不需要在 api_server 里再写一遍。
+    """
+    body = body if isinstance(body, dict) else {}
+    action = str(body.get("action") or "save").strip().lower()
+    try:
+        mod = _channel_module(name)
+    except ValueError as e:
+        return None, str(e)
+    label = str(getattr(mod, "status", lambda: {}).__name__ and "") or name
+    try:
+        if action in ("start", "stop"):
+            mod.save_config({"enabled": action == "start"})
+            mod.start(mod.load_config())
+            return {"ok": True, "status": mod.status()}, None
+        if action == "probe":
+            ok, msg = mod.probe()
+            if not ok:
+                return None, msg
+            return {"ok": True, "message": msg, "status": mod.status()}, None
+        if action == "test":
+            uid = str(body.get("user_id") or body.get("openid") or body.get("chat_id") or "").strip()
+            if not uid:
+                return None, "请填写接收方 ID"
+            ok, msg = mod.probe()
+            if not ok:
+                return None, f"连接检测失败：{msg}"
+            ok, err = mod.send_test(uid, str(body.get("text") or "🐋 鲸语通道测试消息"))
+            if not ok:
+                return None, f"发送失败：{err}"
+            return {"ok": True, "status": mod.status()}, None
+        patch = body.get("config") if isinstance(body.get("config"), dict) else body
+        mod.save_config(patch)
+        mod.start(mod.load_config())
+        return {"ok": True, "status": mod.status()}, None
+    except ValueError as e:
+        return None, str(e)
+    except Exception as e:
+        logger.exception("通道 %s 操作失败", name)
+        return None, f"通道 {name} 操作失败：{e}"
+
+
 def _qq_status():
     import qq_onebot
     return qq_onebot.status()
@@ -6543,6 +6617,12 @@ QQ_CONFIG_PATH = os.path.join(DATA_DIR, "qq_onebot.json")
 QQ_STATE_PATH = os.path.join(DATA_DIR, "qq_state.json")
 QQ_OFFICIAL_CONFIG_PATH = os.path.join(DATA_DIR, "qq_official.json")
 QQ_OFFICIAL_STATE_PATH = os.path.join(DATA_DIR, "qq_official_state.json")
+# Telegram 通道：配置沿用 im_config.json（保持与既有部署兼容），状态单独存放
+TG_CONFIG_PATH = os.path.join(DATA_DIR, "im_config.json")
+TG_STATE_PATH = os.path.join(DATA_DIR, "telegram_state.json")
+# 直播 HUD：静态网页目录（OBS「浏览器源」抓 http://127.0.0.1:8745/live/）
+LIVE_HUD_DIR = os.path.join(BASE_DIR, "live_hud")
+LIVE_STATE_PATH = os.path.join(DATA_DIR, "live_state.json")
 PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
 SCHEDULES_PATH = os.path.join(DATA_DIR, "schedules.json")
 RECENT_PATH = os.path.join(DATA_DIR, "recent_outputs.json")
@@ -7213,6 +7293,19 @@ class _Handler(BaseHTTPRequestHandler):
     def _serve_static(self, path):
         """静态 WebUI 资源（dist/），SPA fallback 到 index.html。"""
         path = str(path or "").split("?", 1)[0].split("#", 1)[0]  # 剥离查询串/片段（缓存戳 ?v= 等）
+        # 直播 HUD 是独立目录（非 WebUI dist），必须在 SPA 兜底之前分流，
+        # 否则 /live/* 会被 index.html 吃掉。它不属于 /v1 路由表，故在此处前置。
+        if path.lstrip("/").startswith("live/"):
+            if path.lstrip("/").startswith("live/data"):
+                # HUD 只读数据（免 token：OBS 浏览器源带不了请求头）
+                try:
+                    import live_engine
+                    self._json(200, live_engine.podium_data())
+                except Exception as e:
+                    self._json(500, {"error": _friendly_error(e)})
+                return
+            self._serve_live_hud(path)
+            return
         rel = self._strip_api_prefix(path).lstrip("/")
         if not rel:
             rel = "index.html"
@@ -7793,7 +7886,7 @@ class _Handler(BaseHTTPRequestHandler):
                 logger.exception("GET %s 失败", self.path)
                 self._fail(500, e, code=500)
         else:
-            # 静态资源（WebUI dist/）
+            # 静态资源；_serve_static 内部先分流直播 HUD（/live/*），再走 SPA 兜底
             self._serve_static(self.path)
 
 
@@ -9121,6 +9214,49 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, result)
 
 
+    # ── 统一通道接口：新增平台无需改这里 ──
+    @_get_route("/v1/channels")
+    def _g_v1_channels(self):
+        try:
+            self._json(200, _channels_list())
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
+
+    @_get_route(("qpath", "/v1/channels/status"))
+    def _g_v1_channels_status(self):
+        """?name=xxx 取单通道状态；不传则返回全部。"""
+        try:
+            import urllib.parse as _up
+            qs = _up.parse_qs(_up.urlparse(self.path).query)
+            name = str((qs.get("name") or [""])[0]).strip()
+            if name:
+                mod = _channel_module(name)
+                self._json(200, {"name": name, "status": mod.status()})
+            else:
+                import channel_registry as cr
+                self._json(200, {"channels": cr.registry.describe()})
+        except ValueError as e:
+            self._json(400, {"error": _friendly_error(e)})
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
+
+    @_post_route("/v1/channels")
+    def _p_v1_channels(self):
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        name = str(body.get("channel") or body.get("name") or "").strip()
+        if not name:
+            self._json(400, {"error": "channel 不能为空"})
+            return
+        result, err = _channel_action(name, body)
+        if err:
+            self._json(400, {"error": err})
+        else:
+            self._json(200, result)
+
+
     @_post_route("/v1/schedules")
     def _p_v1_schedules(self):
         body = self._read_body()
@@ -9172,6 +9308,138 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._json(200, result)
 
+
+    # ══ 直播角色（虚拟角色求生玩法）════════════════════════════════
+    # HUD 网页：供 OBS「浏览器源」抓取（由 _serve_static 前置分流，走独立目录）
+    def _serve_live_hud(self, path=None):
+        raw = str(path or self.path).split("?", 1)[0]
+        rel = raw.rsplit("/live/", 1)[-1].replace("\\", "/").lstrip("/")
+        if not rel or rel.endswith("/"):
+            rel = (rel + "index.html").lstrip("/")
+        # 只允许 live_hud 目录下的白名单后缀，且必须在目录内
+        if ".." in rel.split("/") or rel.startswith("."):
+            self._json(403, {"error": "forbidden"})
+            return
+        full = os.path.normpath(os.path.join(LIVE_HUD_DIR, rel))
+        real_dir = os.path.realpath(LIVE_HUD_DIR) + os.sep
+        real_full = os.path.realpath(full)
+        if not real_full.startswith(real_dir):
+            self._json(403, {"error": "forbidden"})
+            return
+        exts = {".html", ".css", ".js", ".svg", ".png", ".webp", ".json"}
+        if os.path.splitext(real_full)[1].lower() not in exts or not os.path.isfile(real_full):
+            self._json(404, {"error": "not found"})
+            return
+        try:
+            with open(real_full, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._json(500, {"error": "read failed"})
+            return
+        ctype = {
+            ".html": "text/html; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".js": "application/javascript; charset=utf-8",
+            ".json": "application/json; charset=utf-8",
+            ".svg": "image/svg+xml",
+            ".png": "image/png",
+            ".webp": "image/webp",
+        }.get(os.path.splitext(real_full)[1].lower(), "application/octet-stream")
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(data)
+
+    @_get_route("/v1/live/snapshot")
+    def _g_v1_live_snapshot(self):
+        try:
+            import live_engine
+            self._json(200, live_engine.snapshot_dict())
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
+
+    @_get_route("/v1/live/events")
+    def _g_v1_live_events(self):
+        try:
+            import live_engine
+            self._json(200, {"events": live_engine.recent_events(20)})
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
+
+    @_get_route("/v1/live/line")
+    def _g_v1_live_line(self):
+        """HUD 拉取最新台词（带 seq，前端据此判断是否需要播报）。"""
+        try:
+            import live_engine
+            self._json(200, live_engine.latest_line())
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
+
+    @_post_route("/v1/live/gift")
+    def _p_v1_live_gift(self):
+        """模拟/接收一次打赏：更新数值并让角色说一句。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import live_engine
+            giver = str(body.get("giver") or body.get("user") or "神秘观众")[:40]
+            doucoin = float(body.get("doucoin") or body.get("value") or 0)
+            gift = str(body.get("gift") or body.get("gift_name") or "礼物")[:20]
+            count = int(body.get("count") or 1)
+            say = bool(body.get("say", True))
+            result = live_engine.on_gift(giver, doucoin, gift, count, say=say)
+            self._json(200, result)
+        except (TypeError, ValueError) as e:
+            self._json(400, {"error": _friendly_error(e)})
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
+
+    @_post_route("/v1/live/chat")
+    def _p_v1_live_chat(self):
+        """模拟/接收一条弹幕：让角色回一句。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import live_engine
+            user = str(body.get("user") or body.get("giver") or "观众")[:40]
+            text = str(body.get("text") or "")[:200]
+            if not text.strip():
+                self._json(400, {"error": "text 不能为空"})
+                return
+            say = bool(body.get("say", True))
+            self._json(200, live_engine.on_chat(user, text, say=say))
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
+
+    @_post_route("/v1/live/settings")
+    def _p_v1_live_settings(self):
+        """调整数值参数（每日额度/饥饿速度/限速）。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import live_engine
+            patch = body.get("config") if isinstance(body.get("config"), dict) else body
+            st = live_engine.reload_settings(patch)
+            self._json(200, {"ok": True, "snapshot": st.snapshot().as_dict()})
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
+
+    @_get_route("/v1/live/settings")
+    def _g_v1_live_settings(self):
+        try:
+            import live_state
+            self._json(200, {"config": dict(live_state.DEFAULTS)})
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
 
     @_post_route("/v1/skills/crystallize")
     def _p_v1_skills_crystallize(self):
@@ -10797,6 +11065,19 @@ def start_server(port=8745, token=""):
         _qq_official.init(QQ_OFFICIAL_CONFIG_PATH, QQ_OFFICIAL_STATE_PATH)
     except Exception:
         logger.warning("QQ 官方通道初始化失败（可降级）：官方 QQ Bot 不可用")
+    # ── 可降级：Telegram 通道（已从 _im_loop 内联逻辑迁移为独立适配器）──
+    try:
+        import channel_telegram as _tg
+        _tg.init(TG_CONFIG_PATH, TG_STATE_PATH)
+    except Exception:
+        logger.warning("Telegram 通道初始化失败（可降级）：Telegram 不可用")
+    # ── 可降级：直播角色（虚拟角色求生玩法）──
+    try:
+        import live_engine as _live
+        _live.init(LIVE_STATE_PATH)
+        logger.info("直播角色引擎已就绪（HUD: /live/）")
+    except Exception:
+        logger.warning("直播角色引擎初始化失败（可降级）：直播玩法不可用", exc_info=True)
     # ── 可降级：装载运行时能力包（能力主干，v3.17）──
     # 失败只损失扩展能力，内置 169 项工具不受影响；坏包逐个报错而不是整体放弃。
     try:
@@ -10827,10 +11108,9 @@ def start_server(port=8745, token=""):
         _start_inbound()
     except Exception:
         logger.warning("Webhook 接收端启动失败（可降级）：webhook 回调查收不可用")
-    try:
-        _start_im()
-    except Exception:
-        logger.warning("IM 通道启动失败（可降级）：IM 远程指令不可用")
+    # 说明：旧 _im_loop 的内联 Telegram 轮询已迁移为独立通道适配器
+    # （channel_telegram.py），下面由 _tg.start_if_enabled() 统一启动。
+    # 保留 _im_loop 定义仅为兼容旧引用，不再在此启动，避免重复处理同一条消息。
     try:
         import qq_onebot as _qq_onebot
         _qq_onebot.start_if_enabled()
@@ -10841,6 +11121,11 @@ def start_server(port=8745, token=""):
         _qq_official.start_if_enabled()
     except Exception:
         logger.warning("QQ 官方通道启动失败（可降级）：官方 QQ Bot 不可用", exc_info=True)
+    try:
+        import channel_telegram as _tg
+        _tg.start_if_enabled()
+    except Exception:
+        logger.warning("Telegram 通道启动失败（可降级）：Telegram 不可用", exc_info=True)
     try:
         import permissions as perms
         perms.init(

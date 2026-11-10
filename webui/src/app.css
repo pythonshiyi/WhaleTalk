@@ -4596,7 +4596,107 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
   color: var(--text-3); font-size: var(--fs-3xs); font-family: var(--font-mono);
 }
 .persona-memory-meta .pm-op { margin-left: auto; }
+/* ── 直播角色控制台 ───────────────────────────────────────────────── */
+.live-url-row { display: flex; gap: var(--sp-2); align-items: center; }
+.live-url-row .set-select { flex: 1; }
+
+.live-status .svc-title { display: flex; align-items: center; justify-content: space-between; }
+.live-mood {
+  padding: 2px 12px; border-radius: 999px;
+  font-size: var(--fs-sm); font-weight: 500;
+  background: var(--bg-2); color: var(--text-2);
+}
+.live-mood.mood-starving { background: rgba(239,68,68,.16); color: #fca5a5; }
+.live-mood.mood-hungry   { background: rgba(245,158,11,.16); color: #fcd34d; }
+.live-mood.mood-normal   { background: rgba(96,165,250,.16); color: #93c5fd; }
+.live-mood.mood-full     { background: rgba(52,211,153,.16); color: #6ee7b7; }
+
+.live-bar-wrap {
+  display: flex; align-items: center; gap: var(--sp-3);
+  margin: var(--sp-3) 0;
+}
+.live-bar {
+  flex: 1; height: 14px; border-radius: 999px;
+  background: var(--bg-2); overflow: hidden;
+  border: 1px solid var(--border);
+}
+.live-bar-fill {
+  height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #34d399);
+  transition: width .6s cubic-bezier(.22,1,.36,1);
+}
+.live-bar-text { font-size: var(--fs-sm); color: var(--text-3); min-width: 74px; text-align: right; }
+
+.live-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: var(--sp-2); margin-top: var(--sp-3);
+}
+.live-stat {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: var(--sp-2);
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.live-stat b { font-size: var(--fs-lg); color: var(--text-1); font-variant-numeric: tabular-nums; }
+.live-stat span { font-size: var(--fs-3xs); color: var(--text-3); }
+
+.live-top {
+  margin-top: var(--sp-3); font-size: var(--fs-sm); color: var(--text-3);
+}
+.live-top b { color: var(--text-1); }
+
+.live-gift-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: var(--sp-2); margin: var(--sp-2) 0 var(--sp-3);
+}
+.live-gift-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: var(--sp-2); cursor: pointer;
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: var(--r-md); color: var(--text-1);
+  transition: border-color var(--t-fast), background var(--t-fast), transform var(--t-fast);
+}
+.live-gift-btn:hover:not(:disabled) {
+  border-color: var(--accent); background: var(--bg-2); transform: translateY(-1px);
+}
+.live-gift-btn:disabled { opacity: .55; cursor: not-allowed; }
+.live-gift-btn b { font-size: var(--fs-md); }
+.live-gift-btn span { font-size: var(--fs-3xs); color: var(--text-3); }
+
+.live-line {
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md);
+  color: var(--text-1); font-size: var(--fs-md); line-height: 1.6;
+}
+
+.live-warn { border-color: rgba(245,158,11,.35); }
+
 /* ── QQ 陪伴通道 ─────────────────────────────────────────────────── */
+/* 通道 Tab：一个页面承载所有平台（QQ 本地 / QQ 官方 / Telegram / …） */
+.channel-tabs {
+  display: flex; gap: var(--sp-2); flex-wrap: wrap;
+  margin-bottom: var(--sp-3); padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+.channel-tab {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: var(--sp-2) var(--sp-4); cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--bg-1); color: var(--text-2);
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+.channel-tab:hover { background: var(--bg-2); color: var(--text-1); }
+.channel-tab.is-active {
+  border-color: var(--accent); color: var(--text-1);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-1));
+}
+.channel-tab b { font-size: var(--fs-md); font-weight: 600; }
+.channel-tab span { font-size: var(--fs-3xs); color: var(--text-3); }
+.channel-desc { margin-bottom: var(--sp-3); }
+.channel-desc p { color: var(--text-2); font-size: var(--fs-sm); line-height: 1.6; }
+
 .qq-status {
   display: flex; align-items: center; gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4);

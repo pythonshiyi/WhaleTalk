@@ -87,11 +87,16 @@ def test_self_model_and_evolution_actions(btmp):
 
 def test_review_due_action(btmp):
     import brain_api
+    from datetime import datetime, timedelta, timezone
+
     e = bk.remember_structured("需定期复习的高价值记忆", type="规则", importance=5, source="测试")
     items = bk.load_memories(include_archived=True)
+    # 相对时间：复习窗口是 7~90 天，写死绝对日期会随日历推移逸出窗口而误报。
+    ts = (datetime.now(timezone.utc) - timedelta(days=47)).replace(
+        hour=2, minute=0, second=0, microsecond=0).isoformat()
     for it in items:
         if it["id"] == e["id"]:
-            it["ts"] = "2026-08-01T10:00:00+08:00"  # 约 47 天前，落在 7~90 天窗口
+            it["ts"] = ts
     bk.save_memories(items)
     r = brain_api.brain_action("review-due", {"limit": 10})
     assert r["ok"]

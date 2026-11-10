@@ -1327,6 +1327,70 @@ export async function testQqOfficial(openid, text) {
   return api("/v1/qq-official", { method: "POST", body: JSON.stringify({ action: "test", user_id: openid, text }) });
 }
 
+// ── 统一通道接口（新增平台自动可用，前端无需再加函数）────────────
+
+/** @returns {Promise<{channels:Array<Object>, count:number}>} 全部通道能力与运行状态 */
+export async function listChannels() {
+  return api("/v1/channels");
+}
+
+/** @param {string} name 通道名（qq / qq_official / telegram / …）
+ *  @returns {Promise<Object>} 该通道完整状态（含 contacts） */
+export async function getChannelStatus(name) {
+  return api(`/v1/channels/status?name=${encodeURIComponent(name)}`);
+}
+
+/** 统一通道操作：save / start / stop / probe / test
+ *  @param {string} channel @param {Object} body @returns {Promise<Object>} */
+export async function channelAction(channel, body) {
+  return api("/v1/channels", {
+    method: "POST",
+    body: JSON.stringify({ channel, ...(body || {}) }),
+  });
+}
+
+// ── 直播角色（虚拟角色求生玩法）────────────────────────────────
+
+/** @returns {Promise<Object>} 当前生存状态快照（吃饱度/打赏/额度） */
+export async function getLiveSnapshot() {
+  return api("/v1/live/snapshot");
+}
+
+/** @returns {Promise<{events:Array<Object>}>} 最近打赏事件 */
+export async function getLiveEvents() {
+  return api("/v1/live/events");
+}
+
+/** 记录一次打赏（真实接入前可手动模拟）
+ *  @param {{giver:string, doucoin:number, gift?:string, count?:number, say?:boolean}} body */
+export async function sendLiveGift(body) {
+  return api("/v1/live/gift", { method: "POST", body: JSON.stringify(body || {}) });
+}
+
+/** 记录一条弹幕并让角色回复
+ *  @param {{user:string, text:string, say?:boolean}} body */
+export async function sendLiveChat(body) {
+  return api("/v1/live/chat", { method: "POST", body: JSON.stringify(body || {}) });
+}
+
+/** @returns {Promise<Object>} 最近一句台词（HUD 轮询用） */
+export async function getLiveLine() {
+  return api("/v1/live/line");
+}
+
+/** @returns {Promise<{config:Object}>} 数值参数 */
+export async function getLiveSettings() {
+  return api("/v1/live/settings");
+}
+
+/** @param {Object} config @returns {Promise<Object>} 更新数值参数 */
+export async function saveLiveSettings(config) {
+  return api("/v1/live/settings", {
+    method: "POST",
+    body: JSON.stringify({ config }),
+  });
+}
+
 /** @returns {Promise<Array<string>>} 可用模型名 */
 export async function getModels() {
   return api("/v1/models");
