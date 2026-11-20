@@ -45,6 +45,21 @@ def test_upload_file_writes_and_returns_meta(tmp_path, monkeypatch):
     assert p.parent == tmp_path / "uploads" / "files"
 
 
+def test_upload_file_strips_long_mime_data_uri(tmp_path, monkeypatch):
+    """回归：.docx 等长 MIME 的 data: 前缀逗号超过 64 字符，旧实现会漏剥离导致解码失败。"""
+    monkeypatch.setattr(api_server, "DATA_DIR", str(tmp_path))
+    raw = b"PK\x03\x04fake-docx-bytes"
+    mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    body = {
+        "data": f"data:{mime};base64," + base64.b64encode(raw).decode("ascii"),
+        "name": "自助一体机谈判文件(1)(1).docx",
+    }
+    result, err = api_server._upload_file(body)
+    assert err is None, err
+    assert result["name"] == "自助一体机谈判文件(1)(1).docx"
+    assert Path(result["path"]).read_bytes() == raw
+
+
 def test_upload_file_rejects_empty_and_bad_base64(tmp_path, monkeypatch):
     monkeypatch.setattr(api_server, "DATA_DIR", str(tmp_path))
     assert api_server._upload_file({})[1] is not None

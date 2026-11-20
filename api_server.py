@@ -1900,6 +1900,18 @@ def _auto_compress_image(raw, target=_IMAGE_COMPRESS_TARGET, max_side=_IMAGE_COM
     return data, new_ext, "已自动压缩（%s，%s%s）" % (size_note, geo_note, extra)
 
 
+def _strip_b64_data_uri(value):
+    """去掉 FileReader.readAsDataURL 生成的 `data:<mime>;base64,` 前缀。
+
+    MIME 可能很长（.docx/.xlsx 的完整 MIME 超过 80 字符，逗号远在 64 字符之后），
+    不能只检查前 64 字符，否则带前缀的 base64 会校验失败。
+    """
+    text = str(value or "")
+    if text[:5].lower() == "data:" and "," in text:
+        return text.split(",", 1)[1]
+    return text
+
+
 def _upload(body):
     """图片上传：base64 → 超限自动压缩 → DATA_DIR/uploads/<ts>.<ext>，返回本地路径。"""
     import base64
@@ -1907,8 +1919,7 @@ def _upload(body):
     name = str(body.get("name") or "image.png")
     if not b64:
         return None, "缺少 image（base64，data: 前缀可省略）"
-    if "," in b64[:64] and b64.split(",", 1)[0].startswith("data:"):
-        b64 = b64.split(",", 1)[1]
+    b64 = _strip_b64_data_uri(b64)
     try:
         raw = base64.b64decode(b64, validate=True)
     except Exception:
@@ -1967,8 +1978,7 @@ def _upload_file(body):
     name = str(body.get("name") or "file")
     if not raw_b64:
         return None, "缺少 data（base64，data: 前缀可省略）"
-    if "," in raw_b64[:64] and raw_b64.split(",", 1)[0].startswith("data:"):
-        raw_b64 = raw_b64.split(",", 1)[1]
+    raw_b64 = _strip_b64_data_uri(raw_b64)
     try:
         raw = base64.b64decode(raw_b64, validate=True)
     except Exception:
