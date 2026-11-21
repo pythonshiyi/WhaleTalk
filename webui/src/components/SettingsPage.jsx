@@ -383,14 +383,15 @@ function ServicesTab({ cfg, onTip }) {
     setSaving(false);
   };
 
-  const EmRow = ({ label, placeholder, group, key, desc, type }) => (
+  // 注意：React 的 key 是保留属性，不会传给组件 props；这里用 name 作为字段名。
+  const EmRow = ({ label, placeholder, group, name, desc, type }) => (
     <Row label={label} desc={desc}>
       <input
         className="set-select set-combo"
         type={type || "text"}
         placeholder={placeholder}
-        value={field(group, key)}
-        onChange={(e) => setField(group, key, e.target.value)}
+        value={field(group, name)}
+        onChange={(e) => setField(group, name, e.target.value)}
       />
     </Row>
   );
@@ -399,28 +400,28 @@ function ServicesTab({ cfg, onTip }) {
     <div className="svc-wrap">
       <div className="svc-group">
         <div className="svc-title">✉️ 邮件收发（SMTP 发送 + IMAP 读取）</div>
-        <EmRow label="SMTP 服务器" placeholder="smtp.qq.com" group="email" key="smtp_host" />
-        <EmRow label="SMTP 端口" placeholder="465 或 587" group="email" key="smtp_port" />
-        <EmRow label="邮箱账号" placeholder="user@example.com" group="email" key="user" />
-        <EmRow label="密码 / 授权码" placeholder="加密存储" group="email" key="password" type="password" />
-        <EmRow label="发件人" placeholder="默认=账号" group="email" key="from" />
-        <EmRow label="IMAP 服务器" placeholder="imap.qq.com" group="email" key="imap_host" desc="（兼容扁平键）" />
-        <EmRow label="IMAP 端口" placeholder="993" group="email" key="imap_port" />
-        <EmRow label="IMAP 账号" group="email" key="imap_user" />
-        <EmRow label="IMAP 密码" type="password" group="email" key="imap_password" />
+        <EmRow label="SMTP 服务器" placeholder="smtp.qq.com" group="email" name="smtp_host" />
+        <EmRow label="SMTP 端口" placeholder="465 或 587" group="email" name="smtp_port" />
+        <EmRow label="邮箱账号" placeholder="user@example.com" group="email" name="user" />
+        <EmRow label="密码 / 授权码" placeholder="加密存储" group="email" name="password" type="password" />
+        <EmRow label="发件人" placeholder="默认=账号" group="email" name="from" />
+        <EmRow label="IMAP 服务器" placeholder="imap.qq.com" group="email" name="imap_host" desc="（兼容扁平键）" />
+        <EmRow label="IMAP 端口" placeholder="993" group="email" name="imap_port" />
+        <EmRow label="IMAP 账号" group="email" name="imap_user" />
+        <EmRow label="IMAP 密码" type="password" group="email" name="imap_password" />
       </div>
       <div className="svc-group">
         <div className="svc-title">📱 IM 通道（企业微信 / Telegram）</div>
-        <EmRow label="企业微信机器人 Webhook" group="im" key="wecom_webhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" />
-        <EmRow label="Telegram Bot Token" group="im" key="telegram_bot_token" type="password" />
-        <EmRow label="Telegram Chat ID" group="im" key="telegram_chat_id" />
+        <EmRow label="企业微信机器人 Webhook" group="im" name="wecom_webhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" />
+        <EmRow label="Telegram Bot Token" group="im" name="telegram_bot_token" type="password" />
+        <EmRow label="Telegram Chat ID" group="im" name="telegram_chat_id" />
       </div>
       <div className="svc-group">
         <div className="svc-title">🔗 Webhook 推送（钉钉 / Server酱 / Slack / 通用）</div>
-        <EmRow label="钉钉 URL" group="webhooks" key="dingtalk" placeholder="https://oapi.dingtalk.com/robot/send?access_token=…" />
-        <EmRow label="Server酱 URL" group="webhooks" key="serverchan" placeholder="https://sctapi.ftqq.com/KEY.send" />
-        <EmRow label="Slack URL" group="webhooks" key="slack" />
-        <EmRow label="通用 URL（POST {title,text}）" group="webhooks" key="generic" />
+        <EmRow label="钉钉 URL" group="webhooks" name="dingtalk" placeholder="https://oapi.dingtalk.com/robot/send?access_token=…" />
+        <EmRow label="Server酱 URL" group="webhooks" name="serverchan" placeholder="https://sctapi.ftqq.com/KEY.send" />
+        <EmRow label="Slack URL" group="webhooks" name="slack" />
+        <EmRow label="通用 URL（POST {title,text}）" group="webhooks" name="generic" />
       </div>
       <div className="svc-group">
         <div className="svc-title">🗄 数据库连接（只读查询，连接名 default）</div>
@@ -453,10 +454,10 @@ function ServicesTab({ cfg, onTip }) {
         })}
       </div>
       <div className="svc-group">
-        <div className="svc-title">🖼 图片生成（OpenAI 兼容）</div>
-        <EmRow label="端点" group="image" key="base_url" placeholder="默认=当前 base_url" />
-        <EmRow label="API Key" group="image" key="api_key" type="password" />
-        <EmRow label="模型" group="image" key="model" placeholder="gpt-image-1" />
+        <div className="svc-title">🖼 图片生成（OpenAI 兼容 / MOSS）</div>
+        <EmRow label="端点" group="image" name="base_url" placeholder="OpenAI 兼容端点；MOSS 填 https://api.mosi.cn/v1" />
+        <EmRow label="API Key" group="image" name="api_key" type="password" />
+        <EmRow label="模型" group="image" name="model" placeholder="gpt-image-1（MOSS 填 moss-image-base-1.0）" />
         <Toggle
           on={!!(svc.image || {}).vision_self_review}
           label="视觉自审"
@@ -469,14 +470,14 @@ function ServicesTab({ cfg, onTip }) {
         <Row label="监听端口" desc="0=关闭（改后重启生效）">
           <NumInput min={0} max={65535} value={Number(field("inbound", "port")) || 0} onChange={(v) => setField("inbound", "port", v)} />
         </Row>
-        <EmRow label="鉴权 Token" group="inbound" key="token" type="password" />
+        <EmRow label="鉴权 Token" group="inbound" name="token" type="password" />
       </div>
       <div className="svc-group">
         <div className="svc-title">🔎 搜索源凭据</div>
         <EmRow
           label="微博 Cookie"
           group="search"
-          key="weibo_cookie"
+          name="weibo_cookie"
           type="password"
           placeholder="留空=不使用微博关键词搜索"
           desc="微博所有关键词搜索接口都要求登录态（免登录的只有热搜，已默认可用）。填入后可让 search_web 搜到微博正文。获取：Chrome/Edge 打开 m.weibo.cn 并登录 → F12 → Network → 刷新 → 任选请求 → 复制请求头里的 Cookie 值。通常几天到几周过期，过期后自动失效（不影响其它搜索源）。"
@@ -499,7 +500,7 @@ function ServicesTab({ cfg, onTip }) {
       <div className="svc-group">
         <div className="svc-title">✈️ Agent Mail（CLI 邮件代理）</div>
         <Toggle on={!!(svc.agent_mail || {}).enabled} label="启用" onClick={() => setField("agent_mail", "enabled", !(svc.agent_mail || {}).enabled)} />
-        <EmRow label="CLI 路径" group="agent_mail" key="cli" placeholder="agently-cli" />
+        <EmRow label="CLI 路径" group="agent_mail" name="cli" placeholder="agently-cli" />
       </div>
       <button className="confirm-btn confirm-primary" onClick={save} disabled={saving}>{saving ? "保存中…" : "💾 保存外部服务"}</button>
     </div>

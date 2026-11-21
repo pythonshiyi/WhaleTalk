@@ -3839,6 +3839,7 @@ def _services_get():
 def _services_save(body):
     """保存外部服务配置（敏感字段 DPAPI 加密落盘）。"""
     import config_utils
+    import deepseek_client as dc
 
     try:
         # ── Webhook ──
@@ -3930,6 +3931,15 @@ def _services_save(body):
         if patch:
             cfg.update(patch)
             config_utils.save_config(cfg)
+            # 图片生成配置即时生效（不必重启后端）：_init_dc_paths 只在启动时同步一次。
+            if any(k in patch for k in ("image_api_key", "image_base_url", "image_model", "vision_self_review")):
+                try:
+                    dc.IMAGE_GEN_KEY = str(cfg.get("image_api_key") or "").strip() or str(cfg.get("api_key") or "").strip()
+                    dc.IMAGE_GEN_BASE = str(cfg.get("image_base_url") or "").strip() or str(cfg.get("base_url") or "").strip()
+                    dc.IMAGE_GEN_MODEL = str(cfg.get("image_model") or "gpt-image-1").strip()
+                    dc.VISION_SELF_REVIEW = bool(cfg.get("vision_self_review"))
+                except Exception:
+                    logger.exception("保存图片生成配置后同步运行时配置失败（重启后生效）")
         return {"ok": True}, None
     except Exception as e:
         logger.exception("保存外部服务配置失败")

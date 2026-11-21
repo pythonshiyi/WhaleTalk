@@ -457,8 +457,8 @@ DEFAULT_CONFIG = {
     # 配置后 search_web 的 weibo 源才生效；未配置时该源自动跳过（不影响其它源）。
     # 唯一免登录的只有热搜榜，由独立的 weibo_hot 源提供。Cookie 通常几天~几周过期。
     "weibo_cookie": "",
-    "image_base_url": "",     # 图片生成端点（默认 = base_url）
-    "image_model": "gpt-image-1",
+    "image_base_url": "",     # 图片生成端点（默认 = base_url；MOSS 填 https://api.mosi.cn/v1）
+    "image_model": "gpt-image-1",  # 模型 ID（MOSS 用 moss-image-base-1.0 / moss-image-sft-1.0）
     "vision_self_review": False,  # 视觉自审：工具产出图片后自动审图并迭代（统一模型原生多模态，能力恒可用；默认关以控成本）
     "autostart": True,          # 初始开机自启（注册表 Run 键；失败自动回滚）
     "strict_tools": False,    # strict 工具模式（Beta）：模型严格遵循工具 JSON Schema

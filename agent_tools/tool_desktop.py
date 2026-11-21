@@ -14,6 +14,12 @@ from datetime import datetime
 
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 import permissions
+from agent_tools.image_backend import (  # MOSS / OpenAI 兼容图像后端适配
+    build_gen_payload,
+    gen_timeout,
+    is_moss,
+    normalize_moss_size,
+)
 from agent_tools.tool_media import image_understand  # 已迁工具跨模块复用
 from deepseek_client import (
     _ACTIVE_SPEAK,
@@ -1027,16 +1033,22 @@ def _save_gen_items(items, out, num):
             "type": "function",
             "function": {
                 "name": "image_generate",
-                "description": "生成或编辑图片（OpenAI 兼容 images API，需配置 image_api_key/image_base_url/image_model）。纯文生图只传 prompt；要沿用参考图保持角色/画风一致，传 reference（自动走 /images/edits 图生图/编辑），mask 可指定重绘区域。size 接受任意「宽x高」（每边 64-4096，支持 1920x1080/1080x1920 等视频比例）或 auto；n 可一次出多张",
+                "description": "生成或编辑图片（OpenAI 兼容 images API / MOSS 文生图，需配置 image_api_key/image_base_url/image_model）。纯文生图只传 prompt；要沿用参考图保持角色/画风一致，传 reference（自动走 /images/edits 图生图/编辑），mask 可指定重绘区域。size 接受任意「宽x高」（每边 64-4096，支持 1920x1080/1080x1920 等视频比例）或 auto；n 可一次出多张。接入 MOSS 时把 image_base_url 设为 https://api.mosi.cn/v1、image_model 设为 moss-image-base-1.0",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "prompt": {"type": "string", "description": "图片描述提示词，或对参考图的编辑指令"},
                         "path": {"type": "string", "description": "可选：输出路径（默认工作区 images/）；n>1 时第二张起自动加 _2/_3 序号后缀"},
-                        "size": {"type": "string", "description": "可选：尺寸「宽x高」（每边 64-4096，任意比例，如 1024x1024 / 1920x1080 / 1080x1920）或 auto，默认 1024x1024"},
+                        "size": {"type": "string", "description": "可选：尺寸「宽x高」（每边 64-4096，任意比例，如 1024x1024 / 1920x1080 / 1080x1920）或 auto，默认 1024x1024；MOSS 会自动规范到 256-2048、16 的倍数且总像素≤2097152"},
                         "n": {"type": "integer", "description": "可选：一次生成的张数 1-10（默认 1）"},
-                        "reference": {"type": "string", "description": "可选：参考图路径或 http(s) URL；传入即走图生图/编辑（/images/edits），用于角色与画风跨镜头一致"},
+                        "reference": {"type": "string", "description": "可选：参考图路径或 http(s) URL；传入即走图生图/编辑（/images/edits），用于角色与画风跨镜头一致（MOSS 不支持）"},
                         "mask": {"type": "string", "description": "可选：遮罩图路径（透明区域=需要重绘处），仅在传 reference 时生效"},
+                        "negative_prompt": {"type": "string", "description": "可选（MOSS）：不希望出现在图片中的内容"},
+                        "prompt_enhance": {"type": "boolean", "description": "可选（MOSS）：先增强提示词再生图（额外计费），默认 false"},
+                        "seed": {"type": "integer", "description": "可选（MOSS）：随机种子 0-2^53-1，用于复现；n>1 时逐张递增"},
+                        "num_inference_steps": {"type": "integer", "description": "可选（MOSS）：推理步数 1-100"},
+                        "guidance_scale": {"type": "number", "description": "可选（MOSS）：引导系数 0-10"},
+                        "watermark": {"type": "boolean", "description": "可选（MOSS）：是否输出可见水印，默认 true"},
                     },
                     "required": ["prompt"],
                 },
@@ -1046,33 +1058,49 @@ def _save_gen_items(items, out, num):
     phrases='文生图/图生图（参考图编辑）',
     preactivate=(('文生图', 'ai绘图', '生成一张图', '画一张'), ('图生图', '参考图', '保持角色一致', '改图', '修图', '编辑图片')),
 )
-def image_generate(prompt, path="", size="1024x1024", n=1, reference="", mask=""):
-    """生成或编辑图片（OpenAI 兼容 images API）。
+def image_generate(prompt, path="", size="1024x1024", n=1, reference="", mask="",
+                   negative_prompt="", prompt_enhance=False, seed=None,
+                   num_inference_steps=None, guidance_scale=None, watermark=True):
+    """生成或编辑图片（OpenAI 兼容 images API / MOSS 文生图）。
 
     无 reference：POST /images/generations（文生图）。
     有 reference：POST /images/edits（图生图/编辑，multipart），用于角色/画风一致。
     size 支持任意「宽x高」（每边 64-4096）或 auto；n 支持 1-10 张。
+    MOSS 后端自动切换 response_format=url、单张请求、尺寸规范与 900s 超时。
     """
     p = str(prompt or "").strip()
     if not p:
         return "错误：prompt 必填"
+    key = str(_dc.IMAGE_GEN_KEY or "").strip()
+    if not key:
+        return "错误：未配置图片生成（config.json 的 image_api_key / image_base_url / image_model；MOSS 填 https://api.mosi.cn/v1 + moss-image-base-1.0）"
+    base = str(_dc.IMAGE_GEN_BASE or "").strip().rstrip("/") or DEFAULT_BASE_URL
+    model = str(_dc.IMAGE_GEN_MODEL or "").strip() or "gpt-image-1"
+    moss = is_moss(base, model)
+    size_note = ""
     sz = str(size or "1024x1024").strip().lower()
+    if moss and sz == "auto":
+        sz = "1024x1024"
     if sz != "auto":
         m = re.match(r"^(\d{2,4})\s*[x×*]\s*(\d{2,4})$", sz)
         if not m:
             return f"错误：size 非法：{size}（应为「宽x高」如 1024x1024 / 1920x1080 / 1080x1920，或 auto）"
         w, h = int(m.group(1)), int(m.group(2))
-        if not (64 <= w <= 4096 and 64 <= h <= 4096):
-            return f"错误：size 每边须在 64-4096 之间：{size}"
-        sz = f"{w}x{h}"
+        if moss:
+            norm = normalize_moss_size(f"{w}x{h}")
+            if not norm:
+                return f"错误：size 非法：{size}"
+            if norm != f"{w}x{h}":
+                size_note = f"（MOSS 尺寸已规范为 {norm}）"
+            sz = norm
+        else:
+            if not (64 <= w <= 4096 and 64 <= h <= 4096):
+                return f"错误：size 每边须在 64-4096 之间：{size}"
+            sz = f"{w}x{h}"
     try:
         num = clamp_int(n, 1, lo=1, hi=10)
     except (TypeError, ValueError):
         num = 1
-    key = str(_dc.IMAGE_GEN_KEY or "").strip()
-    if not key:
-        return "错误：未配置图片生成（config.json 的 image_api_key / image_base_url / image_model）"
-    base = str(_dc.IMAGE_GEN_BASE or "").strip().rstrip("/") or DEFAULT_BASE_URL
     if str(path or "").strip():
         out = permissions.resolve(path)
         if not out:
@@ -1098,6 +1126,25 @@ def image_generate(prompt, path="", size="1024x1024", n=1, reference="", mask=""
         pass
     ref = str(reference or "").strip()
     mask_p = str(mask or "").strip()
+    if ref and moss:
+        return "错误：MOSS 文生图不支持 reference/mask（图生图/编辑请改用 OpenAI 兼容后端）"
+    seed_v = steps_v = guidance_v = None
+    if moss:
+        try:
+            if seed is not None and str(seed).strip() != "":
+                seed_v = int(seed)
+                if not (0 <= seed_v <= 2 ** 53 - 1):
+                    return "错误：seed 需在 0-2^53-1 之间"
+            if num_inference_steps is not None and str(num_inference_steps).strip() != "":
+                steps_v = int(num_inference_steps)
+                if not (1 <= steps_v <= 100):
+                    return "错误：num_inference_steps 需在 1-100 之间"
+            if guidance_scale is not None and str(guidance_scale).strip() != "":
+                guidance_v = float(guidance_scale)
+                if not (0 <= guidance_v <= 10):
+                    return "错误：guidance_scale 需在 0-10 之间"
+        except (TypeError, ValueError):
+            return "错误：MOSS 生成参数非法（seed / num_inference_steps / guidance_scale）"
     try:
         headers = {"Authorization": f"Bearer {key}"}
         if ref:
@@ -1113,7 +1160,7 @@ def image_generate(prompt, path="", size="1024x1024", n=1, reference="", mask=""
             resp = _http_client().post(
                 f"{base}/images/edits",
                 data={
-                    "model": _dc.IMAGE_GEN_MODEL,
+                    "model": model,
                     "prompt": p,
                     "n": str(num),
                     "size": sz,
@@ -1123,24 +1170,49 @@ def image_generate(prompt, path="", size="1024x1024", n=1, reference="", mask=""
                 headers=headers,
                 timeout=300.0,
             )
+            resp.raise_for_status()
+            try:
+                payload = resp.json()
+            except Exception:
+                return f"错误：图片接口返回非 JSON（HTTP {getattr(resp, 'status_code', '?')}）"
+        elif moss:
+            # MOSS n 仅支持 1：多张时串行请求（seed 逐张递增以便结果不同）
+            items = []
+            for i in range(num):
+                req = build_gen_payload(
+                    model, base, p, n=1, size=sz,
+                    negative_prompt=negative_prompt,
+                    prompt_enhance=bool(prompt_enhance),
+                    seed=(seed_v + i if seed_v is not None else None),
+                    num_inference_steps=steps_v,
+                    guidance_scale=guidance_v,
+                    watermark=watermark,
+                )
+                resp = _http_client().post(
+                    f"{base}/images/generations",
+                    json=req,
+                    headers=headers,
+                    timeout=gen_timeout(base, model),
+                )
+                resp.raise_for_status()
+                try:
+                    data = resp.json()
+                except Exception:
+                    return f"错误：图片接口返回非 JSON（HTTP {getattr(resp, 'status_code', '?')}）"
+                items.extend(data.get("data") or [])
+            payload = {"data": items}
         else:
             resp = _http_client().post(
                 f"{base}/images/generations",
-                json={
-                    "model": _dc.IMAGE_GEN_MODEL,
-                    "prompt": p,
-                    "n": num,
-                    "size": sz,
-                    "response_format": "b64_json",
-                },
+                json=build_gen_payload(model, base, p, n=num, size=sz),
                 headers=headers,
-                timeout=300.0,
+                timeout=gen_timeout(base, model),
             )
-        resp.raise_for_status()
-        try:
-            payload = resp.json()
-        except Exception:
-            return f"错误：图片接口返回非 JSON（HTTP {getattr(resp, 'status_code', '?')}）"
+            resp.raise_for_status()
+            try:
+                payload = resp.json()
+            except Exception:
+                return f"错误：图片接口返回非 JSON（HTTP {getattr(resp, 'status_code', '?')}）"
         items = payload.get("data") or []
         if not items:
             return "错误：接口未返回图片"
@@ -1150,7 +1222,7 @@ def image_generate(prompt, path="", size="1024x1024", n=1, reference="", mask=""
         if not saved:
             return "错误：接口未返回可保存的图片"
         permissions.audit("image_generate", "；".join(saved), p[:80])
-        return f"已生成 {len(saved)} 张图片：" + "、".join(saved)
+        return f"已生成 {len(saved)} 张图片：" + "、".join(saved) + size_note
     except Exception as e:
         return f"错误：图片生成失败: {e}"
 

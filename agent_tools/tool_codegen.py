@@ -24,6 +24,7 @@ from deepseek_client import (
 from security import _safe_url
 from shared import clamp_int
 from toolkit import tool
+from agent_tools.image_backend import build_gen_payload, gen_timeout, is_moss, normalize_moss_size
 
 _KINDS = ("illustration", "icon", "infographic", "pixel", "ui", "diagram", "poster", "logo")
 
@@ -330,15 +331,18 @@ def _bytes_from_resp(data):
 
 
 def _gen_bytes(prompt, size):
-    """文生图后端（OpenAI 兼容 /images/generations）→ (png 字节, err)。"""
+    """文生图后端（OpenAI 兼容 / MOSS /images/generations）→ (png 字节, err)。"""
     key, base, model = _img_backend()
     if not key:
         return None, "未配置图片生成（config.json 的 image_api_key / image_base_url / image_model）"
+    if is_moss(base, model):
+        size = normalize_moss_size(size) or "1024x1024"
+    payload = build_gen_payload(model, base, prompt, n=1, size=str(size))
     try:
         resp = _http_client().post(
             f"{base}/images/generations",
-            json={"model": model, "prompt": str(prompt), "n": 1, "size": str(size), "response_format": "b64_json"},
-            headers={"Authorization": f"Bearer {key}"}, timeout=120.0,
+            json=payload,
+            headers={"Authorization": f"Bearer {key}"}, timeout=gen_timeout(base, model),
         )
         resp.raise_for_status()
         return _bytes_from_resp(resp.json())
@@ -351,6 +355,8 @@ def _edit_bytes(image_bytes, prompt, size, mask_bytes=None):
     key, base, model = _img_backend()
     if not key:
         return None, "未配置图片生成（config.json 的 image_api_key / image_base_url / image_model）"
+    if is_moss(base, model):
+        return None, "MOSS 文生图后端不支持图生图/编辑（需另配 OpenAI 兼容后端）"
     files = {"image": ("image.png", image_bytes, "image/png")}
     if mask_bytes:
         files["mask"] = ("mask.png", mask_bytes, "image/png")
