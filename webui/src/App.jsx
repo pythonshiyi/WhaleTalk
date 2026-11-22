@@ -15,16 +15,9 @@ import { silentWarn } from "./quiet.js";
 const LazyPages = {
   workbench: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.WorkbenchPage }))),
   abilities: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.AbilitiesPage }))),
-  capabilities: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.CapabilitiesPage }))),
-  tasks: lazy(() => import("./components/TasksPage.jsx")),
+  create: lazy(() => import("./components/CreatePage.jsx")),
+  agent: lazy(() => import("./components/BrainPage.jsx")),
   settings: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.SettingsPage }))),
-  prompts: lazy(() => import("./components/PromptsPage.jsx")),
-  personas: lazy(() => import("./components/PersonasPage.jsx")),
-  live: lazy(() => import("./components/LivePage.jsx")),
-  channels: lazy(() => import("./components/ChannelsPage.jsx")),
-  brain: lazy(() => import("./components/BrainPage.jsx")),
-  life: lazy(() => import("./components/LifePage.jsx")),
-  autonomy: lazy(() => import("./components/AutonomyPage.jsx")),
 };
 const PageFallback = () => (
   <div className="page-fallback">
@@ -124,6 +117,11 @@ export default function App() {
   const [openSessionId, setOpenSessionId] = React.useState(null);
   // 角色页「开始对话」→ 切到该角色并新开会话
   const [openPersonaId, setOpenPersonaId] = React.useState(null);
+  // 二级页面标签提到 App 层：设置/工作台跳转时能直达目标标签
+  const [createTab, setCreateTab] = React.useState("personas");
+  const [settingsTab, setSettingsTab] = React.useState("model");
+  const [workbenchTab, setWorkbenchTab] = React.useState("overview");
+  const [agentTab, setAgentTab] = React.useState("cockpit");
 
   React.useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -253,6 +251,8 @@ export default function App() {
                       const P = LazyPages.workbench;
                       return (
                         <P
+                          tab={workbenchTab}
+                          onTab={setWorkbenchTab}
                           onApply={(text) => {
                             setApplyPrompt(text);
                             setPage("chat");
@@ -265,45 +265,42 @@ export default function App() {
                       );
                     })()}
                     {page === "abilities" && <LazyPages.abilities />}
-                    {page === "capabilities" && <LazyPages.capabilities />}
-                    {page === "tasks" && (
-                      <LazyPages.tasks
-                        onOpenSession={(sid) => {
-                          if (!sid) return;
-                          setOpenSessionId(sid);
-                          setPage("chat");
-                        }}
-                      />
-                    )}
-                    {page === "prompts" && (() => {
-                      const P = LazyPages.prompts;
+                    {page === "create" && (() => {
+                      const P = LazyPages.create;
                       return (
                         <P
+                          tab={createTab}
+                          onTab={setCreateTab}
+                          onChatPersona={(persona) => {
+                            setOpenPersonaId(persona.id);
+                            setPage("chat");
+                          }}
                           onApply={(text) => {
                             setApplyPrompt(text);
                             setPage("chat");
                           }}
+                          onGoWechat={() => {
+                            setSettingsTab("wechat");
+                            setPage("settings");
+                          }}
                         />
                       );
                     })()}
-                    {page === "brain" && <LazyPages.brain />}
-                    {page === "personas" && (
-                      <LazyPages.personas
-                        onChat={(persona) => {
-                          setOpenPersonaId(persona.id);
-                          setPage("chat");
-                        }}
-                      />
-                    )}
-                    {page === "live" && <LazyPages.live />}
-                    {page === "channels" && <LazyPages.channels />}
-                    {page === "life" && <LazyPages.life />}
-                    {page === "autonomy" && <LazyPages.autonomy />}
+                    {page === "agent" && (() => {
+                      const P = LazyPages.agent;
+                      return <P tab={agentTab} onTab={setAgentTab} />;
+                    })()}
                     {page === "settings" && (() => {
                       const P = LazyPages.settings;
                       return (
                         <P
-                          onGoPrompts={() => setPage("prompts")}
+                          tab={settingsTab}
+                          onTab={setSettingsTab}
+                          onGoPrompts={() => {
+                            setCreateTab("prompts");
+                            setPage("create");
+                          }}
+                          onGoAbilities={() => setPage("abilities")}
                           quietMode={quietMode}
                           onToggleQuiet={toggleQuiet}
                         />

@@ -5,6 +5,8 @@ import { enqueueSpeak, invalidateVoiceConfig, playTestTone, enableVoiceInterrupt
 import { SkeletonCard, SkeletonList } from "./Skeleton.jsx";
 import { confirmDialog } from "../dialog.js";
 import { Icon } from "./icons.jsx";
+import ChannelsPage from "./ChannelsPage.jsx";
+import PermissionsPage from "./PermissionsPage.jsx";
 
 import { silentWarn } from "../quiet.js";
 
@@ -14,8 +16,9 @@ const TAB_INDEX = [
   { id: "model", label: "🎛 模型与网关", keys: "模型 api key 网关 思考 输出 token 预设 角色" },
   { id: "service", label: "🔌 外部服务", keys: "服务 外部 连接 webhook 工作流" },
   { id: "wechat", label: "📝 公众号写作", keys: "公众号 写作 字数 受众 风格 信源 选题 草稿" },
-  { id: "persona", label: "🧠 人格与工具", keys: "人格 角色 工具 插件 提示词 能力" },
-  { id: "notice", label: "🔔 通知与安全", keys: "通知 安全 提示音 朗读 语音" },
+  { id: "channels", label: "🔌 接入通道", keys: "QQ Telegram 通道 接入 平台 机器人" },
+  { id: "persona", label: "🧠 系统人格与工具", keys: "人格 角色 工具 插件 提示词 能力" },
+  { id: "notice", label: "🔔 通知、安全与权限", keys: "通知 安全 权限 黑名单 审批 提示音 朗读 语音" },
   { id: "look", label: "🎨 外观", keys: "外观 主题 密度 字号 字体 界面" },
   { id: "deps", label: "🔌 可选能力", keys: "可选能力 依赖 安装 组件 浏览器 语音转写 二维码 rar" },
   { id: "adv", label: "⚙ 高级", keys: "高级 备份 更新 清理 流程 检查点 知识库 审计 工具链" },
@@ -303,7 +306,7 @@ function WechatTab({ onTip }) {
       <Row label="正文字数区间" desc="质检按这区间判定字数是否达标（500–8000）">
         <input className="set-select set-combo" type="number" min="500" max="8000"
           value={style.min_chars ?? ""} onChange={(e) => setStyle("min_chars", num(e.target.value))} />
-        <span style={{ margin: "0 6px", color: "var(--color-text-tertiary)" }}>–</span>
+        <span style={{ margin: "0 6px", color: "var(--text-3)" }}>–</span>
         <input className="set-select set-combo" type="number" min="500" max="8000"
           value={style.max_chars ?? ""} onChange={(e) => setStyle("max_chars", num(e.target.value))} />
       </Row>
@@ -1138,7 +1141,7 @@ function AuditBlock() {
 }
 
 // ── 设置页主组件 ────────────────────────────────────
-export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) {
+export default function SettingsPage({ onGoPrompts, onGoAbilities, quietMode, onToggleQuiet, tab: tabProp, onTab }) {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { density, setDensity, fontSize, setFontSize } = React.useContext(DisplayContext);
   const [mode, setMode] = React.useState(() => {
@@ -1148,7 +1151,12 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
       return "simple";
     }
   });
-  const [tab, setTab] = React.useState("model");
+  const [tabState, setTabState] = React.useState("model");
+  const tab = tabProp ?? tabState;
+  const setTab = React.useCallback((next) => {
+    setTabState(next);
+    onTab?.(next);
+  }, [onTab]);
   const [search, setSearch] = React.useState("");
   const q = search.trim().toLowerCase();
   const matchedOtherTabs = q ? TAB_INDEX.filter((t) => t.keys.toLowerCase().includes(q) && t.id !== tab) : [];
@@ -1161,6 +1169,12 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
   const [baseUrlDraft, setBaseUrlDraft] = React.useState(null);
   const [apiKeyDraft, setApiKeyDraft] = React.useState(null);
   const [loadErr, setLoadErr] = React.useState("");
+
+  // 外部深链（创作 → 公众号写作 / 通知 → 权限）必须直接落在高级模式的对应标签，
+  // 不能被上次留下的「简单模式」挡在模型预设页。
+  React.useEffect(() => {
+    if (tabProp && tabProp !== "model") setMode("advanced");
+  }, [tabProp]);
 
   React.useEffect(() => {
     let alive = true;
@@ -1329,8 +1343,10 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
   const TABS = [
     { id: "model", icon: "sliders", text: "模型与网关" },
     { id: "service", icon: "server", text: "外部服务" },
-    { id: "persona", icon: "brain", text: "人格与工具" },
-    { id: "notice", icon: "bell", text: "通知与安全" },
+    { id: "wechat", icon: "pencil", text: "公众号写作" },
+    { id: "channels", icon: "globe", text: "接入通道" },
+    { id: "persona", icon: "brain", text: "系统人格与工具" },
+    { id: "notice", icon: "shield", text: "通知、安全与权限" },
     { id: "look", icon: "palette", text: "外观" },
     { id: "deps", icon: "package", text: "可选能力" },
     { id: "adv", icon: "settings", text: "高级" },
@@ -1523,6 +1539,7 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
             )}
             {tab === "service" && <ServicesTab cfg={cfg} onTip={setTip} />}
             {tab === "wechat" && <WechatTab onTip={setTip} />}
+            {tab === "channels" && <ChannelsPage embedded />}
             {tab === "persona" && (
               <div className="set-card">
               <>
@@ -1563,8 +1580,8 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                 </div>
                 <Toggle on={!!cfg.tools_enabled} label="工具开关" desc="向模型暴露工具定义" onClick={() => saveField({ tools_enabled: !cfg.tools_enabled })} />
                 <Toggle on={!cfg.browser_headless} label="🖥 浏览器可见" desc="AI 操作浏览器弹真实窗口" onClick={() => saveField({ browser_headless: !cfg.browser_headless })} />
-                <Row label="🔧 工具库与权限" desc="135 工具 12 域 · 黑名单管理">
-                  <span className="empty-tip" style={{ padding: 0 }}>在「能力中心」页签管理</span>
+                <Row label="🔧 工具库与权限" desc="工具库、能力包与黑名单管理">
+                  <button className="msg-op" onClick={() => onGoAbilities?.()}>打开能力页 →</button>
                 </Row>
               </>
               </div>
@@ -1594,6 +1611,8 @@ export default function SettingsPage({ onGoPrompts, quietMode, onToggleQuiet }) 
                   <NumInput min={0} max={10000} step={50} value={cfg.monthly_budget || 0} onChange={(v) => saveField({ monthly_budget: v })} />
                 </Row>
                 <Toggle on={!!cfg.block_on_budget} label="⛔ 达预算阻止发送" desc="超过预算后拦截发送" onClick={() => saveField({ block_on_budget: !cfg.block_on_budget })} />
+                <div className="svc-title" style={{ marginTop: 18 }}>🛡 权限与黑名单</div>
+                <PermissionsPage embedded />
               </>
               </div>
             )}

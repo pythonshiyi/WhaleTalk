@@ -667,7 +667,7 @@ function GrowthTab({ onToast }) {
   );
 }
 
-export default function AutonomyPage() {
+export default function AutonomyPage({ embedded = false }) {
   const [tab, setTab] = React.useState("evolve");
   const [tip, setTip] = React.useState("");
   React.useEffect(() => {
@@ -683,11 +683,13 @@ export default function AutonomyPage() {
     { id: "self", icon: "brain", label: "自我状态" },
   ];
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>自主</h1>
-        <p>AI 自主能力的观察与管理窗口 · 进化 · 成长 · 审批 · 行为 · 自我</p>
-      </div>
+    <div className={embedded ? "page-embedded" : "page"}>
+      {!embedded && (
+        <div className="page-head">
+          <h1>自主</h1>
+          <p>AI 自主能力的观察与管理窗口 · 进化 · 成长 · 审批 · 行为 · 自我</p>
+        </div>
+      )}
       <div className="au-tabs" role="tablist">
         {tabs.map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? "au-tab au-tab-on" : "au-tab"} onClick={() => setTab(t.id)}>

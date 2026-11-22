@@ -32,7 +32,7 @@ function fillVars(text) {
   return String(text || "").replace(/\{\{DATE\}\}/g, todayStr());
 }
 
-export default function PromptsPage({ onApply }) {
+export default function PromptsPage({ onApply, embedded = false }) {
   const [items, setItems] = React.useState(null);
   const [q, setQ] = React.useState("");
   const [cat, setCat] = React.useState("全部");
@@ -167,14 +167,16 @@ export default function PromptsPage({ onApply }) {
   };
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>指令库</h1>
-        <p>
-          提示词资产中心 · 输入框打 / 即可调用
-          {items ? ` · 内置 ${items.filter((p) => p.builtin).length} 条 / 我的 ${userItems.length} 条` : ""}
-        </p>
-      </div>
+    <div className={embedded ? "page-embedded" : "page"}>
+      {!embedded && (
+        <div className="page-head">
+          <h1>指令库</h1>
+          <p>
+            提示词资产中心 · 输入框打 / 即可调用
+            {items ? ` · 内置 ${items.filter((p) => p.builtin).length} 条 / 我的 ${userItems.length} 条` : ""}
+          </p>
+        </div>
+      )}
 
       <div className="pm-toolbar">
         <div className="pm-search">

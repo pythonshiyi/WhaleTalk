@@ -264,7 +264,7 @@ function PersonaMemory({ persona, onClose, onChanged }) {
   );
 }
 
-export default function PersonasPage({ onChat }) {
+export default function PersonasPage({ onChat, embedded = false }) {
   const [items, setItems] = React.useState(null);
   const [editing, setEditing] = React.useState(null);
   const [memoryFor, setMemoryFor] = React.useState(null);
@@ -323,11 +323,13 @@ export default function PersonasPage({ onChat }) {
   };
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>角色</h1>
-        <p>为对话模式创建长期角色：性格、说话方式、背景、开场白与边界。会话会记住自己绑定的角色。</p>
-      </div>
+    <div className={embedded ? "page-embedded" : "page"}>
+      {!embedded && (
+        <div className="page-head">
+          <h1>角色</h1>
+          <p>为对话模式创建长期角色：性格、说话方式、背景、开场白与边界。会话会记住自己绑定的角色。</p>
+        </div>
+      )}
 
       <div className="pm-toolbar">
         <div className="persona-toolbar-note">

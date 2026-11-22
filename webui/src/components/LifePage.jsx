@@ -81,7 +81,7 @@ function Stat({ label, value, hint }) {
   );
 }
 
-export default function LifePage() {
+export default function LifePage({ embedded = false }) {
   const [data, setData] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState("");
@@ -115,11 +115,13 @@ export default function LifePage() {
 
   if (!data) {
     return (
-      <div className="page">
-        <div className="page-head">
-          <h1>生命</h1>
-          <p>生命循环尚未返回状态；大脑初始化后会自动醒来。</p>
-        </div>
+      <div className={embedded ? "page-embedded" : "page"}>
+        {!embedded && (
+          <div className="page-head">
+            <h1>生命</h1>
+            <p>生命循环尚未返回状态；大脑初始化后会自动醒来。</p>
+          </div>
+        )}
         <SkeletonList rows={3} />
       </div>
     );
@@ -139,11 +141,13 @@ export default function LifePage() {
   const op = (name) => ops[name] || {};
 
   return (
-    <div className="page life-page">
-      <div className="page-head">
-        <h1>生命</h1>
-        <p>连续时间、内驱、代谢与睡眠。不是聊天窗口的另一个标签，而是它自己的节奏。</p>
-      </div>
+    <div className={embedded ? "page-embedded life-page" : "page life-page"}>
+      {!embedded && (
+        <div className="page-head">
+          <h1>生命</h1>
+          <p>连续时间、内驱、代谢与睡眠。不是聊天窗口的另一个标签，而是它自己的节奏。</p>
+        </div>
+      )}
 
       {err ? (
         <div className="life-error" role="alert">

@@ -353,7 +353,7 @@ function ChannelPanel({ ch, personas }) {
   );
 }
 
-export default function ChannelsPage() {
+export default function ChannelsPage({ embedded = false }) {
   const [active, setActive] = React.useState(CHANNELS[0].key);
   const [personas, setPersonas] = React.useState([]);
 
@@ -366,11 +366,13 @@ export default function ChannelsPage() {
   const ch = CHANNELS.find((c) => c.key === active) || CHANNELS[0];
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>接入通道</h1>
-        <p>让 AI 角色住进各个平台：每个会话独立角色与记忆，只走对话模式，不启用 Agent 工具。选择一个通道进行配置。</p>
-      </div>
+    <div className={embedded ? "page-embedded" : "page"}>
+      {!embedded && (
+        <div className="page-head">
+          <h1>接入通道</h1>
+          <p>让 AI 角色住进各个平台：每个会话独立角色与记忆，只走对话模式，不启用 Agent 工具。选择一个通道进行配置。</p>
+        </div>
+      )}
 
       <div className="channel-tabs">
         {CHANNELS.map((c) => (

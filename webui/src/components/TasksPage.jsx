@@ -64,7 +64,7 @@ function JobRow({ job, onOpen }) {
   );
 }
 
-export default function TasksPage({ onOpenSession }) {
+export default function TasksPage({ onOpenSession, embedded = false }) {
   const [data, setData] = React.useState(null);
   const [err, setErr] = React.useState("");
   const [status, setStatus] = React.useState("");
@@ -90,14 +90,16 @@ export default function TasksPage({ onOpenSession }) {
   const sum = (data && data.summary) || { count: 0, failed: 0, seconds: 0 };
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>任务</h1>
-        <p>
-          每一次执行都是一条记录：跑了多少步、有没有失败、花了多久。
-          记录只保存「发生了什么」，不保存完整参数与结果。
-        </p>
-      </div>
+    <div className={embedded ? "page-embedded" : "page"}>
+      {!embedded && (
+        <div className="page-head">
+          <h1>任务</h1>
+          <p>
+            每一次执行都是一条记录：跑了多少步、有没有失败、花了多久。
+            记录只保存「发生了什么」，不保存完整参数与结果。
+          </p>
+        </div>
+      )}
 
       <div className="jobs-sum">
         <div className="jobs-metric"><b>{sum.count}</b><span>记录</span></div>

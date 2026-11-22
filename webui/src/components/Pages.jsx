@@ -4,20 +4,19 @@ import * as api from "../api.js";
 import { usePoll } from "../usePoll.js";
 import ToolTest from "./ToolTest.jsx";
 import EmptyState from "./EmptyState.jsx";
-import PixelDocViewer from "./PixelDocViewer.jsx";
-import { EditableTable, DocxEditable, TextDocPreview } from "./OfficePreview.jsx";
-import { SkeletonPage } from "./Skeleton.jsx";
 import { Icon } from "./icons.jsx";
+import CapabilitiesPage from "./CapabilitiesPage.jsx";
+import PermissionsPage from "./PermissionsPage.jsx";
+import TasksPage from "./TasksPage.jsx";
 import { confirmDialog } from "../dialog.js";
 
 import { silentWarn } from "../quiet.js";
 import * as brainNav from "../brainNav.js";
 import { bustBrainFeed } from "./BrainTimeline.jsx";
 
-const DOMAINS = []; // 能力域以后端 /v1/abilities 为准（未加载时无数据，明确提示错误）
-
 export function AbilitiesPage() {
   const [open, setOpen] = React.useState(null);
+  const [expanded, setExpanded] = React.useState({});
   const [tab, setTab] = React.useState("tools");
   const [domains, setDomains] = React.useState(null);
   const [total, setTotal] = React.useState(0);
@@ -43,17 +42,21 @@ export function AbilitiesPage() {
   }, []);
 
   const list = domains || [];
+  const domainCount = list.filter((d) => d.name !== "其他").length;
   return (
     <div className="page">
       <div className="page-head">
-        <h1>能力中心</h1>
-        <p>12 大能力域 · {total} 项能力 · 点击工具名可打开测试台直调</p>
+        <h1>能力</h1>
+        <p>{domainCount || 12} 个能力域 · {total} 项能力 · 点击工具名可打开测试台直调</p>
       </div>
-      <div className="ab-tabs">
-        <button className={`ab-tab ${tab === "tools" ? "ab-tab-on" : ""}`} onClick={() => setTab("tools")}>
+      <div className="ab-tabs" role="tablist" aria-label="能力分区">
+        <button role="tab" aria-selected={tab === "tools"} className={`ab-tab ${tab === "tools" ? "ab-tab-on" : ""}`} onClick={() => setTab("tools")}>
           <Icon name="grid" size={15} /> 工具库（{total}）
         </button>
-        <button className={`ab-tab ${tab === "perms" ? "ab-tab-on" : ""}`} onClick={() => setTab("perms")}>
+        <button role="tab" aria-selected={tab === "packs"} className={`ab-tab ${tab === "packs" ? "ab-tab-on" : ""}`} onClick={() => setTab("packs")}>
+          <Icon name="package" size={15} /> 能力包
+        </button>
+        <button role="tab" aria-selected={tab === "perms"} className={`ab-tab ${tab === "perms" ? "ab-tab-on" : ""}`} onClick={() => setTab("perms")}>
           <Icon name="shield" size={15} /> 权限 · 黑名单
         </button>
       </div>
@@ -71,12 +74,20 @@ export function AbilitiesPage() {
                   <b>{d.name}</b>
                   <span className="domain-count">{d.count} 项能力</span>
                 </div>
-                <span className="domain-status ds-stable">稳定</span>
+                {(() => {
+                  const tools = d.tools || [];
+                  const on = tools.filter((t) => t.enabled).length;
+                  return (
+                    <span className={`domain-status ${on === tools.length ? "ds-stable" : "ds-muted"}`}>
+                      {on === tools.length ? "全部启用" : `${on}/${tools.length} 启用`}
+                    </span>
+                  );
+                })()}
               </div>
               <div className="domain-desc">{domains ? `${(d.tools || []).length} 项 · ${(d.tools || []).slice(0, 3).map((t) => t.name).join(" / ")}${(d.tools || []).length > 3 ? " …" : ""}` : d.desc}</div>
               {open === d.name && (
                 <div className="domain-actions">
-                  {(d.tools || []).slice(0, 8).map((t) => (
+                  {(expanded[d.name] ? (d.tools || []) : (d.tools || []).slice(0, 8)).map((t) => (
                     <div
                       className="cap-row cap-clickable"
                       key={t.name}
@@ -92,21 +103,30 @@ export function AbilitiesPage() {
                       <span className={t.enabled ? "cap-on" : "cap-off"}>{t.enabled ? "开" : "关"}</span>
                     </div>
                   ))}
-                  <button className="ctx-action">查看全部 {d.count} 项 →</button>
+                  {(d.tools || []).length > 8 && (
+                    <button
+                      className="ctx-action"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpanded((prev) => ({ ...prev, [d.name]: !prev[d.name] }));
+                      }}
+                    >
+                      {expanded[d.name] ? "收起" : `查看全部 ${d.count} 项 →`}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
           ))}
         </div>
       )}
-      {tab === "perms" && <PermissionsPage />}
+      {tab === "packs" && <CapabilitiesPage embedded />}
+      {tab === "perms" && <PermissionsPage embedded />}
       {testTool && <ToolTest name={testTool} onClose={() => setTestTool(null)} />}
       {err && <div className="empty-tip is-err">{err}</div>}
     </div>
   );
 }
-
-export { default as CapabilitiesPage } from "./CapabilitiesPage.jsx";
 
 // ── 知识库 RAG（记忆与知识页）：文档建索引 → 语义问答带引用源 ──
 function KnowledgeBaseBlock() {
@@ -551,567 +571,8 @@ function BrainGoals() {
 }
 
 // 可编辑下拉（下拉选择 + 自由输入，模型网关一切可自定）
-function Combobox({ options, value, onChange, placeholder }) {
-  return (
-    <>
-      <input
-        className="set-select set-combo"
-        list="wt-model-list"
-        value={value || ""}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      <datalist id="wt-model-list">
-        {options.map((o) => <option key={o} value={o} />)}
-      </datalist>
-    </>
-  );
-}
-
 // 设置页已独立为 SettingsPage.jsx（分类 tabs + 简单/高级模式 + 外部服务）
 export { default as SettingsPage } from "./SettingsPage.jsx";
-
-// ── 权限（黑名单管理 · 核心哲学：默认全放行，只按禁止拦截）──
-function BlacklistGroup({ title, desc, items, color, onAdd, onRemove, placeholder }) {
-  const [input, setInput] = React.useState("");
-  return (
-    <div className="perm-group">
-      <div className="perm-group-head">
-        <b>{title}</b>
-        <span>{desc}</span>
-      </div>
-      <div className="perm-chips">
-        {items.length === 0 ? (
-          <span className="perm-empty">空 —— 默认放行（不拦截任何{title === "审批动作" ? "工具" : "目标"}）</span>
-        ) : (
-          items.map((it) => (
-            <span className="perm-chip" key={it} style={{ borderColor: `${color}44`, color }}>
-              {it}
-              <button className="perm-chip-x" onClick={() => onRemove(it)}>×</button>
-            </span>
-          ))
-        )}
-      </div>
-      <div className="perm-add">
-        <input
-          placeholder={placeholder}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && input.trim()) {
-              onAdd(input.trim());
-              setInput("");
-            }
-          }}
-        />
-        <button
-          className="confirm-btn"
-          disabled={!input.trim()}
-          onClick={() => {
-            onAdd(input.trim());
-            setInput("");
-          }}
-        >
-          添加
-        </button>
-      </div>
-    </div>
-  );
-}
-
-export function PermissionsPage() {
-  const [perms, setPerms] = React.useState(null);
-  const [savedTip, setSavedTip] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
-  const [err, setErr] = React.useState("");
-
-  const load = React.useCallback(async () => {
-    setErr("");
-    const d = await api.getPermissions().catch(() => null);
-    if (d) setPerms(d);
-    else setErr("权限设置加载失败（后端未连接）");
-  }, []);
-  React.useEffect(() => { load(); }, [load]);
-
-  if (!perms) {
-    return (
-      <div className="page">
-        {err
-          ? <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
-          : <SkeletonPage title="权限" hint="正在加载权限设置…" />}
-      </div>
-    );
-  }
-
-  const update = async (key, items) => {
-    setBusy(true);
-    try {
-      const d = await api.savePermissions({ [key]: items }).catch(() => null);
-      if (d && d.ok) {
-        setPerms({ ...perms, [key]: items });
-        setSavedTip("已保存到 permissions.json");
-        setTimeout(() => setSavedTip(""), 1800);
-      }
-    } catch (e) { silentWarn(e, "Pages"); }
-    setBusy(false);
-  };
-
-  const groups = [
-    {
-      key: "blocked_dirs",
-      title: "禁目录（filesystem.blocked_dirs）",
-      desc: "命中路径的文件操作直接拒绝",
-      color: "var(--danger-text)",
-      placeholder: "输入禁用的目录路径，Enter 添加",
-    },
-    {
-      key: "shell_blocklist",
-      title: "禁命令（shell.blocklist）",
-      desc: "命中命令名的 run_command 拒绝",
-      color: "var(--warn-text)",
-      placeholder: "输入禁用的命令名，Enter 添加",
-    },
-    {
-      key: "network_blocklist",
-      title: "禁网络（network.blocklist）",
-      desc: "命中的主机/网段请求拒绝",
-      color: "var(--ai)",
-      placeholder: "输入禁用的主机或网段，Enter 添加",
-    },
-    {
-      key: "approval_actions",
-      title: "审批动作（approval_actions）",
-      desc: "仅这些工具执行前需要你确认（其余默认放行）",
-      color: "var(--brand)",
-      placeholder: "输入工具名，如 send_email，Enter 添加",
-    },
-  ];
-
-  return (
-    <div className="page">
-      <div className="page-head">
-        <h1>权限</h1>
-        <p>自由优先：默认放行 + 黑名单。AI 拥有全部行动能力，只按你禁止的拦截。</p>
-      </div>
-      <div className={`perm-mode-banner ${perms.full_auto ? "perm-mode-task" : ""}`}>
-        {perms.full_auto
-          ? "🚀 任务模式已开启：零审批、零开关，AI 拥有全部工具（黑名单仍生效）"
-          : "💬 对话模式：不调用任何工具，黑名单不生效"}
-      </div>
-      {/* 黑名单一键总开关：默认开（黑名单空 = 0 限制）；关 = 一键全放行（连黑名单也不拦） */}
-      <div className="perm-group" style={{ borderColor: "var(--border-strong)" }}>
-        <div className="perm-group-head">
-          <b>黑名单总开关（blocklist_enabled）</b>
-          <span>{perms.blocklist_enabled ? "已开启：黑名单条目生效（默认空 = 0 限制）" : "已关闭：一键全放行，黑名单条目不拦截"}</span>
-        </div>
-        <button
-          className="confirm-btn"
-          onClick={async () => {
-            setBusy(true);
-            try {
-              const d = await api.savePermissions({ blocklist_enabled: !perms.blocklist_enabled }).catch(() => null);
-              if (d && d.ok) {
-                setPerms({ ...perms, blocklist_enabled: !perms.blocklist_enabled });
-                setSavedTip("已保存到 permissions.json");
-                setTimeout(() => setSavedTip(""), 1800);
-              }
-            } catch (e) { silentWarn(e, "Pages"); }
-            setBusy(false);
-          }}
-          disabled={busy}
-        >
-          {perms.blocklist_enabled ? "🔓 一键全放行" : "🛡 启用黑名单限制"}
-        </button>
-      </div>
-      <div className="perm-groups">
-        {groups.map((g) => (
-          <BlacklistGroup
-            key={g.key}
-            title={g.title}
-            desc={g.desc}
-            color={g.color}
-            items={perms[g.key] || []}
-            placeholder={g.placeholder}
-            onAdd={(v) => update(g.key, [...(perms[g.key] || []), v])}
-            onRemove={(v) => update(g.key, (perms[g.key] || []).filter((x) => x !== v))}
-          />
-        ))}
-      </div>
-      <div className="perm-note">配置文件：permissions.json · 修改立即生效</div>
-      {savedTip && <div className="set-saved-tip">{savedTip}</div>}
-    </div>
-  );
-}
-
-// ── 任务与模板 ────────────────────────────────────
-export function TasksPage() {
-  const [tasks, setTasks] = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
-  const [err, setErr] = React.useState("");
-  const load = React.useCallback(async () => {
-    setLoading(true);
-    setErr("");
-    const d = await api.getTasks().catch(() => null);
-    if (d) setTasks(d);
-    else setErr("任务模板加载失败：后端未连接，请启动服务后重试");
-    setLoading(false);
-  }, []);
-  React.useEffect(() => {
-    load();
-  }, [load]);
-  const templates = tasks?.templates || [];
-  const playground = tasks?.playground || [];
-  return (
-    <div className="page">
-      <div className="page-head">
-        <h1>任务与模板</h1>
-        <p>Agent 任务模板 · 试玩任务 · 全部在任务模式下执行</p>
-      </div>
-      {loading && <div className="empty-tip is-loading">正在加载任务模板…</div>}
-      {!loading && err && (
-        <div className="empty-tip is-err">
-          {err}　<button className="msg-op" onClick={load}>重试</button>
-        </div>
-      )}
-      {!loading && !err && templates.length === 0 && playground.length === 0 && (
-        <div className="empty-tip">暂时没有可用的任务模板。</div>
-      )}
-      {templates.length > 0 && (
-        <>
-          <div className="wb-card-title"><Icon name="list" size={14} /> 任务模板（{templates.length}）</div>
-          <div className="task-grid">
-            {templates.map((t, i) => (
-              <div className="wb-card task-card" key={i}>
-                <b>{t.name || `模板 ${i + 1}`}</b>
-                <div className="task-sub">{t.desc || ""}</div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-      {playground.length > 0 && (
-        <>
-          <div className="wb-card-title" style={{ marginTop: 16 }}>试玩任务</div>
-          <div className="task-grid">
-            {playground.map((p, i) => (
-              <div className="wb-card task-card" key={i}>
-                <b>{typeof p === "string" ? p : p.name || p.title || `试玩 ${i + 1}`}</b>
-                <div className="task-sub">点击后在输入框发起（试玩由本界面提供）</div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── 文件与产物 ────────────────────────────────────
-export function FilesPage() {
-  const [files, setFiles] = React.useState(null);
-  const [err, setErr] = React.useState("");
-  const [sel, setSel] = React.useState(null);   // 当前预览的文件绝对路径
-  React.useEffect(() => {
-    let alive = true;
-    (async () => {
-      const d = await api.listFiles().catch(() => null);
-      if (!alive) return;
-      if (d) {
-        setFiles(d);
-        setErr("");
-      } else {
-        setErr("文件列表加载失败：后端未连接，请启动服务后刷新");
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-  const ext = sel ? (sel.match(/\.[^.\\/]+$/) || [""])[0].toLowerCase() : "";
-  const PIXEL_EXTS = [".pdf", ".docx", ".pptx"];
-  const OFFICE_EXTS = [".xlsx", ".xls", ".docx", ".pptx", ".pdf", ".csv"];
-  return (
-    <div className="page">
-      <div className="page-head">
-        <h1>文件与产物</h1>
-        <p>{files ? `工作目录：${files.active_dir}` : "最近产物 · 工作区文件"}</p>
-      </div>
-      <div className="wb-card-title"><Icon name="package" size={14} /> 最近产物（{files?.recent?.length || 0}）</div>
-      <div className="files-list">
-        {err && <div className="empty-tip is-err">{err}</div>}
-        {(files ? files.recent || [] : []).map((r, i) => (
-          <div className="files-row" key={i}>
-            <button
-              type="button"
-              className="files-open"
-              onClick={() => setSel(r)}
-              title="点击预览"
-            >📦 {r}</button>
-          </div>
-        ))}
-        {!err && files && (files.recent || []).length === 0 && (
-          <EmptyState icon="package" title="还没有产物" hint="工具生成的文件会自动出现在这里。" compact />
-        )}
-      </div>
-      <div className="wb-card-title" style={{ marginTop: 16 }}>工作区（{files?.entries?.length || 0} 项）</div>
-      <div className="files-list">
-        {(files?.entries || []).map((e, i) => {
-          const full = `${files.active_dir}\\${e.name}`;
-          return (
-            <div className="files-row" key={i}>
-              {e.is_dir ? (
-                <span>📁 {e.name}</span>
-              ) : (
-                <button
-                  type="button"
-                  className="files-open"
-                  onClick={() => setSel(full)}
-                  title="点击预览"
-                >📄 {e.name}</button>
-              )}
-              <span className="files-meta">{e.is_dir ? "目录" : `${e.size} B`} · {e.mtime}</span>
-            </div>
-          );
-        })}
-      </div>
-      {sel && (
-        <div className="wb-card" style={{ marginTop: 16 }}>
-          <div className="wb-card-title">
-            <Icon name="package" size={14} /> 预览：{sel.split(/[\\/]/).pop()}
-            <button type="button" className="btn-mini" style={{ marginLeft: 8 }}
-              onClick={() => setSel(null)}>关闭</button>
-            <button type="button" className="btn-mini" style={{ marginLeft: 6 }}
-              onClick={() => api.openFile(sel).catch(() => null)}>用本机程序打开</button>
-          </div>
-          {PIXEL_EXTS.includes(ext) ? (
-            <PixelDocViewer path={sel} ext={ext} />
-          ) : OFFICE_EXTS.includes(ext) ? (
-            <OfficeFilePreview path={sel} />
-          ) : (
-            <TextFilePreview path={sel} />
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Office 产物预览：走 /v1/files/preview 取结构化内容，xlsx/Word 支持就地编辑回写。 */
-function OfficeFilePreview({ path }) {
-  const [state, setState] = React.useState({ status: "loading", data: null, err: "" });
-  React.useEffect(() => {
-    let alive = true;
-    setState({ status: "loading", data: null, err: "" });
-    (async () => {
-      const d = await api.previewFile(path).catch(() => null);
-      if (!alive) return;
-      if (!d || d.error) {
-        setState({ status: "err", data: null, err: (d && d.error) || "无法读取预览" });
-        return;
-      }
-      setState({ status: "ok", data: d, err: "" });
-    })();
-    return () => { alive = false; };
-  }, [path]);
-  if (state.status === "loading") {
-    return <div style={{ opacity: .7, fontSize: "var(--fs-xs)" }}>正在加载预览…</div>;
-  }
-  if (state.status === "err") {
-    return <div style={{ opacity: .8, fontSize: "var(--fs-xs)", color: "var(--danger-text)" }}>⚠ {state.err}</div>;
-  }
-  const d = state.data || {};
-  if (d.xlsx && Array.isArray(d.header)) {
-    return <EditableTable path={path} name={d.name} header={d.header} rows={d.rows || []} total={d.total || 0} />;
-  }
-  if (d.docx && typeof d.content === "string") {
-    return <DocxEditable path={path} name={d.name} content={d.content} />;
-  }
-  return <TextDocPreview data={d} />;
-}
-
-/** 文本类产物预览：拉原文按纯文本展示（超长截断，避免长文件卡 UI）。 */
-function TextFilePreview({ path }) {
-  const [state, setState] = React.useState({ status: "loading", text: "", err: "" });
-  React.useEffect(() => {
-    let alive = true;
-    setState({ status: "loading", text: "", err: "" });
-    (async () => {
-      const r = await api.fetchFileBlob(path).catch(() => null);
-      if (!alive) return;
-      if (!r || !r.ok || !r.blob) {
-        setState({ status: "err", text: "", err: (r && r.error) || "无法读取文件" });
-        return;
-      }
-      const raw = await r.blob.text();
-      if (!alive) return;
-      const MAX = 200000;
-      setState({
-        status: "ok",
-        text: raw.length > MAX ? raw.slice(0, MAX) + `\n\n…（已截断，全文 ${raw.length} 字符）` : raw,
-        err: "",
-      });
-    })();
-    return () => { alive = false; };
-  }, [path]);
-  if (state.status === "loading") return <div style={{ opacity: .7, fontSize: "var(--fs-xs)" }}>正在加载…</div>;
-  if (state.status === "err") return <div style={{ opacity: .8, fontSize: "var(--fs-xs)", color: "var(--danger-text)" }}>⚠ {state.err}</div>;
-  return <pre className="file-preview-pre">{state.text}</pre>;
-}
-
-// ── 自我进化 ──────────────────────────────────────
-export function EvolutionPage() {
-  const [evos, setEvos] = React.useState(null);
-  const [detail, setDetail] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
-  const [tip, setTip] = React.useState("");
-  const [err, setErr] = React.useState("");
-
-  const flash = (t) => { setTip(t); setTimeout(() => setTip(""), 3200); };
-
-  const load = React.useCallback(async () => {
-    setErr("");
-    const d = await api.getEvolutions().catch(() => null);
-    if (d) setEvos(d.evolutions || []);
-    else setErr("进化提案加载失败（后端未连接）");
-  }, []);
-
-  React.useEffect(() => {
-    load();
-  }, [load]);
-
-  const apply = async (name) => {
-    if (!(await confirmDialog(`采纳提案「${name}」？原文件将备份为 .evobak`, { okText: "采纳" }))) return;
-    setBusy(true);
-    const r = await api.applyEvolution(name).catch(() => null);
-    setBusy(false);
-    if (r && r.ok) {
-      flash(`✅ 已采纳：${r.applied.length} 个文件（原文件备份 .evobak，重启后生效）`);
-      setDetail(null);
-      load();
-    } else {
-      flash(`❌ 失败：${(r && r.error) || "后端未响应"}`);
-    }
-  };
-
-  const ignore = async (name) => {
-    if (!(await confirmDialog(`忽略并删除提案「${name}」？`, { danger: true, okText: "忽略" }))) return;
-    setBusy(true);
-    const r = await api.ignoreEvolution(name).catch(() => null);
-    setBusy(false);
-    if (r && r.ok) {
-      setDetail(null);
-      load();
-    } else {
-      flash(`❌ 失败：${(r && r.error) || "后端未响应"}`);
-    }
-  };
-
-  const showDetail = async (name) => {
-    const d = await api.getEvolutionDetail(name).catch(() => null);
-    if (d && d.files) setDetail(d);
-    else flash("❌ 方案读取失败");
-  };
-
-  return (
-    <div className="page">
-      <div className="page-head">
-        <h1>自我进化</h1>
-        <p>鲸语阅读自己的代码 → 提交改进提案 → 由你决定是否采纳</p>
-      </div>
-      {detail && (
-        <div className="evo-detail">
-          <div className="evo-detail-head">
-            <b>📄 {detail.name}</b>
-            <button className="confirm-btn" onClick={() => setDetail(null)}>← 返回列表</button>
-          </div>
-          {detail.files.map((f) => (
-            <div className="evo-file" key={f.name}>
-              <div className="evo-file-head">
-                <b>{f.name}</b>
-                <span>{f.original_exists ? "（将覆盖原文件）" : "（新文件）"}</span>
-              </div>
-              <pre>{f.content.slice(0, 3000)}</pre>
-            </div>
-          ))}
-        </div>
-      )}
-      {!detail && (
-        <div className="evo-list">
-          {tip && <div className="px-tip" style={{ textAlign: "left", marginBottom: 8 }}>{tip}</div>}
-          {err && <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>}
-          {!err && evos === null && <div className="empty-tip is-loading">正在加载进化提案…</div>}
-          {(evos || []).map((e) => (
-            <div className={`evo-card ${e.applied ? "evo-applied" : ""}`} key={e.name}>
-              <div className="evo-line1">
-                <b>{e.name}</b>
-                {e.applied && <span className="evo-badge">已采纳</span>}
-              </div>
-              <div className="evo-line2">{e.files.length} 个文件 · {e.mtime}</div>
-              {!e.applied && (
-                <div className="evo-actions">
-                  <button className="msg-op" onClick={() => showDetail(e.name)}>🔍 差异预览</button>
-                  <button className="msg-op" disabled={busy} onClick={() => apply(e.name)}>✅ 采纳</button>
-                  <button className="msg-op" style={{ color: "var(--danger-text)" }} disabled={busy} onClick={() => ignore(e.name)}>🗑 忽略</button>
-                </div>
-              )}
-            </div>
-          ))}
-          {!err && evos && evos.length === 0 && <EmptyState icon="sparkles" title="还没有进化提案" hint="AI 自我审查后会在这里自动生成改进提案。" compact />}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── 系统 ──────────────────────────────────────────
-export function SystemPage() {
-  const [status, setStatus] = React.useState(null);
-  const [err, setErr] = React.useState("");
-  const load = React.useCallback(async () => {
-    setErr("");
-    const s = await api.getStatus().catch(() => null);
-    if (s) setStatus(s);
-    else setErr("系统状态加载失败（后端未连接）");
-  }, []);
-  React.useEffect(() => { load(); }, [load]);
-  const u = status?.usage_total || {};
-  if (!status) {
-    return (
-      <div className="page">
-        <div className="page-head">
-          <h1>系统</h1>
-          <p>用量 · 安全 · 依赖 · 工作目录</p>
-        </div>
-        {err
-          ? <div className="empty-tip is-err">{err}　<button className="msg-op" onClick={load}>重试</button></div>
-          : <div className="empty-tip is-loading">正在加载系统状态…</div>}
-      </div>
-    );
-  }
-  return (
-    <div className="page">
-      <div className="page-head">
-        <h1>系统</h1>
-        <p>用量 · 安全 · 依赖 · 工作目录</p>
-      </div>
-      <div className="wb-card">
-        <div className="wb-card-title"><Icon name="chart" size={14} /> 账户与用量</div>
-        <div className="sys-row"><span>累计输入</span><b>{(u.prompt || 0).toLocaleString()} tokens</b></div>
-        <div className="sys-row"><span>累计输出</span><b>{(u.completion || 0).toLocaleString()} tokens</b></div>
-        <div className="sys-row"><span>缓存命中</span><b className="ok-text">{(u.cache_hit || 0).toLocaleString()}</b></div>
-        <div className="sys-row"><span>本月成本</span><b>¥{status?.monthly_cost || 0}</b></div>
-        <div className="sys-row"><span>本月预算</span><b>¥{(status?.monthly_budget || 0).toFixed(2)}</b></div>
-        {status?.peak_hour && <div className="sys-row"><span>高峰时段</span><b className="warn-text">⏰ 高峰</b></div>}
-      </div>
-      <div className="wb-card" style={{ marginTop: 12 }}>
-        <div className="wb-card-title"><Icon name="shield" size={14} /> 工作模式与安全</div>
-        <div className="sys-row"><span>工作模式</span><b>{status?.mode === "task" ? "🚀 任务模式：全部工具自动可用" : "💬 对话模式：不调用任何工具"}</b></div>
-        <div className="sys-row"><span>隐私模式</span><b>{status?.privacy ? "🔒 开启" : "关闭"}</b></div>
-        <div className="sys-row"><span>工作目录</span><b className="sys-path">{status?.active_dir || ""}</b></div>
-      </div>
-    </div>
-  );
-}
 
 // ── 定时任务（A2）──────────────────────────────────
 function SchedulesBlock() {
@@ -1222,7 +683,7 @@ function greet() {
   return h < 6 ? "夜深了" : h < 9 ? "早上好" : h < 12 ? "上午好" : h < 14 ? "中午好" : h < 18 ? "下午好" : h < 23 ? "晚上好" : "夜深了";
 }
 
-export function WorkbenchPage({ onApply, onPickSession }) {
+export function WorkbenchPage({ onApply, onPickSession, tab: tabProp, onTab }) {
   const [status, setStatus] = React.useState(null);
   const [sessions, setSessions] = React.useState([]);
   const [files, setFiles] = React.useState(null);
@@ -1233,6 +694,12 @@ export function WorkbenchPage({ onApply, onPickSession }) {
   const [prompts, setPrompts] = React.useState([]);
   const [templates, setTemplates] = React.useState({});
   const [updatedAt, setUpdatedAt] = React.useState("");
+  const [tabState, setTabState] = React.useState("overview");
+  const tab = tabProp ?? tabState;
+  const setTab = React.useCallback((next) => {
+    setTabState(next);
+    onTab?.(next);
+  }, [onTab]);
 
   // 全量刷新：态势走 /v1/situation 单一事实源（人+AI 同源），快捷行动资产单独拉，30s 轮询
   const refresh = React.useCallback(async () => {
@@ -1268,7 +735,15 @@ export function WorkbenchPage({ onApply, onPickSession }) {
   const u = (status && status.usage_total) || {};
   const running = Object.values(procs || {}).filter((p) => !p.exited);
   const missingDeps = (deps || []).filter((d) => !d.ok);
-  const recentFiles = (files && files.recent) || [];
+  // /v1/situation 的 recent.files 是带元数据的对象；兼容旧字符串形式。
+  const recentFiles = ((files && files.recent) || []).map((f) => {
+    if (f && typeof f === "object") {
+      const p = f.path || "";
+      return { ...f, path: p, name: f.name || String(p).split(/[\\/]/).pop() || "未命名文件" };
+    }
+    const p = String(f || "");
+    return { path: p, name: p.split(/[\\/]/).pop() || "未命名文件" };
+  }).filter((f) => f.path);
   // 快捷行动：高频（use_count）优先，不足用零次使用的补齐
   const used = (prompts || []).filter((p) => p.enabled !== false && p.use_count > 0)
     .sort((a, b) => (b.use_count || 0) - (a.use_count || 0));
@@ -1311,11 +786,26 @@ export function WorkbenchPage({ onApply, onPickSession }) {
             <span className="wb-head-tip">一切尽在掌握</span>
           </p>
         </div>
-        <button className="confirm-btn wb-refresh" onClick={refresh} title="手动刷新">
-          ⟳ 刷新{updatedAt ? ` · ${updatedAt}` : ""}
+        {tab === "overview" && (
+          <button className="confirm-btn wb-refresh" onClick={refresh} title="手动刷新">
+            ⟳ 刷新{updatedAt ? ` · ${updatedAt}` : ""}
+          </button>
+        )}
+      </div>
+
+      <div className="ab-tabs" role="tablist" aria-label="工作台分区">
+        <button role="tab" aria-selected={tab === "overview"} className={`ab-tab ${tab === "overview" ? "ab-tab-on" : ""}`} onClick={() => setTab("overview")}>
+          <Icon name="layout" size={15} /> 概览
+        </button>
+        <button role="tab" aria-selected={tab === "tasks"} className={`ab-tab ${tab === "tasks" ? "ab-tab-on" : ""}`} onClick={() => setTab("tasks")}>
+          <Icon name="activity" size={15} /> 任务记录
         </button>
       </div>
 
+      {tab === "tasks" ? (
+        <TasksPage embedded onOpenSession={onPickSession} />
+      ) : (
+        <>
       {/* ① 态势横幅：现在发生了什么 */}
       <div className="wb-hero">
         <div className="wb-hero-item" title="运行中的后台进程">
@@ -1463,13 +953,13 @@ export function WorkbenchPage({ onApply, onPickSession }) {
         <div className="wb-card">
           <div className="wb-card-title"><Icon name="package" size={14} /> 最近产物（{recentFiles.length}）</div>
           <div className="wb-file-list">
-            {recentFiles.slice(0, 6).map((p) => (
-              <div className="wb-file-item" key={p}>
-                <span className="wb-file-ic">{fileIcon(p)}</span>
-                <span className="wb-file-name" title={p}>{String(p).split(/[\\/]/).pop()}</span>
+            {recentFiles.slice(0, 6).map((f) => (
+              <div className="wb-file-item" key={f.path}>
+                <span className="wb-file-ic">{fileIcon(f.name || f.path)}</span>
+                <span className="wb-file-name" title={f.path}>{f.name}</span>
                 <div className="wb-file-ops">
-                  <button className="pm-op" onClick={() => openFile(p)}>打开</button>
-                  <button className="pm-op" onClick={() => openFile(p, true)}>定位</button>
+                  <button className="pm-op" onClick={() => openFile(f.path)}>打开</button>
+                  <button className="pm-op" onClick={() => openFile(f.path, true)}>定位</button>
                 </div>
               </div>
             ))}
@@ -1482,6 +972,8 @@ export function WorkbenchPage({ onApply, onPickSession }) {
       <div style={{ marginTop: 12 }}>
         <SchedulesBlock />
       </div>
+        </>
+      )}
     </div>
   );
 }

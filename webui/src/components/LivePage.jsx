@@ -35,7 +35,7 @@ function Stat({ label, value, accent }) {
   );
 }
 
-export default function LivePage() {
+export default function LivePage({ embedded = false }) {
   const [snap, setSnap] = React.useState(null);
   const [settings, setSettings] = React.useState(null);
   const [err, setErr] = React.useState("");
@@ -115,21 +115,23 @@ export default function LivePage() {
     }
   };
 
-  if (!snap && !err) return <div className="page"><SkeletonCard /></div>;
+  if (!snap && !err) return embedded ? <div className="page-embedded"><SkeletonCard /></div> : <div className="page"><SkeletonCard /></div>;
 
   const hudUrl = `${window.location.origin}/live/`;
   const filledPct = Math.round((snap?.filled || 0) * 100);
   const mood = snap?.mood || "normal";
 
   return (
-    <div className="page live-page">
-      <div className="page-head">
-        <h1>直播角色</h1>
-        <p>
-          观众用抖音官方礼物打赏，角色靠打赏「吃饭」活下来。这里是主播控制台；
-          观众看到的是 HUD 页面，用 OBS「浏览器源」加载即可。
-        </p>
-      </div>
+    <div className={embedded ? "page-embedded live-page" : "page live-page"}>
+      {!embedded && (
+        <div className="page-head">
+          <h1>直播角色</h1>
+          <p>
+            观众用抖音官方礼物打赏，角色靠打赏「吃饭」活下来。这里是主播控制台；
+            观众看到的是 HUD 页面，用 OBS「浏览器源」加载即可。
+          </p>
+        </div>
+      )}
 
       {err && <div className="empty-tip is-err">{err}</div>}
 

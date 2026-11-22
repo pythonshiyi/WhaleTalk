@@ -2211,7 +2211,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                 <h1>{isTask ? "今天想做点什么？" : activePersona ? `和${activePersona.name}聊聊` : "随便聊聊"}</h1>
                 <p>
                   {isTask
-                    ? "看得见屏幕、听得见语音、动得了鼠标键盘与浏览器-115项能力随叫随到"
+                    ? "看得见屏幕、听得见语音、动得了鼠标键盘与浏览器 · 全量能力随叫随到"
                     : activePersona
                     ? (activePersona.tagline || "角色对话 · 不调用工具 · 可随时在头部切换角色")
                     : "纯问答 · 不调用工具 · 适合聊天、翻译、写作、答疑"}

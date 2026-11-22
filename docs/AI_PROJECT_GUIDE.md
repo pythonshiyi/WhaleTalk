@@ -19,7 +19,7 @@
 
 - **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.28.0`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **125 个 `/v1` 路由**、**138 个 pytest 文件 / 1374 用例 + 33 个前端 node 套件**、
+  **125 个 `/v1` 路由**、**138 个 pytest 文件 / 1374 用例 + 34 个前端 node 套件**、
   源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
   主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
