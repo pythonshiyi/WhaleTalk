@@ -4,6 +4,8 @@ import FirstRunPage from "./components/FirstRunPage.jsx";
 import ChatPage, { BackendBanner } from "./components/ChatPage.jsx";
 import DepsBanner from "./components/DepsBanner.jsx";
 import InstallBanner from "./components/InstallBanner.jsx";
+import CommandPalette from "./components/CommandPalette.jsx";
+import { usePoll } from "./usePoll.js";
 import { FlashProvider, ToastProvider } from "./components/FlashToast.jsx";
 import DialogHost from "./components/DialogHost.jsx";
 import * as api from "./api.js";
@@ -122,6 +124,10 @@ export default function App() {
   const [settingsTab, setSettingsTab] = React.useState("model");
   const [workbenchTab, setWorkbenchTab] = React.useState("overview");
   const [agentTab, setAgentTab] = React.useState("cockpit");
+  const [abilitiesQuery, setAbilitiesQuery] = React.useState("");
+  const [assetPath, setAssetPath] = React.useState("");
+  const [cmdOpen, setCmdOpen] = React.useState(false);
+  const [runningJobs, setRunningJobs] = React.useState([]);
 
   React.useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -188,6 +194,41 @@ export default function App() {
     } catch (e) { silentWarn(e, "App"); }
   };
 
+  // 全局导航：命令面板 / 待处理收件箱 / 后台任务条共用。
+  const navigate = React.useCallback((dest) => {
+    if (!dest || typeof dest !== "object") return;
+    if (dest.workbenchTab) setWorkbenchTab(dest.workbenchTab);
+    if (dest.createTab) setCreateTab(dest.createTab);
+    if (dest.settingsTab) setSettingsTab(dest.settingsTab);
+    if (dest.agentTab) setAgentTab(dest.agentTab);
+    if (dest.toolQuery != null) setAbilitiesQuery(String(dest.toolQuery));
+    if (dest.assetPath != null) setAssetPath(String(dest.assetPath));
+    if (dest.sessionId != null) setOpenSessionId(dest.sessionId);
+    if (dest.personaId != null) setOpenPersonaId(dest.personaId);
+    if (dest.prompt != null) setApplyPrompt(dest.prompt);
+    if (dest.page) setPage(dest.page);
+  }, []);
+
+  const loadRunningJobs = React.useCallback(async () => {
+    try {
+      const d = await api.runningJobs();
+      setRunningJobs((d && d.jobs) || []);
+    } catch (e) { silentWarn(e, "App"); }
+  }, []);
+  usePoll(loadRunningJobs, 5000);
+
+  React.useEffect(() => {
+    const onKey = (e) => {
+      const key = String(e.key || "").toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === "k") {
+        e.preventDefault();
+        setCmdOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // 首次启动：全屏依赖安装向导（装完/跳过 → 刷新进入主界面）
   if (firstRun === null) {
     return (
@@ -216,10 +257,26 @@ export default function App() {
             <ToastProvider>
               <DialogHost />
               <div className="app">
-                <Sidebar page={page} onPage={setPage} />
+                <Sidebar page={page} onPage={setPage} onNavigate={navigate} runningCount={runningJobs.length} />
                 <main className="app-main">
                   <BackendBanner />
                   <InstallBanner />
+                  {runningJobs.length > 0 && (
+                    <div className="bg-jobs-bar" role="status">
+                      <span className="bg-jobs-dot" aria-hidden="true" />
+                      <b>{runningJobs.length} 个后台任务正在生成</b>
+                      <span className="bg-jobs-meta">
+                        {runningJobs[0]?.last_tool ? `当前：${runningJobs[0].last_tool}` : "模型思考中"}
+                        {runningJobs[0]?.seconds ? ` · ${Math.round(runningJobs[0].seconds)}s` : ""}
+                      </span>
+                      {runningJobs[0]?.session_id && (
+                        <button className="msg-op" onClick={() => navigate({ page: "chat", sessionId: runningJobs[0].session_id })}>
+                          打开会话
+                        </button>
+                      )}
+                      <button className="msg-op" onClick={() => navigate({ page: "workbench", workbenchTab: "tasks" })}>任务记录</button>
+                    </div>
+                  )}
                   <DepsBanner
                     onGoSettings={() => {
                       try { window.location.hash = "#deps"; } catch (e) { silentWarn(e, "App"); }
@@ -264,7 +321,10 @@ export default function App() {
                         />
                       );
                     })()}
-                    {page === "abilities" && <LazyPages.abilities />}
+                    {page === "abilities" && (() => {
+                      const P = LazyPages.abilities;
+                      return <P initialQuery={abilitiesQuery} />;
+                    })()}
                     {page === "create" && (() => {
                       const P = LazyPages.create;
                       return (
@@ -283,6 +343,7 @@ export default function App() {
                             setSettingsTab("wechat");
                             setPage("settings");
                           }}
+                          assetPath={assetPath}
                         />
                       );
                     })()}
@@ -301,6 +362,11 @@ export default function App() {
                             setPage("create");
                           }}
                           onGoAbilities={() => setPage("abilities")}
+                          onOpenSession={(sid) => {
+                            if (!sid) return;
+                            setOpenSessionId(sid);
+                            setPage("chat");
+                          }}
                           quietMode={quietMode}
                           onToggleQuiet={toggleQuiet}
                         />
@@ -310,6 +376,7 @@ export default function App() {
                   </ErrorBoundary>
                 </main>
               </div>
+              <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} onNavigate={navigate} />
             </ToastProvider>
           </FlashProvider>
         </DisplayContext.Provider>

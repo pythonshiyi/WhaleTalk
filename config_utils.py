@@ -318,6 +318,7 @@ def _load_config_uncached(config_path):
         except Exception as e:
             logger.error("加载配置失败: %s", e)
     cfg["api_key"] = crypto.decrypt(cfg.get("api_key", ""))
+    cfg["fallback_api_key"] = crypto.decrypt(cfg.get("fallback_api_key", ""))
     cfg["inbound_token"] = crypto.decrypt(cfg.get("inbound_token", ""))
     cfg["image_api_key"] = crypto.decrypt(cfg.get("image_api_key", ""))
     cfg["brain_community_brain_key"] = crypto.decrypt(cfg.get("brain_community_brain_key", ""))
@@ -349,7 +350,7 @@ def save_config(cfg, config_path=None):
         # - 明文为空（含 DPAPI 解密失败返回 "" 的情况）但磁盘仍有密文 → 保留磁盘原密文。
         #   否则一次「无关设置」的保存会把解密失败的密文抹成空串，Key 不可逆丢失。
         # - 加密失败（CryptError）→ 保留磁盘原密文，绝不写明文、绝不静默删除。
-        for secret_key in ("api_key", "inbound_token", "image_api_key",
+        for secret_key in ("api_key", "fallback_api_key", "inbound_token", "image_api_key",
                            "brain_community_brain_key", "brain_community_shared_secret",
                            "weibo_cookie"):
             plain = cfg.get(secret_key, "")

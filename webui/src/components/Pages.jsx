@@ -14,19 +14,35 @@ import { silentWarn } from "../quiet.js";
 import * as brainNav from "../brainNav.js";
 import { bustBrainFeed } from "./BrainTimeline.jsx";
 
-export function AbilitiesPage() {
+export function AbilitiesPage({ initialQuery = "" }) {
   const [open, setOpen] = React.useState(null);
   const [expanded, setExpanded] = React.useState({});
   const [tab, setTab] = React.useState("tools");
   const [domains, setDomains] = React.useState(null);
+  const [health, setHealth] = React.useState({});
   const [total, setTotal] = React.useState(0);
   const [testTool, setTestTool] = React.useState(null);
   const [err, setErr] = React.useState("");
+  const [query, setQuery] = React.useState(initialQuery || "");
+  const [filter, setFilter] = React.useState("all");
+  const [favs, setFavs] = React.useState(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem("whaletalk.toolFavs") || "[]");
+      return new Set(Array.isArray(raw) ? raw : []);
+    } catch { return new Set(); }
+  });
+
+  React.useEffect(() => {
+    if (initialQuery) setQuery(String(initialQuery));
+  }, [initialQuery]);
 
   React.useEffect(() => {
     let alive = true;
     (async () => {
-      const d = await api.listAbilities().catch(() => null);
+      const [d, h] = await Promise.all([
+        api.listAbilities().catch(() => null),
+        api.capabilities().catch(() => null),
+      ]);
       if (!alive) return;
       if (d && d.domains) {
         setDomains(d.domains);
@@ -35,14 +51,41 @@ export function AbilitiesPage() {
       } else {
         setErr("能力清单加载失败：后端未连接，请启动服务后刷新");
       }
+      const hm = {};
+      for (const it of (h?.health?.items || [])) hm[it.name] = it;
+      setHealth(hm);
     })();
     return () => {
       alive = false;
     };
   }, []);
 
+  const toggleFav = (name) => {
+    setFavs((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      try { localStorage.setItem("whaletalk.toolFavs", JSON.stringify([...next])); } catch (e) { silentWarn(e, "AbilitiesPage"); }
+      return next;
+    });
+  };
+
   const list = domains || [];
   const domainCount = list.filter((d) => d.name !== "其他").length;
+  const allTools = React.useMemo(() => list.flatMap((d) => (d.tools || []).map((t) => ({
+    ...t,
+    domain: d.name,
+    color: d.color,
+    health: health[t.name] || null,
+    fav: favs.has(t.name),
+  }))), [list, health, favs]);
+  const q = query.trim().toLowerCase();
+  const filteredTools = allTools.filter((t) => {
+    if (filter === "fav" && !t.fav) return false;
+    if (filter === "failed" && !(t.health?.fail_rate > 0 || t.health?.breaker_open)) return false;
+    if (!q) return true;
+    return `${t.name} ${t.description || ""} ${t.domain}`.toLowerCase().includes(q);
+  });
+  const flatMode = !!q || filter !== "all";
   return (
     <div className="page">
       <div className="page-head">
@@ -61,64 +104,115 @@ export function AbilitiesPage() {
         </button>
       </div>
       {tab === "tools" && (
-        <div className="domain-grid">
-          {list.map((d) => (
-            <div
-              key={d.name}
-              className={`domain-card ${open === d.name ? "domain-open" : ""}`}
-              onClick={() => setOpen(open === d.name ? null : d.name)}
-            >
-              <div className="domain-head">
-                <span className="domain-icon" style={{ background: d.color ? `${d.color}22` : "var(--brand-soft)" }}>{d.icon || "🧩"}</span>
-                <div className="domain-meta">
-                  <b>{d.name}</b>
-                  <span className="domain-count">{d.count} 项能力</span>
+        <>
+          <div className="tools-bar">
+            <input
+              className="set-select set-combo tools-search"
+              placeholder="搜索工具名 / 描述 / 能力域…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="搜索工具"
+            />
+            <div className="tools-filters" role="group" aria-label="工具筛选">
+              {[
+                { id: "all", label: `全部 ${allTools.length}` },
+                { id: "fav", label: `收藏 ${favs.size}` },
+                { id: "failed", label: "最近失败" },
+              ].map((f) => (
+                <button
+                  key={f.id}
+                  className={`ab-tab ${filter === f.id ? "ab-tab-on" : ""}`}
+                  aria-pressed={filter === f.id}
+                  onClick={() => setFilter(f.id)}
+                >{f.label}</button>
+              ))}
+            </div>
+          </div>
+
+          {flatMode ? (
+            <div className="tool-flat">
+              {filteredTools.length === 0 && <div className="empty-tip">没有匹配的工具</div>}
+              {filteredTools.map((t) => (
+                <div className="tool-flat-row" key={t.name}>
+                  <button className="tool-fav" title={t.fav ? "取消收藏" : "收藏"} onClick={() => toggleFav(t.name)}>{t.fav ? "★" : "☆"}</button>
+                  <button className="tool-flat-main" onClick={() => setTestTool(t.name)} title="打开测试台">
+                    <b>{t.name}</b>
+                    <span>{t.domain} · {String(t.description || "").slice(0, 90)}</span>
+                  </button>
+                  <span className="tool-health">
+                    {t.health?.calls ? `${t.health.calls} 次 · 失败 ${Math.round((t.health.fail_rate || 0) * 100)}%` : "未调用"}
+                    {t.health?.breaker_open ? <em className="bad">熔断</em> : null}
+                  </span>
+                  <span className={t.enabled ? "cap-on" : "cap-off"}>{t.enabled ? "开" : "关"}</span>
                 </div>
-                {(() => {
-                  const tools = d.tools || [];
-                  const on = tools.filter((t) => t.enabled).length;
-                  return (
-                    <span className={`domain-status ${on === tools.length ? "ds-stable" : "ds-muted"}`}>
-                      {on === tools.length ? "全部启用" : `${on}/${tools.length} 启用`}
-                    </span>
-                  );
-                })()}
-              </div>
-              <div className="domain-desc">{domains ? `${(d.tools || []).length} 项 · ${(d.tools || []).slice(0, 3).map((t) => t.name).join(" / ")}${(d.tools || []).length > 3 ? " …" : ""}` : d.desc}</div>
-              {open === d.name && (
-                <div className="domain-actions">
-                  {(expanded[d.name] ? (d.tools || []) : (d.tools || []).slice(0, 8)).map((t) => (
-                    <div
-                      className="cap-row cap-clickable"
-                      key={t.name}
-                      title="打开测试台"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setTestTool(t.name);
-                      }}
-                    >
-                      <span className="cap-dot" style={{ background: d.color || "var(--brand)" }} />
-                      <span className="cap-name">{t.name}</span>
-                      <span className="cap-desc">{String(t.description || "").slice(0, 34)}</span>
-                      <span className={t.enabled ? "cap-on" : "cap-off"}>{t.enabled ? "开" : "关"}</span>
+              ))}
+            </div>
+          ) : (
+            <div className="domain-grid">
+              {list.map((d) => (
+                <div
+                  key={d.name}
+                  className={`domain-card ${open === d.name ? "domain-open" : ""}`}
+                  onClick={() => setOpen(open === d.name ? null : d.name)}
+                >
+                  <div className="domain-head">
+                    <span className="domain-icon" style={{ background: d.color ? `${d.color}22` : "var(--brand-soft)" }}>{d.icon || "🧩"}</span>
+                    <div className="domain-meta">
+                      <b>{d.name}</b>
+                      <span className="domain-count">{d.count} 项能力</span>
                     </div>
-                  ))}
-                  {(d.tools || []).length > 8 && (
-                    <button
-                      className="ctx-action"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExpanded((prev) => ({ ...prev, [d.name]: !prev[d.name] }));
-                      }}
-                    >
-                      {expanded[d.name] ? "收起" : `查看全部 ${d.count} 项 →`}
-                    </button>
+                    {(() => {
+                      const tools = d.tools || [];
+                      const on = tools.filter((t) => t.enabled).length;
+                      return (
+                        <span className={`domain-status ${on === tools.length ? "ds-stable" : "ds-muted"}`}>
+                          {on === tools.length ? "全部启用" : `${on}/${tools.length} 启用`}
+                        </span>
+                      );
+                    })()}
+                  </div>
+                  <div className="domain-desc">{domains ? `${(d.tools || []).length} 项 · ${(d.tools || []).slice(0, 3).map((t) => t.name).join(" / ")}${(d.tools || []).length > 3 ? " …" : ""}` : d.desc}</div>
+                  {open === d.name && (
+                    <div className="domain-actions">
+                      {(expanded[d.name] ? (d.tools || []) : (d.tools || []).slice(0, 8)).map((t) => {
+                        const h = health[t.name] || {};
+                        return (
+                          <div
+                            className="cap-row cap-clickable"
+                            key={t.name}
+                            title="打开测试台"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setTestTool(t.name);
+                            }}
+                          >
+                            <button className="tool-fav" onClick={(e) => { e.stopPropagation(); toggleFav(t.name); }}>{favs.has(t.name) ? "★" : "☆"}</button>
+                            <span className="cap-dot" style={{ background: d.color || "var(--brand)" }} />
+                            <span className="cap-name">{t.name}</span>
+                            <span className="cap-desc">{String(t.description || "").slice(0, 34)}</span>
+                            {h.fail_rate > 0 && <span className="tool-fail">{Math.round(h.fail_rate * 100)}%</span>}
+                            <span className={t.enabled ? "cap-on" : "cap-off"}>{t.enabled ? "开" : "关"}</span>
+                          </div>
+                        );
+                      })}
+                      {(d.tools || []).length > 8 && (
+                        <button
+                          className="ctx-action"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpanded((prev) => ({ ...prev, [d.name]: !prev[d.name] }));
+                          }}
+                        >
+                          {expanded[d.name] ? "收起" : `查看全部 ${d.count} 项 →`}
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
       {tab === "packs" && <CapabilitiesPage embedded />}
       {tab === "perms" && <PermissionsPage embedded />}
@@ -588,6 +682,8 @@ function SchedulesBlock() {
   React.useEffect(() => {
     refetch();
   }, []);
+  // 运行中状态 / 上次结果由后端写回，15s 轮询一次即可（任务本身可能跑几分钟）
+  usePoll(refetch, 15000);
 
   const save = async (items) => {
     setSchedules(items);
@@ -614,6 +710,15 @@ function SchedulesBlock() {
   };
 
   const del = (idx) => save(schedules.filter((_, i) => i !== idx));
+  const toggle = (idx) => save(schedules.map((s, i) => (i === idx ? { ...s, enabled: s.enabled === false } : s)));
+  const runNow = async (s) => {
+    if (!s.id) { refetch(); return; }
+    try {
+      await api.runSchedule(s.id);
+      setSchedules((prev) => prev.map((x) => (x.id === s.id ? { ...x, last_status: "running", last_result: "" } : x)));
+      setTimeout(refetch, 800);
+    } catch (e) { silentWarn(e, "Pages"); }
+  };
 
   return (
     <div className="wb-card">
@@ -632,9 +737,20 @@ function SchedulesBlock() {
               {s.off_peak && <span className="sched-badge">🌙 错峰</span>}
               <span className="sched-action">{s.action}</span>
               {s.last && <span className="sched-last" title="上次运行">上次 {s.last}</span>}
+              <button className="msg-op" onClick={() => toggle(i)}>{s.enabled === false ? "启用" : "停用"}</button>
+              <button className="msg-op" disabled={s.last_status === "running"} onClick={() => runNow(s)}>
+                {s.last_status === "running" ? "运行中…" : "立即运行"}
+              </button>
               <button className="msg-op" onClick={() => del(i)}>✕</button>
             </div>
             {s.text && <div className="sched-text">{s.text}</div>}
+            {s.last_status && s.last_status !== "running" && (
+              <div className={`sched-text ${s.last_status === "error" ? "is-err" : ""}`}>
+                上次结果：{s.last_status === "ok" ? "成功" : "失败"}
+                {s.last_duration ? ` · ${s.last_duration}s` : ""}
+                {s.last_result ? ` · ${s.last_result}` : ""}
+              </div>
+            )}
           </div>
         ))}
         {loaded && !err && schedules.length === 0 && <EmptyState icon="⏰" title="还没有定时任务" hint="AI 用 schedule_task 工具也能创建定时任务。" compact />}
@@ -803,7 +919,7 @@ export function WorkbenchPage({ onApply, onPickSession, tab: tabProp, onTab }) {
       </div>
 
       {tab === "tasks" ? (
-        <TasksPage embedded onOpenSession={onPickSession} />
+        <TasksPage embedded onOpenSession={onPickSession} onRetry={(job) => onApply?.(job.user_text)} />
       ) : (
         <>
       {/* ① 态势横幅：现在发生了什么 */}

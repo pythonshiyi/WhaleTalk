@@ -100,7 +100,7 @@ const emptyCfg = (ch) => {
   return base;
 };
 
-function ChannelPanel({ ch, personas }) {
+function ChannelPanel({ ch, personas, onOpenSession }) {
   const [status, setStatus] = React.useState(null);
   const [cfg, setCfg] = React.useState(() => emptyCfg(ch));
   const [secretDraft, setSecretDraft] = React.useState("");
@@ -341,6 +341,9 @@ function ChannelPanel({ ch, personas }) {
                 <div className="qq-contact-meta">
                   <span>{c.last_seen || "—"}</span>
                   <code>{c.session_id || "—"}</code>
+                  {c.session_id && onOpenSession && (
+                    <button className="msg-op" onClick={() => onOpenSession(c.session_id)}>打开会话</button>
+                  )}
                 </div>
               </div>
             ))}
@@ -353,7 +356,7 @@ function ChannelPanel({ ch, personas }) {
   );
 }
 
-export default function ChannelsPage({ embedded = false }) {
+export default function ChannelsPage({ embedded = false, onOpenSession }) {
   const [active, setActive] = React.useState(CHANNELS[0].key);
   const [personas, setPersonas] = React.useState([]);
 
@@ -391,7 +394,7 @@ export default function ChannelsPage({ embedded = false }) {
         <p>{ch.desc}</p>
       </div>
 
-      <ChannelPanel key={ch.key} ch={ch} personas={personas} />
+      <ChannelPanel key={ch.key} ch={ch} personas={personas} onOpenSession={onOpenSession} />
     </div>
   );
 }

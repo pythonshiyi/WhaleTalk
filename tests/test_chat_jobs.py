@@ -79,6 +79,25 @@ def test_chat_job_buffer_and_terminal_state():
     assert job.status == "done"
 
 
+def test_running_job_snapshot_lists_only_running_jobs():
+    live = api_server._ChatJob("st-live", "sid-live", "gw")
+    live.emit("tool_start", {"name": "read_file"})
+    done = api_server._ChatJob("st-done", "sid-done", "gw")
+    done.finish("done")
+    with api_server._CHAT_JOBS_LOCK:
+        api_server._CHAT_JOBS["st-live"] = live
+        api_server._CHAT_JOBS["st-done"] = done
+    try:
+        rows = api_server._running_job_snapshot()
+        assert [r["id"] for r in rows] == ["st-live"]
+        assert rows[0]["session_id"] == "sid-live"
+        assert rows[0]["last_tool"] == "read_file"
+        assert rows[0]["seconds"] >= 0
+    finally:
+        _drop("st-live")
+        _drop("st-done")
+
+
 def test_stop_chat_sets_job_stop_event():
     job = api_server._ChatJob("st-stop", "sid-stop", "gw-stop")
     with api_server._CHAT_JOBS_LOCK:

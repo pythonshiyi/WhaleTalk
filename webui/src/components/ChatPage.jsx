@@ -812,6 +812,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     try { localStorage.setItem("whaletalk.persona", personaId || ""); } catch (e) { silentWarn(e, "ChatPage"); }
   }, [personaId]);
   const [busy, setBusy] = React.useState(false);
+  const [bgJob, setBgJob] = React.useState(null);
   // 时间预算提醒：到点只在界面上说一句，**不中断**执行。
   // 没有后端时钟就没有真正的中止能力——与其假装能拦，不如老实提醒。
   // 注意：必须放在 busy 声明**之后**——依赖数组在渲染期求值，提前引用会命中 TDZ
@@ -1551,6 +1552,23 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     }
   };
 
+  // 刷新/断线后：轮询后端仍在跑的作业。后端每 4s 把在制回合落盘，
+  // 点「同步进度」即可重新拉取会话，看到当前已完成的部分。
+  React.useEffect(() => {
+    if (!activeId || busy) { setBgJob(null); return undefined; }
+    let alive = true;
+    const check = async () => {
+      try {
+        const d = await api.runningJobs();
+        const job = (d?.jobs || []).find((j) => j.session_id === activeId) || null;
+        if (alive) setBgJob(job);
+      } catch { /* 后端暂时不可用：保持现状，不误报 */ }
+    };
+    check();
+    const iv = setInterval(check, 5000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [activeId, busy]);
+
   // 工作台「最近会话」直达：onPickSession 已定义，这里引用最新闭包
   React.useEffect(() => {
     if (!openSessionId) return;
@@ -2181,6 +2199,16 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
               </div>
             </div>
           </div>
+
+          {bgJob && (
+            <div className="chat-bg-banner" role="status">
+              <span className="bg-jobs-dot" aria-hidden="true" />
+              <b>这轮仍在后台生成</b>
+              <span>{bgJob.last_tool ? `当前工具：${bgJob.last_tool}` : "模型思考中"} · 已 {Math.round(bgJob.seconds || 0)}s</span>
+              <button className="msg-op" onClick={() => onPickSession(activeId)}>同步进度</button>
+              <button className="msg-op" onClick={() => api.stopChat({ sessionId: activeId, streamId: bgJob.id }).catch(() => {})}>停止</button>
+            </div>
+          )}
 
           <div
             className="chat-scroll"

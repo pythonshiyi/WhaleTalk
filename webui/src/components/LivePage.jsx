@@ -134,6 +134,9 @@ export default function LivePage({ embedded = false }) {
       )}
 
       {err && <div className="empty-tip is-err">{err}</div>}
+      <div className="empty-tip" style={{ marginBottom: 10 }}>
+        🧪 本地模拟版：当前用模拟弹幕 / 礼物验证导演、注意力与 HUD 链路，尚未接入抖音/B 站真实平台，也不会自动推流。
+      </div>
 
       {/* ── OBS 地址 ── */}
       <section className="set-card live-card">

@@ -7,6 +7,8 @@
 import argparse
 import datetime
 import os
+import shutil
+import tempfile
 import zipfile
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -96,6 +98,105 @@ def prune(keep=20):
             pass
     if removed:
         print(f"已清理 {removed} 个旧备份（保留最近 {keep} 个）")
+
+
+def _safe_member(name):
+    """把 zip 条目转成安全的相对路径；拒绝绝对路径/盘符/.. 穿越。"""
+    rel = str(name or "").replace("\\", "/").lstrip("/")
+    if not rel or rel.endswith("/"):
+        return ""
+    parts = [p for p in rel.split("/") if p not in ("", ".")]
+    if any(p == ".." or ":" in p for p in parts):
+        return ""
+    return "/".join(parts)
+
+
+DATA_ROOTS = ("data/", "brain/", "trust/")
+DATA_FILES = {"config.json", "permissions.json", "roles.json"}
+
+
+def _in_scope(rel, scope):
+    if scope == "all":
+        return True
+    return rel in DATA_FILES or rel.startswith(DATA_ROOTS)
+
+
+def restore_backup(name, scope="data", base_dir=None):
+    """从 backups/ 恢复一个 zip。
+
+    scope="data"：只恢复 data/、brain/、trust/ 与根配置文件（推荐，风险最低）。
+    scope="all"：恢复备份内全部文件（含程序源码）；恢复后必须重启服务。
+    **恢复前自动再备份当前状态**；任何路径穿越条目直接拒绝。
+    """
+    base_dir = os.path.abspath(base_dir or BASE_DIR)
+    scope = "all" if str(scope).lower() == "all" else "data"
+    fn = os.path.basename(str(name or "").strip())
+    if not fn.endswith(".zip"):
+        return {"ok": False, "error": "备份文件名必须以 .zip 结尾"}
+    zpath = os.path.join(BACKUP_DIR, fn)
+    if not os.path.isfile(zpath):
+        return {"ok": False, "error": f"备份不存在：{fn}"}
+
+    try:
+        pre_path = make_backup()
+        pre_name = os.path.basename(pre_path)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"恢复前备份失败，已中止：{type(e).__name__}: {e}"}
+
+    tmp = tempfile.mkdtemp(prefix=".restore_", dir=BACKUP_DIR)
+    restored = skipped = 0
+    errors = []
+    try:
+        with zipfile.ZipFile(zpath) as zf:
+            bad = zf.testzip()
+            if bad:
+                return {"ok": False, "error": f"备份压缩包损坏：{bad}", "pre_backup": pre_name}
+            for info in zf.infolist():
+                rel = _safe_member(info.filename)
+                if not rel or rel.startswith("backups/"):
+                    continue
+                target = os.path.join(tmp, rel)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with zf.open(info) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+        if scope == "all" and not os.path.isfile(os.path.join(tmp, "api_server.py")):
+            return {"ok": False, "error": "备份缺少 api_server.py，拒绝恢复", "pre_backup": pre_name}
+        if scope == "data" and not os.path.isdir(os.path.join(tmp, "data")):
+            return {"ok": False, "error": "备份缺少 data/，拒绝恢复", "pre_backup": pre_name}
+
+        for root, _dirs, files in os.walk(tmp):
+            for f in files:
+                src = os.path.join(root, f)
+                rel = os.path.relpath(src, tmp).replace("\\", "/")
+                if not _in_scope(rel, scope):
+                    skipped += 1
+                    continue
+                dst = os.path.abspath(os.path.join(base_dir, rel))
+                try:
+                    if os.path.commonpath([base_dir, dst]) != base_dir:
+                        skipped += 1
+                        continue
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copy2(src, dst)
+                    restored += 1
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{rel}: {type(e).__name__}: {e}")
+        return {
+            "ok": not errors,
+            "scope": scope,
+            "restored": restored,
+            "skipped": skipped,
+            "errors": errors[:20],
+            "pre_backup": pre_name,
+            "requires_restart": True,
+            "message": "恢复完成；请重启 WhaleTalk 以加载恢复后的程序/配置" if scope == "all"
+                       else "数据与配置已恢复；建议重启 WhaleTalk 让所有模块重新读取",
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"恢复失败：{type(e).__name__}: {e}", "pre_backup": pre_name}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main():

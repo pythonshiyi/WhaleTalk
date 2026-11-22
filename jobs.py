@@ -101,6 +101,8 @@ def fold_events(events):
             )
             step["status"] = "failed" if step["failed"] else "done"
             step["result_chars"] = len(text or "")
+            # 失败原因只留短预览；完整结果可能含密钥/隐私，绝不落盘。
+            step["error_preview"] = _preview(text, 300) if step["failed"] else ""
     for s in steps:
         if s.get("status") == "running":
             s["status"] = "failed" if s.get("failed") else "done"

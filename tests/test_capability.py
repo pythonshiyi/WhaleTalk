@@ -235,6 +235,26 @@ def test_breaker_opens_after_consecutive_failures():
     assert capability.health("p_test_bad")["breaker_open"] is True
 
 
+def test_reset_health_clears_breaker():
+    bad = _cap(name="p_test_reset",
+               exec={"type": "builtin_ref", "tool": "read_file"},
+               perms={"tools": ["read_file"], "files": []})
+    assert capability.register_manifest(_manifest([bad]), plugin_id="pkg")["ok"]
+    fn = dc.TOOL_CALL_MAP["p_test_reset"]
+    for _ in range(capability.BREAKER_FAILS):
+        fn(path="")
+    assert capability.health("p_test_reset")["breaker_open"] is True
+    assert capability.reset_health("p_test_reset")["ok"] is True
+    h = capability.health("p_test_reset")
+    assert h["breaker_open"] is False
+    assert h["consecutive_fails"] == 0
+    assert h["calls"] >= capability.BREAKER_FAILS, "重置熔断不应清历史调用量"
+
+
+def test_reset_health_unknown_name():
+    assert capability.reset_health("no_such_tool")["ok"] is False
+
+
 def test_timeout_returns_error(tmp_path):
     (tmp_path / "slowmod.py").write_text(
         "import time\n\ndef run(**kwargs):\n    time.sleep(1.4)\n    return 'done'\n",

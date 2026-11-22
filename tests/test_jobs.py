@@ -74,6 +74,17 @@ def test_fold_marks_failure_by_prefix():
         assert steps[0]["failed"] is True
 
 
+def test_fold_failed_step_keeps_short_error_preview():
+    long_err = "错误：" + "密钥泄露风险" * 100
+    steps = jobs.fold_events([
+        _ev(0, "tool_start", name="write_file", args={}, id="c"),
+        _ev(1, "tool", name="write_file", args={}, result=long_err, id="c"),
+    ])
+    assert steps[0]["error_preview"].startswith("错误：")
+    assert len(steps[0]["error_preview"]) <= 301
+    assert long_err not in json.dumps(steps, ensure_ascii=False), "失败原因也只留短预览"
+
+
 def test_fold_unfinished_steps_are_closed_not_left_running():
     """作业异常结束时不能留下 'running' —— 列表页会永远显示「执行中」。"""
     steps = jobs.fold_events([_ev(0, "tool_start", name="x", args={}, id="c")])

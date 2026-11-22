@@ -1,0 +1,173 @@
+import React from "react";
+import * as api from "../api.js";
+import { usePoll } from "../usePoll.js";
+import { Icon } from "./icons.jsx";
+import Overlay from "./Overlay.jsx";
+
+// 待处理收件箱：把散落在记忆 / 自主 / 工作台 / 信任内核里的「等人决定」
+// 聚合到一个入口。只做汇总与跳转，具体操作仍由对应页面完成（记忆可直接裁决）。
+export default function InboxButton({ onNavigate }) {
+  const [open, setOpen] = React.useState(false);
+  const [items, setItems] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [busy, setBusy] = React.useState("");
+
+  const load = React.useCallback(async () => {
+    const [mem, evo, branches, failed, status, sched, channels] = await Promise.allSettled([
+      api.listPendingMemory(),
+      api.getEvolutions(),
+      api.getEvolveBranches(),
+      api.jobs({ status: "error", limit: 20 }),
+      api.getStatus(),
+      api.getSchedules(),
+      api.listChannels(),
+    ]);
+    const out = [];
+    if (mem.status === "fulfilled") {
+      for (const m of (mem.value?.items || []).slice(0, 8)) {
+        out.push({
+          id: `mem:${m.id}`, kind: "记忆待确认", icon: "brain",
+          title: String(m.text || m.content || "待确认记忆").slice(0, 110),
+          detail: m.source || m.reason || "AI 提炼出的新记忆，等待你决定是否写入",
+          memoryId: m.id,
+        });
+      }
+    }
+    if (evo.status === "fulfilled") {
+      const pending = (evo.value?.evolutions || []).filter((e) => !e.applied);
+      if (pending.length) {
+        out.push({
+          id: "evolutions", kind: "进化提案", icon: "sparkles", count: pending.length,
+          title: `${pending.length} 份进化提案待审阅`,
+          detail: pending.slice(0, 3).map((e) => e.name).join(" · "),
+          dest: { page: "agent", agentTab: "autonomy" },
+        });
+      }
+    }
+    if (branches.status === "fulfilled") {
+      const list = branches.value?.branches || [];
+      if (list.length) {
+        out.push({
+          id: "branches", kind: "进化分支", icon: "git-branch", count: list.length,
+          title: `${list.length} 个自我进化分支待合并`,
+          detail: list.slice(0, 3).map((b) => b.name).join(" · "),
+          dest: { page: "agent", agentTab: "autonomy" },
+        });
+      }
+    }
+    if (failed.status === "fulfilled") {
+      const jobs = failed.value?.jobs || [];
+      for (const j of jobs.slice(0, 5)) {
+        out.push({
+          id: `job:${j.id}`, kind: "失败任务", icon: "warning",
+          title: String(j.user_text || "未命名任务").slice(0, 110),
+          detail: `${j.started_at || ""} · ${j.failed_count || 0} 步失败 · ${j.duration_s || 0}s`,
+          dest: { page: "workbench", workbenchTab: "tasks" },
+        });
+      }
+    }
+    if (status.status === "fulfilled") {
+      const trust = status.value?.trust;
+      if (trust && trust.state === "unconfirmed") {
+        out.push({
+          id: "trust", kind: "信任内核", icon: "shield",
+          title: "核心文件有未确认改动",
+          detail: (trust.files || []).slice(0, 3).join(" · ") || "请打开自主 → 自我状态核对",
+          dest: { page: "agent", agentTab: "autonomy" },
+        });
+      }
+    }
+    if (sched.status === "fulfilled") {
+      for (const s of (sched.value?.schedules || [])) {
+        if (s.last_status === "error") {
+          out.push({
+            id: `sch:${s.id || s.name}`, kind: "定时任务", icon: "clock",
+            title: `定时任务失败：${s.name || s.text || "未命名"}`,
+            detail: String(s.last_result || "").slice(0, 140),
+            dest: { page: "workbench", workbenchTab: "overview" },
+          });
+        }
+      }
+    }
+    if (channels.status === "fulfilled") {
+      for (const c of (channels.value?.channels || [])) {
+        if (c.last_error) {
+          out.push({
+            id: `ch:${c.name}`, kind: "接入通道", icon: "globe",
+            title: `${c.display_name || c.name} 异常`,
+            detail: String(c.last_error).slice(0, 140),
+            dest: { page: "settings", settingsTab: "channels" },
+          });
+        }
+      }
+    }
+    setItems(out);
+    setLoading(false);
+  }, []);
+
+  usePoll(load, 20000);
+
+  const resolveMemory = async (id, action) => {
+    setBusy(id);
+    try {
+      const r = await api.resolvePendingMemory({ action, ids: [id] });
+      if (r && r.ok !== false) await load();
+    } catch {
+      /* 失败保持列表，不误报成功 */
+    }
+    setBusy("");
+  };
+
+  const count = items.length;
+  return (
+    <>
+      <button
+        type="button"
+        className={`sb-inbox ${count ? "has-items" : ""}`}
+        title={count ? `${count} 项待处理` : "待处理"}
+        aria-label={count ? `${count} 项待处理` : "待处理"}
+        onClick={() => setOpen(true)}
+      >
+        <Icon name="bell" size={18} />
+        <span className="sb-item-label">待办</span>
+        {count > 0 && <span className="sb-inbox-badge">{count > 9 ? "9+" : count}</span>}
+      </button>
+
+      {open && (
+        <Overlay title={count ? `待处理 · ${count}` : "待处理"} onClose={() => setOpen(false)} wide>
+          {loading ? (
+            <div className="empty-tip is-loading">正在汇总待处理事项…</div>
+          ) : items.length === 0 ? (
+            <div className="empty-tip">全部处理完了。新的待确认记忆、失败任务与进化提案会出现在这里。</div>
+          ) : (
+            <div className="inbox-list">
+              {items.map((it) => (
+                <div className="inbox-item" key={it.id}>
+                  <span className="inbox-ic"><Icon name={it.icon} size={16} /></span>
+                  <div className="inbox-main">
+                    <div className="inbox-title">
+                      <span className="inbox-kind">{it.kind}</span>
+                      <b>{it.title}</b>
+                      {it.count ? <span className="pm-badge">{it.count}</span> : null}
+                    </div>
+                    {it.detail && <div className="inbox-detail">{it.detail}</div>}
+                  </div>
+                  <div className="inbox-ops">
+                    {it.memoryId ? (
+                      <>
+                        <button className="pm-op" disabled={busy === it.id} onClick={() => resolveMemory(it.memoryId, "accept")}>写入</button>
+                        <button className="pm-op pm-op-danger" disabled={busy === it.id} onClick={() => resolveMemory(it.memoryId, "dismiss")}>忽略</button>
+                      </>
+                    ) : (
+                      <button className="pm-op" onClick={() => { setOpen(false); onNavigate?.(it.dest); }}>查看 →</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Overlay>
+      )}
+    </>
+  );
+}

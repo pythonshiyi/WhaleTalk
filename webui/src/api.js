@@ -677,6 +677,12 @@ export async function jobDetail(id) {
   return api(`/v1/jobs/${encodeURIComponent(String(id))}`);
 }
 
+/** 当前仍在生成的后台聊天作业（不含正文/参数）
+ * @returns {Promise<{jobs:Array<{id:string,session_id:string,seconds:number,last_tool:string,events:number}>}>} */
+export async function runningJobs() {
+  return api("/v1/jobs/running");
+}
+
 // ── 公众号写作配置 ─────────────────────────────
 /** @returns {Promise<{ok:boolean, config:Object, defaults:Object, groups:string[], path:string}>} */
 export async function wechatConfig() {
@@ -788,6 +794,12 @@ export async function getSchedules() {
 /** @param {Object} schedules @returns {Promise<any>} */
 export async function saveSchedules(schedules) {
   return api("/v1/schedules", { method: "POST", body: JSON.stringify({ schedules }) });
+}
+
+/** 立即运行一条定时任务（后台执行，列表轮询 last_status）
+ * @param {string} id */
+export async function runSchedule(id) {
+  return api("/v1/schedules", { method: "POST", body: JSON.stringify({ action: "run_now", id }) });
 }
 
 /**
@@ -1434,6 +1446,12 @@ export async function createBackup() {
 /** @param {string} name @returns {Promise<{ok?:boolean}>} 删除备份 */
 export async function deleteBackup(name) {
   return api("/v1/backup", { method: "POST", body: JSON.stringify({ action: "delete", name }) });
+}
+
+/** 恢复备份。scope: data（数据与配置）| all（含程序源码，需重启）
+ * @param {string} name @param {"data"|"all"} scope */
+export async function restoreBackup(name, scope = "data") {
+  return api("/v1/backup", { method: "POST", body: JSON.stringify({ action: "restore", name, scope }) });
 }
 
 /** @returns {Promise<{update?:boolean, latest?:string}>} 版本更新检查 */

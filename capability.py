@@ -741,6 +741,18 @@ def health(name: str) -> dict:
     }
 
 
+def reset_health(name: str) -> dict:
+    """重置单个能力的熔断/连续失败计数（不清历史调用量，便于观察真实失败率）。"""
+    with _lock:
+        st = _TOOLS.get(str(name or ""))
+        if st is None:
+            return {"ok": False, "error": f"能力不存在：{name}"}
+        st["fails"] = 0
+        st["breaker_until"] = 0.0
+        st["last_error"] = ""
+    return {"ok": True, "name": str(name or "")}
+
+
 def health_all() -> dict:
     """全部能力健康度 + 汇总（供 /v1/status 与工具管理面）。"""
     items = [health(n) for n in list(_TOOLS.keys())]
@@ -771,6 +783,8 @@ def list_capabilities() -> list:
             "fail_rate": h["fail_rate"],
             "avg_ms": h["avg_ms"],
             "breaker_open": h["breaker_open"],
+            "consecutive_fails": h.get("consecutive_fails", 0),
+            "last_error": h.get("last_error", ""),
         })
     return out
 

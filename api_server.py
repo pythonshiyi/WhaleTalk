@@ -119,6 +119,36 @@ class _ChatJob:
         return
 
 
+def _running_job_snapshot(limit=20):
+    """当前仍在生成的聊天作业（供侧栏/工作台显示「后台任务运行中」）。
+
+    只暴露会话 id、耗时、当前工具与事件数；不返回正文/参数，避免把未完成内容
+    当成已完成结果展示。回放仍由 /v1/chat/stream + 同一 stream_id 负责。
+    """
+    now = time.time()
+    out = []
+    with _CHAT_JOBS_LOCK:
+        for job in list(_CHAT_JOBS.values()):
+            if getattr(job, "status", "") != "running":
+                continue
+            last_tool = ""
+            with job.cond:
+                for _seq, event, data in reversed(job.events):
+                    if event == "tool_start" and isinstance(data, dict):
+                        last_tool = str(data.get("name") or "")
+                        break
+            out.append({
+                "id": job.id,
+                "session_id": job.sid,
+                "status": "running",
+                "seconds": round(max(0.0, now - float(job.created or now)), 1),
+                "last_tool": last_tool,
+                "events": len(job.events),
+            })
+    out.sort(key=lambda x: x.get("seconds", 0), reverse=True)
+    return out[:limit]
+
+
 def _chat_jobs_gc():
     """回收已完成且超过 TTL 的作业（防内存增长）。
 
@@ -437,7 +467,7 @@ _TOOL_DOMAIN = {
     "read_file": "文件与目录", "write_file": "文件与目录", "edit_file": "文件与目录",
     "list_dir": "文件与目录", "delete_file": "文件与目录", "archive_files": "文件与目录",
     "extract_archive": "文件与目录", "batch_rename": "文件与目录", "archive_list": "文件与目录",
-    "download_file": "文件与目录", "search_local": "文件与目录", "code_lookup": "编程与执行",
+    "download_file": "文件与目录", "search_local": "文件与目录", "code_lookup": "开发与测试",
     "list_snapshots": "文件与目录", "restore_snapshot": "文件与目录",
     "find_images": "文件与目录", "asset_import": "文件与目录", "asset_list": "文件与目录",
     "asset_organize": "文件与目录",
@@ -4572,13 +4602,18 @@ def _schedule_next_run(item, now=None):
 
 
 def _schedules_get():
-    """定时任务列表（附下次运行时间）。"""
+    """定时任务列表（附下次运行时间；旧数据自动补稳定 id）。"""
     import stores
     items = stores.load_schedules(SCHEDULES_PATH)
-    now = None
+    changed = False
     for s in items:
+        if not s.get("id"):
+            s["id"] = "sch_" + hex(int(time.time() * 1000))[2:] + secrets_token(4)
+            changed = True
         if s.get("enabled"):
-            s["next_run"] = _schedule_next_run(s, now)
+            s["next_run"] = _schedule_next_run(s)
+    if changed:
+        stores.save_schedules(SCHEDULES_PATH, items)
     return {"schedules": items}
 
 
@@ -4593,10 +4628,14 @@ def _schedules_save(body):
         if not isinstance(s, dict):
             continue
         item = {
+            "id": str(s.get("id") or "") or ("sch_" + hex(int(time.time() * 1000))[2:] + secrets_token(4)),
             "enabled": bool(s.get("enabled", True)),
             "action": str(s.get("action") or "message"),
             "last": str(s.get("last") or ""),
-            "last_run": 0,
+            "last_run": int(s.get("last_run") or 0),
+            "last_status": str(s.get("last_status") or "")[:20],
+            "last_result": str(s.get("last_result") or "")[:300],
+            "last_duration": round(float(s.get("last_duration") or 0), 2) if str(s.get("last_duration") or "0").replace(".", "", 1).isdigit() else 0,
             "text": str(s.get("text") or ""),
             "name": str(s.get("name") or "")[:40],
         }
@@ -4817,8 +4856,12 @@ def _scheduler_loop():
                             s["last"] = pending_marker[1]
                         elif kind == "cron":
                             last_checked_minute[pending_marker[1]] = pending_marker[2]
-                    _dispatch_schedule(s, action)
+                    started = time.time()
+                    ok, result = _dispatch_schedule(s, action)
                     s["last_run"] = int(now.timestamp())
+                    s["last_status"] = "ok" if ok else "error"
+                    s["last_result"] = str(result or "")[:300]
+                    s["last_duration"] = round(max(0.0, time.time() - started), 2)
                     stores.save_schedules(SCHEDULES_PATH, items)
         except Exception:
             logger.exception("调度循环异常")
@@ -5024,22 +5067,70 @@ def _start_process_watchdog(interval=180, max_idle=3600):
 
 
 def _dispatch_schedule(s, action):
-    """执行定时任务动作。"""
+    """执行定时任务动作。返回 (ok, result_text)，供列表显示上次结果。"""
     import backup as backup_mod
     import deepseek_client as dc
     try:
         if action == "backup":
             backup_mod.make_backup()
+            result = "备份完成"
         elif action == "notify":
             dc.send_webhook_notify(str(s.get("text") or "定时提醒"), title="鲸语定时提醒")
+            result = "提醒已发送"
         elif action == "workflow":
             name = str(s.get("text") or "")
             if name:
                 dc.run_workflow(name)
+                result = f"流程已执行：{name}"
+            else:
+                result = "流程名为空，已跳过"
         else:
             _headless_chat(str(s.get("text") or "").strip())
-    except Exception:
+            result = "消息任务已执行"
+        return True, result
+    except Exception as e:  # noqa: BLE001
         logger.exception("定时任务执行失败: %s", action)
+        return False, f"{type(e).__name__}: {e}"[:300]
+
+
+def _schedule_mark_result(schedule_id, *, status, result="", started=None):
+    """按 id 回写定时任务状态；找不到（已删除）时静默跳过。"""
+    import stores
+    items = stores.load_schedules(SCHEDULES_PATH)
+    for s in items:
+        if str(s.get("id") or "") == str(schedule_id or ""):
+            s["last_status"] = status
+            s["last_result"] = str(result or "")[:300]
+            if started is not None:
+                s["last_run"] = int(time.time())
+                try:
+                    s["last_duration"] = round(max(0.0, time.time() - float(started)), 2)
+                except (TypeError, ValueError):
+                    s["last_duration"] = 0
+            stores.save_schedules(SCHEDULES_PATH, items)
+            return True
+    return False
+
+
+def _run_schedule_now(schedule_id):
+    """立即执行一条定时任务（后台线程，不阻塞 HTTP 请求）。"""
+    import stores
+    items = stores.load_schedules(SCHEDULES_PATH)
+    target = next((s for s in items if str(s.get("id") or "") == str(schedule_id or "")), None)
+    if target is None:
+        return False
+    target["last_status"] = "running"
+    target["last_result"] = ""
+    stores.save_schedules(SCHEDULES_PATH, items)
+    started = time.time()
+
+    def _run():
+        item = dict(target)
+        ok, msg = _dispatch_schedule(item, str(item.get("action") or "message"))
+        _schedule_mark_result(schedule_id, status="ok" if ok else "error", result=msg, started=started)
+
+    threading.Thread(target=_run, daemon=True, name="schedule-run").start()
+    return True
 
 
 def _save_session_data(body):
@@ -8323,6 +8414,9 @@ class _Handler(BaseHTTPRequestHandler):
             recs = _jobs_mod.list_jobs(limit=limit, session_id=sid, status=status)
             self._json(200, {"jobs": recs, "summary": _jobs_mod.summary(recs)})
             return
+        if path == "/v1/jobs/running":
+            self._json(200, {"jobs": _running_job_snapshot()})
+            return
         jid = path[len("/v1/jobs/"):] if path.startswith("/v1/jobs/") else ""
         rec = _jobs_mod.get_job(jid)
         if not rec:
@@ -8368,19 +8462,63 @@ class _Handler(BaseHTTPRequestHandler):
                 if not pid:
                     self._json(400, {"error": "unload 需要 pack_id"})
                     return
+                old_path = next((p.get("path") for p in cap_mod.list_plugins()
+                                 if str(p.get("plugin_id")) == pid), "")
                 res = cap_mod.unregister_plugin(pid, reason="api")
+                # 自建包卸载 = 从用户能力目录移除；否则重启后 load_dir 会把它装回来。
+                if res.get("ok") and old_path:
+                    try:
+                        ap = os.path.abspath(old_path)
+                        if os.path.commonpath([ap, os.path.abspath(_capability_dir())]) == os.path.abspath(_capability_dir()):
+                            os.remove(ap)
+                    except OSError as e:
+                        logger.warning("卸载能力包时删除文件失败：%s", e)
             elif action in ("load", "reload"):
                 name = os.path.basename(str(body.get("file") or "").strip())
                 if not name:
                     self._json(400, {"error": "load 需要 file（能力包文件名）"})
                     return
                 path = os.path.join(_capability_dir(), name)
+                bundled = False
+                if not os.path.isfile(path):
+                    path = os.path.join(_builtin_capability_dir(), name)
+                    bundled = True
                 if not os.path.isfile(path):
                     self._json(404, {"error": f"能力包不存在：{name}"})
                     return
+                res = cap_mod.load_file(path, plugin_id=str(body.get("pack_id") or ""), bundled=bundled)
+            elif action == "install":
+                manifest = body.get("manifest")
+                name = os.path.basename(str(body.get("name") or "").strip())
+                if not isinstance(manifest, dict) or not name:
+                    self._json(400, {"error": "install 需要 name + manifest 对象"})
+                    return
+                if not name.endswith(".json"):
+                    name += ".json"
+                if name.startswith(".") or "/" in name or "\\" in name:
+                    self._json(400, {"error": "非法能力包文件名"})
+                    return
+                os.makedirs(_capability_dir(), exist_ok=True)
+                path = os.path.join(_capability_dir(), name)
+                import persistence
+                if not persistence.atomic_json_write(path, manifest, compact=True):
+                    self._json(500, {"error": "能力包写入失败（磁盘异常）"})
+                    return
                 res = cap_mod.load_file(path, plugin_id=str(body.get("pack_id") or ""))
+                if not res.get("ok"):
+                    # 安装失败不留半装 manifest，避免下次启动重复报错。
+                    try:
+                        os.remove(path)
+                    except OSError as e:
+                        logger.warning("清理安装失败的能力包失败：%s", e)
+            elif action == "reset_health":
+                tool = str(body.get("name") or body.get("tool") or "").strip()
+                if not tool:
+                    self._json(400, {"error": "reset_health 需要 name"})
+                    return
+                res = cap_mod.reset_health(tool)
             else:
-                self._json(400, {"error": f"未知 action：{action}（load/reload/unload）"})
+                self._json(400, {"error": f"未知 action：{action}（load/reload/unload/install/reset_health）"})
                 return
         except Exception:  # noqa: BLE001
             # 与全仓错误出口一致：异常详情只落日志，前端收脱敏文案
@@ -8702,6 +8840,11 @@ class _Handler(BaseHTTPRequestHandler):
             "has_key": bool(key_val),
             # 脱敏提示（前3 + 尾4），绝不回传明文密钥
             "key_hint": (f"{key_val[:3]}***{key_val[-4:]}" if len(key_val) >= 8 else ("***" if key_val else "")),
+            "fallback_enabled": bool(cfg.get("fallback_enabled")),
+            "fallback_base_url": str(cfg.get("fallback_base_url") or ""),
+            "fallback_model": str(cfg.get("fallback_model") or ""),
+            "has_fallback_key": bool(str(cfg.get("fallback_api_key") or "").strip()),
+            "fallback_key_hint": (lambda k: (f"{k[:3]}***{k[-4:]}" if len(k) >= 8 else ("***" if k else "")))(str(cfg.get("fallback_api_key") or "")),
             "system_prompt": str(cfg.get("system_prompt") or ""),
             "temperature": float(cfg.get("custom_temperature") or 1.0),
             "top_p": float(cfg.get("custom_top_p") or 1.0),
@@ -9181,6 +9324,13 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": err})
             else:
                 self._json(200, result)
+        elif action == "restore":
+            import backup as backup_mod
+            res = backup_mod.restore_backup(
+                (body or {}).get("name") or "",
+                scope=(body or {}).get("scope") or "data",
+            )
+            self._json(200 if res.get("ok") else 400, res)
         elif body is None:
             self._json(400, {"error": "invalid json or body too large"})
         else:
@@ -9335,6 +9485,13 @@ class _Handler(BaseHTTPRequestHandler):
         body = self._read_body()
         if body is None:
             self._json(400, {"error": "invalid json or body too large"})
+            return
+        if str((body or {}).get("action") or "").strip() == "run_now":
+            sid = str((body or {}).get("id") or "").strip()
+            if not sid or not _run_schedule_now(sid):
+                self._json(404, {"error": "定时任务不存在"})
+            else:
+                self._json(200, {"ok": True, "id": sid, "status": "running"})
             return
         result, err = _schedules_save(body)
         if err:
@@ -9951,6 +10108,8 @@ class _Handler(BaseHTTPRequestHandler):
                    ("tools_enabled", bool), ("privacy_mode", bool), ("system_prompt", str),
                    ("temperature", float), ("top_p", float), ("seed", int), ("json_output", bool),
                    ("beta_api", bool), ("strict_tools", bool), ("base_url", str),
+                   ("fallback_enabled", bool), ("fallback_base_url", str),
+                   ("fallback_model", str), ("fallback_api_key", str),
                    ("notify_on_done", bool), ("project_context", bool),
                    ("completion_sound", bool), ("silent_start", bool),
                    ("max_context_tokens", int), ("max_context_chars", int),

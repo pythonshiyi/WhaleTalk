@@ -13,7 +13,7 @@ import { silentWarn } from "../quiet.js";
 // ── 设置搜索：搜索词通过 Context 下发，Row / 大块按需过滤 ────────────
 const SearchCtx = React.createContext("");
 const TAB_INDEX = [
-  { id: "model", label: "🎛 模型与网关", keys: "模型 api key 网关 思考 输出 token 预设 角色" },
+  { id: "model", label: "🎛 模型与网关", keys: "模型 api key 网关 思考 输出 token 预设 角色 备用 回退" },
   { id: "service", label: "🔌 外部服务", keys: "服务 外部 连接 webhook 工作流" },
   { id: "wechat", label: "📝 公众号写作", keys: "公众号 写作 字数 受众 风格 信源 选题 草稿" },
   { id: "channels", label: "🔌 接入通道", keys: "QQ Telegram 通道 接入 平台 机器人" },
@@ -724,34 +724,68 @@ function AdvancedTab({ cfg, saveField, onReset, onGoPrompts, reloadConfig }) {
 function BackupBlock() {
   const [list, setList] = React.useState(null);
   const [tip, setTip] = React.useState("");
+  const [scope, setScope] = React.useState("data");
+  const [busy, setBusy] = React.useState("");
   const load = async () => {
     const d = await api.listBackups().catch(() => null);
     if (d) setList(d.backups || []);
   };
   React.useEffect(() => { load(); }, []);
   const create = async () => {
+    setBusy("create");
     const d = await api.createBackup().catch(() => null);
     if (d && d.ok) {
       setTip("备份完成");
       setTimeout(() => setTip(""), 2000);
       load();
     }
+    setBusy("");
   };
   const del = async (name) => {
     if (!(await confirmDialog(`删除备份 ${name}？`, { danger: true, okText: "删除" }))) return;
     const d = await api.deleteBackup(name).catch(() => null);
     if (d && d.ok) { load(); }
   };
+  const restore = async (name) => {
+    const label = scope === "all" ? "全部文件（含程序源码）" : "数据与配置";
+    if (!(await confirmDialog(
+      `从备份恢复「${name}」？\n恢复范围：${label}\n\n恢复前会自动再备份当前状态；恢复后需要重启 WhaleTalk。`,
+      { danger: true, okText: "恢复" },
+    ))) return;
+    setBusy(name);
+    try {
+      const d = await api.restoreBackup(name, scope);
+      if (d && d.ok) {
+        setTip(`恢复完成：${d.restored} 个文件 · 恢复前备份 ${d.pre_backup || "已生成"} · 请重启 WhaleTalk`);
+        load();
+      } else {
+        setTip(`恢复失败：${(d && (d.error || (d.errors || []).join("；"))) || "未知错误"}`);
+      }
+    } catch (e) {
+      setTip(`恢复失败：${(e && e.message) || e}`);
+    } finally {
+      setBusy("");
+    }
+  };
   return (
     <div className="svc-actions" style={{ display: "block" }}>
       <div className="sched-line1">
         <b>📦 项目备份</b>
         <span className="sched-action">{list ? list.length : 0} 个</span>
-        <button className="confirm-btn" onClick={create}>＋ 立即备份</button>
+        <button className="confirm-btn" onClick={create} disabled={!!busy}>{busy === "create" ? "备份中…" : "＋ 立即备份"}</button>
       </div>
-      {(list || []).slice(0, 5).map((b) => (
-        <div className="sched-text" key={b.name}>• {b.name}（{Math.round(b.size / 1024)} KB · {b.mtime}）
-          <button className="msg-op" onClick={() => del(b.name)}>✕</button>
+      <div className="sched-form" style={{ marginBottom: 6 }}>
+        <span className="pm-cat">恢复范围</span>
+        <select className="set-select" value={scope} onChange={(e) => setScope(e.target.value)}>
+          <option value="data">数据与配置（推荐，不覆盖程序）</option>
+          <option value="all">全部文件（含程序源码，需重启）</option>
+        </select>
+      </div>
+      {(list || []).slice(0, 8).map((b) => (
+        <div className="sched-text" key={b.name}>
+          • {b.name}（{Math.round(b.size / 1024)} KB · {b.mtime}）
+          <button className="msg-op" disabled={!!busy} onClick={() => restore(b.name)}>恢复</button>
+          <button className="msg-op" disabled={!!busy} onClick={() => del(b.name)}>✕</button>
         </div>
       ))}
       {tip && <div className="px-tip">{tip}</div>}
@@ -1141,7 +1175,7 @@ function AuditBlock() {
 }
 
 // ── 设置页主组件 ────────────────────────────────────
-export default function SettingsPage({ onGoPrompts, onGoAbilities, quietMode, onToggleQuiet, tab: tabProp, onTab }) {
+export default function SettingsPage({ onGoPrompts, onGoAbilities, onOpenSession, quietMode, onToggleQuiet, tab: tabProp, onTab }) {
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { density, setDensity, fontSize, setFontSize } = React.useContext(DisplayContext);
   const [mode, setMode] = React.useState(() => {
@@ -1476,6 +1510,22 @@ export default function SettingsPage({ onGoPrompts, onGoAbilities, quietMode, on
                     OpenAI <code>/chat/completions</code>（含流式与工具调用）。
                   </div>
                 )}
+                <div className="svc-title" style={{ marginTop: 10 }}>🛟 备用网关（可选）</div>
+                <Toggle
+                  on={!!cfg.fallback_enabled}
+                  label="主网关失败时自动切换"
+                  desc="仅重试模型请求，不会重跑已执行的工具；默认关闭"
+                  onClick={() => saveField({ fallback_enabled: !cfg.fallback_enabled })}
+                />
+                <Row label="备用 Base URL" desc="OpenAI 兼容网关地址">
+                  <input className="set-select set-combo" defaultValue={cfg.fallback_base_url || ""} placeholder="https://api.example.com/v1" onBlur={(e) => saveField({ fallback_base_url: e.target.value.trim() })} />
+                </Row>
+                <Row label="备用 API Key" desc={cfg.has_fallback_key ? `✅ 已配置 ${cfg.fallback_key_hint || ""}（加密存储）` : "未配置则不会启用备用网关"}>
+                  <input className="set-select set-combo" type="password" defaultValue="" placeholder={cfg.has_fallback_key ? "输入新 Key 可覆盖" : "sk-…"} onBlur={(e) => { if (e.target.value.trim()) saveField({ fallback_api_key: e.target.value.trim() }); }} />
+                </Row>
+                <Row label="备用模型" desc="该网关支持的模型 id，例如 gpt-4o / qwen-plus">
+                  <input className="set-select set-combo" defaultValue={cfg.fallback_model || ""} placeholder="gpt-4o" onBlur={(e) => saveField({ fallback_model: e.target.value.trim() })} />
+                </Row>
                 <Row label="模型" desc={activeModelMeta ? `${activeModelMeta.label} · 上下文 ${(activeModelMeta.max_context_tokens / 1000000).toFixed(1)}M · 输出 ${(activeModelMeta.max_output_tokens / 1024).toFixed(0)}K` : "可输入任意兼容模型"}>
                   {customModel || !modelOptions.includes(cfg.model) ? (
                     <div style={{ display: "flex", gap: 6, width: "100%", maxWidth: 420 }}>
@@ -1539,7 +1589,7 @@ export default function SettingsPage({ onGoPrompts, onGoAbilities, quietMode, on
             )}
             {tab === "service" && <ServicesTab cfg={cfg} onTip={setTip} />}
             {tab === "wechat" && <WechatTab onTip={setTip} />}
-            {tab === "channels" && <ChannelsPage embedded />}
+            {tab === "channels" && <ChannelsPage embedded onOpenSession={onOpenSession} />}
             {tab === "persona" && (
               <div className="set-card">
               <>

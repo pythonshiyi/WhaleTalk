@@ -6484,6 +6484,36 @@ class DeepSeekClient:
                 except Exception:
                     logger.exception("收集本轮新增消息失败（不影响生成）")
 
+    def _fallback_client(self):
+        """按配置构建备用网关客户端；主客户端失败时只重试模型请求。
+
+        安全边界：备用网关只接管 `_create_with_retry`（一次模型调用），不重跑
+        已经执行的工具，避免同一副作用执行两次。默认关闭。
+        """
+        if getattr(self, "_is_fallback", False):
+            return None
+        try:
+            import config_utils
+            cfg = config_utils.load_config()
+            if not cfg.get("fallback_enabled"):
+                return None
+            key = str(cfg.get("fallback_api_key") or "").strip()
+            base = str(cfg.get("fallback_base_url") or "").strip()
+            model = str(cfg.get("fallback_model") or "").strip()
+            if not key or not base or not model:
+                return None
+            sig = (key, base, model)
+            cache = getattr(self, "_fallback_cache", None)
+            if cache and cache[0] == sig:
+                return cache[1]
+            client = DeepSeekClient(key, base_url=base, model=model, timeout=self.timeout)
+            client._is_fallback = True
+            self._fallback_cache = (sig, client)
+            return client
+        except Exception as e:  # noqa: BLE001
+            logger.warning("备用网关初始化失败：%s", e)
+            return None
+
     def _create_with_retry(self, kwargs, attempts=3, stop_event=None):
         last_error = None
         for i in range(1, attempts + 1):
@@ -6506,7 +6536,9 @@ class DeepSeekClient:
                     last_error = e
                     logger.warning("服务端错误 %s，第 %s 次重试", status, i)
                 else:
-                    raise
+                    # 4xx（Key 无效 / 模型不可用等）不再原地重试，交给备用网关或原样抛出。
+                    last_error = e
+                    break
             if i < attempts:
                 # 分段 sleep：用户点停止后立即感知，不等完整个退避窗口
                 end = time.monotonic() + 2 ** (i - 1)
@@ -6514,6 +6546,17 @@ class DeepSeekClient:
                     if stop_event and stop_event.is_set():
                         raise _StopRequested()  # 干净信号：chat() 内部转 return False
                     time.sleep(min(0.1, end - time.monotonic()))
+        # 主网关失败 → 尝试备用网关（仅重试这一次模型调用，不重跑工具）。
+        if last_error is not None:
+            fb = self._fallback_client()
+            if fb is not None:
+                try:
+                    logger.warning("主网关失败，切换备用网关 %s", fb.model)
+                    kw = dict(kwargs)
+                    kw["model"] = fb.model
+                    return fb._create_with_retry(kw, attempts=2, stop_event=stop_event)
+                except Exception as fe:  # noqa: BLE001
+                    logger.warning("备用网关也失败：%s", fe)
         # 保留原异常类型（此前包成 RuntimeError → 上层 `except (APIConnectionError,
         # APITimeoutError)` 匹配不到，预流连接失败会走错分支/文案）。
         if last_error is not None:

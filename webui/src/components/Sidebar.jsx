@@ -2,6 +2,7 @@ import React from "react";
 import { usePoll } from "../usePoll.js";
 import { getStatus } from "../api.js";
 import { Icon } from "./icons.jsx";
+import InboxButton from "./InboxButton.jsx";
 
 // 一级入口只保留六个「用户任务」：会话 / 工作台 / 创作 / 能力 / 智能体 / 设置。
 // 配置类（接入通道、权限、可选能力）统一收进设置；任务记录收进工作台；
@@ -15,7 +16,7 @@ const NAV_ITEMS = [
   { id: "settings", label: "设置", icon: "settings" },
 ];
 
-export default function Sidebar({ page, onPage }) {
+export default function Sidebar({ page, onPage, onNavigate, runningCount = 0 }) {
   const [status, setStatus] = React.useState(null);
   const [statusErr, setStatusErr] = React.useState(false);
 
@@ -55,12 +56,16 @@ export default function Sidebar({ page, onPage }) {
               >
                 <Icon name={n.icon} size={20} />
                 <span className="sb-item-label">{n.label}</span>
+                {n.id === "chat" && runningCount > 0 && (
+                  <span className="sb-item-busy" title={`${runningCount} 个后台任务正在生成`} aria-label="后台任务运行中" />
+                )}
               </button>
             );
           })}
         </div>
 
         <div className="sb-bottom">
+          <InboxButton onNavigate={onNavigate} />
           <button
             className="sb-status"
             title={`当前模型：${status ? status.model : "…"} · 点击打开设置`}

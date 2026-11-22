@@ -357,6 +357,11 @@ DEFAULT_CONFIG = {
     "base_url": "https://api.deepseek.com",
     # 统一模型（v3.10.0）：V4.1 Flash 原生多模态，视觉/推理无需切换模式
     "model": "deepseek-flash",
+    # 备用网关：主模型连接失败/模型不可用时，仅重试模型请求（不会重跑已执行工具）。
+    "fallback_enabled": False,
+    "fallback_base_url": "",
+    "fallback_api_key": "",
+    "fallback_model": "",
     "voice_config": {"auto_mode": "off", "rate": 0, "volume": 100, "voice": "",
                      "engine": "auto", "piper_voice": "zh_CN-chaowen-medium"},
     "scenario": "通用",
