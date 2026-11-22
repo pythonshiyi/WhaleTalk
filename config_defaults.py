@@ -446,6 +446,10 @@ DEFAULT_CONFIG = {
     "life_daily_cost_budget": 5.0,
     "life_fatigue_per_action": 8.0,
     "life_off_peak_only": False,
+    # 直播角色 v2（本地 P0）：角色卡 / 冷场自主开麦 / 台词限速
+    "live_persona_id": "",              # 直播角色卡 id；空=用角色库第一个
+    "live_idle_speak_seconds": 25,      # 冷场多少秒后自主开麦
+    "live_max_lines_per_minute": 6,     # 台词限速（含回复与自主开麦）
     "pure_chat": False,
     "web_search": False,  # 对话模式联网开关：开启后纯对话注入 search_web 等联网工具（仅搜索，克制注入）
     "quiet_mode": False,  # 纯净对话总开关：开启后停止全部个性上下文注入（长期记忆/核心自我/大脑）与对话回写，AI 只带基础系统提示

@@ -1,68 +1,75 @@
-"""直播服务层：把生存引擎、角色台词生成、TTS 串成一条可用的链路。
+"""直播门面：把「打赏账本 / 导演 / 演员 / 舞台 / 模拟器」串成对外接口。
 
-职责边界
---------
-- `live_state.py`  ：纯数值（吃饱度/打赏/额度），不依赖任何外部服务
-- `live_engine.py` ：本模块，负责「事件 → 台词 → 语音」，把 AI 接进来
-- `api_server`     ：HTTP 接口（/v1/live/*）与静态 HUD 服务
+分层
+----
+- `live_state.py`     打赏账本（今日收入/额度/榜单），纯数值，**不再驱动人格**；
+- `live/`             直播角色 v2：事件总线 / 房间状态 / 注意力 / 演员 / 导演 / 舞台；
+- `live_engine.py`    本模块（薄门面）：旧 API 兼容 + `/v1/live/*` 的调用面；
+- `api_server`        HTTP 接口与静态 HUD 服务。
 
-设计原则
+兼容约定
 --------
-1. **失败可降级**：LLM 挂了就用兜底台词，TTS 挂了就只出文字，绝不卡住直播。
-2. **合规内建**：提示词层禁止索要打赏/诱导消费；台词出稿后再做一次敏感过滤。
-3. **限速保守**：默认每分钟最多 3 句，既防刷屏也降低平台风控关注度。
+历史接口（on_gift / on_chat / latest_line / podium_data / _deliver …）保持可用：
+- 导演未运行时，手工送礼/弹幕走同步回复（网页测试页行为不变）；
+- 导演运行时，事件入总线，由导演统一决定什么时候、对谁说。
 """
 from __future__ import annotations
 
 import logging
-import os
-import re
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import live_state
+from live import actor as live_actor
+from live import director as live_director
+from live import safety, stage, voice
+from live.events import EV_DANMAKU, EV_GIFT, EV_SC, LiveEvent
+from live.room import Room
+from live.simulator import Simulator
 
 logger = logging.getLogger("whaletalk.live")
 
 CONFIG_FILE: Optional[str] = None
 _state: Optional[live_state.LiveState] = None
 _lock = threading.RLock()
+_sim: Optional[Simulator] = None
 
-# 兜底台词：LLM 不可用时不至于哑火（也避免直播出现长时间静默）
-_FALLBACK_FEED = {
-    "starving": "谢谢你……我这就去吃点东西，真的快饿扁了。",
-    "hungry": "谢谢！肚子刚好叫了一声，你就送来了。",
-    "normal": "谢谢你的礼物，今天过得还不错。",
-    "full": "谢谢你，我今天吃得很饱，心情特别好。",
-}
-_FALLBACK_CHAT = "嗯，我在听，你继续说。"
+# 舞台当前台词（与 live.stage 共享同一个 dict，兼容历史测试直接改 _latest）
+_latest: Dict[str, Any] = stage.LATEST
 
-# 台词后置过滤：命中这些模式就丢弃重来（防止模型不听话去要礼物）
-_FORBIDDEN = re.compile(
-    r"(送礼物|刷礼物|打个赏|上票|充值|继续送|再多送|再送一|再刷一|给我刷|送我礼物"
-    r"|送礼|冲榜|帮我冲|还差.*元|差.*块钱)",
-    re.IGNORECASE,
-)
-# 绝不出现的自我暴露。
-# 注意 AI 必须用「前后不是拉丁字母」的边界：旧的裸 AI + IGNORECASE 会把
-# said / again / main / explain 里的 "ai" 一起判违规，英文台词必然被整句丢弃。
-_SELF_EXPOSE = re.compile(
-    r"(?<![A-Za-z])AI(?![A-Za-z])|人工智能|模型|程序|开发者|代码|提示词|LLM",
-    re.IGNORECASE,
-)
+# 历史导出：live_engine._is_safe_line / _clean_line 仍可用
+_is_safe_line = safety.is_safe_line
+_clean_line = safety.clean_line
+
+
+# ── 配置/路径 ──────────────────────────────────────────────
+
+def _cfg() -> Dict[str, Any]:
+    try:
+        import config_utils
+        return config_utils.load_config()
+    except Exception:
+        return {}
+
+
+def _persona_id() -> str:
+    return str(_cfg().get("live_persona_id") or "").strip()
 
 
 def init(config_path: Optional[str] = None,
          state_path: Optional[str] = None, *,
+         room_path: Optional[str] = None,
          reset: bool = False) -> None:
-    """接线：配置与状态文件路径。"""
+    """接线：配置 / 打赏账本 / 房间记忆路径，并（重新）构造导演。"""
     global CONFIG_FILE, _state
     with _lock:
         if reset or _state is None:
             CONFIG_FILE = str(config_path) if config_path else CONFIG_FILE
             live_state.STATE_FILE = str(state_path) if state_path else live_state.STATE_FILE
             _state = live_state.LiveState().load()
+        room = Room(room_path).load()
+        live_director.configure(room=room, persona_id=_persona_id())
 
 
 def state() -> live_state.LiveState:
@@ -71,6 +78,13 @@ def state() -> live_state.LiveState:
         if _state is None:
             _state = live_state.LiveState().load()
         return _state
+
+
+def room() -> Room:
+    d = live_director.current()
+    if d is not None:
+        return d.room
+    return Room(None).load()
 
 
 def reload_settings(cfg: Optional[Dict[str, Any]] = None) -> live_state.LiveState:
@@ -87,122 +101,58 @@ def reload_settings(cfg: Optional[Dict[str, Any]] = None) -> live_state.LiveStat
         return new
 
 
+# ── 兼容：舞台/账本快照 ────────────────────────────────────
+
 def snapshot_dict() -> Dict[str, Any]:
     return state().snapshot().as_dict()
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# 台词生成
-# ══════════════════════════════════════════════════════════════════════════
-
-def _clean_line(text: str) -> str:
-    """清洗模型输出：去引号/前缀/多余空白，截断到一句话。"""
-    s = str(text or "").strip()
-    s = re.sub(r"^[\"'“”‘’]+|[\"'“”‘’]+$", "", s)
-    s = re.sub(r"^(台词|回复|回答)[:：]\s*", "", s)
-    s = s.split("\n")[0].strip()
-    return s[:120]
+def latest_line() -> Dict[str, Any]:
+    return stage.latest()
 
 
-def _is_safe_line(text: str) -> bool:
-    """合规过滤：不含诱导消费、不自我暴露。"""
-    if not text:
-        return False
-    if _FORBIDDEN.search(text):
-        return False
-    if _SELF_EXPOSE.search(text):
-        return False
-    return True
+def recent_events(limit: int = 20) -> List[Dict[str, Any]]:
+    return room().recent_events(max(1, min(50, int(limit or 20))))
 
 
-def _call_llm(prompt: str) -> str:
-    """调用一次对话模型拿台词。失败返回空串（由调用方降级）。"""
-    try:
-        import config_utils
-        import deepseek_client as dc
-    except Exception:
-        logger.exception("直播台词：依赖导入失败")
-        return ""
-    try:
-        cfg = config_utils.load_config()
-        key = str(cfg.get("api_key") or "").strip()
-        if not key:
-            return ""
-        client = dc.DeepSeekClient(
-            key,
-            base_url=cfg.get("base_url") or dc.DEFAULT_BASE_URL,
-            model=cfg.get("model") or dc.DEFAULT_MODEL,
-            # 直播是实时场景：不为一句台词把打赏接口挂 30 秒（模型慢就降级走兜底）。
-            timeout=min(10.0, max(3.0, float(cfg.get("timeout") or 30))),
-        )
-        parts: List[str] = []
-        client.chat(
-            [{"role": "user", "content": prompt}],
-            scenario="通用",
-            thinking="low",          # 直播要快，不要深思考
-            max_tokens=200,
-            tools_enabled=False,
-            smart_tools=False,
-            on_content=lambda t: parts.append(t),
-        )
-        return _clean_line("".join(parts))
-    except Exception:
-        logger.exception("直播台词生成失败")
-        return ""
+def podium_data() -> Dict[str, Any]:
+    """HUD 专用聚合（免 token）：账本快照 + 最近事件 + 当前台词 + 房间状态。"""
+    snap = state().snapshot().as_dict()
+    r = room()
+    return {
+        "snapshot": snap,
+        "events": r.recent_events(12),
+        "line": stage.latest(),
+        "room": r.snapshot(),
+    }
+
+
+def room_snapshot() -> Dict[str, Any]:
+    return room().snapshot()
+
+
+# ── 兼容：台词发布 / 语音 ──────────────────────────────────
+
+def _publish_line(text: str, audio: str = "") -> int:
+    return stage.publish(text, audio)
 
 
 def _speak(text: str) -> Dict[str, Any]:
-    """把台词合成语音（复用现有 TTS 三级引擎）。失败只返回空 URL。
+    return voice.speak(text)
 
-    直接调用 api_server 的合成函数，不经过 HTTP，避免自己请求自己。
-    """
-    if not text:
-        return {"audio": "", "engine": ""}
-    try:
-        import api_server as srv
-        import hashlib
-        import json as _json
 
-        vc = srv._voice_cfg()
-        rate = max(-10, min(10, int(vc.get("rate") or 0)))
-        volume = max(0, min(100, int(vc.get("volume") or 100)))
-        voice = str(vc.get("voice") or "")[:80]
-        digest = hashlib.sha1(
-            _json.dumps([text, rate, volume, voice, ""], ensure_ascii=False).encode("utf-8")
-        ).hexdigest()
-        cache = srv._VOICE_CACHE_DIR
-        os.makedirs(cache, exist_ok=True)
-        for ext in (".mp3", ".wav"):
-            fp = os.path.join(cache, digest + ext)
-            if os.path.isfile(fp) and os.path.getsize(fp) > 200:
-                return {"audio": f"/v1/tts/audio/{digest}{ext}", "engine": "cache"}
-
-        edge_ok = srv._edge_available()
-        plan: List[Tuple[str, str]] = []
-        if edge_ok:
-            plan.append(("edge", f"{digest}.mp3"))
-        plan.append(("sapi", f"{digest}.wav"))
-        for eng, fn in plan:
-            fp = os.path.join(cache, fn)
-            with srv._TTS_SEM:
-                if eng == "edge":
-                    msg = srv._synthesize_edge(text, fp, rate, volume, voice)
-                else:
-                    msg = srv._synthesize_sapi(text, fp, rate, volume, voice)
-            if not msg and os.path.isfile(fp) and os.path.getsize(fp) > 200:
-                return {"audio": f"/v1/tts/audio/{fn}", "engine": eng}
-        return {"audio": "", "engine": ""}
-    except Exception:
-        logger.exception("直播语音合成失败（降级为纯文字）")
-        return {"audio": "", "engine": ""}
+def _speak_into_published(text: str, seq: int) -> None:
+    """后台合成语音并回填（只有台词没被覆盖时才生效）。"""
+    if not voice.ENABLED:
+        return
+    audio = _speak(text)
+    url = str(audio.get("audio") or "")
+    if url:
+        stage.attach_audio(seq, url)
 
 
 def _deliver(text: str, mood: str, *, say: bool) -> Dict[str, Any]:
-    """统一的"说一句"出口：限速 + 安全过滤 + 语音。
-
-    语音合成放到后台线程：TTS 可能耗时数秒（Edge 在线 / SAPI 本地），
-    不能让它拖住 /v1/live/gift 这类实时接口——HUD 会从 /live/data 轮询到音频。
-    """
+    """统一的"说一句"出口：限速 + 安全过滤 + 后台语音（历史接口）。"""
     st = state()
     if not st.can_speak():
         return {"text": text, "spoken": False, "reason": "rate_limited"}
@@ -211,135 +161,142 @@ def _deliver(text: str, mood: str, *, say: bool) -> Dict[str, Any]:
         return {"text": text, "spoken": False, "reason": "filtered"}
     st.mark_spoken()
     seq = _publish_line(text, "")
-    if say:
+    if say and voice.ENABLED:
         threading.Thread(target=_speak_into_published, args=(text, seq),
                          daemon=True, name="live-tts").start()
     return {"text": text, "spoken": True, "audio": "", "engine": "",
             "audio_pending": bool(say)}
 
 
-def _speak_into_published(text: str, seq: int) -> None:
-    """后台合成语音；只有台词没被更新覆盖时才回填音频（避免串台）。
+# ── 手工接口（网页测试页 / 外部调用）──────────────────────
 
-    `audio_seq` 单独标记「这段音频属于哪一句」：HUD 用它判重播，
-    否则台词已出、音频后到，前端按 seq 判重会永远不播。
-    """
-    audio = _speak(text)
-    url = str(audio.get("audio") or "")
-    if not url:
-        return
-    with _lock:
-        if int(_latest.get("seq") or 0) == int(seq):
-            _latest["audio"] = url
-            _latest["audio_seq"] = int(seq)
+def _manual_can_speak() -> bool:
+    st = state()
+    if not st.can_speak():
+        return False
+    st.mark_spoken()
+    return True
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# 对外动作
-# ══════════════════════════════════════════════════════════════════════════
 
 def on_gift(giver: str, doucoin: float, gift_name: str = "礼物",
             count: int = 1, *, say: bool = True) -> Dict[str, Any]:
-    """收到打赏：更新数值 → 生成台词 → 合成语音。"""
+    """收到打赏：记账 → 导演运行时入总线；否则同步回一句。"""
     st = state()
     change = st.feed(giver, doucoin, gift_name, count)
-    snap = live_state.LiveSnapshot(**change["after"])
-
-    persona = _persona_name()
-    prompt = live_state.build_feed_prompt(snap, change["record"], persona)
-    line = _call_llm(prompt)
-    if not _is_safe_line(line):
-        line = _FALLBACK_FEED.get(snap.mood, _FALLBACK_FEED["normal"])
-
-    spoken = _deliver(line, snap.mood, say=say)
-    return {
-        "ok": True,
-        "change": change,
-        "line": spoken,
-        "snapshot": change["after"],
-    }
+    ev = LiveEvent(kind=EV_GIFT, user_id="", user_name=str(giver or "神秘观众"),
+                   gift_name=str(gift_name or "礼物"),
+                   value=float((change.get("record") or {}).get("yuan") or 0.0))
+    d = live_director.current()
+    if d is not None and d.running():
+        d.submit(ev)
+        return {"ok": True, "queued": True, "change": change, "snapshot": change["after"]}
+    if not _manual_can_speak():
+        return {"ok": True, "change": change,
+                "line": {"text": "", "spoken": False, "reason": "rate_limited"},
+                "snapshot": change["after"]}
+    line = live_actor.reply_to(ev, room(), _persona_id())
+    return {"ok": True, "change": change, "line": line, "snapshot": change["after"]}
 
 
 def on_chat(user: str, text: str, *, say: bool = True) -> Dict[str, Any]:
-    """收到弹幕：生成一句回应（含单人冷却，避免一人刷屏）。"""
-    st = state()
-    uid = str(user or "")
-    if not st.user_can_talk(uid):
-        return {"ok": True, "skipped": True, "reason": "user_cooldown"}
-    snapped = st.snapshot()
-    persona = _persona_name()
-    prompt = live_state.build_chat_prompt(snapped, uid or "观众", str(text or "")[:200], persona)
-    line = _call_llm(prompt)
-    if not _is_safe_line(line):
-        line = _FALLBACK_CHAT
-
-    st.mark_user_talked(uid)
-    spoken = _deliver(line, snapped.mood, say=say)
-    return {"ok": True, "line": spoken, "snapshot": st.snapshot().as_dict()}
+    """收到弹幕：导演运行时入总线；否则同步回一句。"""
+    ev = LiveEvent(kind=EV_DANMAKU, user_id="", user_name=str(user or "观众"),
+                   text=str(text or "")[:200])
+    d = live_director.current()
+    r = room()
+    if d is not None and d.running():
+        d.submit(ev)
+        return {"ok": True, "queued": True, "snapshot": r.snapshot()}
+    if not _manual_can_speak():
+        return {"ok": True, "skipped": True, "reason": "rate_limited", "snapshot": r.snapshot()}
+    line = live_actor.reply_to(ev, r, _persona_id())
+    return {"ok": True, "line": line, "snapshot": r.snapshot()}
 
 
-def _persona_name() -> str:
-    """取当前默认角色名，让台词口吻对上人设。角色库不可用时回退默认名。"""
-    try:
-        import personas
-        items = personas.list_personas()
-        if items:
-            return str(items[0].get("name") or "大肥鱼")
-    except Exception:
-        logger.debug("读取角色名失败，使用默认名", exc_info=True)
-    return "大肥鱼"
+# ── 导演/模拟器 ───────────────────────────────────────────
+
+def start() -> bool:
+    return live_director.start()
 
 
-# ── 最新台词：HUD 拉取后显示气泡并播放语音 ──
-_latest: Dict[str, Any] = {"seq": 0, "text": "", "audio": "", "audio_seq": 0, "at": 0.0}
+def stop() -> None:
+    sim_stop()
+    live_director.stop()
 
 
-def _publish_line(text: str, audio: str) -> int:
-    """把刚说的台词发布出去，供 HUD 拉取。返回本次台词序号。"""
-    with _lock:
-        seq = int(_latest.get("seq") or 0) + 1
-        _latest["seq"] = seq
-        _latest["text"] = str(text or "")
-        _latest["audio"] = str(audio or "")
-        _latest["at"] = time.time()
-        return seq
+def running() -> bool:
+    return live_director.running()
 
 
-def latest_line() -> Dict[str, Any]:
-    """HUD 轮询：返回最近一句台词（带自增序号，前端据此判断是否新台词）。"""
-    with _lock:
-        return dict(_latest)
+def tick() -> Dict[str, Any]:
+    return live_director.tick_once()
 
 
-def podium_data() -> Dict[str, Any]:
-    """HUD 专用的只读数据聚合：一次请求拿到全部画面所需信息。
-
-    ⚠️ 这个接口**不需要 token**（OBS 浏览器源无法带 Authorization 头），
-    因此只暴露画面用得到的字段，不含任何凭据或配置项。观众昵称/礼物名
-    本就要上屏（HUD 的滚动条与榜单），不属于需要隐藏的身份数据。
-    """
-    st = state()
-    snap = st.snapshot().as_dict()
-    with _lock:
-        line = dict(_latest)
-    return {
-        "snapshot": snap,
-        "events": list(snap.get("recent") or [])[:12],
-        "line": line,
-    }
+def status() -> Dict[str, Any]:
+    out = live_director.status()
+    out["sim_running"] = bool(_sim is not None and _sim.running())
+    out["line"] = stage.latest()
+    return out
 
 
-def recent_events(limit: int = 20) -> List[Dict[str, Any]]:
-    return list(state().snapshot().recent)[:max(1, min(50, limit))]
+def _get_sim(speed: float = 1.0, loop: bool = True) -> Simulator:
+    d = live_director.current()
+    if d is None:
+        raise RuntimeError("直播引擎未初始化")
+    global _sim
+    if _sim is None:
+        _sim = Simulator(d, speed=speed, loop=loop)
+    return _sim
+
+
+def sim_start(speed: float = 1.0, loop: bool = True) -> Dict[str, Any]:
+    d = live_director.current()
+    if d is None:
+        raise RuntimeError("直播引擎未初始化")
+    d.start()
+    _get_sim(speed, loop).start()
+    return status()
+
+
+def sim_stop() -> Dict[str, Any]:
+    global _sim
+    if _sim is not None:
+        _sim.stop()
+        _sim = None
+    live_director.stop()
+    return status()
+
+
+def sim_step() -> Dict[str, Any]:
+    """单步：发一条剧本事件并立刻跑一次决策（调试/测试用）。"""
+    d = live_director.current()
+    if d is None:
+        raise RuntimeError("直播引擎未初始化")
+    ev = _get_sim().step()
+    action = d.tick_once()
+    return {"event": ev.as_dict() if ev is not None else None, "tick": action,
+            "status": status()}
 
 
 __all__ = [
     "CONFIG_FILE",
     "init",
+    "latest_line",
     "on_chat",
     "on_gift",
+    "podium_data",
     "recent_events",
     "reload_settings",
+    "room",
+    "room_snapshot",
+    "running",
+    "sim_start",
+    "sim_step",
+    "sim_stop",
     "snapshot_dict",
+    "start",
     "state",
+    "status",
+    "stop",
+    "tick",
 ]

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>鲸语 · 直播舞台（本地 P0）</title>
+<link rel="stylesheet" href="stage.css">
+</head>
+<body>
+<div class="stage" id="stage">
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <span class="name" id="personaName">大肥鱼</span>
+      <span class="tag">AI 虚拟形象 · 内容由 AI 生成</span>
+    </div>
+    <div class="meters">
+      <div class="meter" title="直播间人数"><span id="viewers">0</span><small>人</small></div>
+      <div class="meter energy" title="精力（会随时间与互动变化）">
+        <div class="bar"><i id="energyBar"></i></div>
+        <small id="mood">还算有精神</small>
+      </div>
+    </div>
+  </header>
+
+  <main class="center">
+    <div class="char-wrap" id="charWrap">
+      <svg class="char" viewBox="0 0 240 200" aria-label="角色立绘占位">
+        <defs>
+          <radialGradient id="bodyG" cx="40%" cy="30%" r="80%">
+            <stop offset="0%" stop-color="#8fe3ff"/>
+            <stop offset="60%" stop-color="#3aa7d8"/>
+            <stop offset="100%" stop-color="#1d5f86"/>
+          </radialGradient>
+          <linearGradient id="tailG" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#63c8ef"/>
+            <stop offset="100%" stop-color="#22658c"/>
+          </linearGradient>
+        </defs>
+        <ellipse class="shadow" cx="120" cy="182" rx="62" ry="9" fill="rgba(0,0,0,.35)"/>
+        <g class="fish">
+          <path class="tail" d="M66 100 C10 70, 10 130, 66 100 C28 142, 62 160, 88 122 Z" fill="url(#tailG)"/>
+          <ellipse class="body" cx="126" cy="100" rx="66" ry="50" fill="url(#bodyG)"/>
+          <ellipse class="gloss" cx="104" cy="78" rx="26" ry="16" fill="rgba(255,255,255,.28)"/>
+          <path class="fin" d="M116 56 C124 30, 154 28, 164 50 C150 42, 130 42, 116 56 Z" fill="#2b83ad"/>
+          <path class="fin2" d="M112 140 C126 154, 150 152, 158 138 C144 144, 126 144, 112 140 Z" fill="#2b83ad"/>
+          <g class="eye left">
+            <circle cx="108" cy="92" r="10" fill="#0d2b3d"/>
+            <circle class="glint" cx="105" cy="88" r="3.4" fill="#e9fbff"/>
+          </g>
+          <g class="eye right">
+            <circle cx="148" cy="92" r="11" fill="#0d2b3d"/>
+            <circle class="glint" cx="144" cy="88" r="3.6" fill="#e9fbff"/>
+          </g>
+          <ellipse class="cheek" cx="96" cy="112" rx="8" ry="4.5" fill="rgba(255,120,150,.45)"/>
+          <ellipse class="cheek" cx="160" cy="112" rx="8" ry="4.5" fill="rgba(255,120,150,.45)"/>
+          <ellipse class="mouth" id="mouth" cx="128" cy="118" rx="9" ry="3.2" fill="#0d2b3d"/>
+        </g>
+      </svg>
+      <div class="bubble" id="bubble" hidden><span id="bubbleText"></span></div>
+    </div>
+  </main>
+
+  <aside class="feed">
+    <h3>弹幕 / 事件 <small id="topic"></small></h3>
+    <ul id="eventList"></ul>
+  </aside>
+
+  <footer class="bottom">
+    <div class="controls">
+      <button id="btnStart" class="primary">▶ 开始模拟</button>
+      <button id="btnStop">⏹ 停止</button>
+      <button id="btnStep">⏭ 单步</button>
+      <span class="hint" id="hint">本地 P0 · 未推流 · 弹幕为模拟</span>
+    </div>
+    <div class="subtitle" id="subtitle"></div>
+    <audio id="voice" preload="auto"></audio>
+  </footer>
+</div>
+<script src="stage.js"></script>
+</body>
+</html>

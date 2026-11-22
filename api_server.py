@@ -6660,6 +6660,13 @@ def _resolve_data_dir():
 DATA_DIR = _resolve_data_dir()
 
 _VOICE_CACHE_DIR = os.path.join(DATA_DIR, "voice", "cache")
+
+# 直播语音（免 token，供 <audio> / OBS）：只认内容哈希文件名，杜绝路径穿越
+_LIVE_AUDIO_RE = re.compile(r"^[0-9a-f]{8,40}\.(mp3|wav)$")
+
+
+def _valid_live_audio(name: str) -> bool:
+    return bool(_LIVE_AUDIO_RE.match(str(name or "")))
 # 信任内核状态缓存（mtime 为键 + 30s TTL）：让 /v1/status 零成本读到结论，
 # 不必每次刷新都重算 5 个内核文件的 sha256。
 _TRUST_CACHE = {}
@@ -6683,6 +6690,7 @@ TG_STATE_PATH = os.path.join(DATA_DIR, "telegram_state.json")
 # 直播 HUD：静态网页目录（OBS「浏览器源」抓 http://127.0.0.1:8745/live/）
 LIVE_HUD_DIR = os.path.join(BASE_DIR, "live_hud")
 LIVE_STATE_PATH = os.path.join(DATA_DIR, "live_state.json")
+LIVE_ROOM_PATH = os.path.join(DATA_DIR, "live_room.json")
 PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
 SCHEDULES_PATH = os.path.join(DATA_DIR, "schedules.json")
 RECENT_PATH = os.path.join(DATA_DIR, "recent_outputs.json")
@@ -7363,6 +7371,11 @@ class _Handler(BaseHTTPRequestHandler):
                     self._json(200, live_engine.podium_data())
                 except Exception as e:
                     self._json(500, {"error": _friendly_error(e)})
+                return
+            if path.lstrip("/").startswith("live/audio/"):
+                # 直播语音同样免 token：<audio> 标签带不了 Authorization 头，
+                # 走 /v1/tts/audio 会 401 → 舞台"有字幕没声音"。
+                self._serve_live_audio(path)
                 return
             self._serve_live_hud(path)
             return
@@ -9371,6 +9384,37 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ══ 直播角色（虚拟角色求生玩法）════════════════════════════════
     # HUD 网页：供 OBS「浏览器源」抓取（由 _serve_static 前置分流，走独立目录）
+    def _serve_live_audio(self, path=None):
+        """直播语音（免 token，供舞台页 / OBS）：只允许语音缓存里的内容哈希文件。"""
+        name = str(path or self.path).split("?", 1)[0].split("#", 1)[0].rsplit("/", 1)[-1]
+        if not _valid_live_audio(name):
+            self._json(404, {"error": "not found"})
+            return
+        full = os.path.join(_VOICE_CACHE_DIR, name)
+        try:
+            real_dir = os.path.realpath(_VOICE_CACHE_DIR) + os.sep
+            real_full = os.path.realpath(full)
+        except OSError:
+            self._json(404, {"error": "not found"})
+            return
+        if not real_full.startswith(real_dir) or not os.path.isfile(real_full):
+            self._json(404, {"error": "not found"})
+            return
+        try:
+            with open(real_full, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._json(500, {"error": "read failed"})
+            return
+        ctype = "audio/mpeg" if name.endswith(".mp3") else "audio/wav"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        # 文件名即内容哈希：同一句台词永远同一文件，可长缓存
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _serve_live_hud(self, path=None):
         raw = str(path or self.path).split("?", 1)[0]
         rel = raw.rsplit("/live/", 1)[-1].replace("\\", "/").lstrip("/")
@@ -9498,6 +9542,40 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             import live_state
             self._json(200, {"config": dict(live_state.DEFAULTS)})
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
+
+    # ── 直播角色 v2：房间状态 / 本地模拟 ──
+    @_get_route("/v1/live/room")
+    def _g_v1_live_room(self):
+        """房间状态（观众/能量/情绪/话题/最近台词）；HUD 走免 token 的 /live/data。"""
+        try:
+            import live_engine
+            self._json(200, live_engine.room_snapshot())
+        except Exception as e:
+            self._json(500, {"error": _friendly_error(e)})
+
+    @_post_route("/v1/live/sim")
+    def _p_v1_live_sim(self):
+        """本地模拟：start（开始剧本+导演）/ stop / step（单步）/ status。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        try:
+            import live_engine
+            action = str(body.get("action") or "status").strip().lower()
+            if action == "start":
+                speed = float(body.get("speed") or 1.0)
+                self._json(200, live_engine.sim_start(speed=speed, loop=bool(body.get("loop", True))))
+            elif action == "stop":
+                self._json(200, live_engine.sim_stop())
+            elif action == "step":
+                self._json(200, live_engine.sim_step())
+            else:
+                self._json(200, live_engine.status())
+        except (TypeError, ValueError) as e:
+            self._json(400, {"error": _friendly_error(e)})
         except Exception as e:
             self._json(500, {"error": _friendly_error(e)})
 
@@ -11134,7 +11212,7 @@ def start_server(port=8745, token=""):
     # ── 可降级：直播角色（虚拟角色求生玩法）──
     try:
         import live_engine as _live
-        _live.init(LIVE_STATE_PATH)
+        _live.init(LIVE_STATE_PATH, room_path=LIVE_ROOM_PATH)
         logger.info("直播角色引擎已就绪（HUD: /live/）")
     except Exception:
         logger.warning("直播角色引擎初始化失败（可降级）：直播玩法不可用", exc_info=True)

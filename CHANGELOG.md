@@ -2,6 +2,59 @@
 
 本文件记录鲸语 WhaleTalk 的版本迭代历史。当前版本见 [README](README.md)。
 
+## 未发版（2026-11-10）—— 🎭 直播角色 v2（本地 P0）
+
+把直播从「事件→一句台词」的机械接口，改成**持续在线的角色**：
+每秒判断"要不要说话"，有人说话时可以选择不接，冷场时自己起话头。
+本阶段只跑本地（模拟弹幕 + 舞台页），**不接平台、不推流**。设计见 [docs/直播角色.md](docs/直播角色.md)。
+
+### 一、新增 `live/` 包（平台无关）
+
+- `events.py`：`LiveEvent`（danmaku/gift/enter/follow/like/sc）+ 线程安全事件总线。
+- `room.py`：直播间在场状态——观众关系（到访次数/常客）、精力、情绪、话题、最近台词；
+  跨场只保留关系，事件/台词/限速时间戳属"现场"，启动时清空。
+- `attention.py`：显著性打分。提问/点名/新观众加权，刷屏、复读、超过 25 秒的过期弹幕降权或直接丢弃。
+- `prompts.py` / `actor.py`：角色卡**全量**（性格/背景/说话方式/边界）+ 房间状态 + 最近台词 →
+  一句台词；合规过滤（不索要礼物/不自我暴露/去旁白）+ 复读检查 + 兜底。
+- `voice.py` / `stage.py`：TTS 后台合成与 `audio_seq` 回填；HUD 台词发布。
+- `director.py`：每秒决策——回 / 自主开麦 / 沉默；限速窗口内的高价值事件进待回队列
+  （最多 3 条，过期 25 秒），精力过低时不再自主开麦。
+- `simulator.py` / `simulate.py`：本地剧本（新观众、常客复读、礼物、键盘侠刷屏、长冷场）
+  与命令行跑通（`python -m live.simulate --dry` 可离线自检）。
+
+### 二、`live_engine.py` 重构为薄门面
+
+- 旧接口（`on_gift` / `on_chat` / `latest_line` / `podium_data` / `_deliver` …）保持兼容：
+  导演未运行时同步回一句，运行时事件入总线由导演统一决定。
+- 打赏账本 `live_state.py` 退回"只记账"，不再驱动人格与情绪。
+- 新增 `room()` / `room_snapshot()` / `start()` / `stop()` / `tick()` / `status()` /
+  `sim_start()` / `sim_stop()` / `sim_step()`。
+
+### 三、舞台页（立绘占位）
+
+- 新增 `live_hud/stage.html|css|js`：立绘占位（呼吸/眨眼/说话口型）、气泡台词、字幕、
+  弹幕流、人数/精力/情绪、`开始/停止/单步` 本地模拟按钮；OBS 可直接作浏览器源。
+- 免 token 的 `/live/data` 扩展为 `{snapshot, events, line, room}`；新增
+  `GET /v1/live/room`、`POST /v1/live/sim`。
+- **语音改走免 token 的 `/live/audio/<hash>.mp3|wav`**：`<audio>` 标签与 OBS 浏览器源
+  带不了 `Authorization` 头，原先的 `/v1/tts/audio` 会 401——表现就是「有字幕、没声音」。
+  文件名是内容哈希，舞台与 HUD 按 `audio_seq` 判重播。
+
+### 五、修复（本轮同批）
+
+- **首次弹幕被判"复读"**：`submit` 会把当前事件记进去重窗口，打分时又把它自己算成复读
+  （−2.4 分），结果普通弹幕几乎都不回，只有带问号或礼物的勉强过线。
+  `Room.repeated(..., before=ev.ts)` 现在排除事件自身；新增回归用例。
+- 舞台页弹幕昵称取错字段（`user` → `user_name`）；立绘补了尾鳍/背鳍/高光。
+
+
+### 四、配置与测试
+
+- 新增配置：`live_persona_id`（角色卡）、`live_idle_speak_seconds`（冷场阈值）、
+  `live_max_lines_per_minute`（限速）。
+- 新增 `tests/test_live_room.py`（20 用例）：观众关系、精力衰减、注意力打分、导演决策、
+  限速待回队列、模拟器剧本、舞台音频归属、门面接线。
+
 ## 未发版（2026-11-10）—— 🩹 直播玩法与「配置项空转」修复
 
 本轮来自一次真实排障：修的都是**能复现的功能缺陷**，不是风格问题。每条都带回归用例。

@@ -151,7 +151,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：169 工具（11 组）· 123 个 `/v1` 路由 · 后端 136 个 pytest 文件 / 1349 用例 · 前端 32 个 node 套件（自动发现，`npm test` 全跑）。
+- **规模**：169 工具（11 组）· 125 个 `/v1` 路由 · 后端 138 个 pytest 文件 / 1373 用例 · 前端 32 个 node 套件（自动发现，`npm test` 全跑）。
 
 ---
 
@@ -231,6 +231,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 | [docs/能力协议.md](docs/能力协议.md) | **新工具接入的唯一标准**：能力 manifest、五种执行体（含外部 MCP）、权限与预算、热插拔 |
 | [docs/信任内核.md](docs/信任内核.md) | 自我完整性：内核改动可声明 · 可见 · 可回滚 |
 | [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) | UI 令牌与一致性规范（前端改界面必读） |
+| [docs/直播角色.md](docs/直播角色.md) | 直播角色 v2（本地 P0）：注意力/导演/演员/舞台，以及接 B 站的路径 |
 | [docs/出网账本与记忆门面.md](docs/出网账本与记忆门面.md) | 出网审计 + 记忆唯一写入门面 |
 | [docs/大脑记忆生命-P1落地.md](docs/大脑记忆生命-P1落地.md) | 大脑/记忆/生命的连续性、命中增量与有限自主 |
 | [docs/架构收口-P0.md](docs/架构收口-P0.md) | 上下文装配 / 退化日志 / 工具钩子管线 |
