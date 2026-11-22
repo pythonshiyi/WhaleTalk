@@ -323,7 +323,15 @@ export default function App() {
                     })()}
                     {page === "abilities" && (() => {
                       const P = LazyPages.abilities;
-                      return <P initialQuery={abilitiesQuery} />;
+                      return (
+                        <P
+                          initialQuery={abilitiesQuery}
+                          onAskTool={(name) => {
+                            setApplyPrompt(`请解释工具 ${name} 的用途、参数和一个最小调用示例；先不要执行它。`);
+                            setPage("chat");
+                          }}
+                        />
+                      );
                     })()}
                     {page === "create" && (() => {
                       const P = LazyPages.create;

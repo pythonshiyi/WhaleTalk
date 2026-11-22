@@ -14,7 +14,7 @@ import { silentWarn } from "../quiet.js";
 import * as brainNav from "../brainNav.js";
 import { bustBrainFeed } from "./BrainTimeline.jsx";
 
-export function AbilitiesPage({ initialQuery = "" }) {
+export function AbilitiesPage({ initialQuery = "", onAskTool }) {
   const [open, setOpen] = React.useState(null);
   const [expanded, setExpanded] = React.useState({});
   const [tab, setTab] = React.useState("tools");
@@ -143,6 +143,7 @@ export function AbilitiesPage({ initialQuery = "" }) {
                     {t.health?.calls ? `${t.health.calls} 次 · 失败 ${Math.round((t.health.fail_rate || 0) * 100)}%` : "未调用"}
                     {t.health?.breaker_open ? <em className="bad">熔断</em> : null}
                   </span>
+                  {onAskTool && <button className="pm-op" onClick={() => onAskTool(t.name)}>问 AI</button>}
                   <span className={t.enabled ? "cap-on" : "cap-off"}>{t.enabled ? "开" : "关"}</span>
                 </div>
               ))}
