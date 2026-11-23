@@ -44,7 +44,7 @@ button {
   margin: 0;
 }
 .app { display: flex; height: 100vh; height: 100dvh; }
-.app-main { flex: 1; min-width: 0; display: flex; }
+.app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
 /* ═══ 侧边栏（6 个一级入口 · 图标 + 常驻文字） ═══════════
    不再做 hover 展开覆盖层：6 个入口用 72px 宽的「图标 + 小字」即可扫读，
@@ -4745,7 +4745,7 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
   background: var(--ok); box-shadow: 0 0 7px var(--ok); animation: pulse 1.8s infinite;
 }
 .bg-jobs-bar {
-  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap; flex-shrink: 0;
   padding: 6px var(--sp-4); background: var(--brand-soft);
   border-bottom: 1px solid rgba(var(--brand-rgb), .25); font-size: var(--fs-sm); color: var(--text-2);
 }
