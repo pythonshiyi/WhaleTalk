@@ -261,7 +261,9 @@ export default function App() {
                 <main className="app-main">
                   <BackendBanner />
                   <InstallBanner />
-                  {runningJobs.length > 0 && (
+                  {/* 后台任务条只在非会话页显示：会话页已有流式进度/后台横幅，
+                      否则每次生成都会顶出一条冗余提示。跨页/刷新后仍能看到后台仍在生成。 */}
+                  {page !== "chat" && runningJobs.length > 0 && (
                     <div className="bg-jobs-bar" role="status">
                       <span className="bg-jobs-dot" aria-hidden="true" />
                       <b>{runningJobs.length} 个后台任务正在生成</b>
