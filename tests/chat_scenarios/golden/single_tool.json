@@ -1,0 +1,198 @@
+{
+  "scenario": "single_tool",
+  "ok": true,
+  "events": [
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 1,
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    },
+    {
+      "type": "tool_start",
+      "name": "get_date",
+      "args": "{}",
+      "id": "call_date"
+    },
+    {
+      "type": "tool",
+      "name": "get_date",
+      "args": "{}",
+      "result": "{date} {time} 中国标准时间",
+      "id": "call_date"
+    },
+    {
+      "type": "tool_duration",
+      "name": "get_date",
+      "duration": "num",
+      "id": "call_date"
+    },
+    {
+      "type": "content",
+      "text": "已获取日期。"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 2,
+      "prompt": 200,
+      "completion": 20,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    }
+  ],
+  "requests": [
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "今天几号？",
+          "content_sha": "9004b4779af3",
+          "content_len": 5,
+          "has_image": false
+        }
+      ],
+      "tools": {
+        "count": 169,
+        "has": [
+          "get_date",
+          "write_file"
+        ]
+      },
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    },
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "今天几号？",
+          "content_sha": "9004b4779af3",
+          "content_len": 5,
+          "has_image": false
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "content_sha": "da39a3ee5e6b",
+          "content_len": 0,
+          "has_image": false,
+          "tool_calls": [
+            {
+              "id": "call_date",
+              "name": "get_date",
+              "args": "{}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{date} {time} 中国标准时间",
+          "content_sha": "dc081736f4bc",
+          "content_len": 20,
+          "has_image": false,
+          "tool_call_id": "call_date"
+        }
+      ],
+      "tools": {
+        "count": 169,
+        "has": [
+          "get_date",
+          "write_file"
+        ]
+      },
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    }
+  ],
+  "new_messages": [
+    {
+      "role": "assistant",
+      "content": "",
+      "content_sha": "da39a3ee5e6b",
+      "content_len": 0,
+      "has_image": false,
+      "tool_calls": [
+        {
+          "id": "call_date",
+          "name": "get_date",
+          "args": "{}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "{date} {time} 中国标准时间",
+      "content_sha": "dc081736f4bc",
+      "content_len": 20,
+      "has_image": false,
+      "tool_call_id": "call_date"
+    },
+    {
+      "role": "assistant",
+      "content": "已获取日期。",
+      "content_sha": "0dc2598c6a04",
+      "content_len": 6,
+      "has_image": false
+    }
+  ]
+}

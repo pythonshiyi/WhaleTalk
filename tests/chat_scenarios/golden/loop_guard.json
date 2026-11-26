@@ -1,0 +1,509 @@
+{
+  "scenario": "loop_guard",
+  "ok": true,
+  "events": [
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 1,
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    },
+    {
+      "type": "tool_start",
+      "name": "get_date",
+      "args": "{}",
+      "id": "call_l1"
+    },
+    {
+      "type": "tool",
+      "name": "get_date",
+      "args": "{}",
+      "result": "{date} {time} 中国标准时间",
+      "id": "call_l1"
+    },
+    {
+      "type": "tool_duration",
+      "name": "get_date",
+      "duration": "num",
+      "id": "call_l1"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 2,
+      "prompt": 200,
+      "completion": 20,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    },
+    {
+      "type": "tool_start",
+      "name": "get_date",
+      "args": "{}",
+      "id": "call_l2"
+    },
+    {
+      "type": "tool",
+      "name": "get_date",
+      "args": "{}",
+      "result": "{date} {time} 中国标准时间",
+      "id": "call_l2"
+    },
+    {
+      "type": "tool_duration",
+      "name": "get_date",
+      "duration": "num",
+      "id": "call_l2"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 3,
+      "prompt": 300,
+      "completion": 30,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    },
+    {
+      "type": "loop_guard",
+      "name": "get_date",
+      "repeats": 3
+    },
+    {
+      "type": "tool_start",
+      "name": "get_date",
+      "args": "{}",
+      "id": "call_l3"
+    },
+    {
+      "type": "tool",
+      "name": "get_date",
+      "args": "{}",
+      "result": "{date} {time} 中国标准时间",
+      "id": "call_l3"
+    },
+    {
+      "type": "tool_duration",
+      "name": "get_date",
+      "duration": "num",
+      "id": "call_l3"
+    },
+    {
+      "type": "content",
+      "text": "检测到重复调用，已换策略。"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 4,
+      "prompt": 400,
+      "completion": 40,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    }
+  ],
+  "requests": [
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "反复取时间，直到我让你停。",
+          "content_sha": "e343be206986",
+          "content_len": 13,
+          "has_image": false
+        }
+      ],
+      "tools": {
+        "count": 169,
+        "has": [
+          "get_date",
+          "write_file"
+        ]
+      },
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    },
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "反复取时间，直到我让你停。",
+          "content_sha": "e343be206986",
+          "content_len": 13,
+          "has_image": false
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "content_sha": "da39a3ee5e6b",
+          "content_len": 0,
+          "has_image": false,
+          "tool_calls": [
+            {
+              "id": "call_l1",
+              "name": "get_date",
+              "args": "{}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{date} {time} 中国标准时间",
+          "content_sha": "dc081736f4bc",
+          "content_len": 20,
+          "has_image": false,
+          "tool_call_id": "call_l1"
+        }
+      ],
+      "tools": {
+        "count": 169,
+        "has": [
+          "get_date",
+          "write_file"
+        ]
+      },
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    },
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "反复取时间，直到我让你停。",
+          "content_sha": "e343be206986",
+          "content_len": 13,
+          "has_image": false
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "content_sha": "da39a3ee5e6b",
+          "content_len": 0,
+          "has_image": false,
+          "tool_calls": [
+            {
+              "id": "call_l1",
+              "name": "get_date",
+              "args": "{}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{date} {time} 中国标准时间",
+          "content_sha": "dc081736f4bc",
+          "content_len": 20,
+          "has_image": false,
+          "tool_call_id": "call_l1"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "content_sha": "da39a3ee5e6b",
+          "content_len": 0,
+          "has_image": false,
+          "tool_calls": [
+            {
+              "id": "call_l2",
+              "name": "get_date",
+              "args": "{}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{date} {time} 中国标准时间",
+          "content_sha": "dc081736f4bc",
+          "content_len": 20,
+          "has_image": false,
+          "tool_call_id": "call_l2"
+        }
+      ],
+      "tools": {
+        "count": 169,
+        "has": [
+          "get_date",
+          "write_file"
+        ]
+      },
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    },
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "反复取时间，直到我让你停。",
+          "content_sha": "e343be206986",
+          "content_len": 13,
+          "has_image": false
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "content_sha": "da39a3ee5e6b",
+          "content_len": 0,
+          "has_image": false,
+          "tool_calls": [
+            {
+              "id": "call_l1",
+              "name": "get_date",
+              "args": "{}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{date} {time} 中国标准时间",
+          "content_sha": "dc081736f4bc",
+          "content_len": 20,
+          "has_image": false,
+          "tool_call_id": "call_l1"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "content_sha": "da39a3ee5e6b",
+          "content_len": 0,
+          "has_image": false,
+          "tool_calls": [
+            {
+              "id": "call_l2",
+              "name": "get_date",
+              "args": "{}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{date} {time} 中国标准时间",
+          "content_sha": "dc081736f4bc",
+          "content_len": 20,
+          "has_image": false,
+          "tool_call_id": "call_l2"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "content_sha": "da39a3ee5e6b",
+          "content_len": 0,
+          "has_image": false,
+          "tool_calls": [
+            {
+              "id": "call_l3",
+              "name": "get_date",
+              "args": "{}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{date} {time} 中国标准时间\n（提示：这是第 3 次以相同参数调用「get_date」。若你在轮询/重试/等待进展，请继续；若确无新信息，可考虑换参数或换策略。）",
+          "content_sha": "4b7e7669688f",
+          "content_len": 87,
+          "has_image": false,
+          "tool_call_id": "call_l3"
+        }
+      ],
+      "tools": {
+        "count": 169,
+        "has": [
+          "get_date",
+          "write_file"
+        ]
+      },
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    }
+  ],
+  "new_messages": [
+    {
+      "role": "assistant",
+      "content": "",
+      "content_sha": "da39a3ee5e6b",
+      "content_len": 0,
+      "has_image": false,
+      "tool_calls": [
+        {
+          "id": "call_l1",
+          "name": "get_date",
+          "args": "{}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "{date} {time} 中国标准时间",
+      "content_sha": "dc081736f4bc",
+      "content_len": 20,
+      "has_image": false,
+      "tool_call_id": "call_l1"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "content_sha": "da39a3ee5e6b",
+      "content_len": 0,
+      "has_image": false,
+      "tool_calls": [
+        {
+          "id": "call_l2",
+          "name": "get_date",
+          "args": "{}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "{date} {time} 中国标准时间",
+      "content_sha": "dc081736f4bc",
+      "content_len": 20,
+      "has_image": false,
+      "tool_call_id": "call_l2"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "content_sha": "da39a3ee5e6b",
+      "content_len": 0,
+      "has_image": false,
+      "tool_calls": [
+        {
+          "id": "call_l3",
+          "name": "get_date",
+          "args": "{}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "{date} {time} 中国标准时间\n（提示：这是第 3 次以相同参数调用「get_date」。若你在轮询/重试/等待进展，请继续；若确无新信息，可考虑换参数或换策略。）",
+      "content_sha": "4b7e7669688f",
+      "content_len": 87,
+      "has_image": false,
+      "tool_call_id": "call_l3"
+    },
+    {
+      "role": "assistant",
+      "content": "检测到重复调用，已换策略。",
+      "content_sha": "3b7670346421",
+      "content_len": 13,
+      "has_image": false
+    }
+  ]
+}

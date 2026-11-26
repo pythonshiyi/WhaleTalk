@@ -8,6 +8,11 @@
 > `requirements.lock` + 依赖门禁、CI 3.12/3.15 矩阵、发布门禁、前端 e2e 冒烟。
 > 基线：30/30 通过，¥0.69，11m33s，见 [eval/BASELINE.md](eval/BASELINE.md)。
 > 下一步 P1：拆 `chat`、Runtime、`api/` 包、SQLite。
+>
+> **P1 进展（2026-11-27）**：12 个 `chat` 特征化场景 + 假模型回放已落地
+> （`tests/chat_scenarios/`，含纯文本/单工具/并行/点菜/停止/断线/计划拒绝/审批拒绝/图片/JSON/空回复/循环提示）；
+> `chat/metrics.py`（指标聚合）与 `chat/prompt.py`（消息清洗 + 缓存友好布局）已抽出，
+> `chat` 从 946 行降到 892 行；每步都用快照对比，零行为差异。
 
 ---
 

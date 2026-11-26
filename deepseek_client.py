@@ -30,6 +30,13 @@ from openai import (
 
 import permissions
 import crypto
+from chat.metrics import TurnMetrics
+from chat.prompt import (
+    PromptBuilder,
+    prune_reasoning_for_send,
+    restore_text_content,
+    sanitize_messages,
+)
 from shared import cron_field_ok, OCR_IMAGE_PS, is_peak_hour  # noqa: F401  # is_peak_hour 由 main.py 经本模块 re-export
 from shared import (  # P1-3 re-export：工具域阈值常量/锁已下沉 shared，保留 dc.X 旧路径
     CALL_API_MAX_BYTES,
@@ -5180,43 +5187,6 @@ def check_balance(api_key, base_url=DEFAULT_BASE_URL, timeout=10.0):
     return response.json()
 
 
-def _restore_text_content(m):
-    """把发送时内联的图片内容块还原为纯文本 content（UI/存档只保留文本与图片路径）。"""
-    if not (isinstance(m, dict) and isinstance(m.get("content"), list)):
-        return m
-    text_parts = []
-    for b in m["content"]:
-        if isinstance(b, dict) and b.get("type") == "text" and b.get("text"):
-            text_parts.append(b["text"])
-    m = dict(m)
-    m["content"] = "\n".join(text_parts)
-    return m
-
-
-def _prune_reasoning_for_send(messages):
-    """发送时剥离「无工具调用轮次」的思考内容（官方多轮拼接规则）。
-
-    官方规则：两个 user 消息之间，若模型未进行工具调用，中间 assistant 的
-    reasoning_content 在后续轮次传入 API 会被忽略——不传即可省下这部分
-    输入 token（思考内容可占数千 token，是纯浪费）。
-    带 tool_calls 的轮次必须完整回传 reasoning_content（缺失会 400），
-    因此只剥离「无 tool_calls 的 assistant 消息」。
-    仅对浅拷贝生效，不影响调用方内存中的会话历史（UI/存档仍需 reasoning）。
-    """
-    cleaned = []
-    for m in messages:
-        if (
-            isinstance(m, dict)
-            and m.get("role") == "assistant"
-            and not m.get("tool_calls")
-            and m.get("reasoning_content")
-        ):
-            m = dict(m)
-            m.pop("reasoning_content", None)
-        cleaned.append(m)
-    return cleaned
-
-
 def _strictify_schema(schema, is_root=False):
     """把 JSON Schema 转换为 strict 模式（Beta）兼容形式。
 
@@ -5438,104 +5408,8 @@ class DeepSeekClient:
 
     @staticmethod
     def _sanitize_messages(messages):
-        """过滤非法消息：assistant 消息必须包含 content 或 tool_calls。
-
-        中断生成或模型仅返回思考时会产生 content 为空的 assistant 消息，
-        DeepSeek API 会以 400 (invalid_request_error) 拒绝此类历史记录。
-        同时清理「悬空 tool_calls」：assistant 声明了工具调用但历史中
-        没有配对 tool 消息（stop/异常中断的残留），不清理会导致后续 400。
-        """
-        has_tool = set()
-        for m in messages:
-            if isinstance(m, dict) and m.get("role") == "tool" and m.get("tool_call_id"):
-                has_tool.add(m["tool_call_id"])
-        cleaned = []
-        for m in messages:
-            if not isinstance(m, dict) or m.get("role") != "assistant":
-                cleaned.append(m)
-                continue
-            content = m.get("content")
-            tcs = m.get("tool_calls")
-            if tcs:
-                valid = [
-                    tc for tc in tcs
-                    if isinstance(tc, dict) and tc.get("id") in has_tool
-                ]
-                if len(valid) != len(tcs):
-                    m = dict(m)
-                    if valid:
-                        m["tool_calls"] = valid
-                    else:
-                        m.pop("tool_calls", None)
-            if not content and not m.get("tool_calls"):
-                continue
-            m = dict(m)
-            if content is None:
-                m["content"] = ""
-            cleaned.append(m)
-        # pass 2：保证「assistant(tool_calls) → 配对 tool 消息」严格相邻完整。
-        # 历史保存错位（压缩裁剪/异常中断/并行轮次丢失 assistant 层）会产生孤立
-        # tool 消息，或 assistant 声明了 tool_calls 却没有对应 tool 响应——两者
-        # DeepSeek API 均以 400 拒绝（tool must be a response to preceding tool_calls）。
-        # 规则：tool 消息必须紧跟在声明其 id 的 assistant 之后，否则丢弃；
-        #       assistant 上未被满足的 tool_calls 一律剔除（必要时整条剔除）。
-        final = []
-        pending_msg = None      # final 中等待被响应、可原地修正的 assistant 副本
-        pending_ids = set()
-
-        def _drop_pending():
-            nonlocal pending_msg, pending_ids
-            if pending_msg is not None and pending_ids:
-                kept = [
-                    tc for tc in (pending_msg.get("tool_calls") or [])
-                    if not (isinstance(tc, dict) and tc.get("id") in pending_ids)
-                ]
-                if kept:
-                    pending_msg["tool_calls"] = kept
-                else:
-                    pending_msg.pop("tool_calls", None)
-                    if not pending_msg.get("content"):
-                        try:
-                            final.remove(pending_msg)
-                        except ValueError:
-                            pass
-            pending_msg = None
-            pending_ids = set()
-
-        for m in cleaned:
-            if not isinstance(m, dict):
-                _drop_pending()
-                final.append(m)
-                continue
-            role = m.get("role")
-            if role == "assistant":
-                _drop_pending()
-                msg = dict(m)
-                tcs = msg.get("tool_calls")
-                if tcs:
-                    valid_tcs = [tc for tc in tcs if isinstance(tc, dict) and tc.get("id")]
-                    msg["tool_calls"] = valid_tcs
-                    if valid_tcs:
-                        pending_msg = msg
-                        pending_ids = {tc["id"] for tc in valid_tcs}
-                    else:
-                        msg.pop("tool_calls", None)
-                final.append(msg)
-            elif role == "tool":
-                tid = m.get("tool_call_id")
-                if pending_msg is not None and tid and tid in pending_ids:
-                    pending_ids.discard(tid)
-                    final.append(m)
-                    if not pending_ids:
-                        pending_msg = None
-                else:
-                    continue  # 悬空 tool：丢弃，避免 400
-            else:
-                # 非 assistant 且非 tool（user/system）：此前的 tool_calls 已无法满足
-                _drop_pending()
-                final.append(m)
-        _drop_pending()
-        return final
+        """兼容旧入口：实现已迁到 chat/prompt.sanitize_messages。"""
+        return sanitize_messages(messages)
 
     def chat(
         self,
@@ -5594,59 +5468,27 @@ class DeepSeekClient:
         if strict_tools and not self.is_official:
             strict_tools = False
 
-        messages[:] = self._sanitize_messages(messages)
-        # 图片内联：仅替换受影响的 user 消息副本；原始消息对象（content 文本 +
-        # images 路径）不受影响，chat() 结束时再同步回调用方（含新增 assistant/tool 消息）。
-        # 统一模型（V4.1 Flash）原生多模态，默认路径不会走到下面的兜底；此处仅对
-        # 「自定义 OpenAI 兼容端点 + 明确不支持图片的模型名」保留优雅降级，不抛错、
-        # 不改全局配置（VISION_MODEL 已与默认模型同为 deepseek-flash）。
-        if any(
-            isinstance(m, dict) and m.get("images") and m.get("role") == "user"
-            for m in messages
-        ) and not is_vision_model(self.model) and getattr(self, "is_official", False):
-            # 仅官方端点才回退到 VISION_MODEL：第三方网关未必托管 deepseek-flash，
-            # 强行替换会把用户自配的多模态模型（gpt-4o/qwen-vl…）改成不存在的模型 → 400/404。
-            eff_model = VISION_MODEL
-            logger.info("会话包含图片输入：本次请求自动改用多模态模型 %s（全局配置不变）", VISION_MODEL)
-        else:
-            eff_model = self.model
-        work = embed_message_images(messages, eff_model)
-        # 记录「本轮新增消息」的起点：供上层做「只追加本轮」的断连兜底落盘
-        # （整段覆盖会在长会话里丢失 80 条之前的历史；append 又需要精确的本轮切片）。
-        _base_work_len = len(work)
-        json_hint = None
-        memory_msg = None
-        image_hint_msg = None
-        # 缓存友好消息布局（官方硬盘缓存按「前缀完整匹配」命中）：
-        # - 恒定的 json_hint 保持在最前（前缀稳定 → 可命中）
-        # - 系统提示词 messages[0] 紧随其后（稳定前缀主体）
-        # - 可能变化的记忆注入追加在末尾（system 消息位置任意），
-        #   记忆刷新只破坏尾部单元，稳定前缀继续命中
-        if json_output:
-            json_hint = {"role": "system", "content": JSON_HINT_MESSAGE}
-            work = [json_hint] + work
-        if memory_text:
-            memory_msg = {"role": "system", "content": memory_text}
-            work = work + [memory_msg]
-        # 图片须知（仅「本轮用户刚发图」时注入，临时 system 消息，不写回历史）：
-        # 内联后模型可直接看到图片，无需为「读图」调用工具；给出当前图片路径
-        # 供 OCR/细节分析等二次处理兜底。历史带图消息在上下文里已内联可见，
-        # 无需重复注入（避免带图会话每轮都注入、路径列表膨胀）。
-        last_user = None
-        for m in messages:
-            if isinstance(m, dict) and m.get("role") == "user":
-                last_user = m
-        if last_user and last_user.get("images"):
-            paths = [
-                str(p) for p in last_user.get("images")
-                if isinstance(p, str) and str(p).strip()
-            ][:5]
-            hint = IMAGE_INLINE_HINT
-            if paths:
-                hint += "\n当前图片路径：\n" + "\n".join("- " + p for p in paths)
-            image_hint_msg = {"role": "system", "content": hint}
-            work = work + [image_hint_msg]
-        trailing = str(trailing_text or "")
+        prepared = PromptBuilder(
+            vision_model=VISION_MODEL,
+            is_vision_model=is_vision_model,
+            embed_images=embed_message_images,
+            json_hint=JSON_HINT_MESSAGE,
+            image_hint=IMAGE_INLINE_HINT,
+        ).prepare(
+            messages,
+            model=self.model,
+            is_official=getattr(self, "is_official", False),
+            json_output=json_output,
+            memory_text=memory_text,
+            trailing_text=trailing_text,
+        )
+        work = prepared.work
+        _base_work_len = prepared.base_work_len
+        json_hint = prepared.json_hint
+        memory_msg = prepared.memory_msg
+        image_hint_msg = prepared.image_hint_msg
+        trailing = prepared.trailing
+        eff_model = prepared.eff_model
 
         kwargs = {
             "model": eff_model,
@@ -5775,28 +5617,16 @@ class DeepSeekClient:
             ]
 
         # 本轮（用户可见的一次回复）计时与速率聚合：跨工具轮次累加。
-        turn_t0 = time.perf_counter()
-        agg = {
-            "rounds": 0, "prompt": 0, "completion": 0,
-            "cache_hit": 0, "cache_miss": 0,
-            "gen_ms": 0.0, "ttft_ms": None, "total_ms": 0.0, "tps": 0.0,
-        }
+        # 具体算法在 chat/metrics.py；这里只负责在正常/停止/断线三种出口下发。
+        metrics = TurnMetrics()
 
         def _emit_metrics(interrupted=False):
             """下发本轮累计速率统计（正常完成 / 停止 / 断线均可）。
             停止与断线路径此前直接 return，导致前端拿不到统计——统一由此出口。"""
             if not on_metrics:
                 return
-            payload = dict(agg)
-            payload["interrupted"] = bool(interrupted)
             try:
-                payload["total_ms"] = round((time.perf_counter() - turn_t0) * 1000.0, 1)
-                _gs = float(payload.get("gen_ms") or 0.0) / 1000.0
-                payload["tps"] = round(float(payload.get("completion") or 0) / _gs, 1) if _gs > 0.05 else 0.0
-            except Exception:
-                pass
-            try:
-                on_metrics(payload)
+                on_metrics(metrics.snapshot(interrupted))
             except Exception as e:  # noqa: BLE001
                 import degrade
                 degrade.degrade("metrics.callback", e,
@@ -5857,7 +5687,7 @@ class DeepSeekClient:
                 # 发送前构造请求消息：剥离无工具轮次的思考内容（省输入 token），
                 # 动态上下文（trailing_text）追加到最近一条 user 消息尾部。
                 # 仅作用于浅拷贝：不修改 work / 调用方内存历史（UI 与存档保留 reasoning）
-                req_msgs = _prune_reasoning_for_send(req_work)
+                req_msgs = prune_reasoning_for_send(req_work)
                 if trailing:
                     req_msgs = list(req_msgs)
                     for i in range(len(req_msgs) - 1, -1, -1):
@@ -5909,7 +5739,7 @@ class DeepSeekClient:
                     # 向上抛让调用方报错——否则静默 return False 会被 SSE 当成正常 done，
                     # 用户看到「AI 不回复也没有报错」（如系统代理不可达 / 网关不可连）。
                     if (not (held["reasoning"] or held["content"] or held["tool_calls"])
-                            and agg.get("rounds", 0) == 0):
+                            and metrics.rounds == 0):
                         _emit_metrics(interrupted=True)
                         raise
                     # 已有部分增量送达 UI：不再重试（避免已显示内容重复），
@@ -5935,17 +5765,7 @@ class DeepSeekClient:
                 try:
                     round_end = time.perf_counter()
                     first_ts, last_ts = stream_timing if stream_timing else (None, None)
-                    if first_ts is not None:
-                        if agg["ttft_ms"] is None:
-                            agg["ttft_ms"] = round((first_ts - round_t0) * 1000.0, 1)
-                        if last_ts is not None:
-                            agg["gen_ms"] += (last_ts - first_ts) * 1000.0
-                    agg["rounds"] += 1
-                    for _k in ("prompt", "completion", "cache_hit", "cache_miss"):
-                        agg[_k] += int(round_usage.get(_k, 0) or 0)
-                    agg["total_ms"] = round((round_end - turn_t0) * 1000.0, 1)
-                    _gen_s = agg["gen_ms"] / 1000.0
-                    agg["tps"] = round(agg["completion"] / _gen_s, 1) if _gen_s > 0.05 else 0.0
+                    metrics.add_round(round_t0, first_ts, last_ts, round_usage, round_end)
                     _emit_metrics(False)
                 except Exception:
                     pass
@@ -6465,7 +6285,7 @@ class DeepSeekClient:
             # work 恒为独立列表：把新增的 assistant/tool 消息同步回调用方，
             # 并将图片内联的消息还原为纯文本 content（UI/存档只保留文本 + images 路径）
             messages[:] = [
-                _restore_text_content(m)
+                restore_text_content(m)
                 for m in work
                 if m is not json_hint and m is not memory_msg and m is not image_hint_msg
             ]
@@ -6480,7 +6300,7 @@ class DeepSeekClient:
                     for _m in work[_base_work_len + _skip:]:
                         if _m is json_hint or _m is memory_msg or _m is image_hint_msg:
                             continue
-                        new_messages_out.append(_restore_text_content(_m))
+                        new_messages_out.append(restore_text_content(_m))
                 except Exception:
                     logger.exception("收集本轮新增消息失败（不影响生成）")
 

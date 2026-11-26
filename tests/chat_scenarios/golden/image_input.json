@@ -1,0 +1,85 @@
+{
+  "scenario": "image_input",
+  "ok": true,
+  "events": [
+    {
+      "type": "content",
+      "text": "收到图片。"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 1,
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    }
+  ],
+  "requests": [
+    {
+      "model": "deepseek-flash",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "这张图是什么？ ",
+          "content_sha": "96c40c5ecb5b",
+          "content_len": 8,
+          "has_image": true
+        },
+        {
+          "role": "system",
+          "content": "[图片须知] 用户消息中已附带的图片（对话中的图片块）你能直接看到内容，解读它们无需调用任何工具、无需文件路径，直接描述/回答即可。只有需要 OCR 提取文字、放大查看细节、或分析工具生成的文件图片时，才调用 image_understand 并传入明确的本地路径或 URL（路径见下方列表）。\n当前图片路径：\n- {ws}\\chat_input.png",
+          "content_sha": "56c0b8601d36",
+          "content_len": 177,
+          "has_image": false
+        }
+      ],
+      "tools": [
+        "create_evolution",
+        "project_info",
+        "read_project_file",
+        "self_evolve",
+        "verify_files"
+      ],
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    }
+  ],
+  "new_messages": [
+    {
+      "role": "assistant",
+      "content": "收到图片。",
+      "content_sha": "514222aed8d4",
+      "content_len": 5,
+      "has_image": false
+    }
+  ]
+}

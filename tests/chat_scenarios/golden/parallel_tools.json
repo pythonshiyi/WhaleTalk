@@ -1,0 +1,243 @@
+{
+  "scenario": "parallel_tools",
+  "ok": true,
+  "events": [
+    {
+      "type": "tool_start",
+      "name": "get_date",
+      "args": "{}",
+      "id": "call_a"
+    },
+    {
+      "type": "tool",
+      "name": "get_date",
+      "args": "{}",
+      "result": "{date} {time} 中国标准时间",
+      "id": "call_a"
+    },
+    {
+      "type": "tool_duration",
+      "name": "get_date",
+      "duration": "num",
+      "id": "call_a"
+    },
+    {
+      "type": "tool_start",
+      "name": "get_date",
+      "args": "{}",
+      "id": "call_b"
+    },
+    {
+      "type": "tool",
+      "name": "get_date",
+      "args": "{}",
+      "result": "{date} {time} 中国标准时间",
+      "id": "call_b"
+    },
+    {
+      "type": "tool_duration",
+      "name": "get_date",
+      "duration": "num",
+      "id": "call_b"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 1,
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    },
+    {
+      "type": "content",
+      "text": "两个日期都拿到了。"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 2,
+      "prompt": 200,
+      "completion": 20,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    }
+  ],
+  "requests": [
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "同时取两次当前时间。",
+          "content_sha": "953f68a8b8b7",
+          "content_len": 10,
+          "has_image": false
+        }
+      ],
+      "tools": {
+        "count": 169,
+        "has": [
+          "get_date",
+          "write_file"
+        ]
+      },
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    },
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "同时取两次当前时间。",
+          "content_sha": "953f68a8b8b7",
+          "content_len": 10,
+          "has_image": false
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "content_sha": "da39a3ee5e6b",
+          "content_len": 0,
+          "has_image": false,
+          "tool_calls": [
+            {
+              "id": "call_a",
+              "name": "get_date",
+              "args": "{}"
+            },
+            {
+              "id": "call_b",
+              "name": "get_date",
+              "args": "{}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "{date} {time} 中国标准时间",
+          "content_sha": "dc081736f4bc",
+          "content_len": 20,
+          "has_image": false,
+          "tool_call_id": "call_a"
+        },
+        {
+          "role": "tool",
+          "content": "{date} {time} 中国标准时间",
+          "content_sha": "dc081736f4bc",
+          "content_len": 20,
+          "has_image": false,
+          "tool_call_id": "call_b"
+        }
+      ],
+      "tools": {
+        "count": 169,
+        "has": [
+          "get_date",
+          "write_file"
+        ]
+      },
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    }
+  ],
+  "new_messages": [
+    {
+      "role": "assistant",
+      "content": "",
+      "content_sha": "da39a3ee5e6b",
+      "content_len": 0,
+      "has_image": false,
+      "tool_calls": [
+        {
+          "id": "call_a",
+          "name": "get_date",
+          "args": "{}"
+        },
+        {
+          "id": "call_b",
+          "name": "get_date",
+          "args": "{}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "{date} {time} 中国标准时间",
+      "content_sha": "dc081736f4bc",
+      "content_len": 20,
+      "has_image": false,
+      "tool_call_id": "call_a"
+    },
+    {
+      "role": "tool",
+      "content": "{date} {time} 中国标准时间",
+      "content_sha": "dc081736f4bc",
+      "content_len": 20,
+      "has_image": false,
+      "tool_call_id": "call_b"
+    },
+    {
+      "role": "assistant",
+      "content": "两个日期都拿到了。",
+      "content_sha": "164e13e97dc7",
+      "content_len": 9,
+      "has_image": false
+    }
+  ]
+}

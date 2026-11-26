@@ -635,6 +635,11 @@ def write_excel(path, data, sheet="Sheet1", mode="overwrite", sheets=None,
     p = permissions.resolve(path)
     if not p:
         return "错误：路径无效"
+    # 扩展名守卫：曾出现模型把 xlsx 二进制写进 .csv，随后 read_csv 报
+    # "new-line character seen in unquoted field"（实为 zip 头被当文本解析）。
+    # 在写盘前明确拒绝，避免生成损坏的 CSV。
+    if not str(p).lower().endswith((".xlsx", ".xlsm")):
+        return "错误：write_excel 只接受 .xlsx/.xlsm 路径；写 CSV 请用 write_file"
     ok, reason = permissions.check_filesystem(p, write=True)
     if not ok:
         return reason

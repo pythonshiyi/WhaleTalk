@@ -1,0 +1,71 @@
+{
+  "scenario": "stop",
+  "ok": true,
+  "events": [
+    {
+      "type": "content",
+      "text": "开始生成"
+    },
+    {
+      "type": "metrics",
+      "rounds": 1,
+      "prompt": 0,
+      "completion": 0,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    }
+  ],
+  "requests": [
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "说一段很长的话。",
+          "content_sha": "acd7b3a97122",
+          "content_len": 8,
+          "has_image": false
+        }
+      ],
+      "tools": [
+        "create_evolution",
+        "project_info",
+        "read_project_file",
+        "self_evolve",
+        "verify_files"
+      ],
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    }
+  ],
+  "new_messages": [
+    {
+      "role": "assistant",
+      "content": "开始生成",
+      "content_sha": "6793e8ac6643",
+      "content_len": 4,
+      "has_image": false
+    }
+  ]
+}

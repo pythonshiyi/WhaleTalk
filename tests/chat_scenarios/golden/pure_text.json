@@ -1,0 +1,87 @@
+{
+  "scenario": "pure_text",
+  "ok": true,
+  "events": [
+    {
+      "type": "reasoning",
+      "text": "先想一下"
+    },
+    {
+      "type": "content",
+      "text": "你好"
+    },
+    {
+      "type": "content",
+      "text": "，我是鲸语。"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 1,
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    }
+  ],
+  "requests": [
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "你好",
+          "content_sha": "440ee0853ad1",
+          "content_len": 2,
+          "has_image": false
+        }
+      ],
+      "tools": [
+        "create_evolution",
+        "project_info",
+        "read_project_file",
+        "self_evolve",
+        "verify_files"
+      ],
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    }
+  ],
+  "new_messages": [
+    {
+      "role": "assistant",
+      "content": "你好，我是鲸语。",
+      "content_sha": "55350a9fc442",
+      "content_len": 8,
+      "has_image": false,
+      "has_reasoning": true
+    }
+  ]
+}

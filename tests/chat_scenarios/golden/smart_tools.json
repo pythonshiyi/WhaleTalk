@@ -1,0 +1,186 @@
+{
+  "scenario": "smart_tools",
+  "ok": true,
+  "events": [
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 1,
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    },
+    {
+      "type": "content",
+      "text": "已激活日期工具。"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 2,
+      "prompt": 200,
+      "completion": 20,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    }
+  ],
+  "requests": [
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是一个拥有 169 项专业能力的桌面 AI 智能体，能力地图如下（你确实拥有这些能力，不要拒绝用户请求）。工具列表只显示已加载的定义，未列出的能力同样归你所有；能力定义未加载时，先调用 activate_tools 激活再使用，不要声称自己没有某项能力或做不到。\n\n视觉自检准则：执行截图/浏览器/RPA 操作、或生成图片/图表后，用 screen_see / image_understand 查",
+          "content_sha": "301ae5fb6f70",
+          "content_len": 400,
+          "has_image": false
+        },
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "帮我处理一下。",
+          "content_sha": "a7aa67ab0e8a",
+          "content_len": 7,
+          "has_image": false
+        }
+      ],
+      "tools": [
+        "activate_tools"
+      ],
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    },
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "[能力提示] 你共拥有 169 项能力，当前已加载 1 项：get_date。\n其余能力同样归你所有，只是定义未加载；需要时调用 activate_tools([\"工具名或组名\"]) 激活后立即可用。\n组名：浏览器与网页、编程与执行、文件与目录、数据与文档、邮件与消息、媒体与图像、桌面自动化、应用与环境、定时与任务、记忆与知识、系统与基础。\n重要：不要因为工具列表里看不到就声称自己没有某项能力或做",
+          "content_sha": "f29accc50110",
+          "content_len": 236,
+          "has_image": false
+        },
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "帮我处理一下。",
+          "content_sha": "a7aa67ab0e8a",
+          "content_len": 7,
+          "has_image": false
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "content_sha": "da39a3ee5e6b",
+          "content_len": 0,
+          "has_image": false,
+          "tool_calls": [
+            {
+              "id": "call_act",
+              "name": "activate_tools",
+              "args": "{\"tools\":[\"get_date\"]}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "已激活工具: get_date",
+          "content_sha": "a072adf51e62",
+          "content_len": 15,
+          "has_image": false,
+          "tool_call_id": "call_act"
+        }
+      ],
+      "tools": [
+        "activate_tools",
+        "get_date"
+      ],
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    }
+  ],
+  "new_messages": [
+    {
+      "role": "assistant",
+      "content": "",
+      "content_sha": "da39a3ee5e6b",
+      "content_len": 0,
+      "has_image": false,
+      "tool_calls": [
+        {
+          "id": "call_act",
+          "name": "activate_tools",
+          "args": "{\"tools\":[\"get_date\"]}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "已激活工具: get_date",
+      "content_sha": "a072adf51e62",
+      "content_len": 15,
+      "has_image": false,
+      "tool_call_id": "call_act"
+    },
+    {
+      "role": "assistant",
+      "content": "已激活日期工具。",
+      "content_sha": "28584c88b4ad",
+      "content_len": 8,
+      "has_image": false
+    }
+  ]
+}

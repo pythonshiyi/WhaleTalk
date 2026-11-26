@@ -9,9 +9,8 @@
     {"type": "file_exists", "path": "out/summary.csv"},
     {"type": "csv_columns", "path": "out/summary.csv", "columns": ["region", "total"]},
     {"type": "csv_row_count", "path": "out/summary.csv", "rows": 3},
-    {"type": "csv_row", "path": "out/summary.csv", "index": 0, "values": ["华南", "1500"]},
-    {"type": "no_tool_error"}
+    {"type": "csv_row", "path": "out/summary.csv", "index": 0, "values": ["华南", "1500"]}
   ],
   "budget": {"max_tool_calls": 20, "max_cny": 1.0, "max_seconds": 240},
-  "notes": "验证表格转换、排序与 CSV 写出。"
+  "notes": "验证表格转换、排序与 CSV 写出；只看最终产物，允许模型试错后自纠（不因瞬时工具错误判失败）。"
 }

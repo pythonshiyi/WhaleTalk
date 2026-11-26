@@ -1,0 +1,179 @@
+{
+  "scenario": "plan_reject",
+  "ok": true,
+  "events": [
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 1,
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    },
+    {
+      "type": "content",
+      "text": "已按你的意思取消。"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 2,
+      "prompt": 200,
+      "completion": 20,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    }
+  ],
+  "requests": [
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "先给我一个计划再执行。",
+          "content_sha": "3094878a5e59",
+          "content_len": 11,
+          "has_image": false
+        }
+      ],
+      "tools": {
+        "count": 169,
+        "has": [
+          "get_date",
+          "write_file"
+        ]
+      },
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    },
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "先给我一个计划再执行。",
+          "content_sha": "3094878a5e59",
+          "content_len": 11,
+          "has_image": false
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "content_sha": "da39a3ee5e6b",
+          "content_len": 0,
+          "has_image": false,
+          "tool_calls": [
+            {
+              "id": "call_plan",
+              "name": "get_date",
+              "args": "{}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "用户拒绝计划",
+          "content_sha": "6876708bd5bb",
+          "content_len": 6,
+          "has_image": false,
+          "tool_call_id": "call_plan"
+        }
+      ],
+      "tools": {
+        "count": 169,
+        "has": [
+          "get_date",
+          "write_file"
+        ]
+      },
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": null
+    }
+  ],
+  "new_messages": [
+    {
+      "role": "assistant",
+      "content": "",
+      "content_sha": "da39a3ee5e6b",
+      "content_len": 0,
+      "has_image": false,
+      "tool_calls": [
+        {
+          "id": "call_plan",
+          "name": "get_date",
+          "args": "{}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "用户拒绝计划",
+      "content_sha": "6876708bd5bb",
+      "content_len": 6,
+      "has_image": false,
+      "tool_call_id": "call_plan"
+    },
+    {
+      "role": "assistant",
+      "content": "已按你的意思取消。",
+      "content_sha": "f9fa7af04f04",
+      "content_len": 9,
+      "has_image": false
+    }
+  ]
+}

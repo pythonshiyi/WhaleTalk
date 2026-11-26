@@ -1,0 +1,87 @@
+{
+  "scenario": "json_output",
+  "ok": true,
+  "events": [
+    {
+      "type": "content",
+      "text": "{\"ok\": true, \"n\": 1}"
+    },
+    {
+      "type": "usage",
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0
+    },
+    {
+      "type": "metrics",
+      "rounds": 1,
+      "prompt": 100,
+      "completion": 10,
+      "cache_hit": 0,
+      "cache_miss": 0,
+      "interrupted": false
+    }
+  ],
+  "requests": [
+    {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "[JSON 输出模式] 请严格输出合法的 JSON 对象（已启用 response_format），不要输出任何 JSON 以外的内容。",
+          "content_sha": "0c18206532f3",
+          "content_len": 68,
+          "has_image": false
+        },
+        {
+          "role": "system",
+          "content": "你是鲸语特征化测试助手，回答简短。",
+          "content_sha": "617c03c498e4",
+          "content_len": 17,
+          "has_image": false
+        },
+        {
+          "role": "user",
+          "content": "请只输出 JSON：{\"ok\": true, \"n\": 1}",
+          "content_sha": "d0d6923c057e",
+          "content_len": 30,
+          "has_image": false
+        }
+      ],
+      "tools": [
+        "create_evolution",
+        "project_info",
+        "read_project_file",
+        "self_evolve",
+        "verify_files"
+      ],
+      "stream": true,
+      "max_tokens": 16384,
+      "temperature": null,
+      "top_p": null,
+      "reasoning_effort": "high",
+      "seed": null,
+      "stop": null,
+      "logprobs": null,
+      "tool_choice": null,
+      "extra_body": {
+        "thinking": {
+          "type": "enabled"
+        }
+      },
+      "response_format": {
+        "type": "json_object"
+      }
+    }
+  ],
+  "new_messages": [
+    {
+      "role": "assistant",
+      "content": "{\"ok\": true, \"n\": 1}",
+      "content_sha": "aa67ac98d2ad",
+      "content_len": 20,
+      "has_image": false
+    }
+  ]
+}
