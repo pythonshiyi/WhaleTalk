@@ -4133,6 +4133,34 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
 .tc-error { color: var(--danger-text); }
 .tc-evidence { max-height: 72px; overflow: auto; }
 
+/* P3：恢复 / 队列 / 依赖图 / 产物 diff */
+.task-plan-strategy, .task-plan-artifacts { font-size: var(--fs-3xs); color: var(--text-3); background: var(--bg-2); border-radius: 4px; padding: 1px 5px; }
+.task-plan-dep { font-size: var(--fs-3xs); color: var(--text-3); background: var(--bg-2); border-radius: 4px; padding: 1px 5px; flex-shrink: 0; }
+.task-plan-state-queued { color: var(--brand-strong); background: var(--brand-soft); }
+.task-plan-waiting .task-plan-node { color: var(--warn-text); border-color: rgba(var(--warn-rgb), .5); background: var(--warn-soft); }
+.tc-strategy, .tc-priority, .tc-queue-pos, .tc-live, .tc-recover, .tc-recover-count, .tc-queue-count { font-size: var(--fs-3xs); color: var(--text-3); background: var(--bg-3); border-radius: 4px; padding: 1px 6px; }
+.tc-live { color: var(--brand-strong); background: var(--brand-soft); }
+.tc-recover, .tc-recover-count { color: var(--warn-text); background: var(--warn-soft); }
+.tc-queue-pos, .tc-queue-count { color: var(--brand-strong); background: var(--brand-soft); }
+.tc-status-queued { color: var(--brand-strong); background: var(--brand-soft); }
+.tc-runtime-note { font-size: var(--fs-3xs); color: var(--warn-text); background: var(--warn-soft); border-radius: 4px; padding: 5px 7px; margin: 6px 0; }
+.tc-step-dep, .tc-step-group { font-size: var(--fs-3xs); color: var(--text-3); background: var(--bg-3); border-radius: 4px; padding: 1px 5px; }
+.tc-step-waiting .tc-step-node { color: var(--warn-text); border-color: rgba(var(--warn-rgb), .5); background: var(--warn-soft); }
+.tc-artifacts { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.tc-art-title { font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
+.tc-art-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.tc-art { background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 6px 8px; }
+.tc-art-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-3xs); color: var(--text-3); }
+.tc-art-state { border-radius: 4px; padding: 1px 5px; background: var(--bg-3); }
+.tc-art-created { color: var(--ok-text); background: var(--ok-soft); }
+.tc-art-modified { color: var(--warn-text); background: var(--warn-soft); }
+.tc-art-name { flex: 1; min-width: 0; text-align: left; background: none; border: none; color: var(--text-2); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-art-toggle, .tc-art-rollback { border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--text-3); cursor: pointer; padding: 1px 5px; }
+.tc-art-rollback { color: var(--danger-text); border-color: rgba(var(--danger-rgb), .4); }
+.tc-art-body { margin-top: 6px; }
+.tc-art-diff { max-height: 240px; overflow: auto; background: var(--bg-3); border-radius: 4px; padding: 7px; font-size: var(--fs-3xs); line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.tc-art-empty, .tc-art-hash { font-size: var(--fs-3xs); color: var(--text-3); margin-top: 4px; }
+
 /* 过程带 */
 .rail { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; margin-bottom: var(--sp-3); }
 .rail-head { display: flex; align-items: center; gap: var(--sp-2); padding: 8px var(--sp-3); cursor: pointer; user-select: none; transition: background var(--dur-fast) var(--ease); }

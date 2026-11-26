@@ -875,6 +875,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [cmdPanel, setCmdPanel] = React.useState(false);
   const [taskCenterOpen, setTaskCenterOpen] = React.useState(false);
   const [taskPlans, setTaskPlans] = React.useState([]);
+  const [taskQueue, setTaskQueue] = React.useState([]);
+  const [taskRecoverable, setTaskRecoverable] = React.useState(0);
   const [taskCenterLoading, setTaskCenterLoading] = React.useState(false);
   const [moreOpen, setMoreOpen] = React.useState(false);
   const moreRef = React.useRef(null);
@@ -1567,6 +1569,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     try {
       const d = await api.listTaskPlans({ status: "all", limit: 100 });
       setTaskPlans(Array.isArray(d && d.plans) ? d.plans : []);
+      setTaskQueue(Array.isArray(d && d.queue) ? d.queue : []);
+      setTaskRecoverable(Number(d && d.recoverable) || 0);
     } catch (e) { silentWarn(e, "ChatPage.taskPlans"); }
     finally { setTaskCenterLoading(false); }
   }, []);
@@ -1602,6 +1606,57 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     } catch (e) {
       silentWarn(e, "ChatPage.taskResume");
       toast("⚠️ 恢复任务失败：" + ((e && e.message) || "后端未连接"));
+    }
+  };
+
+  const syncTaskPlan = async (plan) => {
+    if (!plan || !plan.plan_id) return;
+    try {
+      const d = await api.getTaskPlan(plan.plan_id);
+      const latest = d && d.plan;
+      const streamId = latest && latest.runtime && latest.runtime.stream_id;
+      if (!streamId) {
+        toast("该任务没有可回放的进度，点「续跑」即可从断点继续");
+        refreshTaskPlans();
+        return;
+      }
+      if (latest.session_id && latest.session_id !== activeId && !busy) {
+        await onPickSession(latest.session_id);
+      }
+      setTaskCenterOpen(false);
+      toast("正在同步任务进度…");
+      await api.replayStream(streamId, {
+        onTaskPlan: (ev) => {
+          setTaskPlans((list) => list.map((x) => (x.plan_id === ev.plan_id ? { ...x, ...ev } : x)));
+          updateMsgs((list) => list.map((x) => (
+            x && x.taskPlan && x.taskPlan.plan_id === ev.plan_id ? { ...x, taskPlan: ev } : x
+          )));
+        },
+        onNotice: (ev) => { if (ev && ev.text) toast(ev.text); },
+        onError: (msg) => toast("⚠️ 进度同步失败：" + (msg || "后端未连接")),
+      });
+      refreshTaskPlans();
+    } catch (e) {
+      silentWarn(e, "ChatPage.taskSync");
+      toast("⚠️ 进度同步失败：" + ((e && e.message) || "后端未连接"));
+    }
+  };
+
+  const handlePlanRollback = async (plan, art) => {
+    if (!plan || !plan.plan_id || !art) return;
+    try {
+      const d = await api.rollbackTaskPlan(plan.plan_id, { paths: [art.path] });
+      toast((d && d.message) || "产物已回滚");
+      if (d && d.plan) {
+        updateMsgs((list) => list.map((x) => (
+          x && x.taskPlan && x.taskPlan.plan_id === plan.plan_id ? { ...x, taskPlan: d.plan } : x
+        )));
+        setTaskPlans((list) => list.map((p) => (p.plan_id === plan.plan_id ? d.plan : p)));
+      }
+      refreshTaskPlans();
+    } catch (e) {
+      silentWarn(e, "ChatPage.taskRollback");
+      toast("⚠️ 回滚失败：" + ((e && e.message) || "后端未连接"));
     }
   };
 
@@ -2144,8 +2199,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                 onClick={() => { setTaskCenterOpen(true); refreshTaskPlans(); }}
               >
                 <Icon name="list" size={13} />
-                <span>任务中心</span>
-                {taskPlans.some((p) => ["running", "paused", "blocked"].includes(p.status)) && (
+                <span>任务中心{taskRecoverable > 0 ? ` · ${taskRecoverable} 可恢复` : ""}</span>
+                {taskPlans.some((p) => ["queued", "running", "paused", "blocked"].includes(p.status)) && (
                   <span className="task-center-dot" />
                 )}
               </button>
@@ -2525,10 +2580,14 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         open={taskCenterOpen}
         onClose={() => setTaskCenterOpen(false)}
         plans={taskPlans}
+        queue={taskQueue}
+        recoverable={taskRecoverable}
         loading={taskCenterLoading}
         onRefresh={refreshTaskPlans}
         onControl={handlePlanControl}
         onResume={resumeTaskPlan}
+        onSync={syncTaskPlan}
+        onRollback={handlePlanRollback}
       />
     </div>
   );

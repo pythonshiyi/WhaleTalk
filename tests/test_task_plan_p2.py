@@ -11,7 +11,7 @@ def _setup(tmp_path, monkeypatch):
         plan_id="p2abc123",
         session_id="sess-1",
         goal="先写文件，再校验内容",
-        steps=[{"title": "写文件"}, {"title": "校验内容"}],
+        steps=[{"title": "写文件"}, {"title": "校验内容", "depends_on": [1]}],
     )
     task_plan.save(plan)
     return plan

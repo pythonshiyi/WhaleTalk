@@ -185,6 +185,7 @@ function PlanBlock({ plan, tools }) {
 
 // ── 长任务计划（自动拆步 + 结构化验收 + 可控执行）────────
 const TASK_STATUS_LABEL = {
+  queued: "排队中",
   running: "进行中",
   paused: "已暂停",
   blocked: "已阻塞",
@@ -196,7 +197,9 @@ function TaskPlanBlock({ plan, onControl }) {
   const [open, setOpen] = React.useState({});
   if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) return null;
   const done = plan.steps.filter((s) => s && s.status === "done").length;
-  const active = ["running", "paused", "blocked"].includes(plan.status);
+  const active = ["queued", "running", "paused", "blocked"].includes(plan.status);
+  const strategy = plan.strategy && plan.strategy !== "general" ? plan.strategy : "";
+  const artifactCount = Array.isArray(plan.artifacts) ? plan.artifacts.length : Number(plan.artifact_count || 0);
   const ctl = (action, step) => onControl && onControl(plan.plan_id, action, step);
   const statusLabel = TASK_STATUS_LABEL[plan.status] || plan.status;
   return (
@@ -206,6 +209,8 @@ function TaskPlanBlock({ plan, onControl }) {
         <span>任务计划</span>
         <span className={`task-plan-state task-plan-state-${plan.status}`}>{statusLabel}</span>
         <span className="task-plan-cnt">{done}/{plan.steps.length}</span>
+        {strategy && <span className="task-plan-strategy">{strategy}</span>}
+        {artifactCount > 0 && <span className="task-plan-artifacts" title="产物清单见任务中心">产物 {artifactCount}</span>}
         {active && (
           <span className="task-plan-ctl-wrap">
             {plan.status === "running" ? (
@@ -227,9 +232,13 @@ function TaskPlanBlock({ plan, onControl }) {
             <li key={(s && s.id) || i} className={`task-plan-item task-plan-${st}`}>
               <div className="task-plan-step-row">
                 <span className="task-plan-node">
-                  {st === "done" ? "✓" : st === "skipped" ? "↷" : ["failed", "blocked"].includes(st) ? "✕" : i + 1}
+                  {st === "done" ? "✓" : st === "skipped" ? "↷" : st === "waiting" ? "⧗" : ["failed", "blocked"].includes(st) ? "✕" : i + 1}
                 </span>
                 <span className="task-plan-title">{s && s.title}</span>
+                {s && Array.isArray(s.depends_on) && s.depends_on.length > 0 && (
+                  <span className="task-plan-dep">依赖 #{s.depends_on.join(",#")}</span>
+                )}
+                {s && s.parallel_group && <span className="task-plan-dep">并行 {s.parallel_group}</span>}
                 {Number(s && s.attempts) > 0 && (
                   <span className="task-plan-attempts" title="失败次数">×{s.attempts}</span>
                 )}

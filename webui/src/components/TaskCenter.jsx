@@ -1,7 +1,9 @@
 import React from "react";
+import * as api from "../api.js";
 import { Icon } from "./icons.jsx";
 
 const STATUS_LABEL = {
+  queued: "排队中",
   running: "进行中",
   paused: "已暂停",
   blocked: "已阻塞",
@@ -11,6 +13,7 @@ const STATUS_LABEL = {
 
 const STEP_LABEL = {
   pending: "待执行",
+  waiting: "等待前置",
   running: "执行中",
   done: "已完成",
   failed: "失败",
@@ -18,17 +21,75 @@ const STEP_LABEL = {
   skipped: "已跳过",
 };
 
-function PlanCard({ plan, onControl, onResume }) {
-  const active = ["running", "paused", "blocked"].includes(plan.status);
+const STRATEGY_LABEL = {
+  code: "代码",
+  docs: "文档",
+  data: "数据",
+  research: "调研",
+  general: "通用",
+};
+
+function ArtifactItem({ plan, art, onRollback }) {
+  const [open, setOpen] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const label = art.state === "created" ? "新增" : art.state === "modified" ? "修改" : "未变";
+  const doRollback = async () => {
+    setBusy(true);
+    try {
+      await onRollback(plan, art);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <li className="tc-art">
+      <div className="tc-art-head">
+        <span className={`tc-art-state tc-art-${art.state || "unchanged"}`}>{label}</span>
+        <button className="tc-art-name" title={art.path}
+          onClick={() => api.openFile(art.path).catch(() => {})}>
+          {art.relpath || art.path}
+        </button>
+        <span className="tc-art-step">#{art.step}</span>
+        <button className="tc-art-toggle" onClick={() => setOpen((v) => !v)}>
+          {open ? "收起" : "差异"}
+        </button>
+        {art.rollback_available && (
+          <button className="tc-art-rollback" disabled={busy} onClick={doRollback}>
+            {busy ? "回滚中…" : "回滚"}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="tc-art-body">
+          {art.diff ? <pre className="tc-art-diff">{art.diff}</pre> : <div className="tc-art-empty">无文本差异（二进制或未变更）</div>}
+          <div className="tc-art-hash">SHA256 {(art.after && art.after.sha256) || "—"}</div>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function PlanCard({ plan, onControl, onResume, onSync, onRollback }) {
+  const active = ["queued", "running", "paused", "blocked"].includes(plan.status);
   const pct = plan.total ? Math.round((plan.done / plan.total) * 100) : 0;
+  const rt = plan.runtime || {};
+  const artifacts = Array.isArray(plan.artifacts) ? plan.artifacts : [];
   return (
     <article className={`tc-card tc-${plan.status}`}>
       <div className="tc-card-head">
         <span className={`tc-status tc-status-${plan.status}`}>{STATUS_LABEL[plan.status] || plan.status}</span>
         <span className="tc-plan-id" title={plan.plan_id}>#{String(plan.plan_id).slice(0, 8)}</span>
+        {plan.strategy && plan.strategy !== "general" && (
+          <span className="tc-strategy">{STRATEGY_LABEL[plan.strategy] || plan.strategy}</span>
+        )}
+        {!!plan.priority && <span className="tc-priority">P{plan.priority}</span>}
+        {rt.queue_position > 0 && <span className="tc-queue-pos">排队 {rt.queue_position}</span>}
+        {rt.job_running && <span className="tc-live">运行中</span>}
+        {!rt.job_running && rt.recoverable && <span className="tc-recover">可恢复</span>}
         <span className="tc-time">{plan.updated_at || plan.created_at || ""}</span>
       </div>
       <div className="tc-goal" title={plan.goal}>{plan.goal}</div>
+      {rt.message && <div className="tc-runtime-note">{rt.kind || "运行时"}：{rt.message}</div>}
       <div className="tc-progress">
         <div className="tc-progress-bar"><i style={{ width: `${pct}%` }} /></div>
         <span>{plan.done}/{plan.total} · {pct}%</span>
@@ -42,6 +103,9 @@ function PlanCard({ plan, onControl, onResume }) {
           <button onClick={() => onControl(plan.plan_id, "resume")}>恢复状态</button>
         )}
         {active && <button onClick={() => onControl(plan.plan_id, "cancel")}>取消</button>}
+        {rt.stream_id && (
+          <button onClick={() => onSync(plan)}>同步进度</button>
+        )}
         {plan.status !== "cancelled" && (
           <button className="tc-primary" onClick={() => onResume(plan)}>续跑</button>
         )}
@@ -54,6 +118,10 @@ function PlanCard({ plan, onControl, onResume }) {
                 {s.status === "done" ? "✓" : s.status === "skipped" ? "↷" : ["failed", "blocked"].includes(s.status) ? "✕" : i + 1}
               </span>
               <span className="tc-step-title">{s.title}</span>
+              {(s.depends_on || []).length > 0 && (
+                <span className="tc-step-dep">依赖 #{s.depends_on.join(",#")}</span>
+              )}
+              {s.parallel_group && <span className="tc-step-group">并行 {s.parallel_group}</span>}
               <span className="tc-step-state">{STEP_LABEL[s.status] || s.status}</span>
               {Number(s.attempts) > 0 && <span className="tc-step-attempts">×{s.attempts}</span>}
             </div>
@@ -68,23 +136,33 @@ function PlanCard({ plan, onControl, onResume }) {
             {active && ["failed", "blocked", "done", "skipped"].includes(s.status) && (
               <button className="tc-step-op" onClick={() => onControl(plan.plan_id, "retry", s.id)}>重试此步</button>
             )}
-            {active && ["pending", "failed", "blocked"].includes(s.status) && (
+            {active && ["pending", "waiting", "failed", "blocked"].includes(s.status) && (
               <button className="tc-step-op" onClick={() => onControl(plan.plan_id, "skip", s.id)}>跳过此步</button>
             )}
           </li>
         ))}
       </ol>
+      {artifacts.length > 0 && (
+        <div className="tc-artifacts">
+          <div className="tc-art-title">产物（{artifacts.length}）</div>
+          <ul className="tc-art-list">
+            {artifacts.map((art, i) => (
+              <ArtifactItem key={art.path || i} plan={plan} art={art} onRollback={onRollback} />
+            ))}
+          </ul>
+        </div>
+      )}
     </article>
   );
 }
 
-export default function TaskCenter({ open, onClose, plans = [], loading, onRefresh, onControl, onResume }) {
+export default function TaskCenter({ open, onClose, plans = [], loading, queue = [], recoverable = 0, onRefresh, onControl, onResume, onSync, onRollback }) {
   const [filter, setFilter] = React.useState("all");
   if (!open) return null;
   const shown = plans.filter((p) => {
-    if (filter === "active") return ["running", "paused", "blocked"].includes(p.status);
+    if (filter === "active") return ["queued", "running", "paused", "blocked"].includes(p.status);
     if (filter === "done") return p.status === "completed";
-    if (filter === "problem") return ["failed", "blocked", "cancelled"].includes(p.status) || Number(p.failed) > 0;
+    if (filter === "problem") return ["blocked", "cancelled"].includes(p.status) || Number(p.failed) > 0;
     return true;
   });
   return (
@@ -93,6 +171,8 @@ export default function TaskCenter({ open, onClose, plans = [], loading, onRefre
       <aside className="task-center-drawer" aria-label="任务中心">
         <div className="tc-head">
           <span className="tc-title"><Icon name="list" size={14} /> 任务中心</span>
+          {recoverable > 0 && <span className="tc-recover-count">{recoverable} 个可恢复</span>}
+          {queue.length > 0 && <span className="tc-queue-count">队列 {queue.length}</span>}
           <button className="tc-icon-btn" title="刷新" onClick={onRefresh}><Icon name="refresh" size={14} /></button>
           <button className="tc-icon-btn" title="关闭" onClick={onClose}>×</button>
         </div>
@@ -104,7 +184,8 @@ export default function TaskCenter({ open, onClose, plans = [], loading, onRefre
         <div className="tc-list">
           {loading && <div className="tc-empty">正在加载任务计划…</div>}
           {!loading && shown.length === 0 && <div className="tc-empty">这里还没有任务计划。任务模式下多步任务会自动生成计划。</div>}
-          {shown.map((p) => <PlanCard key={p.plan_id} plan={p} onControl={onControl} onResume={onResume} />)}
+          {shown.map((p) => <PlanCard key={p.plan_id} plan={p} onControl={onControl}
+            onResume={onResume} onSync={onSync} onRollback={onRollback} />)}
         </div>
       </aside>
     </>

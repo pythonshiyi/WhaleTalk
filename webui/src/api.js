@@ -493,6 +493,62 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
   }
 }
 
+/**
+ * 只回放已有作业事件（刷新后同步长任务进度），绝不新建生成。
+ * @param {string} streamId
+ * @param {StreamHandlers} handlers
+ * @param {AbortSignal} [signal]
+ */
+export async function replayStream(streamId, handlers, signal) {
+  const payload = JSON.stringify({ stream_id: String(streamId || "") });
+  const attempt = (/** @type {string} */ token) => fetch(`${getBase()}/v1/chat/replay`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: payload,
+    signal,
+  });
+  let r = await attempt(getToken());
+  if (r.status === 401) {
+    try { _lsDel(TOKEN_KEY); } catch (e) { silentWarn(e, "api"); }
+    const token = await _selfFetchToken();
+    if (token) r = await attempt(token);
+  }
+  if (!r.ok || !r.body) throw new Error(await _errMessage(r, `chat/replay → ${r.status}`));
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  const dispatch = (/** @type {string} */ line) => {
+    if (!line.startsWith("data: ")) return;
+    let ev;
+    try { ev = JSON.parse(line.slice(6)); } catch { return; }
+    if (ev.type === "task_plan") handlers.onTaskPlan?.(ev);
+    else if (ev.type === "notice") handlers.onNotice?.(ev);
+    else if (ev.type === "content") handlers.onContent?.(ev.text);
+    else if (ev.type === "tool") handlers.onTool?.(ev);
+    else if (ev.type === "tool_start") handlers.onToolStart?.(ev);
+    else if (ev.type === "done") handlers.onDone?.();
+    else if (ev.type === "error") handlers.onError?.(ev.message);
+  };
+  const drain = () => {
+    const re = /\r?\n\r?\n/;
+    let m;
+    while ((m = re.exec(buf)) !== null) {
+      const frame = buf.slice(0, m.index);
+      buf = buf.slice(m.index + m[0].length);
+      for (const line of frame.split(/\r?\n/)) dispatch(line);
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    drain();
+  }
+  buf += decoder.decode();
+  drain();
+  if (buf.trim()) for (const line of buf.split(/\r?\n/)) dispatch(line);
+}
+
 // ── 会话 ─────────────────────────────────────────────
 
 /**
@@ -712,6 +768,27 @@ export async function controlTaskPlan(planId, action, opts = {}) {
       reason: opts.reason,
     }),
   });
+}
+
+/**
+ * 回滚任务产物（dry_run=true 时只预览，不落盘）。
+ * @param {string} planId
+ * @param {{paths?:string[], dry_run?:boolean}} [opts]
+ */
+export async function rollbackTaskPlan(planId, opts = {}) {
+  return api("/v1/task_plans/rollback", {
+    method: "POST",
+    body: JSON.stringify({
+      plan_id: planId,
+      paths: opts.paths || [],
+      dry_run: !!opts.dry_run,
+    }),
+  });
+}
+
+/** 任务队列快照：并发上限、排队位置、运行中任务。 */
+export async function getTaskQueue() {
+  return api("/v1/task_queue");
 }
 
 // ── 任务 / 执行历史 ─────────────────────────────

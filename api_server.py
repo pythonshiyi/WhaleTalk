@@ -79,7 +79,7 @@ class _ChatJob:
     """
 
     __slots__ = ("id", "sid", "stop_key", "stop_event", "status", "events",
-                 "cond", "subscribers", "created", "finished", "thread")
+                 "cond", "subscribers", "created", "finished", "thread", "plan_id")
 
     def __init__(self, jid, sid, stop_key):
         self.id = jid
@@ -93,6 +93,7 @@ class _ChatJob:
         self.created = time.time()
         self.finished = None
         self.thread = None
+        self.plan_id = ""   # P3-1：作业与长任务计划双向绑定，便于断线重连/暂停只影响本计划
 
     def emit(self, event, data):
         with self.cond:
@@ -150,16 +151,20 @@ def _running_job_snapshot(limit=20):
     return out[:limit]
 
 
-def _task_plan_jobs(plan):
-    """找到正在执行指定任务计划的聊天作业（按 SSE 中的 plan_id 识别）。"""
-    plan_id = str(getattr(plan, "plan_id", "") or "")
+def _task_plan_jobs(plan, include_done=False):
+    """找到执行/回放指定任务计划的聊天作业（优先用双向绑定，兼容旧事件识别）。"""
+    plan_id = str((plan.get("plan_id") if isinstance(plan, dict)
+                   else getattr(plan, "plan_id", "")) or "")
     if not plan_id:
         return []
     with _CHAT_JOBS_LOCK:
         jobs = list(_CHAT_JOBS.values())
     hit = []
     for job in jobs:
-        if getattr(job, "status", "") != "running":
+        if not include_done and getattr(job, "status", "") != "running":
+            continue
+        if str(getattr(job, "plan_id", "") or "") == plan_id:
+            hit.append(job)
             continue
         with job.cond:
             events = list(job.events)
@@ -175,9 +180,42 @@ def _task_plan_jobs(plan):
 def _broadcast_task_plan(plan):
     """用户控制计划后，把最新进度推给仍在订阅该计划的会话。"""
     payload = plan.payload()
-    for job in _task_plan_jobs(plan):
+    jobs = _task_plan_jobs(plan)
+    for job in jobs:
         job.emit("task_plan", payload)
-    return len(_task_plan_jobs(plan))
+    return len(jobs)
+
+
+def _task_plan_runtime(plan):
+    """任务中心用：作业是否仍在跑、能否回放、排队位置、是否可恢复。"""
+    info = {
+        "stream_id": "",
+        "job_status": "",
+        "job_running": False,
+        "events": 0,
+        "seconds": 0,
+        "recoverable": False,
+        "queue_position": int(task_plan.queue_position(str(
+            (plan.get("plan_id") if isinstance(plan, dict) else getattr(plan, "plan_id", "")) or ""))),
+        "concurrency": int(task_plan.max_concurrent()),
+    }
+    jobs = _task_plan_jobs(plan, include_done=True)
+    if jobs:
+        job = next((j for j in jobs if getattr(j, "status", "") == "running"), jobs[0])
+        with job.cond:
+            n_events = len(job.events)
+        info.update({
+            "stream_id": job.id,
+            "job_status": job.status,
+            "job_running": bool(job.status == "running"),
+            "events": n_events,
+            "seconds": round(max(0.0, time.time() - float(job.created or time.time())), 1),
+        })
+    plan_status = plan.get("status") if isinstance(plan, dict) else getattr(plan, "status", "")
+    info["recoverable"] = bool(
+        plan_status in task_plan.ACTIVE_STATUSES and not info["job_running"]
+    )
+    return info
 
 
 def _stop_task_plan_jobs(plan):
@@ -202,6 +240,7 @@ def _chat_jobs_gc():
        `_handle_chat_stream` 找不到旧作业会新建一个，语义正确。
     """
     now = time.time()
+    zombie_plans = []
     with _CHAT_JOBS_LOCK:
         for k, j in list(_CHAT_JOBS.items()):
             if j.status != "running" and j.finished and (now - j.finished) > _CHAT_JOB_TTL:
@@ -211,7 +250,14 @@ def _chat_jobs_gc():
                 th = getattr(j, "thread", None)
                 if th is not None and not th.is_alive():
                     logger.warning("回收僵尸聊天作业（线程已死但状态仍为 running）: %s", k)
+                    if getattr(j, "plan_id", ""):
+                        zombie_plans.append(j.plan_id)
                     _CHAT_JOBS.pop(k, None)
+    for plan_id in zombie_plans:
+        try:
+            task_plan.note_runtime_error(plan_id, "job_crashed", "作业线程异常退出，计划已保留可恢复")
+        except Exception:
+            logger.exception("僵尸作业的任务状态标记失败")
 
 
 _APPROVAL_LOCK = threading.Lock()
@@ -6833,6 +6879,8 @@ SCHEDULES_PATH = os.path.join(DATA_DIR, "schedules.json")
 RECENT_PATH = os.path.join(DATA_DIR, "recent_outputs.json")
 FAV_PATH = os.path.join(DATA_DIR, "favorites.json")
 WORKSPACE_DIR = os.path.join(DATA_DIR, "workspace")
+# P3-2：产物快照/回滚以实际工作区为根（此处 WORKSPACE_DIR 才完成解析）。
+task_plan.configure(os.path.join(DATA_DIR, "task_plans"), WORKSPACE_DIR)
 EVOLUTIONS_DIR = os.path.join(_ORIG_DIR, "evolutions")
 ARCHIVES_DIR = os.path.join(DATA_DIR, "archives")
 SUMMARIES_DIR = os.path.join(DATA_DIR, "summaries")  # 滚动摘要持久化（按会话增量更新）
@@ -8417,8 +8465,15 @@ class _Handler(BaseHTTPRequestHandler):
             session_id=(qs.get("session_id") or [""])[0],
             limit=limit,
         )
+        for p in plans:
+            p["runtime"] = _task_plan_runtime(p)
         active = sum(1 for p in plans if p.get("status") in task_plan.ACTIVE_STATUSES)
-        self._json(200, {"plans": plans, "count": len(plans), "active": active})
+        queue = task_plan.queue_snapshot()
+        self._json(200, {
+            "plans": plans, "count": len(plans), "active": active,
+            "recoverable": sum(1 for p in plans if p.get("runtime", {}).get("recoverable")),
+            "queue": queue, "concurrency": task_plan.max_concurrent(),
+        })
 
 
     @_get_route(("pre", "/v1/task_plans/", ""))
@@ -8428,7 +8483,19 @@ class _Handler(BaseHTTPRequestHandler):
         if plan is None:
             self._json(404, {"error": "task plan not found"})
             return
-        self._json(200, {"plan": plan.payload()})
+        payload = plan.payload()
+        payload["runtime"] = _task_plan_runtime(plan)
+        self._json(200, {"plan": payload})
+
+
+    @_get_route("/v1/task_queue")
+    def _g_v1_task_queue(self):
+        """任务队列快照：并发上限、排队项、运行中项。"""
+        self._json(200, {
+            "queue": task_plan.queue_snapshot(),
+            "concurrency": task_plan.max_concurrent(),
+            "active": {k: dict(v) for k, v in list(task_plan._ACTIVE.items())},
+        })
 
 
     @_get_route("/v1/evolutions")
@@ -9007,6 +9074,22 @@ class _Handler(BaseHTTPRequestHandler):
     @_post_route("/v1/chat/stream")
     def _p_v1_chat_stream(self):
         self._handle_chat_stream()
+
+
+    @_post_route("/v1/chat/replay")
+    def _p_v1_chat_replay(self):
+        """只回放已有作业事件，绝不新建生成（刷新后同步长任务进度用）。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        stream_id = str(body.get("stream_id") or "").strip()
+        with _CHAT_JOBS_LOCK:
+            job = _CHAT_JOBS.get(stream_id)
+        if job is None:
+            self._json(404, {"error": "stream not found or expired"})
+            return
+        self._stream_job_to_client(job)
 
 
     @_post_route("/v1/chat/stop")
@@ -10167,6 +10250,26 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "message": msg, "plan": plan.payload()})
 
 
+    @_post_route("/v1/task_plans/rollback")
+    def _p_v1_task_plan_rollback(self):
+        """产物回滚：body {plan_id, paths?:[...], dry_run?:bool}。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        plan_id = str(body.get("plan_id") or "").strip()
+        paths = body.get("paths") or []
+        if not isinstance(paths, list):
+            paths = []
+        plan, results, msg = task_plan.rollback(
+            plan_id, [str(p) for p in paths], bool(body.get("dry_run")))
+        if plan is None:
+            self._json(404, {"error": msg})
+            return
+        _broadcast_task_plan(plan)
+        self._json(200, {"ok": True, "message": msg, "results": results, "plan": plan.payload()})
+
+
     @_post_route("/v1/memory/pending")
     def _p_v1_memory_pending(self):
         """裁决待确认记忆：body {action: "accept"|"dismiss", ids: [...]}。"""
@@ -10965,6 +11068,10 @@ class _Handler(BaseHTTPRequestHandler):
         _users = [m for m in persist_base if isinstance(m, dict) and m.get("role") == "user"]
         _user_turn = [_users[-1]] if _users else []
         _last_save = [0.0]
+        # P3：作业级任务态必须在 try 之前定义，finally 才能可靠释放队列槽位。
+        task_plan_obj = None
+        _slot_ok = True
+        _replan_tried = False
 
         def _save_progress(force=False):
             if is_continue or not _user_turn:
@@ -11021,16 +11128,20 @@ class _Handler(BaseHTTPRequestHandler):
             if comp_info:
                 send("compressed", comp_info)
 
-            # ── 任务模式升级：自动拆步 + 逐步验收 + 断点续跑 ──
-            # 只在 task 模式启用；规划失败自动退化为单步计划，不阻断主任务。
-            task_plan_obj = None
+            # ── 长任务计划：拆步 / 验收 / 恢复 / 队列 / 依赖图 ──
+            # 只在 task 模式启用；规划失败自动退化为普通任务模式，不阻断主流程。
             if str(body.get("mode") or "") == "task" and not kwargs.get("pure_chat"):
                 try:
                     _um = [m for m in messages
                            if isinstance(m, dict) and m.get("role") == "user"]
                     _goal = _msg_text(_um[-1]) if _um else ""
-                    task_plan_obj = task_plan.prepare(client, job.sid, _goal)
+                    _priority = body.get("task_priority")
+                    if _priority is None:
+                        _priority = task_plan.priority_from_goal(_goal)
+                    task_plan_obj = task_plan.prepare(client, job.sid, _goal, priority=_priority)
                     if task_plan_obj is not None:
+                        job.plan_id = task_plan_obj.plan_id
+                        task_plan.bind_stream(task_plan_obj.plan_id, job.id)
                         messages = messages + [{
                             "role": "system",
                             "content": task_plan.render_prompt(task_plan_obj),
@@ -11048,6 +11159,21 @@ class _Handler(BaseHTTPRequestHandler):
                                          f"{len(task_plan_obj.steps)}），继续执行未完成步骤。"),
                                 "level": "info",
                             })
+                        # P3-3：并发上限 + 同文件冲突避让；等待期间不阻塞其它会话。
+                        if not task_plan.wait_for_slot(task_plan_obj.plan_id, job.stop_event):
+                            _slot_ok = False
+                            latest = task_plan.load(task_plan_obj.plan_id) or task_plan_obj
+                            send("task_plan", latest.payload())
+                            send("notice", {
+                                "text": "任务排队超时或已停止，计划保留在任务中心；可稍后续跑。",
+                                "level": "warn",
+                            })
+                            task_plan_obj = None
+                        else:
+                            latest = task_plan.load(task_plan_obj.plan_id) or task_plan_obj
+                            task_plan_obj = latest
+                            if latest.status == "queued":
+                                send("task_plan", latest.payload())
                 except Exception:
                     logger.exception("任务计划准备失败（降级为普通任务模式）")
                     task_plan_obj = None
@@ -11076,6 +11202,7 @@ class _Handler(BaseHTTPRequestHandler):
                 _save_progress(force=True)
                 # 步骤验收工具执行后，立刻把最新计划推给前端（进度条实时更新）
                 if n == "task_step_done" and task_plan_obj is not None:
+                    task_plan.clear_runtime_error(task_plan_obj.plan_id)
                     updated = task_plan.load(task_plan_obj.plan_id)
                     if updated is not None:
                         task_plan_obj = updated
@@ -11117,24 +11244,56 @@ class _Handler(BaseHTTPRequestHandler):
                 # 本轮新增消息（供断连兜底做「只追加本轮」的落盘，避免长会话丢历史）
                 "new_messages_out": generated,
             })
-            ok = client.chat(messages, **kwargs)
+            ok = client.chat(messages, **kwargs) if _slot_ok else False
+            if (_slot_ok and task_plan_obj is not None and not ok
+                    and not job.stop_event.is_set()):
+                # 429 / 超时 / 断网等生成层异常：记录退避，交给续跑循环换方法重试。
+                _p, _wait, _blocked = task_plan.note_runtime_error(
+                    task_plan_obj.plan_id, "generation_failed", "生成未正常完成（可能限流或网络异常）")
+                if _p is not None:
+                    task_plan_obj = _p
+                if not _blocked:
+                    ok = True
+                    send("notice", {
+                        "text": f"生成受限流/网络影响，任务已保留；{min(int(_wait), 30)} 秒后自动续跑。",
+                        "level": "warn",
+                    })
             # 长任务自动续跑：模型提前收尾但计划没验收完时，不把半截任务丢给用户。
-            # 最多追 2 轮，避免模型卡住时无限烧 token；停止请求立即退出。
+            # 最多追 3 轮；阻塞时先尝试换方法重规划剩余步骤，仍不行才交还用户。
             _auto_continue = 0
             while (task_plan_obj is not None and ok and not job.stop_event.is_set()
-                   and _auto_continue < 2):
+                   and _auto_continue < 3):
                 latest = task_plan.load(task_plan_obj.plan_id) or task_plan_obj
                 task_plan_obj = latest
-                if latest.all_done() or latest.status in ("paused", "cancelled"):
+                if latest.all_done() or latest.status in ("paused", "cancelled", "queued"):
                     break
                 if latest.status == "blocked":
+                    if not _replan_tried:
+                        _replan_tried = True
+                        try:
+                            replanned, changed = task_plan.replan_remaining(client, latest)
+                            if changed and replanned is not None:
+                                task_plan_obj = replanned
+                                send("notice", {
+                                    "text": "连续失败，已自动重新规划剩余步骤并换方法继续。",
+                                    "level": "info",
+                                })
+                                send("task_plan", replanned.payload())
+                                continue
+                        except Exception:
+                            logger.exception("剩余步骤自动重规划失败")
                     send("notice", {
                         "text": "任务步骤连续失败，已自动阻塞；请在任务中心重试/跳过，或换方法后回复“继续”。",
                         "level": "warn",
                     })
                     break
                 _auto_continue += 1
-                _left = len(latest.steps) - latest.done_count()
+                _left = len(latest.pending_steps())
+                _backoff = task_plan.runtime_wait_seconds(latest.plan_id)
+                if _backoff > 0:
+                    send("notice", {"text": f"限流退避中，稍后自动继续（{min(int(_backoff), 30)} 秒）。",
+                                    "level": "warn"})
+                    time.sleep(min(_backoff, 3.0))
                 send("notice", {
                     "text": f"任务还有 {_left} 步未验收，自动继续第 {_auto_continue} 轮。",
                     "level": "info",
@@ -11143,6 +11302,13 @@ class _Handler(BaseHTTPRequestHandler):
                 messages.append(_resume)
                 generated.append(_resume)
                 ok = client.chat(messages, **kwargs)
+                if not ok and not job.stop_event.is_set():
+                    _p, _wait, _blocked = task_plan.note_runtime_error(
+                        latest.plan_id, "generation_failed", "自动续跑仍未正常完成（可能限流或网络异常）")
+                    if _p is not None:
+                        task_plan_obj = _p
+                    if not _blocked:
+                        ok = True
             # 作业线程此前忽略 chat 的返回值：提前终止（return False）也会照发 done，
             # 与「正常完成」无从区分。补一条可见提示（停止/已给具体原因时不重复）。
             if not ok and not job.stop_event.is_set() and not _trunc["seen"]:
@@ -11236,6 +11402,12 @@ class _Handler(BaseHTTPRequestHandler):
             send("done", {})
             job.finish("error")
         finally:
+            # P3-3：无论正常完成/异常/用户停止，都必须归还并发槽位并唤醒排队任务。
+            if task_plan_obj is not None:
+                try:
+                    task_plan.release_slot(task_plan_obj.plan_id)
+                except Exception:
+                    logger.exception("任务队列槽位释放失败")
             # 无人订阅（前端卸载/关标签/断连）时由作业兜底落盘：只追加本轮，
             # 避免整段覆盖在长会话里丢失历史。有订阅者时前端会保存，避免重复。
             # 订阅数须在 job.cond 下读取：订阅者增减都在该锁内，裸读可能在
