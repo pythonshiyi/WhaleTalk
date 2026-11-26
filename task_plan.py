@@ -225,6 +225,7 @@ class TaskPlan:
     recipe_id: str = ""  # P4-1：复用的配方 ID（若命中）
     recipe_name: str = ""  # P4-1：复用的配方名称（展示用）
     pitfalls_applied: List[str] = field(default_factory=list)  # P4-3：本次开工套用的避坑条目 ID
+    finalized: bool = False  # P4-2：收尾是否已执行（配方沉淀+记忆归档）；与 status 解耦，避免提前 completed 误判
 
     def __post_init__(self):
         if not self.created_at:
@@ -322,6 +323,7 @@ class TaskPlan:
             "recipe_id": self.recipe_id,
             "recipe_name": self.recipe_name,
             "pitfalls_applied": list(self.pitfalls_applied),
+            "finalized": bool(self.finalized),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -344,6 +346,7 @@ class TaskPlan:
             "recipe_id": self.recipe_id,
             "recipe_name": self.recipe_name,
             "pitfalls_applied": self.pitfalls_applied,
+            "finalized": bool(self.finalized),
         }
 
     @classmethod
@@ -365,6 +368,7 @@ class TaskPlan:
             recipe_id=str(data.get("recipe_id") or ""),
             recipe_name=str(data.get("recipe_name") or ""),
             pitfalls_applied=list(data.get("pitfalls_applied") or []),
+            finalized=bool(data.get("finalized", False)),
         )
 
     # -- 更新 --
@@ -1416,8 +1420,11 @@ def finalize(plan_id: str) -> Tuple[Optional[TaskPlan], bool]:
         plan = load(plan_id)
         if plan is None:
             return None, False
-        if plan.all_done() and plan.status not in ("cancelled", "completed"):
+        # 用 finalized 标记而非 status 判定「首次收尾」：mark 的 _sync_status 会提前把
+        # status 置为 completed，若按 status 判断会让配方沉淀/记忆归档被整段跳过。
+        if plan.all_done() and not plan.finalized and plan.status != "cancelled":
             plan.status = "completed"
+            plan.finalized = True
             plan.updated_at = _now()
             save(plan)
             return plan, True

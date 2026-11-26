@@ -11377,6 +11377,12 @@ class _Handler(BaseHTTPRequestHandler):
                         # 沉淀配方：完成过的任务成为下次同类任务的已验证模板，省重复规划
                         try:
                             _recipe, _rnote = task_plan.save_recipe(final_plan)
+                            if _recipe:
+                                # 把配方 ID 回写计划：任务中心/归档据此显示「复用自哪个配方」，
+                                # 也让二次同类任务能在 from_dict 后带上 provenance。
+                                final_plan.recipe_id = str(_recipe.get("recipe_id") or "")
+                                final_plan.recipe_name = str(_recipe.get("name") or "")
+                                task_plan.save(final_plan)
                             if _rnote:
                                 send("notice", {"text": _rnote, "level": "info"})
                         except Exception as e:

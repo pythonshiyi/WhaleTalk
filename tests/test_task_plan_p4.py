@@ -84,10 +84,15 @@ def test_evidence_is_done_no_recheck(tmp_path, monkeypatch):
     assert just is False and plan2.status == "running"
 
     task_plan.complete_step("p4final1", 2, "done", "完成证据二")
-    # mark() 内部已按证据置 completed；finalize 幂等
+    # mark() 内部已按证据把 status 置为 completed，但收尾尚未执行（finalized=False）。
+    # finalize 必须用 finalized 而非 status 判定首次完成，否则配方沉淀/归档会被跳过：
+    # 这是真实多步 UI 流程暴露的 bug（状态完成但 recipe_id 为空）。
     assert task_plan.load("p4final1").status == "completed"
     plan3, just2 = task_plan.finalize("p4final1")
-    assert just2 is False and plan3.status == "completed"
+    assert just2 is True and plan3.status == "completed" and plan3.finalized is True
+    # 再次收尾幂等，不重复沉淀
+    plan4, just3 = task_plan.finalize("p4final1")
+    assert just3 is False and plan4.finalized is True
 
 
 def test_pitfall_recorded_and_injected(tmp_path, monkeypatch):
