@@ -49,6 +49,17 @@ RECIPE_MATCH_THRESHOLD = 0.55
 MAX_RECIPES = 200
 # P4-3：开工前注入的避坑条数上限（避免提示过长反而干扰模型）。
 MAX_PITFALL_HINTS = 5
+# P5-1：确定性技能——只有精确匹配的已验证配方才允许跳过模型直接重放工具轨迹。
+# 阈值明显低于配方复用：宁可少命中，也不能跑错（跑错=返工，违背用户硬约束）。
+SKILL_MATCH_THRESHOLD = 0.92
+MIN_SKILL_SUCCESSES = 2  # 配方至少真实成功 2 次才升级为技能
+# 可确定性重放的工具白名单：仅限无副作用歧义、纯本地、参数可完全复现的操作。
+# 交互/审批/网络/生成类工具一律不进白名单——它们需要模型判断或用户参与。
+SKILL_REPLAYABLE_TOOLS = frozenset({
+    "write_file", "edit_file", "read_file", "verify_files",
+    "write_excel", "write_csv",
+})
+MAX_SKILL_CALLS_PER_STEP = 30
 
 ACTIVE_STATUSES = ("running", "queued", "paused", "blocked")
 TERMINAL_STATUSES = ("completed", "cancelled")
@@ -226,6 +237,10 @@ class TaskPlan:
     recipe_name: str = ""  # P4-1：复用的配方名称（展示用）
     pitfalls_applied: List[str] = field(default_factory=list)  # P4-3：本次开工套用的避坑条目 ID
     finalized: bool = False  # P4-2：收尾是否已执行（配方沉淀+记忆归档）；与 status 解耦，避免提前 completed 误判
+    # P5-1：每步的真实工具调用轨迹 {step_id: [{"name","args"}]}；完成后沉淀为可执行技能，
+    # 同类目标精确命中后直接重放，跳过模型调用（不做事后复核）。
+    step_traces: Dict[str, Any] = field(default_factory=dict)
+    execution_mode: str = "model"  # model / deterministic（确定性重放）
 
     def __post_init__(self):
         if not self.created_at:
@@ -245,7 +260,35 @@ class TaskPlan:
         self.recipe_id = str(self.recipe_id or "")[:60]
         self.recipe_name = str(self.recipe_name or "")[:120]
         self.pitfalls_applied = [str(p) for p in (self.pitfalls_applied or []) if p][:30]
+        self.step_traces = self._norm_traces(self.step_traces)
+        self.execution_mode = str(self.execution_mode or "model")[:20]
+        if self.execution_mode not in ("model", "deterministic"):
+            self.execution_mode = "model"
         self.refresh_dependencies()
+
+    @staticmethod
+    def _norm_traces(raw: Any) -> Dict[str, Any]:
+        """轨迹归一化：只保留可信工具调用（白名单由 execute_skill 校验），限量防膨胀。"""
+        out: Dict[str, Any] = {}
+        if not isinstance(raw, dict):
+            return out
+        total = 0
+        for step_id, calls in raw.items():
+            if total >= 200:
+                break
+            clean = []
+            for c in (calls if isinstance(calls, list) else [])[:30]:
+                if not isinstance(c, dict):
+                    continue
+                name = str(c.get("name") or "")[:60]
+                args = c.get("args") if isinstance(c.get("args"), dict) else {}
+                if not name:
+                    continue
+                clean.append({"name": name, "args": dict(args)})
+                total += 1
+            if clean:
+                out[str(step_id)] = clean
+        return out
 
     # -- 查询 --
     def done_count(self) -> int:
@@ -324,6 +367,8 @@ class TaskPlan:
             "recipe_name": self.recipe_name,
             "pitfalls_applied": list(self.pitfalls_applied),
             "finalized": bool(self.finalized),
+            "execution_mode": self.execution_mode,
+            "step_traces": {k: [dict(c) for c in v] for k, v in self.step_traces.items()},
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -347,6 +392,8 @@ class TaskPlan:
             "recipe_name": self.recipe_name,
             "pitfalls_applied": self.pitfalls_applied,
             "finalized": bool(self.finalized),
+            "execution_mode": self.execution_mode,
+            "step_traces": self.step_traces,
         }
 
     @classmethod
@@ -369,6 +416,8 @@ class TaskPlan:
             recipe_name=str(data.get("recipe_name") or ""),
             pitfalls_applied=list(data.get("pitfalls_applied") or []),
             finalized=bool(data.get("finalized", False)),
+            step_traces=data.get("step_traces") or {},
+            execution_mode=str(data.get("execution_mode") or "model"),
         )
 
     # -- 更新 --
@@ -1260,6 +1309,8 @@ def save_recipe(plan: TaskPlan) -> Tuple[Optional[Dict[str, Any]], str]:
             # 同类任务再次成功：强化这份配方（更新步骤模板 + 成功次数）
             hit["steps"] = _step_templates(plan.steps)
             hit["strategy"] = plan.strategy
+            if plan.step_traces:
+                hit["traces"] = {k: [dict(c) for c in v] for k, v in plan.step_traces.items()}
             hit["touched_paths"] = list(plan.touched_paths)[:50]
             hit["successes"] = int(hit.get("successes") or 0) + 1
             hit["source_plan_id"] = plan.plan_id
@@ -1272,6 +1323,7 @@ def save_recipe(plan: TaskPlan) -> Tuple[Optional[Dict[str, Any]], str]:
                 "tokens": tokens[:40],
                 "strategy": plan.strategy,
                 "steps": _step_templates(plan.steps),
+                "traces": {k: [dict(c) for c in v] for k, v in (plan.step_traces or {}).items()},
                 "touched_paths": list(plan.touched_paths)[:50],
                 "source_plan_id": plan.plan_id,
                 "uses": 0,
@@ -1326,6 +1378,193 @@ def match_recipe(goal: str) -> Optional[Dict[str, Any]]:
         hit["updated_at"] = _now()
         _save_store(_recipes_path(), rows)
         return dict(hit)
+
+
+# ── P5-1：确定性技能（工具轨迹沉淀 + 零模型重放）────────────────────────
+# 每步的工具调用先累积在 buffer，遇到 task_step_done(step=N) 时归到步骤 N。
+_SKILL_BUFFERS: Dict[str, List[Dict[str, Any]]] = {}
+_SKILL_BUF_LOCK = threading.RLock()
+
+
+def buffer_tool_call(plan_id: str, name: str, args: Any) -> None:
+    """由 SSE on_tool 回调收集一次真实工具调用，等待归属到当前验收步骤。"""
+    if not plan_id or name in ("task_step_done",):
+        return
+    if name not in SKILL_REPLAYABLE_TOOLS:
+        return  # 交互/网络/生成类工具不入轨迹，避免重放时产生副作用或依赖模型判断
+    clean = dict(args) if isinstance(args, dict) else {}
+    with _SKILL_BUF_LOCK:
+        buf = _SKILL_BUFFERS.setdefault(str(plan_id), [])
+        if len(buf) < MAX_SKILL_CALLS_PER_STEP * 8:
+            buf.append({"name": str(name), "args": clean})
+
+
+def flush_tool_calls(plan_id: str, step: int) -> None:
+    """把累积的调用归到指定步骤（task_step_done 触发时调用）。"""
+    pid = str(plan_id or "")
+    with _SKILL_BUF_LOCK:
+        calls = _SKILL_BUFFERS.pop(pid, [])
+    if not calls or not pid:
+        return
+    with _WRITE_LOCK:
+        plan = load(pid)
+        if plan is None:
+            return
+        traces = dict(plan.step_traces or {})
+        merged = list(traces.get(str(step), [])) + calls
+        traces[str(step)] = merged[-MAX_SKILL_CALLS_PER_STEP:]
+        plan.step_traces = traces
+        save(plan)
+
+
+def drop_tool_buffer(plan_id: str) -> None:
+    with _SKILL_BUF_LOCK:
+        _SKILL_BUFFERS.pop(str(plan_id or ""), None)
+
+
+def match_skill(goal: str) -> Optional[Dict[str, Any]]:
+    """精确匹配已验证 2 次以上的技能配方；命中才允许跳过模型直接重放。
+
+    比配方复用更严格：必须带完整 traces 且 successes 达标，宁可不命中也不跑错。
+    """
+    tokens = _goal_tokens(goal)
+    if len(tokens) < 2:
+        return None
+    with _WRITE_LOCK:
+        rows = _load_store(_recipes_path())
+        best, hit = 0.0, None
+        for row in rows:
+            if not row.get("traces"):
+                continue
+            if int(row.get("successes") or 0) < MIN_SKILL_SUCCESSES:
+                continue
+            score = _jaccard(tokens, set(row.get("tokens") or []))
+            if score > best:
+                best, hit = score, row
+        if hit is None or best < SKILL_MATCH_THRESHOLD:
+            return None
+        return dict(hit)
+
+
+def _skill_trace_for_step(recipe: Dict[str, Any], step: int,
+                          titles: List[str]) -> List[Dict[str, Any]]:
+    """按步骤标题对齐配方轨迹：优先按标题精确匹配，退回同序号（步骤模板顺序稳定）。"""
+    traces = recipe.get("traces") or {}
+    if not isinstance(traces, dict):
+        return []
+    key = None
+    if 0 <= step - 1 < len(titles):
+        title = str(titles[step - 1] or "").strip()
+        for k, v in traces.items():
+            if str(k).strip() == title:
+                key = k
+                break
+    if key is None:
+        # 序号回退：配方 traces 的 key 允许是 "1"/"2" 数字字符串
+        if str(step) in traces:
+            key = str(step)
+    if key is None:
+        return []
+    out = []
+    for c in (traces.get(key) or []):
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("name") or "")
+        if name not in SKILL_REPLAYABLE_TOOLS:
+            return []  # 含不可重放工具 → 整个技能作废，交给模型
+        out.append({"name": name, "args": dict(c.get("args") or {})})
+    return out
+
+
+def _ordered_skill_calls(recipe: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """把配方轨迹按步骤号排序后展平成全局有序调用列表。
+
+    模型可能在一轮里并行调用多个工具 + 多个 task_step_done，导致按步骤归属时
+    buffer 被首个验收清空（轨迹只剩部分步骤）。全局有序重放规避这种错配。
+    """
+    traces = recipe.get("traces") or {}
+    if not isinstance(traces, dict):
+        return []
+    def _sk(k):
+        try:
+            return int(k)
+        except (TypeError, ValueError):
+            return 9999
+    out: List[Dict[str, Any]] = []
+    for key in sorted(traces.keys(), key=_sk):
+        for c in (traces.get(key) or []):
+            if not isinstance(c, dict):
+                continue
+            name = str(c.get("name") or "")
+            if name not in SKILL_REPLAYABLE_TOOLS:
+                return []  # 含不可重放工具 → 整段作废
+            out.append({"name": name, "args": dict(c.get("args") or {})})
+    return out[:MAX_SKILL_CALLS_PER_STEP * 8]
+
+
+def execute_skill(plan: TaskPlan, recipe: Dict[str, Any], emit=None) -> Tuple[bool, str]:
+    """确定性重放技能：不调用模型，按全局有序轨迹重放工具并逐步验收。
+
+    参数已随配方持久化为字面量，命中要求目标 token Jaccard ≥ SKILL_MATCH_THRESHOLD，
+    因此这些参数对新目标同样有效。任一前置校验或执行失败 → (False, 原因)，
+    由上层降级回模型路径；绝不假装完成、绝不做事后复核（用户硬约束）。
+    """
+    import toolkit as _tk  # 延迟导入：避免与工具注册建立顺序耦合
+    # 防御：确保内置工具已注册（单独调用本模块、未走 api_server 导入链时也能重放）。
+    if _tk.executor_for("write_file") is None:
+        try:
+            import deepseek_client  # noqa: F401  触发工具注册链
+            import agent_tools  # noqa: F401
+        except Exception as e:
+            logger.warning("确定性技能：工具注册链加载失败：%s", e)
+
+    calls = _ordered_skill_calls(recipe)
+    if not calls:
+        return False, "配方无可重放轨迹（或含不可重放工具），降级模型执行"
+    emit = emit or (lambda _ev, _data: None)
+    paths: List[str] = []
+    last_result = ""
+    workspace = _workspace()
+    ws_abs = os.path.abspath(workspace) if workspace else ""
+    for c in calls:
+        name, args = c["name"], dict(c["args"])
+        fn = _tk.executor_for(name)
+        if fn is None:
+            return False, f"轨迹工具 {name} 当前不可用，降级模型执行"
+        # 路径护栏：必须在工作区内，防止旧技能写到环境外
+        p = str(args.get("path") or "")
+        if p:
+            abs_p = p if os.path.isabs(p) else os.path.join(workspace, p)
+            abs_p = os.path.abspath(abs_p)
+            if ws_abs and not (abs_p.startswith(ws_abs + os.sep) or abs_p == ws_abs):
+                return False, f"轨迹路径越界（{p}），降级模型执行"
+            paths.append(p)
+        emit("tool_start", {"name": name, "args": args})
+        try:
+            result = fn(**args)
+        except Exception as e:
+            return False, f"轨迹工具 {name} 执行异常：{e}；降级模型执行"
+        if not isinstance(result, str):
+            try:
+                result = json.dumps(result, ensure_ascii=False, default=str)
+            except Exception:
+                result = str(result)
+        last_result = str(result)
+        emit("tool", {"name": name, "args": args, "result": last_result[:2000]})
+
+    # 全局重放完成 → 按步骤依次验收。技能是已验证配方，产物与参数对新目标一致，
+    # 这里直接以重放结果登记完成，不追加任何复核轮。
+    steps = [s for s in (plan.steps or []) if s.get("status") not in DONE_STATUSES]
+    for i, step in enumerate(steps):
+        sid = int(step.get("id") or 0)
+        vpath = paths[i] if i < len(paths) else (paths[0] if paths else "")
+        evidence = f"[确定性技能] 全局重放 {len(calls)} 个已验证工具调用；输出：{last_result[:160]}"
+        complete_step(plan.plan_id, sid, "done", evidence, verify_path=vpath)
+        fresh = load(plan.plan_id)
+        step_now = next((s for s in (fresh.steps if fresh else []) if int(s.get("id") or 0) == sid), None)
+        if not step_now or step_now.get("status") != "done":
+            return False, f"步骤 {sid} 确定性验收未通过，降级模型执行"
+    return True, f"确定性技能执行完成：重放 {len(calls)} 个工具调用，零模型调用"
 
 
 def record_pitfall(plan: TaskPlan, step: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1530,6 +1769,11 @@ def create(client, goal: str, session_id: str, priority: Optional[int] = None) -
     goal = str(goal or "").strip()
     parts: List[str] = []
     recipe = match_recipe(goal)  # P4-1：同类任务复用，跳过规划调用，也不撞 429
+    skill = None
+    # P5-1：只有精确匹配 + successes 达标的已验证配方才升级为零模型确定性技能。
+    # 命中技能时直接套用技能的步骤模板（与配方一致），并记录 execution_mode。
+    if recipe is not None:
+        skill = match_skill(goal)
     steps: List[Dict[str, Any]] = []
     strategy = ""
     if recipe is not None:
@@ -1567,6 +1811,7 @@ def create(client, goal: str, session_id: str, priority: Optional[int] = None) -
         recipe_id=str((recipe or {}).get("recipe_id") or ""),
         recipe_name=str((recipe or {}).get("name") or ""),
         pitfalls_applied=[str(p.get("pitfall_id") or "") for p in match_pitfalls(goal)],
+        execution_mode="deterministic" if skill is not None else "model",
     )
 
 
@@ -1767,6 +2012,93 @@ def current_hint(plan: Optional[TaskPlan]) -> str:
         f"step={ids[0]}, evidence=\"可核验证据\")。"
         f"还剩 {len(plan.pending_steps())} 步；未全部验收前不要结束回复。"
     )
+
+
+def recall_tasks(query: str, limit: int = 3, min_score: float = 0.18) -> List[Dict[str, Any]]:
+    """P5-2 跨会话任务召回：从已完成计划中找相关任务的结构化摘要。
+
+    不依赖向量模型：目标 token Jaccard + 查询串/产物路径命中，轻量且可离线。
+    返回项含 goal / 产物路径 / 每步证据 / 完成时间，供注入提示让模型直接答复
+    「昨天那份报告在哪、结论是什么」这类跨会话问题。
+    """
+    tokens = _goal_tokens(query)
+    text = str(query or "").lower()
+    # 中文 bigram：_goal_tokens 把整段汉字当一个词，对自然语言问句几乎无重叠。
+    # 用 2-gram 重合度补足，让「上次的销售报告」能匹配「生成季度销售报告」。
+    def _bigrams(s: str) -> set:
+        han = re.findall(r"[\u4e00-\u9fff]+", str(s or ""))
+        out = set()
+        for seg in han:
+            out.update(seg[i:i + 2] for i in range(len(seg) - 1))
+        return out
+    q_bg = _bigrams(query)
+    if not tokens and not q_bg and not text.strip():
+        return []
+    try:
+        limit = max(1, min(int(limit or 3), 10))
+    except (TypeError, ValueError):
+        limit = 3
+    scored: List[Tuple[float, str, Dict[str, Any]]] = []
+    try:
+        names = [n for n in os.listdir(_dir()) if n.endswith(".json")]
+    except OSError:
+        return []
+    for name in names[:1000]:
+        try:
+            with open(os.path.join(_dir(), name), encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict) or str(data.get("status") or "") != "completed":
+                continue
+            plan = TaskPlan.from_dict(data)
+            goal = plan.goal
+            score = _jaccard(tokens, _goal_tokens(goal))
+            # 中文问句：bigram 重合度（按查询覆盖率计，避免长目标稀释）
+            if q_bg:
+                g_bg = _bigrams(goal)
+                if q_bg and g_bg:
+                    overlap = len(q_bg & g_bg) / float(len(q_bg))
+                    score = max(score, overlap * 0.9)
+            # 产物路径命中（用户常按文件名追问）
+            paths = [str(a.get("relpath") or a.get("path") or "") for a in (plan.artifacts or [])]
+            for p in paths:
+                if p and p.lower() in text:
+                    score = max(score, 0.75)
+            if score < min_score:
+                continue
+            summary = {
+                "plan_id": plan.plan_id,
+                "goal": goal[:200],
+                "completed_at": plan.updated_at,
+                "strategy": plan.strategy,
+                "artifacts": paths[:20],
+                "steps": [
+                    {"title": str(s.get("title") or "")[:120],
+                     "evidence": str(s.get("evidence") or "")[:200]}
+                    for s in (plan.steps or []) if s.get("status") == "done"
+                ][:12],
+            }
+            scored.append((score, plan.updated_at, summary))
+        except Exception:
+            continue
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [row[2] for row in scored[:limit]]
+
+
+def recall_text(query: str, limit: int = 3) -> str:
+    """把召回结果渲染成可注入的紧凑文本；无命中返回空串（不污染提示）。"""
+    rows = recall_tasks(query, limit=limit)
+    if not rows:
+        return ""
+    lines = ["[历史任务召回] 以下是与本问题相关的已完成任务，产物与结论可直接引用："]
+    for i, r in enumerate(rows, 1):
+        lines.append(f"{i}. 任务：{r['goal']}（完成于 {r.get('completed_at','')}）")
+        if r.get("artifacts"):
+            lines.append(f"   产物：{', '.join(r['artifacts'][:8])}")
+        for s in (r.get("steps") or [])[:6]:
+            ev = str(s.get("evidence") or "").strip()
+            if ev:
+                lines.append(f"   · {s.get('title','')}：{ev[:160]}")
+    return "\n".join(lines)
 
 
 def archive_text(plan: TaskPlan) -> str:

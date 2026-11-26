@@ -5059,6 +5059,7 @@ def _companion_reply(text, session_id="", persona_id="", images=None):
     messages, memory_text = _Handler._inject_system_messages(
         _CompanionCtx(), messages, cfg, True, False
     )
+    memory_text = _Handler._append_task_recall(messages, memory_text, False)
 
     client = dc.DeepSeekClient(
         key,
@@ -10948,6 +10949,33 @@ class _Handler(BaseHTTPRequestHandler):
             "max_tool_rounds": self._round_budget(body, cfg),
         }
 
+    @staticmethod
+    def _append_task_recall(messages, memory_text, quiet_mode=False):
+        """P5-2：把与当前问题相关的已完成任务摘要并入 memory_text 通道。
+
+        不改动 _inject_system_messages 的二元组契约；quiet_mode 时不注入（尊重安静模式）。
+        只注入一次，避免多轮对话重复占用上下文。
+        """
+        if quiet_mode:
+            return memory_text
+        try:
+            _user_texts = [
+                _msg_text(m) for m in messages
+                if isinstance(m, dict) and m.get("role") == "user"
+            ]
+            if not _user_texts:
+                return memory_text
+            recall = task_plan.recall_text(_user_texts[-1], limit=3)
+            if not recall:
+                return memory_text
+            existing = str(memory_text or "")
+            if "历史任务召回" in existing:
+                return memory_text
+            return f"{existing}\n\n{recall}" if existing else recall
+        except Exception:
+            logger.debug("任务召回注入失败（不影响对话）", exc_info=True)
+            return memory_text
+
     def _inject_system_messages(self, messages, cfg, pure_chat, quiet_mode=False):
         """系统提示与上下文装配（Provider 表驱动，见 context_providers.py）。
 
@@ -11047,6 +11075,7 @@ class _Handler(BaseHTTPRequestHandler):
             messages, memory_text = self._inject_system_messages(
                 messages, cfg, kwargs.get("pure_chat", False), quiet_mode
             )
+            memory_text = self._append_task_recall(messages, memory_text, quiet_mode)
             if memory_text:
                 kwargs["memory_text"] = memory_text
             messages, comp_info = _compress_messages(
@@ -11158,6 +11187,7 @@ class _Handler(BaseHTTPRequestHandler):
             messages, memory_text = self._inject_system_messages(
                 messages, cfg, kwargs.get("pure_chat", False), quiet_mode
             )
+            memory_text = self._append_task_recall(messages, memory_text, quiet_mode)
             if memory_text:
                 kwargs["memory_text"] = memory_text
             messages, comp_info = _compress_messages(
@@ -11254,10 +11284,20 @@ class _Handler(BaseHTTPRequestHandler):
                 # 步骤验收工具执行后，立刻把最新计划推给前端（进度条实时更新）
                 if n == "task_step_done" and task_plan_obj is not None:
                     task_plan.clear_runtime_error(task_plan_obj.plan_id)
+                    # P5-1：把自上次验收以来累积的可重放工具调用归到本步，供技能沉淀
+                    try:
+                        _done_step = int((a or {}).get("step") or 0) if isinstance(a, dict) else 0
+                        if _done_step:
+                            task_plan.flush_tool_calls(task_plan_obj.plan_id, _done_step)
+                    except Exception as e:
+                        logger.warning("工具轨迹归属失败（不影响验收）：%s", e)
                     updated = task_plan.load(task_plan_obj.plan_id)
                     if updated is not None:
                         task_plan_obj = updated
                         send("task_plan", updated.payload())
+                elif n != "task_step_done" and task_plan_obj is not None:
+                    # P5-1：收集本步的真实工具调用（白名单内），等 task_step_done 归属
+                    task_plan.buffer_tool_call(task_plan_obj.plan_id, n, a)
 
             # 本轮「未正常完成」提示的去重标记：具体原因（截断/循环防护等）由
             # on_truncated 给出更精确的说明，避免再叠一句泛化提示。
@@ -11295,7 +11335,36 @@ class _Handler(BaseHTTPRequestHandler):
                 # 本轮新增消息（供断连兜底做「只追加本轮」的落盘，避免长会话丢历史）
                 "new_messages_out": generated,
             })
-            ok = client.chat(messages, **kwargs) if _slot_ok else False
+            # P5-1 确定性技能：精确命中已验证技能时直接重放工具轨迹，零模型调用。
+            # 任一前置校验/执行失败 → 降级回模型路径（不返工、不假装完成）。
+            _skill_ok = None
+            if (_slot_ok and task_plan_obj is not None
+                    and getattr(task_plan_obj, "execution_mode", "model") == "deterministic"
+                    and not job.stop_event.is_set()):
+                _skill = task_plan.match_skill(task_plan_obj.goal)
+                if _skill is not None:
+                    try:
+                        _sok, _smsg = task_plan.execute_skill(
+                            task_plan_obj, _skill,
+                            emit=lambda ev, data: send(ev, data))
+                        send("notice", {"text": _smsg, "level": "info" if _sok else "warn"})
+                        if _sok:
+                            _skill_ok = True
+                            ok = True
+                            _latest = task_plan.load(task_plan_obj.plan_id)
+                            if _latest is not None:
+                                task_plan_obj = _latest
+                                send("task_plan", _latest.payload())
+                        # 失败时 ok 保持初值，自然落入下方 client.chat 模型路径
+                    except Exception as e:
+                        logger.warning("确定性技能执行失败，降级模型路径：%s", e)
+                        task_plan.drop_tool_buffer(task_plan_obj.plan_id)
+                else:
+                    # 技能在两次调用之间被删/失效：降级为普通配方执行
+                    task_plan_obj.execution_mode = "model"
+                    task_plan.save(task_plan_obj)
+            if _skill_ok is None:
+                ok = client.chat(messages, **kwargs) if _slot_ok else False
             if (_slot_ok and task_plan_obj is not None and not ok
                     and not job.stop_event.is_set()):
                 # 429 / 超时 / 断网等生成层异常：记录退避，交给续跑循环换方法重试。
