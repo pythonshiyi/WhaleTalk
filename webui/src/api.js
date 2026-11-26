@@ -791,6 +791,24 @@ export async function getTaskQueue() {
   return api("/v1/task_queue");
 }
 
+/** P4-1：可复用任务配方列表（完成过的任务沉淀的步骤模板）。 */
+export async function listTaskRecipes(limit = 50) {
+  return api(`/v1/task_recipes?limit=${Number(limit) || 50}`);
+}
+
+/** P4-3：历史失败经验库（开工前避坑清单）。 */
+export async function listTaskPitfalls(limit = 50) {
+  return api(`/v1/task_pitfalls?limit=${Number(limit) || 50}`);
+}
+
+/** P4-1：删除一条配方。 @param {string} recipeId */
+export async function deleteTaskRecipe(recipeId) {
+  return api("/v1/task_recipes/delete", {
+    method: "POST",
+    body: JSON.stringify({ recipe_id: String(recipeId || "") }),
+  });
+}
+
 // ── 任务 / 执行历史 ─────────────────────────────
 /**
  * 执行历史列表。

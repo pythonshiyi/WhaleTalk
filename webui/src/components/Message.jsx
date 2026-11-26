@@ -223,6 +223,14 @@ function TaskPlanBlock({ plan, onControl }) {
         )}
       </div>
       {plan.goal && <div className="task-plan-goal">{plan.goal}</div>}
+      {(plan.recipe_name || (Array.isArray(plan.pitfalls_applied) && plan.pitfalls_applied.length > 0)) && (
+        <div className="task-plan-provenance">
+          {plan.recipe_name && <span className="task-plv task-plv-recipe" title={plan.recipe_id}>复用配方「{plan.recipe_name}」</span>}
+          {Array.isArray(plan.pitfalls_applied) && plan.pitfalls_applied.length > 0 && (
+            <span className="task-plv task-plv-pitfall">套用 {plan.pitfalls_applied.length} 条避坑经验</span>
+          )}
+        </div>
+      )}
       <ol className="task-plan-list">
         {plan.steps.map((s, i) => {
           const st = (s && s.status) || "pending";

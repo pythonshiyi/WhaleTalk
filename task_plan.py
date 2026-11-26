@@ -9,6 +9,9 @@
 - P3-2：任务开始前对工作区做轻量快照，步骤验收产物记录 hash/diff，可单文件回滚；
 - P3-3：全局队列、并发上限、优先级、同文件冲突避让、会话隔离；
 - P3-4：步骤依赖 DAG、并行组、策略模板、失败分支隔离与剩余步骤自动重规划。
+- P4-1：任务配方——完成过的任务沉淀为可复用步骤模板，命中即直接套用，跳过重复规划；
+- P4-2：证据即完成——最后一步 task_step_done 验收通过即 completed，无事后复核轮；
+- P4-3：开工前避坑清单——历史失败结构化，开工时注入提示，让模型第一次就走对路。
 """
 
 from __future__ import annotations
@@ -41,6 +44,11 @@ QUEUE_WAIT_TIMEOUT = 600.0
 _SNAPSHOT_FILE_LIMIT = 300
 _SNAPSHOT_FILE_MAX = 512 * 1024
 _SNAPSHOT_TOTAL_MAX = 24 * 1024 * 1024
+# P4-1：配方匹配阈值（token Jaccard），命中即复用已完成任务的步骤模板，跳过重复规划。
+RECIPE_MATCH_THRESHOLD = 0.55
+MAX_RECIPES = 200
+# P4-3：开工前注入的避坑条数上限（避免提示过长反而干扰模型）。
+MAX_PITFALL_HINTS = 5
 
 ACTIVE_STATUSES = ("running", "queued", "paused", "blocked")
 TERMINAL_STATUSES = ("completed", "cancelled")
@@ -214,6 +222,9 @@ class TaskPlan:
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
     rollbacks: List[Dict[str, Any]] = field(default_factory=list)
     touched_paths: List[str] = field(default_factory=list)
+    recipe_id: str = ""  # P4-1：复用的配方 ID（若命中）
+    recipe_name: str = ""  # P4-1：复用的配方名称（展示用）
+    pitfalls_applied: List[str] = field(default_factory=list)  # P4-3：本次开工套用的避坑条目 ID
 
     def __post_init__(self):
         if not self.created_at:
@@ -230,6 +241,9 @@ class TaskPlan:
         self.artifacts = [a for a in (self.artifacts or []) if isinstance(a, dict)][:200]
         self.rollbacks = [r for r in (self.rollbacks or []) if isinstance(r, dict)][:100]
         self.touched_paths = [str(p) for p in (self.touched_paths or []) if p][:200]
+        self.recipe_id = str(self.recipe_id or "")[:60]
+        self.recipe_name = str(self.recipe_name or "")[:120]
+        self.pitfalls_applied = [str(p) for p in (self.pitfalls_applied or []) if p][:30]
         self.refresh_dependencies()
 
     # -- 查询 --
@@ -305,6 +319,9 @@ class TaskPlan:
             "artifacts": list(self.artifacts),
             "rollbacks": list(self.rollbacks),
             "touched_paths": list(self.touched_paths),
+            "recipe_id": self.recipe_id,
+            "recipe_name": self.recipe_name,
+            "pitfalls_applied": list(self.pitfalls_applied),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -324,6 +341,9 @@ class TaskPlan:
             "artifacts": self.artifacts,
             "rollbacks": self.rollbacks,
             "touched_paths": self.touched_paths,
+            "recipe_id": self.recipe_id,
+            "recipe_name": self.recipe_name,
+            "pitfalls_applied": self.pitfalls_applied,
         }
 
     @classmethod
@@ -342,6 +362,9 @@ class TaskPlan:
             artifacts=list(data.get("artifacts") or []),
             rollbacks=list(data.get("rollbacks") or []),
             touched_paths=list(data.get("touched_paths") or []),
+            recipe_id=str(data.get("recipe_id") or ""),
+            recipe_name=str(data.get("recipe_name") or ""),
+            pitfalls_applied=list(data.get("pitfalls_applied") or []),
         )
 
     # -- 更新 --
@@ -813,6 +836,14 @@ def complete_step(plan_id: str, step: int, status: str, evidence: str,
         ok, msg = plan.mark(step, final_status, final_evidence, check_result)
         if not ok:
             return plan, msg
+        # P4-3：步骤失败即记录避坑经验，供同类任务开工前规避（不做事后复核）
+        if str(final_status).lower() not in ("done", "完成", "ok"):
+            try:
+                failed_step = next((s for s in plan.steps if int(s.get("id") or 0) == int(step)), None)
+                if failed_step is not None:
+                    record_pitfall(plan, failed_step)
+            except Exception as e:
+                logger.warning("避坑经验记录失败（不影响步骤验收）：%s", e)
         save(plan)
         suffix = f"；验收：{check_text}" if check_text else ""
         art_msg = ""
@@ -1149,6 +1180,250 @@ def find_incomplete(session_id: str) -> Optional[TaskPlan]:
     return load(str(plans[0].get("plan_id") or "")) if plans else None
 
 
+# ── P4：配方复用 + 避坑经验 + 证据即完成 ─────────────
+
+def _goal_tokens(goal: str) -> set:
+    """从目标抽取中文/英文词元，用于配方与避坑的相似度匹配。"""
+    return set(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", str(goal or "").lower()))
+
+
+def _jaccard(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / float(len(a | b))
+
+
+def _recipes_path() -> str:
+    return os.path.join(_dir(), "recipes", "recipes.json")
+
+
+def _pitfalls_path() -> str:
+    return os.path.join(_dir(), "experience", "pitfalls.json")
+
+
+def _load_store(path: str) -> List[Dict[str, Any]]:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return [x for x in (data or []) if isinstance(x, dict)] if isinstance(data, list) else []
+    # noqa: silent-except: 配方/经验库首次不存在或损坏时按空库处理，不阻断任务
+    except Exception:
+        return []
+
+
+def _save_store(path: str, rows: List[Dict[str, Any]]) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(rows[:MAX_RECIPES * 10], f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _step_templates(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out = []
+    for s in steps or []:
+        if not isinstance(s, dict):
+            continue
+        item = {
+            "title": str(s.get("title") or "")[:120],
+            "depends_on": _norm_ids(s.get("depends_on") or []),
+            "parallel_group": str(s.get("parallel_group") or "")[:60],
+        }
+        if item["title"]:
+            out.append(item)
+    return out[:12]
+
+
+def save_recipe(plan: TaskPlan) -> Tuple[Optional[Dict[str, Any]], str]:
+    """任务完成后沉淀配方：同名目标的步骤模板 + 成功证据，下次同类任务直接复用。"""
+    if plan is None or not plan.all_done():
+        return None, "任务未完成，不沉淀配方"
+    tokens = sorted(_goal_tokens(plan.goal))
+    if len(tokens) < 2:
+        return None, "目标信息过少，不沉淀配方"
+    with _WRITE_LOCK:
+        rows = _load_store(_recipes_path())
+        hit = None
+        best = 0.0
+        for row in rows:
+            score = _jaccard(set(tokens), set(row.get("tokens") or []))
+            if score > best:
+                best, hit = score, row
+        now = _now()
+        if hit is not None and best >= RECIPE_MATCH_THRESHOLD:
+            # 同类任务再次成功：强化这份配方（更新步骤模板 + 成功次数）
+            hit["steps"] = _step_templates(plan.steps)
+            hit["strategy"] = plan.strategy
+            hit["touched_paths"] = list(plan.touched_paths)[:50]
+            hit["successes"] = int(hit.get("successes") or 0) + 1
+            hit["source_plan_id"] = plan.plan_id
+            hit["updated_at"] = now
+            recipe = hit
+        else:
+            recipe = {
+                "recipe_id": uuid.uuid4().hex[:10],
+                "name": str(plan.goal)[:60],
+                "tokens": tokens[:40],
+                "strategy": plan.strategy,
+                "steps": _step_templates(plan.steps),
+                "touched_paths": list(plan.touched_paths)[:50],
+                "source_plan_id": plan.plan_id,
+                "uses": 0,
+                "successes": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+            rows.append(recipe)
+        rows = sorted(rows, key=lambda r: (int(r.get("successes") or 0), int(r.get("uses") or 0)), reverse=True)[:MAX_RECIPES]
+        _save_store(_recipes_path(), rows)
+        return recipe, f"已沉淀配方：{recipe.get('name', '')}"
+
+
+def list_recipes(limit: int = 50) -> List[Dict[str, Any]]:
+    try:
+        limit = max(1, min(int(limit or 50), MAX_RECIPES))
+    except (TypeError, ValueError):
+        limit = 50
+    rows = _load_store(_recipes_path())
+    rows.sort(key=lambda r: (int(r.get("successes") or 0), int(r.get("uses") or 0)), reverse=True)
+    return rows[:limit]
+
+
+def delete_recipe(recipe_id: str) -> bool:
+    rid = str(recipe_id or "")
+    with _WRITE_LOCK:
+        rows = _load_store(_recipes_path())
+        kept = [r for r in rows if str(r.get("recipe_id") or "") != rid]
+        if len(kept) == len(rows):
+            return False
+        _save_store(_recipes_path(), kept)
+        return True
+
+
+def match_recipe(goal: str) -> Optional[Dict[str, Any]]:
+    """命中历史配方则直接套用已验证步骤模板，跳过重复的模型规划调用。"""
+    tokens = _goal_tokens(goal)
+    if len(tokens) < 2:
+        return None
+    with _WRITE_LOCK:
+        rows = _load_store(_recipes_path())
+        best, hit = 0.0, None
+        for row in rows:
+            if not row.get("steps"):
+                continue
+            score = _jaccard(tokens, set(row.get("tokens") or []))
+            if score > best:
+                best, hit = score, row
+        if hit is None or best < RECIPE_MATCH_THRESHOLD:
+            return None
+        hit["uses"] = int(hit.get("uses") or 0) + 1
+        hit["updated_at"] = _now()
+        _save_store(_recipes_path(), rows)
+        return dict(hit)
+
+
+def record_pitfall(plan: TaskPlan, step: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """步骤失败/阻塞时记录一条避坑经验：目标签名 + 失败步骤 + 原因。"""
+    if plan is None or not isinstance(step, dict):
+        return None
+    reason = str(step.get("last_error") or step.get("evidence") or "").strip()
+    if not reason:
+        return None
+    tokens = sorted(_goal_tokens(plan.goal))
+    if len(tokens) < 2:
+        return None
+    with _WRITE_LOCK:
+        rows = _load_store(_pitfalls_path())
+        title = str(step.get("title") or "")[:120]
+        hit = None
+        best = 0.0
+        for row in rows:
+            score = _jaccard(set(tokens), set(row.get("tokens") or []))
+            if score > best:
+                best, hit = score, row
+        if hit is not None and best >= RECIPE_MATCH_THRESHOLD and str(hit.get("step_title") or "") == title:
+            hit["occurrences"] = int(hit.get("occurrences") or 0) + 1
+            hit["reason"] = reason[:300]
+            hit["updated_at"] = _now()
+            pitfall = hit
+        else:
+            pitfall = {
+                "pitfall_id": uuid.uuid4().hex[:10],
+                "tokens": tokens[:40],
+                "strategy": plan.strategy,
+                "step_title": title,
+                "reason": reason[:300],
+                "avoid": "",
+                "occurrences": 1,
+                "created_at": _now(),
+                "updated_at": _now(),
+            }
+            rows.append(pitfall)
+        rows = rows[-MAX_RECIPES * 5:]
+        _save_store(_pitfalls_path(), rows)
+        return pitfall
+
+
+def record_pitfall_avoid(plan: TaskPlan, changed_steps: List[Dict[str, Any]]) -> None:
+    """重规划成功后，把新步骤标题写成"换个方法"的避坑建议。"""
+    if plan is None or not changed_steps:
+        return
+    avoid = "；".join(str(s.get("title") or "")[:80] for s in changed_steps[:3])
+    if not avoid:
+        return
+    tokens = _goal_tokens(plan.goal)
+    with _WRITE_LOCK:
+        rows = _load_store(_pitfalls_path())
+        for row in rows:
+            if _jaccard(tokens, set(row.get("tokens") or [])) >= RECIPE_MATCH_THRESHOLD and not row.get("avoid"):
+                row["avoid"] = avoid[:300]
+                row["updated_at"] = _now()
+        _save_store(_pitfalls_path(), rows)
+
+
+def match_pitfalls(goal: str) -> List[Dict[str, Any]]:
+    """开工前匹配历史失败，返回需要提前规避的条目（含换方法建议）。"""
+    tokens = _goal_tokens(goal)
+    if len(tokens) < 2:
+        return []
+    scored = []
+    for row in _load_store(_pitfalls_path()):
+        score = _jaccard(tokens, set(row.get("tokens") or []))
+        if score >= RECIPE_MATCH_THRESHOLD:
+            scored.append((score, row))
+    scored.sort(key=lambda x: -x[0])
+    return [dict(r) for _s, r in scored[:MAX_PITFALL_HINTS]]
+
+
+def list_pitfalls(limit: int = 50) -> List[Dict[str, Any]]:
+    try:
+        limit = max(1, min(int(limit or 50), MAX_RECIPES))
+    except (TypeError, ValueError):
+        limit = 50
+    rows = _load_store(_pitfalls_path())
+    rows.sort(key=lambda r: int(r.get("occurrences") or 0), reverse=True)
+    return rows[:limit]
+
+
+def finalize(plan_id: str) -> Tuple[Optional[TaskPlan], bool]:
+    """证据即完成：所有步骤验收通过即一次性置 completed，无事后复核轮。
+
+    返回 (plan, just_completed)；just_completed 仅在本次调用首次完成时为真。
+    """
+    with _WRITE_LOCK:
+        plan = load(plan_id)
+        if plan is None:
+            return None, False
+        if plan.all_done() and plan.status not in ("cancelled", "completed"):
+            plan.status = "completed"
+            plan.updated_at = _now()
+            save(plan)
+            return plan, True
+        return plan, False
+
+
 def _heuristic_steps(goal: str) -> List[Dict[str, Any]]:
     """模型不可用时的本地拆步：只认显式顺序词/编号列表。"""
     text = str(goal or "").strip()
@@ -1244,10 +1519,16 @@ def _parse_steps(text: str, goal: str) -> Tuple[List[Dict[str, Any]], str]:
 
 
 def create(client, goal: str, session_id: str, priority: Optional[int] = None) -> TaskPlan:
-    """优先让模型拆步；限流/错误时用本地顺序词兜底，不阻断主任务。"""
+    """配方命中直接套用已验证步骤模板（省一次模型规划）；否则模型拆步/本地兜底。"""
     goal = str(goal or "").strip()
     parts: List[str] = []
-    if not any(h in goal for h in SIMPLE_HINTS):
+    recipe = match_recipe(goal)  # P4-1：同类任务复用，跳过规划调用，也不撞 429
+    steps: List[Dict[str, Any]] = []
+    strategy = ""
+    if recipe is not None:
+        steps = [dict(s) for s in (recipe.get("steps") or [])]
+        strategy = str(recipe.get("strategy") or "general")
+    elif not any(h in goal for h in SIMPLE_HINTS):
         try:
             client.chat(
                 [
@@ -1263,7 +1544,7 @@ def create(client, goal: str, session_id: str, priority: Optional[int] = None) -
         except Exception as e:
             logger.warning("任务规划模型不可用，改用本地拆步：%s", e)
             parts = []
-    steps, strategy = _parse_steps("".join(parts), goal)
+        steps, strategy = _parse_steps("".join(parts), goal)
     if not steps:
         steps = _heuristic_steps(goal)
     plan_id = uuid.uuid4().hex[:12]
@@ -1274,8 +1555,11 @@ def create(client, goal: str, session_id: str, priority: Optional[int] = None) -
         session_id=str(session_id or ""),
         goal=goal[:500],
         steps=steps,
-        strategy=strategy,
+        strategy=strategy or "general",
         priority=priority if priority is not None else priority_from_goal(goal),
+        recipe_id=str((recipe or {}).get("recipe_id") or ""),
+        recipe_name=str((recipe or {}).get("name") or ""),
+        pitfalls_applied=[str(p.get("pitfall_id") or "") for p in match_pitfalls(goal)],
     )
 
 
@@ -1368,6 +1652,11 @@ def replan_remaining(client, plan: TaskPlan) -> Tuple[Optional[TaskPlan], bool]:
         plan.updated_at = _now()
         plan.refresh_dependencies()
         save(plan)
+    # P4-3：把换方法后的步骤写成同类任务的避坑建议
+    try:
+        record_pitfall_avoid(plan, new_steps)
+    except Exception as e:
+        logger.warning("避坑建议记录失败：%s", e)
     return plan, True
 
 
@@ -1377,8 +1666,27 @@ def render_prompt(plan: TaskPlan) -> str:
         f"计划 ID：{plan.plan_id}",
         f"目标：{plan.goal}",
         f"执行策略：{plan.strategy}；优先级：{plan.priority}",
-        "步骤（依赖未满足的标为 waiting，暂时不要执行）：",
     ]
+    # P4-1：命中配方时明确告知，模型直接照已验证模板走，不要重新设计路径
+    if plan.recipe_id:
+        lines.append(f"复用配方「{plan.recipe_name}」：以下步骤已验证可行，直接照做，不要另起思路。")
+    # P4-3：开工前避坑——把历史失败转换成"第一次就走对"的前置提示，不做事后返工
+    if plan.pitfalls_applied:
+        applied = set(plan.pitfalls_applied)
+        avoid_lines = []
+        for row in match_pitfalls(plan.goal):
+            if str(row.get("pitfall_id") or "") not in applied:
+                continue
+            note = f"- 「{row.get('step_title', '')}」上次因 {str(row.get('reason', ''))[:80]} 失败"
+            if row.get("avoid"):
+                note += f"；改用：{str(row.get('avoid', ''))[:80]}"
+            else:
+                note += "；这次换一种方法，别重复同一路径"
+            avoid_lines.append(note)
+        if avoid_lines:
+            lines.append("[开工前避坑清单 · 历史经验，第一次就走对，不要事后返工]")
+            lines.extend(avoid_lines[:MAX_PITFALL_HINTS])
+    lines.append("步骤（依赖未满足的标为 waiting，暂时不要执行）：")
     for s in plan.steps:
         mark = {"done": "✓", "skipped": "↷", "failed": "✕", "blocked": "!", "waiting": "⧗"}.get(s.get("status"), "○")
         deps = _norm_ids(s.get("depends_on") or [])
@@ -1459,8 +1767,10 @@ def archive_text(plan: TaskPlan) -> str:
     lines = [
         f"[任务归档] 计划 {plan.plan_id}：{plan.goal}",
         f"状态：已完成，共 {len(plan.steps)} 步；策略：{plan.strategy}；完成时间：{_now()}。",
-        "步骤与验收证据：",
     ]
+    if plan.recipe_id:
+        lines.append(f"复用配方：{plan.recipe_name}（{plan.recipe_id}）")
+    lines.append("步骤与验收证据：")
     for s in plan.steps:
         ev = str(s.get("evidence") or "无证据").replace("\n", " ")
         v = s.get("verification") or {}

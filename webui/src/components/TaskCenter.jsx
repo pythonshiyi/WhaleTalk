@@ -156,8 +156,76 @@ function PlanCard({ plan, onControl, onResume, onSync, onRollback }) {
   );
 }
 
+function ExperiencePanel({ onDeleteRecipe }) {
+  const [recipes, setRecipes] = React.useState([]);
+  const [pitfalls, setPitfalls] = React.useState([]);
+  const [busy, setBusy] = React.useState(false);
+  const [loaded, setLoaded] = React.useState(false);
+  const load = React.useCallback(async () => {
+    setBusy(true);
+    try {
+      const [r, p] = await Promise.all([api.listTaskRecipes(50), api.listTaskPitfalls(50)]);
+      setRecipes(Array.isArray(r && r.recipes) ? r.recipes : []);
+      setPitfalls(Array.isArray(p && p.pitfalls) ? p.pitfalls : []);
+      setLoaded(true);
+    } catch (e) { silentWarnApi(e); }
+    finally { setBusy(false); }
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+  const doDelete = async (id) => {
+    try {
+      await api.deleteTaskRecipe(id);
+      await load();
+      if (onDeleteRecipe) onDeleteRecipe();
+    } catch (e) { silentWarnApi(e); }
+  };
+  return (
+    <div className="tc-exp">
+      <div className="tc-exp-bar">
+        <span className="tc-exp-note">完成过的任务会自动变成可复用配方；踩过的坑变成开工前避坑清单——都是为了让同类任务第一次就做对，不返工。</span>
+        <button className="tc-icon-btn" title="刷新" onClick={load} disabled={busy}><Icon name="refresh" size={14} /></button>
+      </div>
+      <div className="tc-exp-title">可复用配方（{recipes.length}）</div>
+      {recipes.length === 0 && <div className="tc-empty">还没有配方。任务完成后会自动沉淀。</div>}
+      <ul className="tc-exp-list">
+        {recipes.map((r) => (
+          <li key={r.recipe_id} className="tc-exp-item">
+            <div className="tc-exp-item-head">
+              <span className="tc-exp-name">{r.name}</span>
+              <span className="tc-exp-stat" title="成功次数">成功 {Number(r.successes) || 0}</span>
+              <span className="tc-exp-stat" title="复用次数">复用 {Number(r.uses) || 0}</span>
+              <button className="tc-exp-del" title="删除配方" onClick={() => doDelete(r.recipe_id)}>×</button>
+            </div>
+            <div className="tc-exp-steps">{(r.steps || []).map((s, i) => `${i + 1}. ${s.title}`).join("　")}</div>
+          </li>
+        ))}
+      </ul>
+      <div className="tc-exp-title">避坑经验（{pitfalls.length}）</div>
+      {pitfalls.length === 0 && <div className="tc-empty">还没有失败经验。步骤失败会自动记录。</div>}
+      <ul className="tc-exp-list">
+        {pitfalls.map((p) => (
+          <li key={p.pitfall_id} className="tc-exp-item tc-exp-pitfall">
+            <div className="tc-exp-item-head">
+              <span className="tc-exp-name">{p.step_title}</span>
+              <span className="tc-exp-stat" title="出现次数">×{Number(p.occurrences) || 0}</span>
+            </div>
+            <div className="tc-exp-reason">上次失败：{p.reason}</div>
+            {p.avoid && <div className="tc-exp-avoid">改用：{p.avoid}</div>}
+          </li>
+        ))}
+      </ul>
+      {loaded && recipes.length === 0 && pitfalls.length === 0 && (
+        <div className="tc-exp-hint">先跑几个任务，这里就会自动积累经验。</div>
+      )}
+    </div>
+  );
+}
+
+function silentWarnApi(e) { try { console.warn("[TaskCenter]", e); } catch (_) {} }
+
 export default function TaskCenter({ open, onClose, plans = [], loading, queue = [], recoverable = 0, onRefresh, onControl, onResume, onSync, onRollback }) {
   const [filter, setFilter] = React.useState("all");
+  const [tab, setTab] = React.useState("tasks");
   if (!open) return null;
   const shown = plans.filter((p) => {
     if (filter === "active") return ["queued", "running", "paused", "blocked"].includes(p.status);
@@ -176,17 +244,27 @@ export default function TaskCenter({ open, onClose, plans = [], loading, queue =
           <button className="tc-icon-btn" title="刷新" onClick={onRefresh}><Icon name="refresh" size={14} /></button>
           <button className="tc-icon-btn" title="关闭" onClick={onClose}>×</button>
         </div>
-        <div className="tc-filters" role="group" aria-label="任务筛选">
-          {[["all", "全部"], ["active", "进行中"], ["problem", "失败/阻塞"], ["done", "已完成"]].map(([key, label]) => (
-            <button key={key} className={filter === key ? "tc-filter-on" : ""} onClick={() => setFilter(key)}>{label}</button>
-          ))}
+        <div className="tc-tabs" role="group" aria-label="任务中心视图">
+          <button className={tab === "tasks" ? "tc-tab-on" : ""} onClick={() => setTab("tasks")}>任务</button>
+          <button className={tab === "exp" ? "tc-tab-on" : ""} onClick={() => setTab("exp")}>经验库</button>
         </div>
-        <div className="tc-list">
-          {loading && <div className="tc-empty">正在加载任务计划…</div>}
-          {!loading && shown.length === 0 && <div className="tc-empty">这里还没有任务计划。任务模式下多步任务会自动生成计划。</div>}
-          {shown.map((p) => <PlanCard key={p.plan_id} plan={p} onControl={onControl}
-            onResume={onResume} onSync={onSync} onRollback={onRollback} />)}
-        </div>
+        {tab === "tasks" ? (
+          <>
+            <div className="tc-filters" role="group" aria-label="任务筛选">
+              {[["all", "全部"], ["active", "进行中"], ["problem", "失败/阻塞"], ["done", "已完成"]].map(([key, label]) => (
+                <button key={key} className={filter === key ? "tc-filter-on" : ""} onClick={() => setFilter(key)}>{label}</button>
+              ))}
+            </div>
+            <div className="tc-list">
+              {loading && <div className="tc-empty">正在加载任务计划…</div>}
+              {!loading && shown.length === 0 && <div className="tc-empty">这里还没有任务计划。任务模式下多步任务会自动生成计划。</div>}
+              {shown.map((p) => <PlanCard key={p.plan_id} plan={p} onControl={onControl}
+                onResume={onResume} onSync={onSync} onRollback={onRollback} />)}
+            </div>
+          </>
+        ) : (
+          <ExperiencePanel />
+        )}
       </aside>
     </>
   );

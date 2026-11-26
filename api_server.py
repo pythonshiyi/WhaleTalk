@@ -8498,6 +8498,32 @@ class _Handler(BaseHTTPRequestHandler):
         })
 
 
+    @_get_route("/v1/task_recipes")
+    def _g_v1_task_recipes(self):
+        """P4-1：可复用任务配方列表（成功过的步骤模板）。"""
+        from urllib.parse import parse_qs, urlparse
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            limit = int((qs.get("limit") or ["50"])[0])
+        except (TypeError, ValueError):
+            limit = 50
+        recipes = task_plan.list_recipes(limit)
+        self._json(200, {"recipes": recipes, "count": len(recipes)})
+
+
+    @_get_route("/v1/task_pitfalls")
+    def _g_v1_task_pitfalls(self):
+        """P4-3：历史失败经验库（避坑清单）。"""
+        from urllib.parse import parse_qs, urlparse
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            limit = int((qs.get("limit") or ["50"])[0])
+        except (TypeError, ValueError):
+            limit = 50
+        pitfalls = task_plan.list_pitfalls(limit)
+        self._json(200, {"pitfalls": pitfalls, "count": len(pitfalls)})
+
+
     @_get_route("/v1/evolutions")
     def _g_v1_evolutions(self):
         self._json(200, _evolutions())
@@ -10270,6 +10296,18 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "message": msg, "results": results, "plan": plan.payload()})
 
 
+    @_post_route("/v1/task_recipes/delete")
+    def _p_v1_task_recipe_delete(self):
+        """删除一条配方：body {recipe_id}。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        recipe_id = str(body.get("recipe_id") or "").strip()
+        ok = task_plan.delete_recipe(recipe_id)
+        self._json(200 if ok else 404, {"ok": ok})
+
+
     @_post_route("/v1/memory/pending")
     def _p_v1_memory_pending(self):
         """裁决待确认记忆：body {action: "accept"|"dismiss", ids: [...]}。"""
@@ -11159,6 +11197,19 @@ class _Handler(BaseHTTPRequestHandler):
                                          f"{len(task_plan_obj.steps)}），继续执行未完成步骤。"),
                                 "level": "info",
                             })
+                        # P4：配方复用 / 避坑套用对用户可见（一次做对，不返工）
+                        if task_plan_obj.recipe_id:
+                            send("notice", {
+                                "text": (f"命中已验证配方「{task_plan_obj.recipe_name}」，直接沿用步骤模板，"
+                                         "省去重复规划。"),
+                                "level": "info",
+                            })
+                        if task_plan_obj.pitfalls_applied:
+                            send("notice", {
+                                "text": (f"已套用 {len(task_plan_obj.pitfalls_applied)} 条历史避坑经验，"
+                                         "第一步就绕开已知的失败路径。"),
+                                "level": "info",
+                            })
                         # P3-3：并发上限 + 同文件冲突避让；等待期间不阻塞其它会话。
                         if not task_plan.wait_for_slot(task_plan_obj.plan_id, job.stop_event):
                             _slot_ok = False
@@ -11316,13 +11367,20 @@ class _Handler(BaseHTTPRequestHandler):
                     "text": "本轮生成未正常完成，任务可能未做完；可补充指令继续或重试。",
                     "level": "warn",
                 })
-            # 任务计划收尾：完成则落 completed；未完成/被停止则保留 running 供下次续跑
+            # 任务计划收尾：证据即完成（最后一步验收通过即 completed，无事后复核轮）；
+            # 未完成/被停止则保留 running 供下次续跑。
             if task_plan_obj is not None:
                 try:
-                    final_plan = task_plan.load(task_plan_obj.plan_id) or task_plan_obj
-                    if final_plan.all_done() and final_plan.status not in ("cancelled", "completed"):
-                        final_plan.status = "completed"
-                        task_plan.save(final_plan)
+                    final_plan, just_done = task_plan.finalize(task_plan_obj.plan_id)
+                    final_plan = final_plan or task_plan_obj
+                    if just_done:
+                        # 沉淀配方：完成过的任务成为下次同类任务的已验证模板，省重复规划
+                        try:
+                            _recipe, _rnote = task_plan.save_recipe(final_plan)
+                            if _rnote:
+                                send("notice", {"text": _rnote, "level": "info"})
+                        except Exception as e:
+                            logger.warning("任务配方沉淀失败（不影响结果）：%s", e)
                         # 跨会话连续性：把验收证据归档到长期记忆，下次会话可直接召回
                         try:
                             import agent_tools.tool_brain as _brain
