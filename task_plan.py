@@ -424,6 +424,19 @@ def current_hint(plan: Optional[TaskPlan]) -> str:
     )
 
 
+def archive_text(plan: TaskPlan) -> str:
+    """任务完成后写入长期记忆的文本：目标 + 每步验收证据。"""
+    lines = [
+        f"[任务归档] 计划 {plan.plan_id}：{plan.goal}",
+        f"状态：已完成，共 {len(plan.steps)} 步；完成时间：{_now()}。",
+        "步骤与验收证据：",
+    ]
+    for s in plan.steps:
+        ev = str(s.get("evidence") or "无证据").replace("\n", " ")
+        lines.append(f"{s.get('id')}. {s.get('title')} → {ev[:220]}")
+    return "\n".join(lines)
+
+
 def resume_prompt(plan: TaskPlan) -> str:
     """模型提前收尾时，自动续跑用的用户消息。"""
     lines = [

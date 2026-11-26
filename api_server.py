@@ -11061,6 +11061,25 @@ class _Handler(BaseHTTPRequestHandler):
                     if final_plan.all_done():
                         final_plan.status = "completed"
                         task_plan.save(final_plan)
+                        # 跨会话连续性：把验收证据归档到长期记忆，下次会话可直接召回
+                        try:
+                            import agent_tools.tool_brain as _brain
+                            _res = str(_brain.write_memory(
+                                task_plan.archive_text(final_plan),
+                                tags=f"task-archive-{final_plan.plan_id},任务归档",
+                                type="项目",
+                                origin="system",
+                                confidence=1.0,
+                            ))
+                            if _res.startswith(("已写入", "该内容已存在")):
+                                send("notice", {
+                                    "text": "任务已完成并归档到记忆；下次可直接问我这次任务的产物与证据。",
+                                    "level": "info",
+                                })
+                            else:
+                                logger.warning("任务归档未写入：%s", _res)
+                        except Exception as e:
+                            logger.warning("任务归档到记忆失败（不影响任务结果）：%s", e)
                     send("task_plan", final_plan.payload())
                     if not final_plan.all_done():
                         left = len(final_plan.steps) - final_plan.done_count()
