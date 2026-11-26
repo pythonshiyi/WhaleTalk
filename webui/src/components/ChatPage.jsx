@@ -11,6 +11,7 @@ import ContextMenu, { useContextMenu } from "./ContextMenu.jsx";
 import ConfirmGate from "./ConfirmGate.jsx";
 import AuxPanel from "./AuxPanel.jsx";
 import { BatchPanel, CmdPanel, TimelinePanel, FimPanel, VariantPanel, SearchPanel, StarPanel } from "./ChatPanels.jsx";
+import TaskCenter from "./TaskCenter.jsx";
 import { FlashContext, ToastContext } from "./FlashToast.jsx";
 import { ModeContext, DisplayContext } from "../App.jsx";
 import * as api from "../api.js";
@@ -872,6 +873,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [variantPanel, setVariantPanel] = React.useState(false);
   const [timelinePanel, setTimelinePanel] = React.useState(false);
   const [cmdPanel, setCmdPanel] = React.useState(false);
+  const [taskCenterOpen, setTaskCenterOpen] = React.useState(false);
+  const [taskPlans, setTaskPlans] = React.useState([]);
+  const [taskCenterLoading, setTaskCenterLoading] = React.useState(false);
   const [moreOpen, setMoreOpen] = React.useState(false);
   const moreRef = React.useRef(null);
   const msgMenu = useContextMenu();   // 消息右键菜单
@@ -1558,6 +1562,49 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     }
   };
 
+  const refreshTaskPlans = React.useCallback(async () => {
+    setTaskCenterLoading(true);
+    try {
+      const d = await api.listTaskPlans({ status: "all", limit: 100 });
+      setTaskPlans(Array.isArray(d && d.plans) ? d.plans : []);
+    } catch (e) { silentWarn(e, "ChatPage.taskPlans"); }
+    finally { setTaskCenterLoading(false); }
+  }, []);
+
+  const handlePlanControl = async (planId, action, step) => {
+    try {
+      const d = await api.controlTaskPlan(planId, action, step ? { step } : {});
+      if (d && d.plan) {
+        updateMsgs((list) => list.map((x) => (
+          x && x.taskPlan && x.taskPlan.plan_id === planId ? { ...x, taskPlan: d.plan } : x
+        )));
+        setTaskPlans((list) => list.map((p) => (p.plan_id === planId ? d.plan : p)));
+      }
+      toast((d && d.message) || "任务计划已更新");
+      if (taskCenterOpen) refreshTaskPlans();
+    } catch (e) {
+      silentWarn(e, "ChatPage.taskControl");
+      toast("⚠️ 任务控制失败：" + ((e && e.message) || "后端未连接"));
+    }
+  };
+
+  const resumeTaskPlan = async (plan) => {
+    if (!plan || !plan.plan_id) return;
+    try {
+      const d = await api.controlTaskPlan(plan.plan_id, "resume");
+      setTaskCenterOpen(false);
+      if (plan.session_id && plan.session_id !== activeId && !busy) {
+        await onPickSession(plan.session_id);
+      }
+      composerRef.current?.insertText(`继续任务计划 ${plan.plan_id}`, true);
+      toast((d && d.message) || "计划已恢复，继续指令已填入输入框");
+      refreshTaskPlans();
+    } catch (e) {
+      silentWarn(e, "ChatPage.taskResume");
+      toast("⚠️ 恢复任务失败：" + ((e && e.message) || "后端未连接"));
+    }
+  };
+
   // 刷新/断线后：轮询后端仍在跑的作业。后端每 4s 把在制回合落盘，
   // 点「同步进度」即可重新拉取会话，看到当前已完成的部分。
   React.useEffect(() => {
@@ -2091,6 +2138,17 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
             </div>
 
             <div className="chat-header-right">
+              <button
+                className="task-center-btn"
+                title="任务中心：查看/恢复/控制长任务计划"
+                onClick={() => { setTaskCenterOpen(true); refreshTaskPlans(); }}
+              >
+                <Icon name="list" size={13} />
+                <span>任务中心</span>
+                {taskPlans.some((p) => ["running", "paused", "blocked"].includes(p.status)) && (
+                  <span className="task-center-dot" />
+                )}
+              </button>
               {/* 主操作：模式切换 + 运行开关 */}
               <div className="ch-actions">
                 {!isTask && (
@@ -2310,6 +2368,7 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                     onRegenerate={m.role === "assistant" ? onRegenerate : undefined}
                     onContinue={m.role === "assistant" && !m.streaming ? () => onContinue(gi) : undefined}
                     onFocusActivity={focusActivity}
+                    onPlanControl={handlePlanControl}
                   />
                 </div>
               );
@@ -2460,6 +2519,16 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
         onStar={onStarMsg}
         onPin={onPinMsg}
         onGoto={gotoMessage}
+      />
+
+      <TaskCenter
+        open={taskCenterOpen}
+        onClose={() => setTaskCenterOpen(false)}
+        plans={taskPlans}
+        loading={taskCenterLoading}
+        onRefresh={refreshTaskPlans}
+        onControl={handlePlanControl}
+        onResume={resumeTaskPlan}
       />
     </div>
   );

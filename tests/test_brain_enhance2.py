@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -95,9 +96,12 @@ def test_hit_boost_in_decay(btmp):
 
 def test_spaced_review_picks_old_high_value(btmp):
     import brain_api
-    # 一条 8 天前的高价值记忆（跨 7 天档中段）应入选复习
-    old_hi = _mk("m-hi", "关键原则：先备份再改库", ts="2026-08-27T10:00:00+08:00", imp=5)
-    fresh = _mk("m-fresh", "今天小记", ts="2026-09-03T10:00:00+08:00", imp=3)
+    # 一条 8 天前的高价值记忆（跨 7 天档中段）应入选复习；用相对时间避免测试随日期腐坏
+    now = datetime.now(timezone(timedelta(hours=8)))
+    old_ts = (now - timedelta(days=8)).isoformat(timespec="seconds")
+    fresh_ts = now.isoformat(timespec="seconds")
+    old_hi = _mk("m-hi", "关键原则：先备份再改库", ts=old_ts, imp=5)
+    fresh = _mk("m-fresh", "今天小记", ts=fresh_ts, imp=3)
     with open(bk.MEMORY_JSONL, "a", encoding="utf-8") as f:
         f.write(_jl(old_hi) + "\n" + _jl(fresh) + "\n")
     due = brain_api._spaced_review_due(__import__("time").time(), limit=5)

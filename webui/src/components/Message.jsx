@@ -183,30 +183,84 @@ function PlanBlock({ plan, tools }) {
   );
 }
 
-// ── 长任务计划（任务模式自动拆步 + 逐步验收）──────────
-function TaskPlanBlock({ plan }) {
+// ── 长任务计划（自动拆步 + 结构化验收 + 可控执行）────────
+const TASK_STATUS_LABEL = {
+  running: "进行中",
+  paused: "已暂停",
+  blocked: "已阻塞",
+  completed: "已完成",
+  cancelled: "已取消",
+};
+
+function TaskPlanBlock({ plan, onControl }) {
+  const [open, setOpen] = React.useState({});
   if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) return null;
   const done = plan.steps.filter((s) => s && s.status === "done").length;
+  const active = ["running", "paused", "blocked"].includes(plan.status);
+  const ctl = (action, step) => onControl && onControl(plan.plan_id, action, step);
+  const statusLabel = TASK_STATUS_LABEL[plan.status] || plan.status;
   return (
     <div className="task-plan-block">
       <div className="task-plan-head">
         <Icon name="list" size={13} />
         <span>任务计划</span>
+        <span className={`task-plan-state task-plan-state-${plan.status}`}>{statusLabel}</span>
         <span className="task-plan-cnt">{done}/{plan.steps.length}</span>
-        {plan.status === "completed" && <span className="task-plan-ok">已完成</span>}
+        {active && (
+          <span className="task-plan-ctl-wrap">
+            {plan.status === "running" ? (
+              <button className="task-plan-ctl" title="暂停任务" onClick={() => ctl("pause")}>暂停</button>
+            ) : (
+              <button className="task-plan-ctl" title="恢复任务" onClick={() => ctl("resume")}>继续</button>
+            )}
+            <button className="task-plan-ctl task-plan-ctl-danger" title="取消任务" onClick={() => ctl("cancel")}>取消</button>
+          </span>
+        )}
       </div>
       {plan.goal && <div className="task-plan-goal">{plan.goal}</div>}
       <ol className="task-plan-list">
         {plan.steps.map((s, i) => {
           const st = (s && s.status) || "pending";
+          const v = s && s.verification;
+          const hasDetail = !!(s && (s.evidence || s.last_error || (v && v.checks && v.checks.length)));
           return (
             <li key={(s && s.id) || i} className={`task-plan-item task-plan-${st}`}>
-              <span className="task-plan-node">
-                {st === "done" ? "✓" : st === "failed" ? "✕" : i + 1}
-              </span>
-              <span className="task-plan-title">{s && s.title}</span>
-              {s && s.evidence && (
-                <span className="task-plan-evidence" title={s.evidence}>证据</span>
+              <div className="task-plan-step-row">
+                <span className="task-plan-node">
+                  {st === "done" ? "✓" : st === "skipped" ? "↷" : ["failed", "blocked"].includes(st) ? "✕" : i + 1}
+                </span>
+                <span className="task-plan-title">{s && s.title}</span>
+                {Number(s && s.attempts) > 0 && (
+                  <span className="task-plan-attempts" title="失败次数">×{s.attempts}</span>
+                )}
+                {hasDetail && (
+                  <button className="task-plan-evidence" title="查看验收证据"
+                    onClick={() => setOpen((o) => ({ ...o, [s.id]: !o[s.id] }))}>
+                    {v && v.ok ? "已验收" : "证据"}
+                  </button>
+                )}
+                {active && ["failed", "blocked", "done", "skipped"].includes(st) && (
+                  <button className="task-plan-ctl" title="重置此步骤后重试"
+                    onClick={() => ctl("retry", s.id)}>重试</button>
+                )}
+                {active && ["pending", "failed", "blocked"].includes(st) && (
+                  <button className="task-plan-ctl" title="跳过此步骤"
+                    onClick={() => ctl("skip", s.id)}>跳过</button>
+                )}
+              </div>
+              {open[s.id] && hasDetail && (
+                <div className="task-plan-detail">
+                  {s.last_error && <div className="task-plan-error">失败原因：{s.last_error}</div>}
+                  {s.evidence && <div className="task-plan-evidence-text">{s.evidence}</div>}
+                  {v && Array.isArray(v.checks) && v.checks.length > 0 && (
+                    <div className="task-plan-checks">
+                      {v.checks.map((c, ci) => <div key={ci}>· {c}</div>)}
+                    </div>
+                  )}
+                  {v && v.path && (
+                    <button className="msg-op" onClick={() => api.openFile(v.path).catch(() => {})}>打开产物</button>
+                  )}
+                </div>
               )}
             </li>
           );
@@ -400,7 +454,7 @@ function SegNote({ n }) {
 }
 
 // ── 悬停操作条 ────────────────────────────────────────
-function Message({ msg, enter = false, onOpenTrace, onResend, onStar, onPin, onQuote, onFork, onEdit, onRegenerate, onContinue, onFocusActivity }) {
+function Message({ msg, enter = false, onOpenTrace, onResend, onStar, onPin, onQuote, onFork, onEdit, onRegenerate, onContinue, onFocusActivity, onPlanControl }) {
   const [copied, setCopied] = React.useState(false);
   const copy = async () => {
     try {
@@ -506,7 +560,7 @@ function Message({ msg, enter = false, onOpenTrace, onResend, onStar, onPin, onQ
           {!msg.streaming && totalMs > 0 && <span className="msg-time">· ⏱ {fmtMs(totalMs)}</span>}
         </div>
 
-        <TaskPlanBlock plan={msg.taskPlan} />
+        <TaskPlanBlock plan={msg.taskPlan} onControl={onPlanControl} />
         <PlanBlock plan={msg.plan} tools={msg.tools} />
         {msg.think && <ThinkBlock text={msg.think} streaming={msg.streaming} />}
         {flow.map((b, i) => (b.type === "steps"

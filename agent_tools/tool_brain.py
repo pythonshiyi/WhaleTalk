@@ -969,6 +969,19 @@ def task_checkpoint_load():
                         "status": {"type": "string", "enum": ["done", "failed"], "description": "done=完成，failed=失败"},
                         "evidence": {"type": "string", "description": "可核验的证据：文件路径、命令输出、URL 或验收结论"},
                         "verify_path": {"type": "string", "description": "可选：产物路径；给出后会检查文件/目录是否存在"},
+                        "verification": {
+                            "type": "object",
+                            "description": "可选：结构化验收规则。不传时只要求文字证据",
+                            "properties": {
+                                "path": {"type": "string", "description": "产物路径（等价于 verify_path）"},
+                                "expect_type": {"type": "string", "enum": ["file", "dir"], "description": "期望产物类型"},
+                                "expect_contains": {"type": "array", "items": {"type": "string"}, "description": "产物文本必须包含的片段"},
+                                "expect_not_contains": {"type": "array", "items": {"type": "string"}, "description": "产物文本不得包含的片段"},
+                                "min_size": {"type": "integer", "description": "文件最小字节数"},
+                                "json_keys": {"type": "array", "items": {"type": "string"}, "description": "JSON 必须包含的字段（支持 a.b 点路径）"},
+                                "min_len": {"type": "integer", "description": "JSON 列表/对象最小条目数"},
+                            },
+                        },
                     },
                     "required": ["plan_id", "step", "evidence"],
                 },
@@ -978,8 +991,8 @@ def task_checkpoint_load():
     phrases='标记任务步骤完成',
     preactivate=(('任务计划', '第几步', '步骤完成', '验收'),),
 )
-def task_step_done(plan_id="", step=0, status="done", evidence="", verify_path=""):
-    """长任务逐步验收：证据 + 可选产物存在性检查，避免口头宣布完成。"""
+def task_step_done(plan_id="", step=0, status="done", evidence="", verify_path="", verification=None):
+    """长任务逐步验收：证据 + 结构化校验，验收失败会自动记为失败/阻塞。"""
     if str(status or "").lower() not in ("done", "failed"):
         return "错误：status 仅支持 done / failed"
     try:
@@ -989,13 +1002,15 @@ def task_step_done(plan_id="", step=0, status="done", evidence="", verify_path="
     ev = str(evidence or "").strip()
     if not ev:
         return "错误：必须提供 evidence（文件路径/命令输出/URL/验收结论），没有证据不算完成"
-    if verify_path:
-        p = permissions.resolve(str(verify_path))
-        if not p or not os.path.exists(p):
-            return f"错误：验收路径不存在：{verify_path}"
-        ev = f"{ev[:400]}（已核验：{p}）"
+    spec = verification
+    if isinstance(spec, dict):
+        spec = dict(spec)
+        if verify_path and not spec.get("path"):
+            spec["path"] = str(verify_path)
+    elif not spec:
+        spec = {"path": str(verify_path)} if verify_path else {}
     try:
-        plan, msg = task_plan.complete_step(plan_id, step_no, status, ev[:500])
+        plan, msg = task_plan.complete_step(plan_id, step_no, status, ev[:500], spec, str(verify_path or ""))
     except Exception as e:  # noqa: BLE001
         return f"错误：计划保存失败：{e}"
     if plan is None:

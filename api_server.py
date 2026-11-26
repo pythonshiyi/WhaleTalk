@@ -150,6 +150,46 @@ def _running_job_snapshot(limit=20):
     return out[:limit]
 
 
+def _task_plan_jobs(plan):
+    """找到正在执行指定任务计划的聊天作业（按 SSE 中的 plan_id 识别）。"""
+    plan_id = str(getattr(plan, "plan_id", "") or "")
+    if not plan_id:
+        return []
+    with _CHAT_JOBS_LOCK:
+        jobs = list(_CHAT_JOBS.values())
+    hit = []
+    for job in jobs:
+        if getattr(job, "status", "") != "running":
+            continue
+        with job.cond:
+            events = list(job.events)
+        if any(
+            ev == "task_plan" and isinstance(data, dict)
+            and str(data.get("plan_id") or "") == plan_id
+            for _seq, ev, data in events
+        ):
+            hit.append(job)
+    return hit
+
+
+def _broadcast_task_plan(plan):
+    """用户控制计划后，把最新进度推给仍在订阅该计划的会话。"""
+    payload = plan.payload()
+    for job in _task_plan_jobs(plan):
+        job.emit("task_plan", payload)
+    return len(_task_plan_jobs(plan))
+
+
+def _stop_task_plan_jobs(plan):
+    """暂停/取消时只停止该计划对应的生成作业，不误伤同会话其他任务。"""
+    stopped = 0
+    for job in _task_plan_jobs(plan):
+        if not job.stop_event.is_set():
+            job.stop_event.set()
+            stopped += 1
+    return stopped
+
+
 def _chat_jobs_gc():
     """回收已完成且超过 TTL 的作业（防内存增长）。
 
@@ -8364,6 +8404,33 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, _tasks())
 
 
+    @_get_route(("qpath", "/v1/task_plans"))
+    def _g_v1_task_plans(self):
+        from urllib.parse import parse_qs, urlparse
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            limit = int((qs.get("limit") or ["100"])[0])
+        except (TypeError, ValueError):
+            limit = 100
+        plans = task_plan.list_plans(
+            status=(qs.get("status") or [""])[0],
+            session_id=(qs.get("session_id") or [""])[0],
+            limit=limit,
+        )
+        active = sum(1 for p in plans if p.get("status") in task_plan.ACTIVE_STATUSES)
+        self._json(200, {"plans": plans, "count": len(plans), "active": active})
+
+
+    @_get_route(("pre", "/v1/task_plans/", ""))
+    def _g_v1_task_plan_detail(self):
+        plan_id = self.path[len("/v1/task_plans/"):].split("?", 1)[0]
+        plan = task_plan.load(plan_id)
+        if plan is None:
+            self._json(404, {"error": "task plan not found"})
+            return
+        self._json(200, {"plan": plan.payload()})
+
+
     @_get_route("/v1/evolutions")
     def _g_v1_evolutions(self):
         self._json(200, _evolutions())
@@ -10077,6 +10144,29 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True})
 
 
+    @_post_route("/v1/task_plans/control")
+    def _p_v1_task_plan_control(self):
+        """任务中心控制：pause/resume/cancel/retry/skip。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        plan_id = str(body.get("plan_id") or "").strip()
+        action = str(body.get("action") or "").strip()
+        try:
+            step = int(body.get("step") or 0)
+        except (TypeError, ValueError):
+            step = 0
+        plan, msg = task_plan.control(plan_id, action, step, str(body.get("reason") or ""))
+        if plan is None:
+            self._json(404, {"error": msg})
+            return
+        if action in ("pause", "cancel"):
+            _stop_task_plan_jobs(plan)
+        _broadcast_task_plan(plan)
+        self._json(200, {"ok": True, "message": msg, "plan": plan.payload()})
+
+
     @_post_route("/v1/memory/pending")
     def _p_v1_memory_pending(self):
         """裁决待确认记忆：body {action: "accept"|"dismiss", ids: [...]}。"""
@@ -11035,7 +11125,13 @@ class _Handler(BaseHTTPRequestHandler):
                    and _auto_continue < 2):
                 latest = task_plan.load(task_plan_obj.plan_id) or task_plan_obj
                 task_plan_obj = latest
-                if latest.all_done():
+                if latest.all_done() or latest.status in ("paused", "cancelled"):
+                    break
+                if latest.status == "blocked":
+                    send("notice", {
+                        "text": "任务步骤连续失败，已自动阻塞；请在任务中心重试/跳过，或换方法后回复“继续”。",
+                        "level": "warn",
+                    })
                     break
                 _auto_continue += 1
                 _left = len(latest.steps) - latest.done_count()
@@ -11058,7 +11154,7 @@ class _Handler(BaseHTTPRequestHandler):
             if task_plan_obj is not None:
                 try:
                     final_plan = task_plan.load(task_plan_obj.plan_id) or task_plan_obj
-                    if final_plan.all_done():
+                    if final_plan.all_done() and final_plan.status not in ("cancelled", "completed"):
                         final_plan.status = "completed"
                         task_plan.save(final_plan)
                         # 跨会话连续性：把验收证据归档到长期记忆，下次会话可直接召回
@@ -11083,8 +11179,13 @@ class _Handler(BaseHTTPRequestHandler):
                     send("task_plan", final_plan.payload())
                     if not final_plan.all_done():
                         left = len(final_plan.steps) - final_plan.done_count()
-                        if job.stop_event.is_set():
-                            send("notice", {"text": f"任务已暂停，计划已保留（剩 {left} 步），下次继续会自动续跑。",
+                        if final_plan.status == "cancelled":
+                            send("notice", {"text": "任务已取消，计划保留在任务中心可供查看。", "level": "warn"})
+                        elif final_plan.status == "paused" or job.stop_event.is_set():
+                            send("notice", {"text": f"任务已暂停，计划已保留（剩 {left} 步）；回复“继续”可从断点续跑。",
+                                            "level": "warn"})
+                        elif final_plan.status == "blocked":
+                            send("notice", {"text": f"任务已阻塞（剩 {left} 步）；请在任务中心重试/跳过失败步骤。",
                                             "level": "warn"})
                         else:
                             send("notice", {"text": (f"任务计划还有 {left} 步未完成（已自动续跑 {_auto_continue} 轮）；"

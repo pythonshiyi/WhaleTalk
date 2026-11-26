@@ -203,9 +203,10 @@ def test_all_split_tools_in_all_six_layers():
 
     cap = set(toolkit.capability_names())      # 运行时能力包（内置/用户）不算内置工具
     names = [t["function"]["name"] for t in dc.TOOLS if t["function"]["name"] not in cap]
-    # 163（162 + hardware_accel）→ 165（+ lyric_align / mv_credits_card）→ 169（+ 鲸群社区 4 工具）
-    assert len(names) == 169, "内置工具总数应为 169，实际 %d" % len(names)
-    assert len(dc._TOOL_ORDER) == 169, "顺序表必须与工具数一致"
+    # 163（162 + hardware_accel）→ 165（+ lyric_align / mv_credits_card）→
+    # 169（+ 鲸群社区 4 工具）→ 170（+ task_step_done 长任务验收工具）
+    assert len(names) == 170, "内置工具总数应为 170，实际 %d" % len(names)
+    assert len(dc._TOOL_ORDER) == 170, "顺序表必须与工具数一致"
     assert set(dc.TOOL_CALL_MAP) - cap == set(dc._TOOL_ORDER), "CALL_MAP 键与 ORDER 必须一一对应"
     for n in _uniq(ALL_SPLIT_TOOLS):
         assert n in names, "%s 必须仍在 TOOLS 列表" % n

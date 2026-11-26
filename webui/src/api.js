@@ -53,6 +53,23 @@ const REQUEST_TIMEOUT = 15000;
  */
 
 /**
+ * 长任务计划（任务模式）。
+ * @typedef {Object} TaskPlan
+ * @property {string} plan_id
+ * @property {string} session_id
+ * @property {string} goal
+ * @property {"running"|"paused"|"blocked"|"completed"|"cancelled"} status
+ * @property {Array<{id:number,title:string,status:string,evidence:string,verification:Object,attempts:number,last_error:string,updated_at:string}>} steps
+ * @property {number} done
+ * @property {number} total
+ * @property {number} failed
+ * @property {number} skipped
+ * @property {number|null} current_step
+ * @property {string} created_at
+ * @property {string} updated_at
+ */
+
+/**
  * streamChat 事件处理器集合。
  * @typedef {Object} StreamHandlers
  * @property {(text:string)=>void} [onReasoning] 思考增量
@@ -656,6 +673,45 @@ export async function usePrompt(id) {
 /** @returns {Promise<any>} 恢复内置指令模板 */
 export async function restoreBuiltinPrompts() {
   return api("/v1/prompts/restore_builtin", { method: "POST", body: JSON.stringify({}) });
+}
+
+// ── 长任务计划中心 ─────────────────────────────
+/**
+ * 任务计划列表（任务中心）。
+ * @param {{status?:string, session_id?:string, limit?:number}} [q]
+ * @returns {Promise<{plans:TaskPlan[], count:number, active:number}>}
+ */
+export async function listTaskPlans(q = {}) {
+  const p = new URLSearchParams();
+  if (q.status) p.set("status", String(q.status));
+  if (q.session_id) p.set("session_id", String(q.session_id));
+  if (q.limit) p.set("limit", String(q.limit));
+  const qs = p.toString();
+  return api(`/v1/task_plans${qs ? `?${qs}` : ""}`);
+}
+
+/** @param {string} planId @returns {Promise<{plan:TaskPlan}>} */
+export async function getTaskPlan(planId) {
+  return api(`/v1/task_plans/${encodeURIComponent(planId)}`);
+}
+
+/**
+ * 控制任务计划：pause / resume / cancel / retry / skip。
+ * @param {string} planId
+ * @param {"pause"|"resume"|"cancel"|"retry"|"skip"} action
+ * @param {{step?:number, reason?:string}} [opts]
+ * @returns {Promise<{ok:boolean, message:string, plan:TaskPlan}>}
+ */
+export async function controlTaskPlan(planId, action, opts = {}) {
+  return api("/v1/task_plans/control", {
+    method: "POST",
+    body: JSON.stringify({
+      plan_id: planId,
+      action,
+      step: opts.step,
+      reason: opts.reason,
+    }),
+  });
 }
 
 // ── 任务 / 执行历史 ─────────────────────────────
