@@ -1,0 +1,16 @@
+{
+  "id": "docs_docx_read",
+  "category": "docs",
+  "turns": [
+    "读取 whale.docx，把它的一级标题和正文写入 out/docx.txt，两行即可。不要询问，直接完成。"
+  ],
+  "setup": ["whale.docx"],
+  "accept": [
+    {"type": "file_exists", "path": "out/docx.txt"},
+    {"type": "file_contains", "path": "out/docx.txt", "text": "鲸语文档测试"},
+    {"type": "file_contains", "path": "out/docx.txt", "text": "本地优先"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 0.8, "max_seconds": 180},
+  "notes": "验证 Word 读取与标题/正文提取。"
+}

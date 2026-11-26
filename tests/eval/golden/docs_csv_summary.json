@@ -1,0 +1,17 @@
+{
+  "id": "docs_csv_summary",
+  "category": "docs",
+  "turns": [
+    "读取 sales.csv，生成 out/summary.csv。表头必须是 region,total，数据按 total 从高到低排序，恰好三行。不要询问，直接完成。"
+  ],
+  "setup": ["sales.csv"],
+  "accept": [
+    {"type": "file_exists", "path": "out/summary.csv"},
+    {"type": "csv_columns", "path": "out/summary.csv", "columns": ["region", "total"]},
+    {"type": "csv_row_count", "path": "out/summary.csv", "rows": 3},
+    {"type": "csv_row", "path": "out/summary.csv", "index": 0, "values": ["华南", "1500"]},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 20, "max_cny": 1.0, "max_seconds": 240},
+  "notes": "验证表格转换、排序与 CSV 写出。"
+}

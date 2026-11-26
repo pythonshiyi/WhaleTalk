@@ -245,13 +245,19 @@ def _auto_lint(path, timeout=30, cap=6000):
 def read_file(path, start_line=None, max_lines=None):
     if not path or len(str(path)) > 512:
         return "错误：路径为空或过长"
+    # 统一解析相对路径（相对工作区）：write_file 一直这么做，read_file 此前把原始
+    # 相对路径直接交给 open()，会按**进程 cwd**（仓库根）解析，导致「刚写进工作区的
+    # 文件读不到」——评测中实测踩到。权限判定与后续 open 必须用同一个绝对路径。
+    p = permissions.resolve(path)
+    if not p:
+        return "错误：路径非法"
     # 与 list_dir / write_file 等一致：所有路径操作先经权限模型判定
     # （默认仅允许工作区；读取工作区外文件请在「权限设置 → allowed_dirs」加入目录）
-    ok, reason = permissions.check_filesystem(path, write=False)
+    ok, reason = permissions.check_filesystem(p, write=False)
     if not ok:
         return reason
     # L7: 编码探测（BOM/UTF-8/GB18030/BIG5/latin-1），替代固定 utf-8 造成的中文乱码
-    enc, is_fallback = _detect_text_encoding(path)
+    enc, is_fallback = _detect_text_encoding(p)
     enc_note = f"\n[编码：{enc}]" if is_fallback else ""
     try:
         if start_line is not None or max_lines is not None:
@@ -263,7 +269,7 @@ def read_file(path, start_line=None, max_lines=None):
                 return "错误：start_line / max_lines 必须是正整数"
             if start > 1_000_000:
                 return "错误：start_line 过大（超过 100 万行，请缩小范围）"
-            with open(path, encoding=enc, errors="replace") as f:
+            with open(p, encoding=enc, errors="replace") as f:
                 for _ in range(start - 1):
                     f.readline()
                 # readline(上限)：单行可达数百 MB（minified JSON/日志），
@@ -279,22 +285,22 @@ def read_file(path, start_line=None, max_lines=None):
                     lines.append(ln)
             lines = [ln for ln in lines if ln != ""]
             if not lines:
-                _mark_read(permissions.resolve(path) or path)
+                _mark_read(p)
                 return f"（第 {start} 行起无内容）"
             body = "".join(lines)
             if not body.endswith("\n"):
                 body += "\n"
             prefix = f"[按行读取 {path} 第 {start}-{start + len(lines) - 1} 行]\n"
-            _mark_read(permissions.resolve(path) or path)
+            _mark_read(p)
             return prefix + body + enc_note
         _cap = READ_FILE_MAX_BYTES if (READ_FILE_MAX_BYTES and READ_FILE_MAX_BYTES > 0) else None
         # 按**字节**读取并按字节截断：文本 read() 的 cap 是字符数，CJK 可读入远超声明上限
-        with open(path, "rb") as f:
+        with open(p, "rb") as f:
             raw = f.read(_cap) if _cap else f.read()
         content = raw.decode(enc, "replace")
         if _cap and len(raw) >= _cap:
             content += f"\n[文件较大，已截断前 {_cap} 字节；如需后续内容请用 start_line/max_lines 按行续读]"
-        _mark_read(permissions.resolve(path) or path)
+        _mark_read(p)
         return content + enc_note
     except Exception as e:
         return f"错误：无法读取文件 {path}: {e}"

@@ -1,0 +1,20 @@
+{
+  "id": "memory_delete",
+  "category": "memory",
+  "turns": [
+    "请调用 write_memory 记住：临时口令是 1234。只回复「已记住」。",
+    "请调用 delete_memory 删除包含「1234」的记忆。只回复「已删除」。",
+    "临时口令是什么？只回答口令本身；如果不知道，只回复「不知道」，不要解释。"
+  ],
+  "fresh_session_at": [3],
+  "config": {"memory_enabled": true, "auto_memory": false, "memory_harvest_mode": "off"},
+  "accept": [
+    {"type": "tool_called", "name": "write_memory"},
+    {"type": "tool_called", "name": "delete_memory"},
+    {"type": "final_regex", "pattern": "不知道|没有|未记录|无法"},
+    {"type": "final_not_contains", "text": "1234"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 1.0, "max_seconds": 240},
+  "notes": "跨会话遗忘：删除后新会话不得再召回旧口令。"
+}

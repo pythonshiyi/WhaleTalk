@@ -12,14 +12,14 @@
 
 ## 0. 一句话总览
 
-**鲸语 WhaleTalk** 是一个 **Windows 本地优先的 AI 桌面智能体**：`Python 3.9+` 后端 +
+**鲸语 WhaleTalk** 是一个 **Windows 本地优先的 AI 桌面智能体**：`Python 3.11+` 后端 +
 `React 19 / Vite 8` 前端 + 本地 HTTP API（`127.0.0.1:8745`），只接入一个统一模型
 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**。核心形态：**纯 Web + 系统托盘常驻**，
 浏览器是唯一界面。
 
 - **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.28.0`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **126 个 `/v1` 路由**、**142 个 pytest 文件 / 1385 用例 + 35 个前端 node 套件**、
+  **126 个 `/v1` 路由**、**144 个 pytest 文件 / 1401 用例 + 35 个前端 node 套件**、
   源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
   主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
@@ -47,9 +47,9 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试 ──
-python -m pytest -q                      # 后端全量（142 个文件 / 1385 用例，约 73s；CI 同款，见下方「分级验证」）
+python -m pytest -q                      # 后端全量（144 个文件 / 1401 用例，约 73s；CI 同款，见下方「分级验证」）
 python -m pytest tests/test_registry.py -q    # 只跑相关文件：日常改动的正确姿势（1–3s）
-cd webui && npm test                     # 前端 31 个 node 套件（runner 自动发现 tests/*.test.mjs）
+cd webui && npm test                     # 前端 35 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
 cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typedef 与后端字段对齐门禁）
 
@@ -57,8 +57,17 @@ cd webui && npm run typecheck            # tsc --noEmit（api.js 的 JSDoc typed
 python tools/audit_tools.py --strict     # 六层一致性审计（error 级门禁，可入 CI；单跑约 1.2s）
 python tools/validate_tools.py           # smart_tools 全链路回归（描述无损等）
 python tools/island_check.py --strict    # 十层孤岛对账（工具可达性，含 __all__ re-export）
-python tools/check_docs.py               # 文档数字 vs 源码实测（169 工具 / 115 路由 / 版本）
+python tools/check_docs.py               # 文档数字 vs 源码实测（169 工具 / 126 路由 / 版本）
 python tools/check_silent_except.py      # 静默吞异常基线差分（只拦新增，见 §12 踩坑 26）
+python tools/check_deps.py --check       # 依赖上限 + requirements.lock 覆盖
+python tools/check_release.py --check    # VERSION / CHANGELOG / tag 一致性
+
+# ── 智能体评测（P0）──
+python tools/agent_eval.py --dry-run     # 任务定义/夹具校验，不调模型
+python tools/agent_eval.py               # 真模型跑黄金任务（需 config.json 有 Key）
+python tools/agent_eval.py --only memory_roundtrip
+python tools/e2e_smoke.py --boot-only    # 前端启动冒烟（无需 Key；CI 用）
+python tools/e2e_smoke.py                # 真发一条消息，验 SSE → 渲染（需 Key）
 
 # ── 出问题时的第一动作：导诊断包（不需要你翻日志）──
 python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 UI「设置 → 诊断」
@@ -66,7 +75,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 
 ### 1.1 分级验证（重要：不要每次都跑全量）
 
-**全量一次约 2 分钟**（1060 用例 73s + 五道门禁 + 前端 31 套件），而**最小相关集通常只有 1–3 秒**。
+**全量一次约 2 分钟**（1,385 用例 73s + 五道门禁 + 前端 35 套件），而**最小相关集通常只有 1–3 秒**。
 日常改动按改动面选最小的一档，绿了就继续；**全量留给里程碑节点**，判定标准是「影响面」而非
 「心理上的安全感」。
 
@@ -77,6 +86,9 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | 新增 / 修改工具 | `audit_tools.py --strict` + 对应域模块测试 | ~3s |
 | API 端点改动 | `pytest tests/test_api_routes.py -q` | ~3s |
 | 前端改动 | `cd webui && node runTests.mjs`（或单跑某个 `*.test.mjs`） | 单套 ~1s |
+| 评测任务/提示词改动 | `agent_eval.py --dry-run` + `--only <id>`（真模型按需） | 1–30s |
+| 前端交互/SSE 改动 | `e2e_smoke.py --boot-only`（有 Key 时跑全量） | ~7s |
+| 依赖 / 版本变更 | `check_deps.py --check` + `check_release.py --check` | ~1s |
 | 跨模块 / 大重构 / 发版前 | 全量：五道门禁 + `pytest -q` + `npm test` | ~2min |
 
 - **阅读/排查/答疑类任务（不改代码）不需要跑任何测试**——先读代码，真有怀疑再定点验证。
@@ -85,9 +97,11 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 - **不要在每次小改后重启服务做冒烟**——端点行为由 `test_api_routes.py` 覆盖，
   只有验证真实端到端行为（SSE、浏览器、托盘）时才起服务，且用完即关。
 
-> **CI**：`.github/workflows/ci.yml` 含 4 个 job——`check`（ruff 关键规则 `E9,F63,F7,F82` +
-> 入口 `py_compile`）、`test-backend`（`pytest -q` + `check_docs`）、`gate-tools`（上面五道门禁）、
-> `webui`（npm ci + build + `npm test`，自动发现全部 31 个套件）。全在 `windows-latest` 上跑。
+> **CI**：`.github/workflows/ci.yml` 含 5 个 job——`check`（ruff 关键规则 `E9,F63,F7,F82` +
+> 入口 `py_compile` + 依赖/发布门禁，3.12/3.15 矩阵）、`test-backend`（`pytest -q` + `check_docs`，
+> 3.12 用 `requirements.txt`、3.15 用 `requirements.lock`）、`gate-tools`（工具五道门禁 + 依赖门禁）、
+> `e2e`（build webui + `e2e_smoke.py --boot-only`，无 Key 也能跑）、
+> `webui`（npm ci + build + `npm test`，自动发现全部 35 个套件）。全在 `windows-latest` 上跑。
 
 ---
 
@@ -202,7 +216,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案）、`check_silent_except.py`（静默吞异常基线差分门禁 + `silent_except_baseline.txt`） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 142 个 pytest 文件 / 1385 用例 |
+| `tests/` | 后端回归 144 个 pytest 文件 / 1401 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
 | `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
@@ -711,7 +725,7 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 理由很直接——缺工具时那两层会以"跳过"形态返回，判定逻辑很容易把它们当成通过，
 那就成了「分支 + 四层假装」。宁可拒绝，也不在证明不了的环境里假装验证过。
 
-## 14. 测试资产速查（tests/，142 个 pytest 文件 / 1385 用例）
+## 14. 测试资产速查（tests/，144 个 pytest 文件 / 1401 用例）
 
 按领域分组（文件名即内容）：
 
@@ -774,6 +788,8 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 | [AI_PROJECT_GUIDE.md](AI_PROJECT_GUIDE.md)（本文件） | 刚接手：跑通 + 建立全局认知 |
 | [../TECH_NOTES.md](../TECH_NOTES.md) | 改架构前的设计取舍与历史踩坑 |
 | [../MODULES.md](../MODULES.md) | 查「某个文件负责什么」的逐模块清单 |
+| [ROADMAP.md](ROADMAP.md) | 升级路线：先可测 → 再解耦 → 再提智 → 扩边界 |
+| [eval/BASELINE.md](eval/BASELINE.md) | 智能体评测基线：当前通过率、成本、失败样本 |
 | [配置与上限.md](配置与上限.md) | 调上限/开关（全部 `WHALETALK_*` 环境变量速查） |
 | [能力协议.md](能力协议.md) | 写能力包（五执行体 + 权限 + 预算 + 自检清单） |
 | [信任内核.md](信任内核.md) | 改 `permissions`/`security`/`crypto`/`snapshot` 前必读 |
@@ -792,5 +808,5 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 
 ---
 
-*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 115 路由 / 1385 用例 / 版本 3.28.0）
+*本文档由 AI 读取源码后整理，符号名与代码一致；规模数字（169 工具 / 126 路由 / 1401 用例 / 版本 3.28.0）
 由 `tools/check_docs.py` 实测口径。行号会随迭代漂移，不承诺行号准确性。*

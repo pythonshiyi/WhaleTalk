@@ -1,0 +1,15 @@
+{
+  "id": "media_chart_render",
+  "category": "media",
+  "turns": [
+    "读取 chart_data.json，用 chart_render 生成宽度 800、高度至少 600 的柱状图（width=800、height=600、scale=1），输出到当前工作目录下的 out/chart.png（使用绝对路径），标题为 Sales。不要询问，直接完成。"
+  ],
+  "setup": ["chart_data.json"],
+  "accept": [
+    {"type": "file_exists", "path": "out/chart.png"},
+    {"type": "image_min_size", "path": "out/chart.png", "width": 800, "height": 600},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 1.0, "max_seconds": 240},
+  "notes": "验证图表渲染与精确画布尺寸。"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "docs_json_to_csv",
+  "category": "docs",
+  "turns": [
+    "读取 items.json，生成 out/items.csv。表头必须是 name,qty，数据按 qty 从大到小排序，恰好三行。不要询问，直接完成。"
+  ],
+  "setup": ["items.json"],
+  "accept": [
+    {"type": "file_exists", "path": "out/items.csv"},
+    {"type": "csv_columns", "path": "out/items.csv", "columns": ["name", "qty"]},
+    {"type": "csv_row_count", "path": "out/items.csv", "rows": 3},
+    {"type": "csv_row", "path": "out/items.csv", "index": 0, "values": ["B", "5"]},
+    {"type": "csv_row", "path": "out/items.csv", "index": 2, "values": ["C", "1"]},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 20, "max_cny": 1.0, "max_seconds": 240},
+  "notes": "验证 JSON → 排序 → CSV 的数据转换。"
+}

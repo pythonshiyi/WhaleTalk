@@ -11,7 +11,7 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.11", "3.12", "3.15"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,18 +29,29 @@ jobs:
           python -m py_compile web_app.py api_server.py deepseek_client.py webui/start.py bootstrap.py deps.py
       - name: Bootstrap self-check
         run: python bootstrap.py check --no-venv --skip-install
+      - name: Dependency gate (upper bounds + lock coverage)
+        run: python tools/check_deps.py --check
+      - name: Release discipline (VERSION / CHANGELOG / tag)
+        run: python tools/check_release.py --check
 
   test-backend:
     runs-on: windows-latest
     strategy:
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.11", "3.12", "3.15"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
+      - name: Install dependencies (locked snapshot, 3.15)
+        if: matrix.python-version == '3.15'
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.lock
+          pip install -r requirements-dev.txt
+      - name: Install dependencies (range resolution, 3.11/3.12)
+        if: matrix.python-version != '3.15'
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
@@ -67,6 +78,41 @@ jobs:
         run: python tools/check_silent_except.py
       - name: Core tool budget (new core tools must be waived with a reason)
         run: python tools/check_tool_budget.py
+      - name: Dependency gate (upper bounds + lock coverage)
+        run: |
+          pip install packaging
+          python tools/check_deps.py --check
+
+  e2e:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.15"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Install backend deps (locked)
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.lock
+      - name: Build webui
+        working-directory: webui
+        run: |
+          npm ci
+          npm run build
+      - name: UI smoke (boot only, no API key)
+        run: python tools/e2e_smoke.py --boot-only
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: out/e2e
+          if-no-files-found: ignore
 
   webui:
     runs-on: windows-latest

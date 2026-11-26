@@ -1,0 +1,15 @@
+{
+  "id": "media_audio_probe",
+  "category": "media",
+  "turns": [
+    "用 media_ffmpeg 的 info 动作读取 tone.wav 的时长（秒），把数字写入 out/duration.txt，只写数字。不要询问，直接完成。"
+  ],
+  "setup": ["tone.wav"],
+  "accept": [
+    {"type": "file_exists", "path": "out/duration.txt"},
+    {"type": "file_regex", "path": "out/duration.txt", "pattern": "^\\s*1(\\.0+)?\\s*$"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 8, "max_cny": 0.5, "max_seconds": 120},
+  "notes": "验证音视频信息探测；夹具是精确 1 秒的 WAV。"
+}

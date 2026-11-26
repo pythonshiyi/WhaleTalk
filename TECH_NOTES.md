@@ -33,7 +33,7 @@ DeepSeek 已把全部模型升级为**单一原生多模态模型**，本产品�
 
 Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、169 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、鲸语大脑（跨会话灵魂）、插件体系（.wtplugin v2）、公众号自动写作。
 
-- 运行时：Python 3.9+（开发 3.12），核心依赖仅 `openai` / `httpx`，其余全部可选（缺失自动降级提示）
+- 运行时：Python 3.11+（开发 3.12/3.15），核心依赖仅 `openai` / `httpx`，其余全部可选（缺失自动降级提示）
 - API 层：标准库 `http.server.ThreadingHTTPServer`（**无 Flask/无框架**）
 - 前端：React 19 + Vite 8（`webui/`），无 UI 框架，纯 CSS 变量主题
 

@@ -1,0 +1,16 @@
+{
+  "id": "docs_pptx_read",
+  "category": "docs",
+  "turns": [
+    "读取 slides.pptx，把每页标题按顺序写入 out/titles.txt，每行一个。不要询问，直接完成。"
+  ],
+  "setup": ["slides.pptx"],
+  "accept": [
+    {"type": "file_exists", "path": "out/titles.txt"},
+    {"type": "file_contains", "path": "out/titles.txt", "text": "第一页 概览"},
+    {"type": "file_contains", "path": "out/titles.txt", "text": "第二页 计划"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 0.8, "max_seconds": 180},
+  "notes": "验证 PPT 读取与页标题提取。"
+}

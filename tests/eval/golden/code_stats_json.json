@@ -1,0 +1,17 @@
+{
+  "id": "code_stats_json",
+  "category": "code",
+  "turns": [
+    "读取当前工作目录下的 numbers.json，用 Python 计算 sum、mean、max 三个值，写入 out/stats.json。JSON 的键必须是 sum、mean、max，其中 mean 为浮点数。不要询问，直接完成。"
+  ],
+  "setup": ["numbers.json"],
+  "accept": [
+    {"type": "file_exists", "path": "out/stats.json"},
+    {"type": "json_field", "path": "out/stats.json", "field": "sum", "equals": 36},
+    {"type": "json_field", "path": "out/stats.json", "field": "mean", "equals": 9.0},
+    {"type": "json_field", "path": "out/stats.json", "field": "max", "equals": 15},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 20, "max_cny": 1.0, "max_seconds": 240},
+  "notes": "验证代码执行、JSON 序列化与数值结果正确性。"
+}

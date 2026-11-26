@@ -1,0 +1,20 @@
+{
+  "id": "memory_update",
+  "category": "memory",
+  "turns": [
+    "请调用 write_memory 记住：我的项目代号是「蓝鲸-7」。只回复「已记住」。",
+    "请调用 update_memory，把包含「蓝鲸-7」的记忆更新为「我的项目代号是蓝鲸-8」。只回复「已更新」。",
+    "我的项目代号是什么？用一行回答。"
+  ],
+  "fresh_session_at": [3],
+  "config": {"memory_enabled": true, "auto_memory": false, "memory_harvest_mode": "off"},
+  "accept": [
+    {"type": "tool_called", "name": "write_memory"},
+    {"type": "tool_called", "name": "update_memory"},
+    {"type": "final_contains", "text": "蓝鲸-8"},
+    {"type": "final_not_contains", "text": "蓝鲸-7"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 1.0, "max_seconds": 240},
+  "notes": "跨会话记忆更新：写入 → 更新 → 新会话只应召回新值，旧值不得残留。"
+}

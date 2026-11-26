@@ -1,0 +1,15 @@
+{
+  "id": "web_download_html",
+  "category": "web",
+  "turns": [
+    "下载 https://example.com 的 HTML 到当前工作目录的 out/page.html（保留原始 HTML）。不要询问，直接完成。"
+  ],
+  "accept": [
+    {"type": "file_exists", "path": "out/page.html"},
+    {"type": "file_contains", "path": "out/page.html", "text": "Example Domain"},
+    {"type": "file_min_bytes", "path": "out/page.html", "bytes": 100},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 10, "max_cny": 0.6, "max_seconds": 150},
+  "notes": "验证下载工具与原始 HTML 落盘。"
+}

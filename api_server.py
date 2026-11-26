@@ -6704,7 +6704,10 @@ BASE_DIR = _runtime_dir()
 # 源码运行在仓库；打包运行时这些被捆绑在 _MEIPASS 临时目录内（进程生命周期内有效），
 # 须用原始模块路径，而不能用 exe 所在目录（那里没有这些资源）。
 _ORIG_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+# 配置路径：env WHALETALK_CONFIG 显式指定（评测/便携/多配置并行），否则程序旁 config.json。
+# 与 WHALETALK_DATA_DIR 同一哲学：评测必须能在不碰用户配置的前提下起独立实例。
+CONFIG_PATH = (os.environ.get("WHALETALK_CONFIG", "").strip()
+               or os.path.join(BASE_DIR, "config.json"))
 try:
     import config_utils as _cu
     _cu.DEFAULT_CONFIG_PATH = CONFIG_PATH
@@ -11284,6 +11287,19 @@ def start_server(port=8745, token=""):
             logger.warning("%s", _msg)
     except Exception:
         logger.warning("系统代理预检失败（可降级，不阻断启动）", exc_info=True)
+    # ── 可降级：大脑目录覆盖（评测/多实例）──
+    # 生命循环在 life_enabled=False 时仍会写 brain/life.json 表示 dormant；评测若共用
+    # 真实 brain/ 会污染用户大脑并抢单实例租约。此开关必须在 _init_dc_paths 之前生效，
+    # 否则 memory_store 会先绑定旧目录。
+    _env_brain_dir = os.environ.get("WHALETALK_BRAIN_DIR", "").strip()
+    if _env_brain_dir:
+        try:
+            import brainkit as _bk_env
+            os.makedirs(_env_brain_dir, exist_ok=True)
+            _bk_env.set_brain_dir(_env_brain_dir)
+            logger.info("大脑目录已由 WHALETALK_BRAIN_DIR 覆盖：%s", _env_brain_dir)
+        except Exception:
+            logger.exception("WHALETALK_BRAIN_DIR 应用失败（可降级）：大脑仍使用默认目录")
     # ── 必须失败：dc 运行时装配（自检清单见 _init_dc_paths）──
     try:
         _init_dc_paths()

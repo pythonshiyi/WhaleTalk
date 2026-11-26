@@ -1,0 +1,15 @@
+{
+  "id": "web_rss_fetch",
+  "category": "web",
+  "turns": [
+    "用 rss_fetch 抓取 {base_url}/feed.xml 的最新条目，把第一条标题写入 out/rss_title.txt，只写标题。不要询问，直接完成。"
+  ],
+  "local_http": ["feed.xml"],
+  "accept": [
+    {"type": "file_exists", "path": "out/rss_title.txt"},
+    {"type": "file_contains", "path": "out/rss_title.txt", "text": "Eval RSS Title One"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 8, "max_cny": 0.5, "max_seconds": 120},
+  "notes": "本地 HTTP 夹具（feed.xml）提供确定性 RSS，避免外部源超时；验证抓取与标题提取。"
+}

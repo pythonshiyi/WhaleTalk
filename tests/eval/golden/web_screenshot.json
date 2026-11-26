@@ -1,0 +1,14 @@
+{
+  "id": "web_screenshot",
+  "category": "web",
+  "turns": [
+    "用 web_screenshot 截取 https://example.com（视口 1280x800），把生成的截图复制或移动为当前工作目录下的 out/shot.png。不要询问，直接完成。"
+  ],
+  "accept": [
+    {"type": "file_exists", "path": "out/shot.png"},
+    {"type": "image_min_size", "path": "out/shot.png", "width": 1000, "height": 600},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 1.0, "max_seconds": 240},
+  "notes": "验证浏览器截图与产物归档；依赖 Playwright chromium。"
+}

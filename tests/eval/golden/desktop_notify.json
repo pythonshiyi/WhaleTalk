@@ -1,0 +1,14 @@
+{
+  "id": "desktop_notify",
+  "category": "desktop",
+  "turns": [
+    "用 notify_desktop 发送一条标题为「Eval」、内容为「P0 冒烟」的静音通知，然后回复「已发送」。不要询问，直接完成。"
+  ],
+  "accept": [
+    {"type": "tool_called", "name": "notify_desktop"},
+    {"type": "final_contains", "text": "已发送"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 6, "max_cny": 0.4, "max_seconds": 90},
+  "notes": "验证桌面通知通道；会真的弹一条静音通知。"
+}

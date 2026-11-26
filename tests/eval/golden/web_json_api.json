@@ -1,0 +1,15 @@
+{
+  "id": "web_json_api",
+  "category": "web",
+  "turns": [
+    "访问 https://api.github.com/repos/python/cpython，把 full_name 和 stargazers_count 写入 out/repo.json。不要询问，直接完成。"
+  ],
+  "accept": [
+    {"type": "file_exists", "path": "out/repo.json"},
+    {"type": "json_field", "path": "out/repo.json", "field": "full_name", "equals": "python/cpython"},
+    {"type": "json_keys", "path": "out/repo.json", "keys": ["full_name", "stargazers_count"]},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 10, "max_cny": 0.6, "max_seconds": 150},
+  "notes": "验证 JSON API 抓取与字段提取；GitHub 限流时可能失败。"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "desktop_screen_size",
+  "category": "desktop",
+  "turns": [
+    "用 rpa_screen_size 获取屏幕分辨率，写入 out/screen.txt，格式为 宽x高。不要询问，直接完成。"
+  ],
+  "accept": [
+    {"type": "file_exists", "path": "out/screen.txt"},
+    {"type": "file_regex", "path": "out/screen.txt", "pattern": "\\d{3,5}\\s*[x×]\\s*\\d{3,5}"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 8, "max_cny": 0.5, "max_seconds": 120},
+  "notes": "验证桌面分辨率探测。"
+}

@@ -33,3 +33,10 @@
 *.gif binary
 *.zip binary
 *.exe binary
+*.pdf binary
+*.docx binary
+*.pptx binary
+*.xlsx binary
+*.wav binary
+*.mp3 binary
+*.mp4 binary

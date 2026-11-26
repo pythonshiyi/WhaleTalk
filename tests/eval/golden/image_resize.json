@@ -1,0 +1,15 @@
+{
+  "id": "image_resize",
+  "category": "media",
+  "turns": [
+    "把 logo.png 处理成 320x240 的 PNG，保存为 out/logo_small.png。尺寸必须精确为 320x240。不要询问，直接完成。"
+  ],
+  "setup": ["logo.png"],
+  "accept": [
+    {"type": "file_exists", "path": "out/logo_small.png"},
+    {"type": "image_size", "path": "out/logo_small.png", "width": 320, "height": 240},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 0.8, "max_seconds": 180},
+  "notes": "验证图片处理工具的尺寸控制与输出落盘。"
+}

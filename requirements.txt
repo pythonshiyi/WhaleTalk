@@ -1,71 +1,75 @@
 # ── 鲸语 WhaleTalk 核心依赖（33 项，与 deps.py AUTO_INSTALL_DEPS 保持一致）──
 # 首次启动自动安装全部核心组件；大型可选能力（浏览器自动化/语音转写/Piper 语音/二维码识别/RAR）
-# 不在此清单，进入程序后在「设置 → 🔌 可选能力」按需一键安装。
+# 不在此清单，进入程序后在「设置 → 🔌 可选能力」按需一键装。
+#
+# 版本策略（P0）：下限保证能力可用，上限挡住不兼容大版本。`requirements.lock`
+# 是当前解析结果的精确快照（pip-compile 生成），CI 与本地复现优先用它。
+# 新增依赖必须同时更新 deps.py 的 AUTO_INSTALL_DEPS 与 requirements.lock。
 
 # 核心 API 网关
-openai>=1.75.0
-httpx>=0.27.0
+openai>=1.75.0,<4
+httpx>=0.27.0,<1
 # QQ official Bot WebSocket (qq_official.py)
-aiohttp>=3.9
+aiohttp>=3.9,<4
 # 系统托盘常驻
-pystray>=0.19.5
-pywin32>=306
+pystray>=0.19.5,<1
+pywin32>=306,<400
 # 图片处理（image_process / 截图 / 图标）
-Pillow>=10.0
+Pillow>=10.0,<13
 # 精确 token 估算
-tiktoken>=0.7.0
+tiktoken>=0.7.0,<1
 # 代码块语法高亮
-pygments>=2.15
+pygments>=2.15,<3
 # 公众号写作 HTML 输出
-markdown>=3.5
+markdown>=3.5,<4
 # 嵌入式 KV 存储（kv_store）
-diskcache>=5.6
+diskcache>=5.6,<6
 # 系统资源自检（system_status）
-psutil>=5.9.0
+psutil>=5.9.0,<8
 # 桌面 RPA（鼠标/键盘/屏幕坐标）
-pyautogui>=0.9.54
+pyautogui>=0.9.54,<1
 # PDF 提取
-PyMuPDF>=1.24
+PyMuPDF>=1.24,<2
 # PDF 生成
-reportlab>=4.0
+reportlab>=4.0,<5
 # Word 读写
-python-docx>=1.1.0
+python-docx>=1.1.0,<2
 # PPT 读取
-python-pptx>=0.6.23
+python-pptx>=0.6.23,<2
 # RSS 聚合
-feedparser>=6.0
+feedparser>=6.0,<7
 # 二维码生成
-qrcode[pil]>=7.4
+qrcode[pil]>=7.4,<9
 # 音视频处理（内置 ffmpeg）
-imageio-ffmpeg>=0.4.9
+imageio-ffmpeg>=0.4.9,<1
 # Excel 读写
-openpyxl>=3.1.0
+openpyxl>=3.1.0,<4
 # 数据图表
-matplotlib>=3.8.0
+matplotlib>=3.8.0,<4
 # 被墙站点抓取（Chrome 指纹，可过 Cloudflare）
-curl_cffi>=0.7.0
+curl_cffi>=0.7.0,<1
 # 实时语音录音（voice_chat_loop）
-sounddevice>=0.4.6
+sounddevice>=0.4.6,<1
 # 在线神经音色（Edge 朗读，缺失自动回退 SAPI）
-edge-tts>=6.1.0
+edge-tts>=6.1.0,<8
 # EPUB 电子书阅读
-ebooklib>=0.18
+ebooklib>=0.18,<1
 # MOBI 电子书阅读
-mobi>=0.3.3
+mobi>=0.3.3,<1
 # Outlook .msg 邮件阅读
-extract-msg>=0.48
+extract-msg>=0.48,<1
 # 7z 压缩包
-py7zr>=0.20
+py7zr>=0.20,<2
 # 数值计算 / 语音分析
-numpy>=1.24.0
+numpy>=1.24.0,<3
 # MySQL 只读查询
-PyMySQL>=1.1.0
+PyMySQL>=1.1.0,<2
 # PostgreSQL 只读查询
-psycopg2-binary>=2.9.0
+psycopg2-binary>=2.9.0,<3
 # 鲸语大脑免密加密快照
-cryptography>=42.0
+cryptography>=42.0,<60
 # 浏览器渲染 / HTML 转图（html_render 用系统 Edge 渲染，chromium 内核按需另装）
-playwright>=1.40.0
+playwright>=1.40.0,<2
 
 # ── 大型可选能力（不随核心自动安装，进程序后到「设置 → 可选能力」一键装）──
 # 浏览器内核：playwright install chromium（约 150MB；html_render 走系统 Edge 则无需）

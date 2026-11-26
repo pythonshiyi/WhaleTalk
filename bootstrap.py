@@ -5,7 +5,7 @@
 遇到死代理或单个包失败就整批失败。本脚本把解释器/网络/代理这些环境差异全部吃干净。
 
 一条命令完成：
-    1) 校验 Python 版本（>= 3.9）
+    1) 校验 Python 版本（>= 3.11）
     2) 准备虚拟环境（默认仓库根 .venv；有 uv 则用 uv 秒建，--no-venv 直接用当前解释器）
     3) 代理预检：系统代理已配置但不可达时自动绕过（修复 pip 死代理导致的全量失败）
     4) 逐包安装 requirements.txt（单包失败不阻断其余，超时/重试兜底；支持离线 wheel）
@@ -40,7 +40,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 DEFAULT_VENV = ".venv"
-MIN_PY = (3, 9)
+MIN_PY = (3, 11)  # 3.9/3.10 已 EOL；下限与 pyproject requires-python 保持一致
 _STDIO_HARDENED = False
 
 
@@ -350,7 +350,7 @@ def _collect_report(target):
     add(f"目标 Python ：{target}")
     add(f"虚拟环境    ：{'存在' if os.path.exists(target) else '不存在'}")
     pyerr = check_python()
-    add(f"版本要求    ：{pyerr or '满足 (>= 3.9)'}")
+    add(f"版本要求    ：{pyerr or '满足 (>= 3.11)'}")
     add("")
     add("[依赖]")
     missing = _missing_in(target) if os.path.exists(target) else None

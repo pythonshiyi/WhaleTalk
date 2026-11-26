@@ -1,0 +1,18 @@
+{
+  "id": "memory_roundtrip",
+  "category": "memory",
+  "turns": [
+    "请调用 write_memory 工具记住：我的项目代号是「蓝鲸-7」，部署窗口是每周三 22:00。只回复「已记住」。",
+    "我的项目代号和部署窗口是什么？用一行回答。"
+  ],
+  "fresh_session_each_turn": true,
+  "config": {"memory_enabled": true, "auto_memory": false, "memory_harvest_mode": "off"},
+  "accept": [
+    {"type": "tool_called", "name": "write_memory"},
+    {"type": "final_contains", "text": "蓝鲸-7"},
+    {"type": "final_contains", "text": "周三"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 1.0, "max_seconds": 240},
+  "notes": "跨会话记忆：第一轮写入，第二轮换新会话提问，必须依赖注入的长期记忆而非对话历史。"
+}

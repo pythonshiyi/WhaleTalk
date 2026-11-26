@@ -6,7 +6,7 @@
 
 ## 开发环境 / Dev Setup
 
-- Python 3.9+（推荐 3.12）
+- Python 3.11+（推荐 3.12 / 3.15）
 - 安装依赖：`pip install -r requirements.txt`（核心依赖 openai / httpx 已在清单中，其余为可选增强）
 - 引导/运行：`python bootstrap.py`（建 `.venv` + 逐包装依赖 + 启动；`--no-venv` 复用当前解释器，`check` 只体检，其余参数透传 `web_app.py`）
 - 运行（跳过引导）：`python web_app.py`（本地 API + 自动打开浏览器 + 托盘常驻；首次启动自动构建 WebUI——`webui/dist` 缺失或源码更新时自动 `npm run build`，已构建则跳过，`--no-webui-build` 可跳过）

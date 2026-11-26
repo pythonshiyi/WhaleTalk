@@ -1,0 +1,17 @@
+{
+  "id": "files_search_content",
+  "category": "files",
+  "turns": [
+    "在当前工作目录中搜索包含「鲸语」的 .md 文件，把匹配文件的相对路径写入 out/matches.txt，每行一个，按路径排序。不要询问，直接完成。"
+  ],
+  "setup": ["docs"],
+  "accept": [
+    {"type": "file_exists", "path": "out/matches.txt"},
+    {"type": "file_contains", "path": "out/matches.txt", "text": "docs/one.md"},
+    {"type": "file_contains", "path": "out/matches.txt", "text": "docs/three.md"},
+    {"type": "file_not_contains", "path": "out/matches.txt", "text": "docs/two.md"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 20, "max_cny": 1.0, "max_seconds": 240},
+  "notes": "验证内容检索、结果写入与排除不匹配文件。"
+}

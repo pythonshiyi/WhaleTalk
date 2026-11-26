@@ -1,0 +1,20 @@
+{
+  "id": "files_batch_rename",
+  "category": "files",
+  "turns": [
+    "把 raw 目录下的 a.txt、b.txt、c.txt 移动并重命名为 out/photo_001.txt、out/photo_002.txt、out/photo_003.txt，保持文件内容不变。不要询问，直接完成。"
+  ],
+  "setup": ["raw"],
+  "accept": [
+    {"type": "file_exists", "path": "out/photo_001.txt"},
+    {"type": "file_exists", "path": "out/photo_002.txt"},
+    {"type": "file_exists", "path": "out/photo_003.txt"},
+    {"type": "file_not_exists", "path": "raw/a.txt"},
+    {"type": "file_not_exists", "path": "raw/b.txt"},
+    {"type": "file_not_exists", "path": "raw/c.txt"},
+    {"type": "file_contains", "path": "out/photo_001.txt", "text": "alpha"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 20, "max_cny": 1.0, "max_seconds": 240},
+  "notes": "验证批量重命名/移动与内容保持。"
+}

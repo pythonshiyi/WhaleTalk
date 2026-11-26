@@ -1,0 +1,15 @@
+{
+  "id": "files_zip_archive",
+  "category": "files",
+  "turns": [
+    "把 docs 目录压缩为 out/docs.zip，压缩包内路径保持 docs/ 前缀（例如 docs/one.md）。不要询问，直接完成。"
+  ],
+  "setup": ["docs"],
+  "accept": [
+    {"type": "file_exists", "path": "out/docs.zip"},
+    {"type": "zip_entries", "path": "out/docs.zip", "entries": ["docs/one.md", "docs/two.md", "docs/three.md"]},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 0.8, "max_seconds": 180},
+  "notes": "验证归档工具与压缩包内相对路径保持。"
+}

@@ -1,0 +1,16 @@
+{
+  "id": "docs_pdf_extract",
+  "category": "docs",
+  "turns": [
+    "提取 report.pdf 的文本，写入 out/pdf.txt。不要询问，直接完成。"
+  ],
+  "setup": ["report.pdf"],
+  "accept": [
+    {"type": "file_exists", "path": "out/pdf.txt"},
+    {"type": "file_contains", "path": "out/pdf.txt", "text": "WhaleTalk PDF Fixture 2026"},
+    {"type": "file_contains", "path": "out/pdf.txt", "text": "Local-first desktop agent"},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 0.8, "max_seconds": 180},
+  "notes": "验证 PDF 文本提取。"
+}

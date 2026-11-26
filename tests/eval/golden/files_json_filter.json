@@ -1,0 +1,17 @@
+{
+  "id": "files_json_filter",
+  "category": "files",
+  "turns": [
+    "读取 items_filter.json，筛选 qty 大于等于 2 的条目，写入 out/filtered.json（保持原对象结构）。不要询问，直接完成。"
+  ],
+  "setup": ["items_filter.json"],
+  "accept": [
+    {"type": "file_exists", "path": "out/filtered.json"},
+    {"type": "json_len", "path": "out/filtered.json", "length": 2},
+    {"type": "file_contains", "path": "out/filtered.json", "text": "\"B\""},
+    {"type": "file_contains", "path": "out/filtered.json", "text": "\"C\""},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 0.8, "max_seconds": 180},
+  "notes": "验证 JSON 读取、条件过滤与结构化写出。"
+}

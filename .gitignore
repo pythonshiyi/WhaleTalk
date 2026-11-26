@@ -33,6 +33,8 @@ full_access_report.md
 
 # ===== 开发工具运行产物 =====
 tools/reports/
+# 智能体评测台的运行目录（含临时配置/会话/产物，不入库）
+out/
 
 # ===== Python =====
 __pycache__/

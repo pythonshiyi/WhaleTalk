@@ -1,0 +1,20 @@
+{
+  "id": "file_markdown_report",
+  "category": "files",
+  "turns": [
+    "读取当前工作目录下的 sales.csv，按 region 汇总 amount，生成 out/region_report.md。报告必须包含：一级标题「区域销售报告」、一个 Markdown 表格（列为 地区 和 销售额）、以及「合计：3500」一行。不要询问，直接完成。"
+  ],
+  "setup": ["sales.csv"],
+  "accept": [
+    {"type": "file_exists", "path": "out/region_report.md"},
+    {"type": "file_contains", "path": "out/region_report.md", "text": "区域销售报告"},
+    {"type": "file_contains", "path": "out/region_report.md", "text": "地区"},
+    {"type": "file_contains", "path": "out/region_report.md", "text": "销售额"},
+    {"type": "file_contains", "path": "out/region_report.md", "text": "3500"},
+    {"type": "file_contains", "path": "out/region_report.md", "text": "华东"},
+    {"type": "file_min_bytes", "path": "out/region_report.md", "bytes": 60},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 20, "max_cny": 1.5, "max_seconds": 300},
+  "notes": "验证读取 CSV、聚合、写出 Markdown 报告的完整链路。"
+}

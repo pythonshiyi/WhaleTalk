@@ -1,0 +1,16 @@
+{
+  "id": "desktop_environment_info",
+  "category": "desktop",
+  "turns": [
+    "用 environment_info 获取当前平台和 Python 版本，写入 out/env.txt，至少包含平台和 Python 两行。不要询问，直接完成。"
+  ],
+  "accept": [
+    {"type": "file_exists", "path": "out/env.txt"},
+    {"type": "file_contains", "path": "out/env.txt", "text": "Python"},
+    {"type": "file_regex", "path": "out/env.txt", "pattern": "win32|Windows|平台"},
+    {"type": "file_min_bytes", "path": "out/env.txt", "bytes": 20},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 8, "max_cny": 0.5, "max_seconds": 120},
+  "notes": "验证系统环境探测与信息整理。"
+}

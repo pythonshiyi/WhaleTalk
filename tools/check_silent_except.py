@@ -37,6 +37,7 @@ BASELINE = Path(__file__).resolve().parent / "silent_except_baseline.txt"
 SKIP_DIRS = {"node_modules", ".git", "dist", "build", "__pycache__", "assets",
              "experiments", "trust",          # trust/ 是内核快照，不参与门禁
              "data", "workspace",             # 运行时产物，非源码
+             "out",                           # 评测/e2e 运行目录（可能含临时 venv）
              ".venv", "venv", ".pytest_cache", ".ruff_cache"}
 NOQA_MARK = "noqa: silent-except"
 

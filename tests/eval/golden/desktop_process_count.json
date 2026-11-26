@@ -1,0 +1,16 @@
+{
+  "id": "desktop_process_count",
+  "category": "desktop",
+  "turns": [
+    "用 list_processes 查看当前后台进程数量，把数字写入 out/process_count.txt，只写数字；如果为 0 就写 0。不要询问，直接完成。"
+  ],
+  "accept": [
+    {"type": "file_exists", "path": "out/process_count.txt"},
+    {"type": "tool_called", "name": "list_processes"},
+    {"type": "file_regex", "path": "out/process_count.txt", "pattern": "^\\s*\\d+\\s*$"},
+    {"type": "file_number_min", "path": "out/process_count.txt", "min": 0},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 8, "max_cny": 0.5, "max_seconds": 120},
+  "notes": "list_processes 只列应用后台进程，评测环境通常为 0；验证如实报告空结果，不虚构数字。"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "code_write_function",
+  "category": "code",
+  "turns": [
+    "在工作目录下创建 out/solution.py，定义函数 add(a, b)，返回两数之和。不要询问，直接完成。"
+  ],
+  "accept": [
+    {"type": "file_exists", "path": "out/solution.py"},
+    {"type": "command", "argv": ["{python}", "-c", "import sys; sys.path.insert(0,'out'); from solution import add; assert add(2,3)==5; print('OK')"], "timeout": 30},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 12, "max_cny": 0.6, "max_seconds": 150},
+  "notes": "验证从零写代码并用独立解释器执行验证。"
+}

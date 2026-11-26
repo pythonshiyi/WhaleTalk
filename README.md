@@ -17,7 +17,7 @@
 ## 📑 目录
 
 - [它是什么](#-它是什么)
-- [能力总览](#-能力总览165-工具)
+- [能力总览](#-能力总览169-工具)
 - [界面与体验](#-界面与体验)
 - [鲸语大脑](#-鲸语大脑)
 - [系统架构](#-系统架构)
@@ -38,7 +38,7 @@
 |---|---|
 | 🖼 **看得见** | 原生多模态视觉——图片理解、图表阅读、OCR、扫码、屏幕截图自查；聊天模型直接看图，无需切换模式 |
 | 💬 **说得出** | 对话 / 深度思考 / 语音合成（Piper 本地离线 · Edge 在线 · SAPI，可逐句流式跟读）/ 语音转文字 |
-| ⚡ **做得了** | 文件 / 代码 / 数据库 / 浏览器 / 邮件 / 媒体 / 桌面 RPA / 应用管理 / 快照恢复，共 165 项工具 |
+| ⚡ **做得了** | 文件 / 代码 / 数据库 / 浏览器 / 邮件 / 媒体 / 桌面 RPA / 应用管理 / 快照恢复，共 169 项工具 |
 | 🧬 **会进化** | 提案分支审阅、失败模式库消解、成功模式复用、技能自动结晶——合入权始终在你 |
 | 🔁 **能自疗** | 工具失败自动沉淀并注入规避提示，同类任务优先复用已验证路径 |
 
@@ -157,7 +157,7 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
 - **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：169 工具（11 组）· 126 个 `/v1` 路由 · 后端 142 个 pytest 文件 / 1385 用例 · 前端 35 个 node 套件（自动发现，`npm test` 全跑）。
+- **规模**：169 工具（11 组）· 126 个 `/v1` 路由 · 后端 144 个 pytest 文件 / 1401 用例 · 前端 35 个 node 套件（自动发现，`npm test` 全跑）。
 
 ---
 
@@ -181,7 +181,7 @@ python web_app.py --server        # 仅启动 API 服务（终端常驻，供远
 python web_app.py --no-tray       # 常驻但不启用系统托盘
 ```
 
-要求：**Python 3.9+，Windows 10/11**。首次启动会自动准备环境：
+要求：**Python 3.11+，Windows 10/11**。首次启动会自动准备环境：
 
 - **`bootstrap.py` 逐包自举**：建 `.venv` → 按 `requirements.txt` **逐包**安装（单包失败不阻断其余，超时/重试兜底）→ 启动；安装前做代理预检，系统代理已配置但不可达时自动绕过直连（避免 pip 继承死代理导致全量失败）。
 - **核心组件**零操作自动安装（进度条 + 实时日志），装完自动进入主界面；`requirements.txt` 与核心清单严格一致。
@@ -230,6 +230,8 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 | 文档 | 内容 |
 |---|---|
 | [docs/AI_PROJECT_GUIDE.md](docs/AI_PROJECT_GUIDE.md) | **接手开发者的可执行地图**（推荐先读） |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | **升级路线**：从能力广度转向任务成功率的四阶段规划（含指标、验收与不做清单） |
+| [docs/eval/BASELINE.md](docs/eval/BASELINE.md) | **智能体评测基线**：30 个黄金任务的通过率、成本与失败样本 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本历史 |
 | [TECH_NOTES.md](TECH_NOTES.md) | 架构笔记与踩坑记录 |
 | [MODULES.md](MODULES.md) | 模块拆分清单与职责边界 |
@@ -253,7 +255,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 - **Capabilities**: **169 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
 - **Self-evolution**: proposal branches, failure-pattern lifecycle, success-pattern reuse — merging stays in your hands.
 - **Security**: default-open permission model, user blocklist as the only restriction source, plus an SSRF hard floor and a trust kernel that makes edits to authorization code declarable, visible, and reversible.
-- **Stack**: Python 3.9+ · React 19 (Vite 8) · local HTTP API (openai / httpx) · Windows 10/11.
+- **Stack**: Python 3.11+ · React 19 (Vite 8) · local HTTP API (openai / httpx) · Windows 10/11.
 
 ### Quick Start
 

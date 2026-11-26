@@ -1,0 +1,15 @@
+{
+  "id": "web_page_title",
+  "category": "web",
+  "turns": [
+    "访问 https://example.com，把页面标题写入当前工作目录下的 out/page_title.txt（路径严格为 out/page_title.txt，不要新建子目录）。文件里只写标题文本，不要写其他内容。不要询问，直接完成。"
+  ],
+  "accept": [
+    {"type": "file_exists", "path": "out/page_title.txt"},
+    {"type": "file_contains", "path": "out/page_title.txt", "text": "Example Domain"},
+    {"type": "file_max_bytes", "path": "out/page_title.txt", "bytes": 300},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 10, "max_cny": 0.8, "max_seconds": 180},
+  "notes": "验证联网抓取与最小写入；离线或代理异常时应失败并给出原因。"
+}

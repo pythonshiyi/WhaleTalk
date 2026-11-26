@@ -1,0 +1,22 @@
+{
+  "id": "docs_xlsx_write",
+  "category": "docs",
+  "turns": [
+    "读取 items.json，创建当前工作目录下的 out/report.xlsx（路径严格为 out/report.xlsx，不要新建子目录）：第一行表头 name、qty，随后三行数据，保持原顺序。不要询问，直接完成。"
+  ],
+  "setup": ["items.json"],
+  "accept": [
+    {"type": "file_exists", "path": "out/report.xlsx"},
+    {"type": "xlsx_cells", "path": "out/report.xlsx", "cells": [
+      {"cell": "A1", "equals": "name"},
+      {"cell": "B1", "equals": "qty"},
+      {"cell": "A2", "equals": "A"},
+      {"cell": "B2", "equals": 2},
+      {"cell": "A4", "equals": "C"},
+      {"cell": "B4", "equals": 1}
+    ]},
+    {"type": "no_tool_error"}
+  ],
+  "budget": {"max_tool_calls": 15, "max_cny": 0.8, "max_seconds": 180},
+  "notes": "验证 Excel 写出与单元格内容。"
+}

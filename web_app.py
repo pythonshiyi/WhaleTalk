@@ -171,6 +171,10 @@ def _single_instance_held():
     句柄保存在模块级，进程存活期间不释放。非 Windows / 异常一律返回 False（不阻断）。
     """
     global _MUTEX_HANDLE
+    if os.environ.get("WHALETALK_ALLOW_MULTI_INSTANCE") == "1":
+        # 评测/开发：不同端口 + 不同数据目录的实例必须能并存。
+        # 默认仍全局单实例（托盘只应有一个），此开关只由显式环境变量打开。
+        return False
     if os.name != "nt":
         return False
     try:
