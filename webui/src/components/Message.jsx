@@ -183,6 +183,39 @@ function PlanBlock({ plan, tools }) {
   );
 }
 
+// ── 长任务计划（任务模式自动拆步 + 逐步验收）──────────
+function TaskPlanBlock({ plan }) {
+  if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) return null;
+  const done = plan.steps.filter((s) => s && s.status === "done").length;
+  return (
+    <div className="task-plan-block">
+      <div className="task-plan-head">
+        <Icon name="list" size={13} />
+        <span>任务计划</span>
+        <span className="task-plan-cnt">{done}/{plan.steps.length}</span>
+        {plan.status === "completed" && <span className="task-plan-ok">已完成</span>}
+      </div>
+      {plan.goal && <div className="task-plan-goal">{plan.goal}</div>}
+      <ol className="task-plan-list">
+        {plan.steps.map((s, i) => {
+          const st = (s && s.status) || "pending";
+          return (
+            <li key={(s && s.id) || i} className={`task-plan-item task-plan-${st}`}>
+              <span className="task-plan-node">
+                {st === "done" ? "✓" : st === "failed" ? "✕" : i + 1}
+              </span>
+              <span className="task-plan-title">{s && s.title}</span>
+              {s && s.evidence && (
+                <span className="task-plan-evidence" title={s.evidence}>证据</span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 // ── 多智能体流水线步骤面板 ──────────────────────────
 // team_run 的结果尾部带 `__TEAM_JSON__{...}` 结构化段（见 agent_tools/tool_desktop.py）。
 // 这里把它解析成步骤条，避免用户直接看到原始 JSON；解析失败则静默降级为纯文本。
@@ -473,6 +506,7 @@ function Message({ msg, enter = false, onOpenTrace, onResend, onStar, onPin, onQ
           {!msg.streaming && totalMs > 0 && <span className="msg-time">· ⏱ {fmtMs(totalMs)}</span>}
         </div>
 
+        <TaskPlanBlock plan={msg.taskPlan} />
         <PlanBlock plan={msg.plan} tools={msg.tools} />
         {msg.think && <ThinkBlock text={msg.think} streaming={msg.streaming} />}
         {flow.map((b, i) => (b.type === "steps"

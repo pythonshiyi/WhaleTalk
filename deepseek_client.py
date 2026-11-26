@@ -4520,7 +4520,7 @@ _TOOL_ORDER = [
     'archive_files', 'extract_archive', 'list_snapshots', 'restore_snapshot', 'batch_rename', 'image_understand', 'screen_see', 'chart_read',
     'screenshot_to_html', 'debug_screenshot', 'scan_read', 'image_batch', 'screen_capture', 'speech_to_text', 'tts_speak', 'tts_stop',
     'app_manage', 'screen_find_click', 'vision_loop', 'voice_chat_loop', 'team_run', 'net_diagnose', 'fetch_url_smart', 'knowledge_index',
-    'knowledge_search', 'database_execute', 'read_email', 'email_summary', 'agent_mail', 'task_checkpoint_save', 'task_checkpoint_load', 'run_workflow',
+    'knowledge_search', 'database_execute', 'read_email', 'email_summary', 'agent_mail', 'task_checkpoint_save', 'task_checkpoint_load', 'task_step_done', 'run_workflow',
     'image_generate', 'usage_report', 'pdf_extract', 'pdf_create', 'pdf_visual_check', 'docx_read', 'docx_edit', 'pptx_read', 'pptx_create', 'rss_fetch', 'qrcode',
     'secret_store', 'kv_store', 'media_ffmpeg', 'mv_compose', 'mv_produce', 'webdav', 'run_wechat_writer', 'daily_brief', 'create_capability', 'html_render', 'html_to_ppt', 'html_to_pdf', 'ppt_layout_check',
     'list_my_capabilities', 'capability_heatmap', 'self_report',

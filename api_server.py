@@ -28,6 +28,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import shared
+import task_plan
 
 logger = logging.getLogger("whaletalk.api")
 
@@ -514,6 +515,7 @@ _TOOL_DOMAIN = {
     "list_processes": "桌面与自动化",
     "schedule_task": "定时与任务", "list_schedules": "定时与任务", "cancel_schedule": "定时与任务",
     "task_checkpoint_save": "定时与任务", "task_checkpoint_load": "定时与任务",
+    "task_step_done": "定时与任务",
     "run_workflow": "定时与任务", "daily_brief": "定时与任务",
     "write_memory": "记忆与知识", "read_memory": "记忆与知识",
     "query_memory_graph": "记忆与知识", "knowledge_index": "记忆与知识",
@@ -6752,6 +6754,7 @@ def _resolve_data_dir():
 
 # 数据目录：会话历史/记忆/大脑数据/工作区产物等全部落此（默认程序旁 data/，可 env 覆盖）。
 DATA_DIR = _resolve_data_dir()
+task_plan.configure(os.path.join(DATA_DIR, "task_plans"))
 
 _VOICE_CACHE_DIR = os.path.join(DATA_DIR, "voice", "cache")
 
@@ -10927,6 +10930,35 @@ class _Handler(BaseHTTPRequestHandler):
                 pure_chat=bool(kwargs.get("pure_chat")))
             if comp_info:
                 send("compressed", comp_info)
+
+            # ── 任务模式升级：自动拆步 + 逐步验收 + 断点续跑 ──
+            # 只在 task 模式启用；规划失败自动退化为单步计划，不阻断主任务。
+            task_plan_obj = None
+            if str(body.get("mode") or "") == "task" and not kwargs.get("pure_chat"):
+                try:
+                    _um = [m for m in messages
+                           if isinstance(m, dict) and m.get("role") == "user"]
+                    _goal = _msg_text(_um[-1]) if _um else ""
+                    task_plan_obj = task_plan.prepare(client, job.sid, _goal)
+                    if task_plan_obj is not None:
+                        messages = messages + [{
+                            "role": "system",
+                            "content": task_plan.render_prompt(task_plan_obj),
+                        }]
+                        # smart_tools 只预激活 user 消息命中的工具；系统提示里的工具名不算。
+                        # 计划一旦存在，必须把验收工具直接放进首轮可用集合。
+                        kwargs["preset_tools"] = list(kwargs.get("preset_tools") or ()) + ["task_step_done"]
+                        send("task_plan", task_plan_obj.payload())
+                        if task_plan_obj.done_count():
+                            send("notice", {
+                                "text": (f"已恢复上次任务计划（{task_plan_obj.done_count()}/"
+                                         f"{len(task_plan_obj.steps)}），继续执行未完成步骤。"),
+                                "level": "info",
+                            })
+                except Exception:
+                    logger.exception("任务计划准备失败（降级为普通任务模式）")
+                    task_plan_obj = None
+
             # 本轮速率统计（TTFT/输出速率/输入输出，跨工具轮累计）：最后一次即为本轮终值，
             # 供会话落盘与会话级「本会话」展示。
             last_metrics = {}
@@ -10945,9 +10977,16 @@ class _Handler(BaseHTTPRequestHandler):
                 _save_progress()
 
             def _on_tool(n, a, r, cid=None):
+                nonlocal task_plan_obj
                 send("tool", {"name": n, "args": a, "result": r, "id": cid})
                 _tool_bookkeeping(n, a, r)
                 _save_progress(force=True)
+                # 步骤验收工具执行后，立刻把最新计划推给前端（进度条实时更新）
+                if n == "task_step_done" and task_plan_obj is not None:
+                    updated = task_plan.load(task_plan_obj.plan_id)
+                    if updated is not None:
+                        task_plan_obj = updated
+                        send("task_plan", updated.payload())
 
             # 本轮「未正常完成」提示的去重标记：具体原因（截断/循环防护等）由
             # on_truncated 给出更精确的说明，避免再叠一句泛化提示。
@@ -10993,6 +11032,24 @@ class _Handler(BaseHTTPRequestHandler):
                     "text": "本轮生成未正常完成，任务可能未做完；可补充指令继续或重试。",
                     "level": "warn",
                 })
+            # 任务计划收尾：完成则落 completed；未完成/被停止则保留 running 供下次续跑
+            if task_plan_obj is not None:
+                try:
+                    final_plan = task_plan.load(task_plan_obj.plan_id) or task_plan_obj
+                    if final_plan.all_done():
+                        final_plan.status = "completed"
+                        task_plan.save(final_plan)
+                    send("task_plan", final_plan.payload())
+                    if not final_plan.all_done():
+                        left = len(final_plan.steps) - final_plan.done_count()
+                        if job.stop_event.is_set():
+                            send("notice", {"text": f"任务已暂停，计划已保留（剩 {left} 步），下次继续会自动续跑。",
+                                            "level": "warn"})
+                        else:
+                            send("notice", {"text": f"任务计划还有 {left} 步未完成；补充指令后继续，会自动从计划续跑。",
+                                            "level": "warn"})
+                except Exception:
+                    logger.exception("任务计划收尾失败（不影响本轮回复）")
             # 任务记录：工具链写入工作目录 tasklog（对齐原程序 _record_tasklog）
             try:
                 with _TOOL_CHAIN_LOCK:

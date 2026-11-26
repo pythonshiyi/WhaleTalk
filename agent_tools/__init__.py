@@ -112,6 +112,7 @@ __all__ = [
     'cancel_schedule',
     'task_checkpoint_save',
     'task_checkpoint_load',
+    'task_step_done',
     'run_workflow',
     'failure_memory',
     'send_email',

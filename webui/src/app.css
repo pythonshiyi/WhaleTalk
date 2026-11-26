@@ -4059,6 +4059,22 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
 .plan-run .plan-node { color: var(--brand-strong); border-color: rgba(var(--brand-rgb), .55); animation: pulse 1.5s infinite; }
 .plan-fail .plan-node { color: var(--danger-text); border-color: rgba(var(--danger-rgb), .5); background: var(--danger-soft); }
 
+/* 长任务计划（任务模式自动拆步 + 逐步验收） */
+.task-plan-block { border: 1px solid rgba(var(--brand-rgb), .32); border-radius: var(--r-md); background: var(--bg-1); padding: 10px 12px; margin-bottom: var(--sp-3); }
+.task-plan-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-3xs); color: var(--text-2); font-weight: 600; margin-bottom: 4px; }
+.task-plan-cnt { margin-left: auto; font-family: var(--font-mono); color: var(--text-3); font-weight: 400; }
+.task-plan-ok { color: var(--ok-text); font-weight: 400; }
+.task-plan-goal { font-size: var(--fs-xs); color: var(--text-3); margin-bottom: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-plan-list { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.task-plan-item { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-2); }
+.task-plan-node { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border-strong); display: grid; place-items: center; font-size: 9px; color: var(--text-3); font-family: var(--font-mono); flex-shrink: 0; }
+.task-plan-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-plan-done .task-plan-node { color: var(--ok-text); border-color: rgba(var(--ok-rgb), .5); background: var(--ok-soft); }
+.task-plan-done .task-plan-title { color: var(--text-3); }
+.task-plan-failed .task-plan-node { color: var(--danger-text); border-color: rgba(var(--danger-rgb), .5); background: var(--danger-soft); }
+.task-plan-failed .task-plan-title { color: var(--danger-text); }
+.task-plan-evidence { font-size: var(--fs-3xs); color: var(--brand-strong); background: var(--brand-soft); border-radius: 4px; padding: 1px 5px; flex-shrink: 0; cursor: help; }
+
 /* 过程带 */
 .rail { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; margin-bottom: var(--sp-3); }
 .rail-head { display: flex; align-items: center; gap: var(--sp-2); padding: 8px var(--sp-3); cursor: pointer; user-select: none; transition: background var(--dur-fast) var(--ease); }

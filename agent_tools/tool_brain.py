@@ -17,6 +17,7 @@ from datetime import datetime
 import deepseek_client as _dc  # 可变注入配置动态访问（dc.X 注入后立即生效）
 import permissions
 import stores
+import task_plan
 from deepseek_client import (
     _brain_sync_delete,
     _brain_sync_memory,
@@ -958,6 +959,56 @@ def task_checkpoint_load():
         {
             "type": "function",
             "function": {
+                "name": "task_step_done",
+                "description": "长任务模式：标记计划中的某一步完成/失败，并提交验收证据；没有证据不算完成",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "plan_id": {"type": "string", "description": "任务计划 ID（系统提示里给出）"},
+                        "step": {"type": "integer", "description": "步骤序号（从 1 开始）"},
+                        "status": {"type": "string", "enum": ["done", "failed"], "description": "done=完成，failed=失败"},
+                        "evidence": {"type": "string", "description": "可核验的证据：文件路径、命令输出、URL 或验收结论"},
+                        "verify_path": {"type": "string", "description": "可选：产物路径；给出后会检查文件/目录是否存在"},
+                    },
+                    "required": ["plan_id", "step", "evidence"],
+                },
+            },
+        },
+    groups=['⏰ 定时与任务'],
+    phrases='标记任务步骤完成',
+    preactivate=(('任务计划', '第几步', '步骤完成', '验收'),),
+)
+def task_step_done(plan_id="", step=0, status="done", evidence="", verify_path=""):
+    """长任务逐步验收：证据 + 可选产物存在性检查，避免口头宣布完成。"""
+    if str(status or "").lower() not in ("done", "failed"):
+        return "错误：status 仅支持 done / failed"
+    try:
+        step_no = int(step)
+    except (TypeError, ValueError):
+        return "错误：step 必须是整数"
+    ev = str(evidence or "").strip()
+    if not ev:
+        return "错误：必须提供 evidence（文件路径/命令输出/URL/验收结论），没有证据不算完成"
+    if verify_path:
+        p = permissions.resolve(str(verify_path))
+        if not p or not os.path.exists(p):
+            return f"错误：验收路径不存在：{verify_path}"
+        ev = f"{ev[:400]}（已核验：{p}）"
+    try:
+        plan, msg = task_plan.complete_step(plan_id, step_no, status, ev[:500])
+    except Exception as e:  # noqa: BLE001
+        return f"错误：计划保存失败：{e}"
+    if plan is None:
+        return msg
+    permissions.audit("task_step_done", f"{plan.plan_id}#{step_no}", str(status))
+    progress = f"进度 {plan.done_count()}/{len(plan.steps)}"
+    return f"{msg}；{progress}" + ("，计划已完成" if plan.all_done() else "")
+
+
+@tool(
+        {
+            "type": "function",
+            "function": {
                 "name": "run_workflow",
                 "description": "运行已保存的流程模板（workflows.json）：按顺序逐条发送指令，上一步完成后自动执行下一步",
                 "parameters": {
@@ -1121,4 +1172,4 @@ def failure_memory(action="list", fingerprint="", tool="", note="", unresolved_o
         return f"错误：失败记忆操作失败: {e}"
 
 
-__all__ = ['write_memory', 'self_profile', 'delete_memory', 'update_memory', 'read_memory', 'query_memory_graph', 'knowledge_index', 'knowledge_search', 'schedule_task', 'list_schedules', 'cancel_schedule', 'task_checkpoint_save', 'task_checkpoint_load', 'run_workflow', 'failure_memory']
+__all__ = ['write_memory', 'self_profile', 'delete_memory', 'update_memory', 'read_memory', 'query_memory_graph', 'knowledge_index', 'knowledge_search', 'schedule_task', 'list_schedules', 'cancel_schedule', 'task_checkpoint_save', 'task_checkpoint_load', 'task_step_done', 'run_workflow', 'failure_memory']

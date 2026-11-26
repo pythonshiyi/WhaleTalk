@@ -74,8 +74,10 @@ def run(args: argparse.Namespace) -> int:
     (run_dir / "data").mkdir(parents=True, exist_ok=True)
     (run_dir / "data" / "first_run_done").write_text("", encoding="utf-8")
 
+    prompt = str(getattr(args, "prompt", "") or PROMPT)
+    needle = str(getattr(args, "needle", "") or NEEDLE)
     task = ev.Task(
-        id="e2e_smoke", category="ui", turns=[PROMPT], accept=[],
+        id="e2e_smoke", category="ui", turns=[prompt], accept=[],
         notes="前端端到端冒烟",
     )
     srv = None
@@ -105,13 +107,13 @@ def run(args: argparse.Namespace) -> int:
 
             if not args.boot_only:
                 composer = page.locator("textarea").first
-                composer.fill(PROMPT)
+                composer.fill(prompt)
                 composer.press("Enter")
                 print("[e2e] 已发送，等待助手回复 ...")
                 page.wait_for_function(
                     """(needle) => [...document.querySelectorAll('.msg.msg-assistant')]
                          .some(e => (e.innerText || '').includes(needle))""",
-                    arg=NEEDLE,
+                    arg=needle,
                     timeout=args.timeout * 1000,
                 )
                 # 等生成徽标消失（若存在），确认不是半截流
@@ -124,9 +126,9 @@ def run(args: argparse.Namespace) -> int:
                     pass
                 assistant = page.locator(".msg.msg-assistant").all_inner_texts()
                 user = page.locator(".msg.msg-user").all_inner_texts()
-                if not any(NEEDLE in t for t in assistant):
-                    raise RuntimeError(f"助手回复未包含 {NEEDLE}：{assistant[-1:] if assistant else '无'}")
-                if not any(PROMPT[:12] in t for t in user):
+                if not any(needle in t for t in assistant):
+                    raise RuntimeError(f"助手回复未包含 {needle}：{assistant[-1:] if assistant else '无'}")
+                if not any(prompt[:12] in t for t in user):
                     raise RuntimeError("用户消息未出现在界面")
                 print("[e2e] 收到助手回复，SSE → 渲染链路通过")
 
@@ -175,6 +177,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--timeout", type=float, default=90.0, help="单步超时秒数")
     parser.add_argument("--startup-timeout", type=float, default=90.0, help="服务启动超时秒数")
     parser.add_argument("--model", default="", help="覆盖模型名")
+    parser.add_argument("--prompt", default="", help="自定义发送内容（默认只回复 E2E-OK）")
+    parser.add_argument("--needle", default="", help="等待助手回复包含的文本（默认 E2E-OK）")
     parser.add_argument("--report-dir", default=str(REPO / "out" / "e2e"), help="输出目录")
     args = parser.parse_args(argv)
     return run(args)

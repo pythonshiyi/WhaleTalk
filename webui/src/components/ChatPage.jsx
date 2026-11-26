@@ -467,6 +467,12 @@ function useBackendChat({
                 onPrompt && onPrompt({ ...ev, type: "plan" });
               }
             },
+            onTaskPlan: (ev) => {
+              if (!alive || stopRef.current) return;
+              // 长任务计划：实时更新步骤状态/验收证据，渲染为独立进度卡
+              if (isContinue) updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, taskPlan: ev } : x)));
+              else patchLast((x) => ({ ...x, taskPlan: ev }));
+            },
             onNeedsConfirmation: (ev) => {
               // 成本预检拦截：标记本次为「待确认」，由 finish() 移除空占位并等待用户决定。
               if (alive && !stopRef.current) {

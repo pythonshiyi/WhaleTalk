@@ -1,6 +1,6 @@
 # 核心工具预算清单（tools/check_tool_budget.py 维护）
 # 每行 = 一个内置工具（源码 @tool() 声明、进 _TOOL_ORDER）。
-# 当前共 169 项。新增/删除都必须走 waive 并留痕，理由见 core_tool_budget_log.txt。
+# 当前共 170 项。新增/删除都必须走 waive 并留痕，理由见 core_tool_budget_log.txt。
 agent_mail
 app_manage
 archive_files
@@ -148,6 +148,7 @@ stop_process
 subagent_run
 task_checkpoint_load
 task_checkpoint_save
+task_step_done
 team_run
 telegram_poll_updates
 track_web
