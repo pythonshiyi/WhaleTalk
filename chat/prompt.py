@@ -160,7 +160,7 @@ class PreparedPrompt:
     json_hint: Optional[Dict[str, Any]]
     memory_msg: Optional[Dict[str, Any]]
     image_hint_msg: Optional[Dict[str, Any]]
-    trailing: str
+    trailing: Any  # str 或 callable（每轮工具循环重新求值）
     eff_model: str
 
 
@@ -196,7 +196,7 @@ class PromptBuilder:
         is_official: bool,
         json_output: bool,
         memory_text: Optional[str],
-        trailing_text: Optional[str],
+        trailing_text: Optional[Any],
     ) -> PreparedPrompt:
         messages[:] = sanitize_messages(messages)
         # 图片内联：仅替换受影响的 user 消息副本；原始消息对象（content 文本 +
@@ -250,6 +250,6 @@ class PromptBuilder:
             json_hint=json_hint_msg,
             memory_msg=memory_msg,
             image_hint_msg=image_hint_msg,
-            trailing=str(trailing_text or ""),
+            trailing=trailing_text or "",
             eff_model=eff_model,
         )

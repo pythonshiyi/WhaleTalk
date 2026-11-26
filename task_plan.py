@@ -401,3 +401,38 @@ def render_prompt(plan: TaskPlan) -> str:
         "4. 全部步骤完成后，汇总产物与验收证据；不要只回复“已完成”。",
     ]
     return "\n".join(lines)
+
+
+def pending_steps(plan: TaskPlan) -> List[Dict[str, Any]]:
+    return [s for s in plan.steps if s.get("status") != "done"]
+
+
+def current_hint(plan: Optional[TaskPlan]) -> str:
+    """每轮工具循环注入的短提醒：始终指向当前必须完成的那一步。"""
+    if plan is None:
+        return ""
+    left = pending_steps(plan)
+    if not left:
+        return ""
+    step = left[0]
+    return (
+        f"[长任务进度 {plan.done_count()}/{len(plan.steps)}] "
+        f"当前必须执行第 {step.get('id')} 步：{step.get('title')}。"
+        f"完成后立刻调用 task_step_done(plan_id=\"{plan.plan_id}\", "
+        f"step={step.get('id')}, evidence=\"可核验证据\")。"
+        f"还剩 {len(left)} 步；未全部验收前不要结束回复。"
+    )
+
+
+def resume_prompt(plan: TaskPlan) -> str:
+    """模型提前收尾时，自动续跑用的用户消息。"""
+    lines = [
+        f"[长任务自动续跑] 计划 {plan.plan_id} 还有 {len(pending_steps(plan))} 步未验收：",
+    ]
+    for s in pending_steps(plan)[:8]:
+        lines.append(f"- 第 {s.get('id')} 步：{s.get('title')}")
+    lines += [
+        "",
+        "请直接执行上述未完成步骤，每步调用 task_step_done 提交证据；全部完成后再汇总。不要重复已完成的步骤。",
+    ]
+    return "\n".join(lines)

@@ -10948,6 +10948,9 @@ class _Handler(BaseHTTPRequestHandler):
                         # smart_tools 只预激活 user 消息命中的工具；系统提示里的工具名不算。
                         # 计划一旦存在，必须把验收工具直接放进首轮可用集合。
                         kwargs["preset_tools"] = list(kwargs.get("preset_tools") or ()) + ["task_step_done"]
+                        # 每轮工具循环重算提醒：模型做完一步后，下一轮立刻被指向下一步
+                        kwargs["trailing_text"] = lambda: task_plan.current_hint(
+                            task_plan.load(task_plan_obj.plan_id) or task_plan_obj)
                         send("task_plan", task_plan_obj.payload())
                         if task_plan_obj.done_count():
                             send("notice", {
@@ -11025,6 +11028,25 @@ class _Handler(BaseHTTPRequestHandler):
                 "new_messages_out": generated,
             })
             ok = client.chat(messages, **kwargs)
+            # 长任务自动续跑：模型提前收尾但计划没验收完时，不把半截任务丢给用户。
+            # 最多追 2 轮，避免模型卡住时无限烧 token；停止请求立即退出。
+            _auto_continue = 0
+            while (task_plan_obj is not None and ok and not job.stop_event.is_set()
+                   and _auto_continue < 2):
+                latest = task_plan.load(task_plan_obj.plan_id) or task_plan_obj
+                task_plan_obj = latest
+                if latest.all_done():
+                    break
+                _auto_continue += 1
+                _left = len(latest.steps) - latest.done_count()
+                send("notice", {
+                    "text": f"任务还有 {_left} 步未验收，自动继续第 {_auto_continue} 轮。",
+                    "level": "info",
+                })
+                _resume = {"role": "user", "content": task_plan.resume_prompt(latest)}
+                messages.append(_resume)
+                generated.append(_resume)
+                ok = client.chat(messages, **kwargs)
             # 作业线程此前忽略 chat 的返回值：提前终止（return False）也会照发 done，
             # 与「正常完成」无从区分。补一条可见提示（停止/已给具体原因时不重复）。
             if not ok and not job.stop_event.is_set() and not _trunc["seen"]:
@@ -11046,7 +11068,8 @@ class _Handler(BaseHTTPRequestHandler):
                             send("notice", {"text": f"任务已暂停，计划已保留（剩 {left} 步），下次继续会自动续跑。",
                                             "level": "warn"})
                         else:
-                            send("notice", {"text": f"任务计划还有 {left} 步未完成；补充指令后继续，会自动从计划续跑。",
+                            send("notice", {"text": (f"任务计划还有 {left} 步未完成（已自动续跑 {_auto_continue} 轮）；"
+                                                     "回复“继续”可从计划接上。"),
                                             "level": "warn"})
                 except Exception:
                     logger.exception("任务计划收尾失败（不影响本轮回复）")

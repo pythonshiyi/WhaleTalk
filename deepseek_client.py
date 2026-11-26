@@ -5688,7 +5688,10 @@ class DeepSeekClient:
                 # 动态上下文（trailing_text）追加到最近一条 user 消息尾部。
                 # 仅作用于浅拷贝：不修改 work / 调用方内存历史（UI 与存档保留 reasoning）
                 req_msgs = prune_reasoning_for_send(req_work)
-                if trailing:
+                # trailing_text 可传 callable：每轮工具循环重新求值。
+                # 长任务用它注入「当前必须执行的步骤」，而不用改写调用方历史。
+                _trailing_now = trailing() if callable(trailing) else trailing
+                if _trailing_now:
                     req_msgs = list(req_msgs)
                     for i in range(len(req_msgs) - 1, -1, -1):
                         if req_msgs[i].get("role") == "user":
@@ -5696,14 +5699,14 @@ class DeepSeekClient:
                             if isinstance(last.get("content"), list):
                                 # 图片内联消息：动态上下文追加为 text 块
                                 last["content"] = list(last["content"]) + [
-                                    {"type": "text", "text": trailing}
+                                    {"type": "text", "text": _trailing_now}
                                 ]
                             else:
-                                last["content"] = str(last.get("content") or "") + "\n\n" + trailing
+                                last["content"] = str(last.get("content") or "") + "\n\n" + _trailing_now
                             req_msgs[i] = last
                             break
                     else:
-                        req_msgs.append({"role": "user", "content": trailing})
+                        req_msgs.append({"role": "user", "content": _trailing_now})
                 kw = dict(kwargs) if req_msgs is not work else kwargs
                 if req_msgs is not work:
                     kw["messages"] = req_msgs
