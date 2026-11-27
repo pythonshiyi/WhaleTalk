@@ -474,6 +474,12 @@ function useBackendChat({
               if (isContinue) updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, taskPlan: ev } : x)));
               else patchLast((x) => ({ ...x, taskPlan: ev }));
             },
+            onTaskRecall: (ev) => {
+              // P6-2 产物直达：归档结果直接渲染成可打开产物的卡片（本轮零模型调用）
+              if (!alive || stopRef.current) return;
+              if (isContinue) updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, taskRecall: ev } : x)));
+              else patchLast((x) => ({ ...x, taskRecall: ev }));
+            },
             onNeedsConfirmation: (ev) => {
               // 成本预检拦截：标记本次为「待确认」，由 finish() 移除空占位并等待用户决定。
               if (alive && !stopRef.current) {
@@ -1631,6 +1637,16 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
           updateMsgs((list) => list.map((x) => (
             x && x.taskPlan && x.taskPlan.plan_id === ev.plan_id ? { ...x, taskPlan: ev } : x
           )));
+        },
+        onTaskRecall: (ev) => {
+          updateMsgs((list) => {
+            for (let i = list.length - 1; i >= 0; i--) {
+              if (list[i] && list[i].role === "assistant") {
+                return list.map((x, j) => (j === i ? { ...x, taskRecall: ev } : x));
+              }
+            }
+            return list;
+          });
         },
         onNotice: (ev) => { if (ev && ev.text) toast(ev.text); },
         onError: (msg) => toast("⚠️ 进度同步失败：" + (msg || "后端未连接")),

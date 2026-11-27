@@ -60,6 +60,22 @@ SKILL_REPLAYABLE_TOOLS = frozenset({
     "write_excel", "write_csv",
 })
 MAX_SKILL_CALLS_PER_STEP = 30
+# P6-1：参数化技能——把轨迹里的字面量抽成槽位，用结构骨架匹配新目标。
+# 槽位值来自新目标中的原文片段，不猜、不调模型；抽取失败一律降级回模型路径。
+SLOT_VALUE_MAX = 120           # 单个槽位值最大长度，防止把整段新目标吞进一个槽位
+TEMPLATE_MIN_CONST_CHARS = 12  # 结构骨架常量总长下限，太短的骨架会误命中任何目标
+TEMPLATE_MIN_SEGMENTS = 2      # 至少要有 2 段有效常量片段
+SKILL_MAX_FAILURES = 2         # 重放连续失败到该次数后自动停用技能
+# P6-2：产物直达——历史追问强命中时零模型调用直接返回结构化结果。
+DIRECT_RECALL_THRESHOLD = 0.72
+DIRECT_ASK_HINTS = (
+    "在哪", "哪里", "哪个文件", "什么文件", "文件名", "路径", "产物", "结论",
+    "结果是什么", "上次", "之前", "刚才", "那份", "报告呢", "做了什么", "吗", "?", "？",
+)
+DIRECT_EXEC_HINTS = (
+    "请创建", "请写", "请生成", "帮我做", "创建文件", "写入", "第一步",
+    "生成一份", "修改文件", "新建一个", "依次完成", "请依次", "帮我改",
+)
 
 ACTIVE_STATUSES = ("running", "queued", "paused", "blocked")
 TERMINAL_STATUSES = ("completed", "cancelled")
@@ -241,6 +257,9 @@ class TaskPlan:
     # 同类目标精确命中后直接重放，跳过模型调用（不做事后复核）。
     step_traces: Dict[str, Any] = field(default_factory=dict)
     execution_mode: str = "model"  # model / deterministic（确定性重放）
+    # P6-4：开工前影响预览（确定性技能将改动的文件/工具序列），随首个 task_plan 事件下发，
+    # 只在开工时告知一次，不追加任何复核轮。
+    skill_preview: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.created_at:
@@ -261,6 +280,7 @@ class TaskPlan:
         self.recipe_name = str(self.recipe_name or "")[:120]
         self.pitfalls_applied = [str(p) for p in (self.pitfalls_applied or []) if p][:30]
         self.step_traces = self._norm_traces(self.step_traces)
+        self.skill_preview = dict(self.skill_preview) if isinstance(self.skill_preview, dict) else {}
         self.execution_mode = str(self.execution_mode or "model")[:20]
         if self.execution_mode not in ("model", "deterministic"):
             self.execution_mode = "model"
@@ -369,6 +389,7 @@ class TaskPlan:
             "finalized": bool(self.finalized),
             "execution_mode": self.execution_mode,
             "step_traces": {k: [dict(c) for c in v] for k, v in self.step_traces.items()},
+            "skill_preview": dict(self.skill_preview),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -394,6 +415,7 @@ class TaskPlan:
             "finalized": bool(self.finalized),
             "execution_mode": self.execution_mode,
             "step_traces": self.step_traces,
+            "skill_preview": self.skill_preview,
         }
 
     @classmethod
@@ -418,6 +440,7 @@ class TaskPlan:
             finalized=bool(data.get("finalized", False)),
             step_traces=data.get("step_traces") or {},
             execution_mode=str(data.get("execution_mode") or "model"),
+            skill_preview=data.get("skill_preview") or {},
         )
 
     # -- 更新 --
@@ -1315,19 +1338,30 @@ def save_recipe(plan: TaskPlan) -> Tuple[Optional[Dict[str, Any]], str]:
             hit["successes"] = int(hit.get("successes") or 0) + 1
             hit["source_plan_id"] = plan.plan_id
             hit["updated_at"] = now
+            # P6-1：用原始目标作锚点重建参数化模板（骨架稳定，不受后续任务措辞漂移影响）
+            if hit.get("traces"):
+                hit["template"] = build_skill_template(
+                    str(hit.get("source_goal") or plan.goal), _ordered_skill_calls(hit))
             recipe = hit
         else:
+            traces = {k: [dict(c) for c in v] for k, v in (plan.step_traces or {}).items()}
             recipe = {
                 "recipe_id": uuid.uuid4().hex[:10],
                 "name": str(plan.goal)[:60],
                 "tokens": tokens[:40],
                 "strategy": plan.strategy,
                 "steps": _step_templates(plan.steps),
-                "traces": {k: [dict(c) for c in v] for k, v in (plan.step_traces or {}).items()},
+                "traces": traces,
                 "touched_paths": list(plan.touched_paths)[:50],
                 "source_plan_id": plan.plan_id,
+                "source_goal": str(plan.goal)[:500],
+                "template": build_skill_template(plan.goal, _ordered_skill_calls({"traces": traces})),
                 "uses": 0,
                 "successes": 1,
+                "skill_hits": 0,
+                "skill_failures": 0,
+                "replay_calls": 0,
+                "disabled": False,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -1356,6 +1390,117 @@ def delete_recipe(recipe_id: str) -> bool:
             return False
         _save_store(_recipes_path(), kept)
         return True
+
+
+def list_skills(limit: int = 50) -> List[Dict[str, Any]]:
+    """P6-3：技能库清单（含确定性命中/失败/省下模型轮次的可统计字段）。"""
+    try:
+        limit = max(1, min(int(limit or 50), MAX_RECIPES))
+    except (TypeError, ValueError):
+        limit = 50
+    out: List[Dict[str, Any]] = []
+    for r in list_recipes(MAX_RECIPES):
+        if not r.get("traces"):
+            continue
+        if int(r.get("successes") or 0) < MIN_SKILL_SUCCESSES:
+            continue
+        out.append({
+            "recipe_id": str(r.get("recipe_id") or ""),
+            "name": str(r.get("name") or ""),
+            "successes": int(r.get("successes") or 0),
+            "uses": int(r.get("uses") or 0),
+            "skill_hits": int(r.get("skill_hits") or 0),
+            "skill_failures": int(r.get("skill_failures") or 0),
+            "replay_calls": int(r.get("replay_calls") or 0),
+            "disabled": bool(r.get("disabled")),
+            "parameterized": bool((r.get("template") or {}).get("goal_pattern")),
+            "last_hit_at": str(r.get("last_hit_at") or ""),
+            "updated_at": str(r.get("updated_at") or ""),
+            "steps": _step_templates(r.get("steps") or []),
+            "traces": r.get("traces") or {},
+        })
+    return out[:limit]
+
+
+def skill_totals() -> Dict[str, Any]:
+    """累计「越用越省」的可核对数字：每次确定性命中 = 省掉一整轮模型规划+执行。"""
+    rows = list_skills(MAX_RECIPES)
+    hits = sum(int(r.get("skill_hits") or 0) for r in rows)
+    return {
+        "skills": len(rows),
+        "active": sum(1 for r in rows if not r.get("disabled")),
+        "parameterized": sum(1 for r in rows if r.get("parameterized")),
+        "hits": hits,
+        "replay_calls": sum(int(r.get("replay_calls") or 0) for r in rows),
+        "saved_model_rounds": hits,
+        "failures": sum(int(r.get("skill_failures") or 0) for r in rows),
+    }
+
+
+def record_skill_outcome(recipe_id: str, ok: bool,
+                         calls_count: int = 0) -> Tuple[bool, str]:
+    """技能重放结果记账；连续失败达阈值自动停用，避免坏技能反复占位。"""
+    rid = str(recipe_id or "")
+    if not rid:
+        return False, "缺少技能 ID"
+    with _WRITE_LOCK:
+        rows = _load_store(_recipes_path())
+        for r in rows:
+            if str(r.get("recipe_id") or "") != rid:
+                continue
+            if ok:
+                r["skill_hits"] = int(r.get("skill_hits") or 0) + 1
+                r["replay_calls"] = int(r.get("replay_calls") or 0) + max(0, int(calls_count or 0))
+                r["last_hit_at"] = _now()
+                msg = "技能命中已记账"
+            else:
+                fails = int(r.get("skill_failures") or 0) + 1
+                r["skill_failures"] = fails
+                if fails >= SKILL_MAX_FAILURES:
+                    r["disabled"] = True
+                    msg = "技能连续失败，已自动停用并降级为模型执行"
+                else:
+                    msg = "技能重放失败，已降级为模型执行"
+            r["updated_at"] = _now()
+            _save_store(_recipes_path(), rows)
+            return True, msg
+    return False, "技能不存在"
+
+
+def control_skill(recipe_id: str, action: str,
+                  goal: str = "") -> Tuple[bool, Any, str]:
+    """P6-3 技能管理：停用 / 启用 / 删除 / 预览轨迹（预览只计算，不写文件）。"""
+    rid, act = str(recipe_id or ""), str(action or "").strip().lower()
+    if not rid:
+        return False, None, "缺少技能 ID"
+    with _WRITE_LOCK:
+        rows = _load_store(_recipes_path())
+        hit = next((r for r in rows if str(r.get("recipe_id") or "") == rid), None)
+        if hit is None:
+            return False, None, "技能不存在"
+        if act == "delete":
+            _save_store(_recipes_path(), [r for r in rows if r is not hit])
+            return True, {"deleted": rid}, "已删除技能"
+        if act in ("disable", "enable"):
+            hit["disabled"] = act == "disable"
+            if act == "enable":
+                hit["skill_failures"] = 0
+            hit["updated_at"] = _now()
+            _save_store(_recipes_path(), rows)
+            return True, {"disabled": bool(hit["disabled"])}, ("已停用技能" if act == "disable" else "已启用技能")
+        if act in ("preview", "dry_run"):
+            calls = _ordered_skill_calls(hit)
+            paths = []
+            for c in calls:
+                p = str((c.get("args") or {}).get("path") or "")
+                if p and p not in paths:
+                    paths.append(p)
+            return True, {
+                "recipe_id": rid, "name": str(hit.get("name") or ""),
+                "calls": calls, "paths": paths, "call_count": len(calls),
+                "note": "仅预览已验证的工具序列，不实际写文件、不调用模型",
+            }, "已生成技能轨迹预览"
+        return False, None, "不支持的操作：" + act
 
 
 def match_recipe(goal: str) -> Optional[Dict[str, Any]]:
@@ -1422,28 +1567,95 @@ def drop_tool_buffer(plan_id: str) -> None:
         _SKILL_BUFFERS.pop(str(plan_id or ""), None)
 
 
-def match_skill(goal: str) -> Optional[Dict[str, Any]]:
-    """精确匹配已验证 2 次以上的技能配方；命中才允许跳过模型直接重放。
+def _iter_arg_strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_arg_strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_arg_strings(item)
 
-    比配方复用更严格：必须带完整 traces 且 successes 达标，宁可不命中也不跑错。
+
+def _literal_args_present(calls: List[Dict[str, Any]], goal: str) -> bool:
+    """精确重放的前提：轨迹里的关键字面量确实还出现在新目标里。
+
+    中文描述不变、只换文件名时 token Jaccard 仍可能 ≥0.92；此时若继续用旧
+    字面量重放就会写错文件。有参数化模板的配方一律先过这道校验，不齐则转模板路径。
+    """
+    text = str(goal or "")
+    for c in calls:
+        for raw in _iter_arg_strings(c.get("args") or {}):
+            s = str(raw).strip()
+            if len(s) < 3 or any(ch in s for ch in ("\n", "\r")):
+                continue
+            if s in text:
+                continue
+            base = _path_basename(s)
+            if base and base in text:
+                continue
+            return False
+    return True
+
+
+def match_skill(goal: str) -> Optional[Dict[str, Any]]:
+    """P6-1：精确匹配或参数化模板匹配已验证技能；命中才允许跳过模型直接重放。
+
+    两条路径都零模型：
+    - exact：目标 token Jaccard ≥ SKILL_MATCH_THRESHOLD，字面量重放；
+    - template：结构骨架常量片段顺序命中 + 槽位规则抽取成功，参数化重放。
+    任一环节不满足即返回 None 降级模型路径；停用/成功次数不足的技能不参与。
     """
     tokens = _goal_tokens(goal)
-    if len(tokens) < 2:
-        return None
     with _WRITE_LOCK:
         rows = _load_store(_recipes_path())
+        eligible = [
+            r for r in rows
+            if r.get("traces")
+            and not bool(r.get("disabled"))
+            and int(r.get("successes") or 0) >= MIN_SKILL_SUCCESSES
+        ]
+        # 1) 精确命中优先（同一目标重复执行，最稳）
         best, hit = 0.0, None
-        for row in rows:
-            if not row.get("traces"):
-                continue
-            if int(row.get("successes") or 0) < MIN_SKILL_SUCCESSES:
-                continue
+        for row in eligible:
             score = _jaccard(tokens, set(row.get("tokens") or []))
             if score > best:
                 best, hit = score, row
-        if hit is None or best < SKILL_MATCH_THRESHOLD:
+        if hit is not None and best >= SKILL_MATCH_THRESHOLD:
+            exact_calls = _ordered_skill_calls(hit)
+            # 有参数化模板时必须确认旧字面量仍在新目标里，否则不能走精确重放
+            if not hit.get("template") or _literal_args_present(exact_calls, goal):
+                if exact_calls:
+                    out = dict(hit)
+                    out["_skill_calls"] = exact_calls
+                    out["_skill_slots"] = {}
+                    out["_match_mode"] = "exact"
+                    return out
+        # 2) 参数化模板命中：换了文件名/内容/关键词也能零模型复用
+        best_tpl, hit_tpl, values = None, None, None
+        for row in eligible:
+            tpl = row.get("template")
+            if not isinstance(tpl, dict) or not tpl.get("goal_pattern"):
+                continue
+            vals = extract_slots(tpl.get("goal_pattern"), goal, tpl.get("slots") or {})
+            if not vals:
+                continue
+            calls = resolve_skill_calls(row, vals)
+            if not calls:
+                continue
+            # 结构骨架覆盖度：常量片段越长越可信，优先选更强的模板
+            const_chars = sum(len(p.strip()) for p in re.split(
+                r"\{s\d+\}", str(tpl.get("goal_pattern") or "")) if p.strip())
+            if best_tpl is None or const_chars > best_tpl:
+                best_tpl, hit_tpl, values = const_chars, row, vals
+        if hit_tpl is None:
             return None
-        return dict(hit)
+        out = dict(hit_tpl)
+        out["_skill_calls"] = resolve_skill_calls(out, values)
+        out["_skill_slots"] = dict(values or {})
+        out["_match_mode"] = "template"
+        return out
 
 
 def _skill_trace_for_step(recipe: Dict[str, Any], step: int,
@@ -1502,13 +1714,210 @@ def _ordered_skill_calls(recipe: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out[:MAX_SKILL_CALLS_PER_STEP * 8]
 
 
+def _template_value_kind(key: str) -> str:
+    """槽位语义：路径类要额外做路径穿越校验，文本类只禁换行/..。"""
+    k = str(key or "").lower()
+    if k in ("path", "file", "filename", "file_path", "name", "out", "output", "dest", "target"):
+        return "filename"
+    return "text"
+
+
+def _path_basename(value: str) -> str:
+    return str(value or "").replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _collect_slot_values(goal: str, value: Any, key: str,
+                         found: Dict[str, str]) -> None:
+    """递归收集可参数化片段：整值命中目标，或路径参数的文件名片段命中目标。"""
+    if isinstance(value, str):
+        val = value.strip()
+        if len(val) < 2 or len(val) > SLOT_VALUE_MAX:
+            return
+        if any(ch in val for ch in ("\n", "\r")):
+            return
+        kind = _template_value_kind(key)
+        if val in goal:
+            found.setdefault(val, kind)
+        elif kind == "filename":
+            base = _path_basename(val)
+            if len(base) >= 3 and base != val and base in goal:
+                found.setdefault(base, "filename")
+    elif isinstance(value, list):
+        for item in value:
+            _collect_slot_values(goal, item, key, found)
+    elif isinstance(value, dict):
+        for k, item in value.items():
+            _collect_slot_values(goal, item, k, found)
+
+
+def _templatize_arg(value: Any, mapping: Dict[str, str]) -> Any:
+    """把参数里的字面量片段换成 {sN} 占位符（支持 str / list / dict）。"""
+    if isinstance(value, str):
+        val = value.strip()
+        if val in mapping:
+            return "{%s}" % mapping[val]
+        base = _path_basename(val)
+        if base in mapping:
+            return value.replace(base, "{%s}" % mapping[base])
+        return value
+    if isinstance(value, list):
+        return [_templatize_arg(x, mapping) for x in value]
+    if isinstance(value, dict):
+        return {k: _templatize_arg(x, mapping) for k, x in value.items()}
+    return value
+
+
+def build_skill_template(goal: str,
+                         calls: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """P6-1：把轨迹参数里出现在目标中的字面量抽成槽位，生成结构骨架 + 参数化调用模板。
+
+    例：目标「创建 a.txt，内容写入 hello」+ 轨迹 {path:"<ws>/a.txt", content:"hello"}
+    → 骨架「创建 {s0}，内容写入 {s1}」，调用模板 {path:"<ws>/{s0}", content:"{s1}"}。
+    下次「创建 b.txt，内容写入 world」按常量片段抽取槽位，即可零模型命中。
+    绝对路径按文件名片段参数化，目录前缀保持字面量；verify_files 的列表参数同样处理。
+    """
+    goal = str(goal or "")
+    if not goal or not calls:
+        return None
+    seen: Dict[str, str] = {}
+    for c in calls:
+        for k, v in (c.get("args") or {}).items():
+            _collect_slot_values(goal, v, k, seen)
+    if not seen:
+        return None
+    # 长片段先替换，避免短片段把长片段切断；同一片段的所有出现都换成同一槽位。
+    value_to_slot: Dict[str, str] = {}
+    pattern = goal
+    for i, val in enumerate(sorted(seen.keys(), key=len, reverse=True)):
+        slot = "s%d" % i
+        value_to_slot[val] = slot
+        pattern = pattern.replace(val, "{%s}" % slot)
+    const_parts = [p.strip() for p in re.split(r"\{s\d+\}", pattern) if p.strip()]
+    if len(const_parts) < TEMPLATE_MIN_SEGMENTS:
+        return None
+    if sum(len(p) for p in const_parts) < TEMPLATE_MIN_CONST_CHARS:
+        return None
+    slots = {slot: {"value": val, "kind": seen[val]}
+             for val, slot in value_to_slot.items()}
+    templated: List[Dict[str, Any]] = []
+    for c in calls:
+        args = {k: _templatize_arg(v, value_to_slot)
+                for k, v in (c.get("args") or {}).items()}
+        templated.append({"name": str(c.get("name") or ""), "args": args})
+    return {"goal_pattern": pattern[:1000], "slots": slots, "calls": templated}
+
+
+def extract_slots(pattern: str, new_goal: str,
+                  slots: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """按结构骨架的常量片段顺序，从新目标抽取槽位值；任一环节不满足即返回 None（降级）。"""
+    parts = re.split(r"(\{s\d+\})", str(pattern or ""))
+    new_goal = str(new_goal or "")
+    if parts and parts[0]:
+        idx = new_goal.find(parts[0])
+        if idx < 0:
+            return None
+        cursor = idx + len(parts[0])
+    else:
+        cursor = 0
+    values: Dict[str, str] = {}
+    i = 1
+    while i < len(parts):
+        token = parts[i]
+        if not (token.startswith("{s") and token.endswith("}")):
+            return None
+        name = token[1:-1]
+        if name not in slots:
+            return None
+        nxt = parts[i + 1] if i + 1 < len(parts) else ""
+        if nxt:
+            j = new_goal.find(nxt, cursor)
+            if j < 0:
+                return None
+            val = new_goal[cursor:j].strip()
+            cursor = j + len(nxt)
+        else:
+            val = new_goal[cursor:].strip()
+            cursor = len(new_goal)
+        if not val or len(val) > SLOT_VALUE_MAX:
+            return None
+        if name in values and values[name] != val:
+            return None  # 同一槽位在新目标里出现多次但值不一致 → 不猜
+        values[name] = val
+        i += 2
+    for name, val in values.items():
+        if any(ch in val for ch in ("\n", "\r", "..")):
+            return None
+        if str((slots.get(name) or {}).get("kind")) == "filename":
+            if os.path.isabs(val) or "/" in val or "\\" in val:
+                return None
+    return values
+
+
+def resolve_skill_calls(recipe: Dict[str, Any],
+                        values: Optional[Dict[str, str]]) -> List[Dict[str, Any]]:
+    """用抽出的槽位值填充参数化调用模板；残留占位符或非法工具一律作废。"""
+    tpl = recipe.get("template") or {}
+    templated = tpl.get("calls") if isinstance(tpl, dict) else None
+    if not templated:
+        return _ordered_skill_calls(recipe) if not values else []
+    vals = values or {}
+    bad = [False]
+
+    def _fill(v: Any) -> Any:
+        if isinstance(v, str):
+            filled = re.sub(r"\{(s\d+)\}",
+                            lambda m: vals.get(m.group(1), m.group(0)), v)
+            if re.search(r"\{s\d+\}", filled):
+                bad[0] = True  # 槽位没抽全 → 绝不带着占位符写文件
+            return filled
+        if isinstance(v, list):
+            return [_fill(x) for x in v]
+        if isinstance(v, dict):
+            return {k: _fill(x) for k, x in v.items()}
+        return v
+
+    out: List[Dict[str, Any]] = []
+    for c in templated:
+        if not isinstance(c, dict):
+            return []
+        name = str(c.get("name") or "")
+        if name not in SKILL_REPLAYABLE_TOOLS:
+            return []
+        args = {k: _fill(v) for k, v in (c.get("args") or {}).items()}
+        if bad[0]:
+            return []
+        out.append({"name": name, "args": args})
+    return out[:MAX_SKILL_CALLS_PER_STEP * 8]
+
+
+def preview_skill(skill: Dict[str, Any]) -> Dict[str, Any]:
+    """P6-4 开工前影响预览：只计算，不执行、不写文件、不调模型。"""
+    calls = [dict(c) for c in (skill.get("_skill_calls") or _ordered_skill_calls(skill))]
+    paths: List[str] = []
+    for c in calls:
+        p = str((c.get("args") or {}).get("path") or "")
+        if p and p not in paths:
+            paths.append(p)
+    return {
+        "recipe_id": str(skill.get("recipe_id") or ""),
+        "name": str(skill.get("name") or ""),
+        "match_mode": str(skill.get("_match_mode") or "exact"),
+        "slots": {k: str(v) for k, v in (skill.get("_skill_slots") or {}).items()},
+        "paths": paths,
+        "call_count": len(calls),
+        "tools": [str(c.get("name") or "") for c in calls],
+    }
+
+
 def execute_skill(plan: TaskPlan, recipe: Dict[str, Any], emit=None) -> Tuple[bool, str]:
     """确定性重放技能：不调用模型，按全局有序轨迹重放工具并逐步验收。
 
-    参数已随配方持久化为字面量，命中要求目标 token Jaccard ≥ SKILL_MATCH_THRESHOLD，
-    因此这些参数对新目标同样有效。任一前置校验或执行失败 → (False, 原因)，
+    P6-1：参数化命中时 recipe 带 `_skill_calls`（槽位已按新目标填充）；
+    精确命中时用原始字面量轨迹。任一前置校验或执行失败 → (False, 原因)，
     由上层降级回模型路径；绝不假装完成、绝不做事后复核（用户硬约束）。
     """
+    if not isinstance(recipe, dict):
+        return False, "技能不可用（配方缺失或含不可重放工具），降级模型执行"
     import toolkit as _tk  # 延迟导入：避免与工具注册建立顺序耦合
     # 防御：确保内置工具已注册（单独调用本模块、未走 api_server 导入链时也能重放）。
     if _tk.executor_for("write_file") is None:
@@ -1518,9 +1927,12 @@ def execute_skill(plan: TaskPlan, recipe: Dict[str, Any], emit=None) -> Tuple[bo
         except Exception as e:
             logger.warning("确定性技能：工具注册链加载失败：%s", e)
 
-    calls = _ordered_skill_calls(recipe)
+    calls = [dict(c) for c in (recipe.get("_skill_calls") or [])] or _ordered_skill_calls(recipe)
     if not calls:
         return False, "配方无可重放轨迹（或含不可重放工具），降级模型执行"
+    # 二次护栏：即使参数化填充过，也必须全是可重放工具，避免绕过白名单
+    if any(str(c.get("name") or "") not in SKILL_REPLAYABLE_TOOLS for c in calls):
+        return False, "轨迹含不可重放工具，降级模型执行"
     emit = emit or (lambda _ev, _data: None)
     paths: List[str] = []
     last_result = ""
@@ -1769,16 +2181,15 @@ def create(client, goal: str, session_id: str, priority: Optional[int] = None) -
     goal = str(goal or "").strip()
     parts: List[str] = []
     recipe = match_recipe(goal)  # P4-1：同类任务复用，跳过规划调用，也不撞 429
-    skill = None
-    # P5-1：只有精确匹配 + successes 达标的已验证配方才升级为零模型确定性技能。
-    # 命中技能时直接套用技能的步骤模板（与配方一致），并记录 execution_mode。
-    if recipe is not None:
-        skill = match_skill(goal)
+    # P6-1：技能判定独立于配方阈值——换了文件名/内容后 Jaccard 可能掉到配方阈值以下，
+    # 但结构骨架仍可命中；此时也必须跳过规划，直接确定性执行。
+    skill = match_skill(goal)
     steps: List[Dict[str, Any]] = []
     strategy = ""
-    if recipe is not None:
-        steps = [dict(s) for s in (recipe.get("steps") or [])]
-        strategy = str(recipe.get("strategy") or "general")
+    source = skill or recipe
+    if source is not None:
+        steps = [dict(s) for s in (source.get("steps") or [])]
+        strategy = str(source.get("strategy") or "general")
     elif not any(h in goal for h in SIMPLE_HINTS):
         try:
             client.chat(
@@ -1808,10 +2219,11 @@ def create(client, goal: str, session_id: str, priority: Optional[int] = None) -
         steps=steps,
         strategy=strategy or "general",
         priority=priority if priority is not None else priority_from_goal(goal),
-        recipe_id=str((recipe or {}).get("recipe_id") or ""),
-        recipe_name=str((recipe or {}).get("name") or ""),
+        recipe_id=str((source or {}).get("recipe_id") or ""),
+        recipe_name=str((source or {}).get("name") or ""),
         pitfalls_applied=[str(p.get("pitfall_id") or "") for p in match_pitfalls(goal)],
         execution_mode="deterministic" if skill is not None else "model",
+        skill_preview=preview_skill(skill) if skill is not None else {},
     )
 
 
@@ -2014,6 +2426,23 @@ def current_hint(plan: Optional[TaskPlan]) -> str:
     )
 
 
+def _shared_han_phrase(query: str, goal: str) -> int:
+    """查询与目标共享的最长连续汉字短语长度。
+
+    bigram 覆盖率对「上次的销售报告结论是什么」这类问句偏低（大量疑问词稀释），
+    但「销售报告」这种 4 字核心短语同时出现在两边，是比词频更强的召回信号。
+    """
+    q_segs = re.findall(r"[\u4e00-\u9fff]{2,}", str(query or ""))
+    g_text = "".join(re.findall(r"[\u4e00-\u9fff]{2,}", str(goal or "")))
+    best = 0
+    for seg in q_segs:
+        for n in range(len(seg), 2, -1):
+            if any(seg[i:i + n] in g_text for i in range(len(seg) - n + 1)):
+                best = max(best, n)
+                break
+    return best
+
+
 def recall_tasks(query: str, limit: int = 3, min_score: float = 0.18) -> List[Dict[str, Any]]:
     """P5-2 跨会话任务召回：从已完成计划中找相关任务的结构化摘要。
 
@@ -2058,6 +2487,10 @@ def recall_tasks(query: str, limit: int = 3, min_score: float = 0.18) -> List[Di
                 if q_bg and g_bg:
                     overlap = len(q_bg & g_bg) / float(len(q_bg))
                     score = max(score, overlap * 0.9)
+            # 共享核心短语：≥4 字连续命中说明问的就是这个任务，足以支撑产物直达
+            shared = _shared_han_phrase(query, goal)
+            if shared >= 4:
+                score = max(score, min(0.92, 0.55 + 0.06 * shared))
             # 产物路径命中（用户常按文件名追问）
             paths = [str(a.get("relpath") or a.get("path") or "") for a in (plan.artifacts or [])]
             for p in paths:
@@ -2068,6 +2501,7 @@ def recall_tasks(query: str, limit: int = 3, min_score: float = 0.18) -> List[Di
             summary = {
                 "plan_id": plan.plan_id,
                 "goal": goal[:200],
+                "score": round(float(score), 3),
                 "completed_at": plan.updated_at,
                 "strategy": plan.strategy,
                 "artifacts": paths[:20],
@@ -2099,6 +2533,54 @@ def recall_text(query: str, limit: int = 3) -> str:
             if ev:
                 lines.append(f"   · {s.get('title','')}：{ev[:160]}")
     return "\n".join(lines)
+
+
+def recall_direct(query: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """P6-2 产物直达：历史任务追问强命中时，直接返回结构化结果，零模型调用。
+
+    保守判定：问句特征 + 无执行指令 + 单一高分结果 + 有产物/证据。
+    任一条件不满足就返回 None，仍走原「召回摘要注入提示」的模型路径。
+    """
+    q = str(query or "").strip()
+    if not q or len(q) > 200:
+        return None
+    if any(h in q for h in DIRECT_EXEC_HINTS):
+        return None
+    if not any(h in q for h in DIRECT_ASK_HINTS):
+        return None
+    rows = recall_tasks(q, limit=2, min_score=DIRECT_RECALL_THRESHOLD)
+    if not rows:
+        return None
+    top = rows[0]
+    top_score = float(top.get("score") or 0)
+    # 同一任务的多次成功执行（goal 相同）不算歧义，取 recall_tasks 已排好的最新一份；
+    # 只有「不同目标且分数接近」才交给模型判断，不猜。
+    if (len(rows) > 1
+            and float(rows[1].get("score") or 0) >= top_score - 0.05
+            and str(rows[1].get("goal") or "") != str(top.get("goal") or "")):
+        return None
+    arts = [str(p) for p in (top.get("artifacts") or []) if p]
+    evs = [s for s in (top.get("steps") or []) if str(s.get("evidence") or "").strip()]
+    if not arts and not evs:
+        return None
+    card = {
+        "type": "task_recall",
+        "plan_id": str(top.get("plan_id") or ""),
+        "goal": str(top.get("goal") or ""),
+        "completed_at": str(top.get("completed_at") or ""),
+        "score": round(top_score, 3),
+        "zero_model": True,
+        "artifacts": [{"path": p, "name": os.path.basename(p)} for p in arts[:20]],
+        "steps": [{"title": str(s.get("title") or ""),
+                   "evidence": str(s.get("evidence") or "")[:300]} for s in evs[:8]],
+    }
+    lines = ["已找到上次完成的任务（直接调取归档，本次未调用模型）：",
+             f"任务：{card['goal']}", f"完成时间：{card['completed_at']}"]
+    if arts:
+        lines.append("产物：" + "、".join(os.path.basename(p) for p in arts[:8]))
+    if evs:
+        lines.append("关键结论：" + str(evs[-1].get("evidence") or "")[:160])
+    return "\n".join(lines), card
 
 
 def archive_text(plan: TaskPlan) -> str:

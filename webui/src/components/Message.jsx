@@ -193,6 +193,44 @@ const TASK_STATUS_LABEL = {
   cancelled: "已取消",
 };
 
+// P6-2：产物直达卡片——历史任务追问强命中时后端零模型直接返回，可一键打开产物。
+function TaskRecallBlock({ card }) {
+  if (!card || card.type !== "task_recall") return null;
+  const arts = Array.isArray(card.artifacts) ? card.artifacts : [];
+  const steps = Array.isArray(card.steps) ? card.steps : [];
+  return (
+    <div className="task-recall-block">
+      <div className="task-recall-head">
+        <Icon name="list" size={13} />
+        <span>历史任务产物</span>
+        {card.zero_model && <span className="task-recall-zero">零模型调用</span>}
+        {card.completed_at && <span className="task-recall-time">{card.completed_at}</span>}
+      </div>
+      {card.goal && <div className="task-recall-goal">{card.goal}</div>}
+      {arts.length > 0 && (
+        <div className="task-recall-arts">
+          {arts.map((a, i) => (
+            <button key={(a && a.path) || i} className="task-recall-art" title={(a && a.path) || ""}
+              onClick={() => api.openFile(String((a && a.path) || "")).catch(() => {})}>
+              {(a && a.name) || (a && a.path) || "产物"}
+            </button>
+          ))}
+        </div>
+      )}
+      {steps.length > 0 && (
+        <details className="task-recall-detail">
+          <summary>步骤与结论（{steps.length}）</summary>
+          {steps.map((s, i) => (
+            <div key={i} className="task-recall-ev">
+              <b>{(s && s.title) || ""}</b>{(s && s.evidence) ? `：${s.evidence}` : ""}
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  );
+}
+
 function TaskPlanBlock({ plan, onControl }) {
   const [open, setOpen] = React.useState({});
   if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) return null;
@@ -229,6 +267,19 @@ function TaskPlanBlock({ plan, onControl }) {
           {Array.isArray(plan.pitfalls_applied) && plan.pitfalls_applied.length > 0 && (
             <span className="task-plv task-plv-pitfall">套用 {plan.pitfalls_applied.length} 条避坑经验</span>
           )}
+        </div>
+      )}
+      {plan.skill_preview && plan.skill_preview.call_count > 0 && (
+        <div className="task-plan-skill-preview">
+          <span className="task-plv task-plv-skill">确定性执行 · 零模型调用</span>
+          {plan.skill_preview.match_mode === "template" && (
+            <span className="task-plv task-plv-recipe">参数化命中</span>
+          )}
+          <span className="task-plan-preview-text">
+            开工前预览：将改动 {(plan.skill_preview.paths || []).length} 个文件
+            {(plan.skill_preview.paths || []).length > 0 &&
+              `（${(plan.skill_preview.paths || []).slice(0, 4).map((p) => String(p).replace(/\\/g, "/").split("/").pop()).join("、")}）`}
+          </span>
         </div>
       )}
       <ol className="task-plan-list">
@@ -578,6 +629,7 @@ function Message({ msg, enter = false, onOpenTrace, onResend, onStar, onPin, onQ
         </div>
 
         <TaskPlanBlock plan={msg.taskPlan} onControl={onPlanControl} />
+        <TaskRecallBlock card={msg.taskRecall} />
         <PlanBlock plan={msg.plan} tools={msg.tools} />
         {msg.think && <ThinkBlock text={msg.think} streaming={msg.streaming} />}
         {flow.map((b, i) => (b.type === "steps"

@@ -8525,6 +8525,22 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"pitfalls": pitfalls, "count": len(pitfalls)})
 
 
+    @_get_route("/v1/task_skills")
+    def _g_v1_task_skills(self):
+        """P6-3：确定性技能库 + 累计省下的模型轮次统计。"""
+        from urllib.parse import parse_qs, urlparse
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            limit = int((qs.get("limit") or ["50"])[0])
+        except (TypeError, ValueError):
+            limit = 50
+        skills = task_plan.list_skills(limit)
+        self._json(200, {
+            "skills": skills, "count": len(skills),
+            "totals": task_plan.skill_totals(),
+        })
+
+
     @_get_route("/v1/evolutions")
     def _g_v1_evolutions(self):
         self._json(200, _evolutions())
@@ -10309,6 +10325,19 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200 if ok else 404, {"ok": ok})
 
 
+    @_post_route("/v1/task_skills/control")
+    def _p_v1_task_skills_control(self):
+        """P6-3：停用 / 启用 / 删除 / 预览技能轨迹。预览只计算，不写文件。"""
+        body = self._read_body()
+        if body is None:
+            self._json(400, {"error": "invalid json or body too large"})
+            return
+        ok, data, msg = task_plan.control_skill(
+            str(body.get("recipe_id") or ""), str(body.get("action") or ""),
+            str(body.get("goal") or ""))
+        self._json(200 if ok else 400, {"ok": ok, "data": data, "message": msg})
+
+
     @_post_route("/v1/memory/pending")
     def _p_v1_memory_pending(self):
         """裁决待确认记忆：body {action: "accept"|"dismiss", ids: [...]}。"""
@@ -10950,6 +10979,24 @@ class _Handler(BaseHTTPRequestHandler):
         }
 
     @staticmethod
+    def _direct_task_recall(messages, mode, quiet_mode=False):
+        """P6-2：普通对话里历史任务追问强命中时，直接取归档结果，零模型调用。
+
+        任务模式、安静模式一律不直达；弱命中/歧义返回 None，继续走召回注入 + 模型路径。
+        """
+        if quiet_mode or str(mode or "") == "task":
+            return None
+        try:
+            users = [m for m in messages
+                     if isinstance(m, dict) and m.get("role") == "user"]
+            if not users:
+                return None
+            return task_plan.recall_direct(_msg_text(users[-1]))
+        except Exception as e:  # 召回失败不得影响正常对话
+            logger.warning("产物直达判定失败（降级模型路径）：%s", e)
+            return None
+
+    @staticmethod
     def _append_task_recall(messages, memory_text, quiet_mode=False):
         """P5-2：把与当前问题相关的已完成任务摘要并入 memory_text 通道。
 
@@ -11075,6 +11122,13 @@ class _Handler(BaseHTTPRequestHandler):
             messages, memory_text = self._inject_system_messages(
                 messages, cfg, kwargs.get("pure_chat", False), quiet_mode
             )
+            # P6-2 产物直达：强命中的历史追问直接返回归档结果，本轮不调用模型
+            _direct = self._direct_task_recall(messages, body.get("mode"), quiet_mode)
+            if _direct is not None:
+                _answer, _card = _direct
+                self._json(200, {"content": _answer, "task_recall": _card,
+                                 "zero_model": True, "usage": None})
+                return
             memory_text = self._append_task_recall(messages, memory_text, quiet_mode)
             if memory_text:
                 kwargs["memory_text"] = memory_text
@@ -11187,6 +11241,20 @@ class _Handler(BaseHTTPRequestHandler):
             messages, memory_text = self._inject_system_messages(
                 messages, cfg, kwargs.get("pure_chat", False), quiet_mode
             )
+            # P6-2 产物直达：强命中的历史追问直接返回归档结果，本轮不调用模型
+            _direct = self._direct_task_recall(messages, body.get("mode"), quiet_mode)
+            if _direct is not None:
+                _answer, _card = _direct
+                reply_parts.append(_answer)
+                generated.append({"role": "assistant", "content": _answer})
+                send("content", {"text": _answer})
+                send("task_recall", _card)
+                send("metrics", {"zero_model": True, "rounds": 0, "gen_ms": 0})
+                _save_progress(force=True)
+                _notify_completed(ok=True)
+                send("done", {"session_id": job.sid})
+                job.finish("done")
+                return
             memory_text = self._append_task_recall(messages, memory_text, quiet_mode)
             if memory_text:
                 kwargs["memory_text"] = memory_text
@@ -11343,11 +11411,28 @@ class _Handler(BaseHTTPRequestHandler):
                     and not job.stop_event.is_set()):
                 _skill = task_plan.match_skill(task_plan_obj.goal)
                 if _skill is not None:
+                    # P6-4：开工前一次性告知将改动的文件（只告知，不追加复核轮）
+                    _pv = task_plan.preview_skill(_skill)
+                    if _pv.get("paths"):
+                        send("notice", {
+                            "text": (f"开工前预览：确定性技能将改动 {len(_pv['paths'])} 个文件"
+                                     f"（{'、'.join(os.path.basename(str(p)) for p in _pv['paths'][:4])}），零模型调用。"),
+                            "level": "info",
+                        })
                     try:
                         _sok, _smsg = task_plan.execute_skill(
                             task_plan_obj, _skill,
                             emit=lambda ev, data: send(ev, data))
                         send("notice", {"text": _smsg, "level": "info" if _sok else "warn"})
+                        # P6-3：命中/失败记账；连续失败自动停用，坏技能不再反复占位
+                        try:
+                            _, _account_msg = task_plan.record_skill_outcome(
+                                str(_skill.get("recipe_id") or ""), _sok,
+                                len(_skill.get("_skill_calls") or []))
+                            if not _sok:
+                                send("notice", {"text": _account_msg, "level": "warn"})
+                        except Exception as e:
+                            logger.warning("技能结果记账失败（不影响执行）：%s", e)
                         if _sok:
                             _skill_ok = True
                             ok = True

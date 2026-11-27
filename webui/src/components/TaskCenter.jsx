@@ -221,6 +221,82 @@ function ExperiencePanel({ onDeleteRecipe }) {
   );
 }
 
+// P6-3 技能库：把「越用越省」变成可核对的数字，并允许停用/启用/删除/预览轨迹。
+function SkillPanel() {
+  const [skills, setSkills] = React.useState([]);
+  const [totals, setTotals] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [preview, setPreview] = React.useState({});
+  const load = React.useCallback(async () => {
+    setBusy(true);
+    try {
+      const d = await api.listTaskSkills(50);
+      setSkills(Array.isArray(d && d.skills) ? d.skills : []);
+      setTotals((d && d.totals) || null);
+    } catch (e) { silentWarnApi(e); }
+    finally { setBusy(false); }
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+  const act = async (id, action) => {
+    try {
+      const d = await api.controlTaskSkill(id, action);
+      if (action === "preview") {
+        setPreview((p) => ({ ...p, [id]: (d && d.data) || null }));
+      } else {
+        setPreview((p) => ({ ...p, [id]: null }));
+        await load();
+      }
+    } catch (e) { silentWarnApi(e); }
+  };
+  const t = totals || {};
+  return (
+    <div className="tc-skills">
+      <div className="tc-skill-summary">
+        <span><b>{Number(t.saved_model_rounds) || 0}</b> 轮模型调用已省下</span>
+        <span><b>{Number(t.replay_calls) || 0}</b> 个工具零模型重放</span>
+        <span><b>{Number(t.active) || 0}</b>/{Number(t.skills) || 0} 个技能启用</span>
+        <span><b>{Number(t.parameterized) || 0}</b> 个支持参数化</span>
+        <button className="tc-icon-btn" title="刷新" onClick={load} disabled={busy}><Icon name="refresh" size={14} /></button>
+      </div>
+      <div className="tc-exp-note tc-skill-note">每次确定性命中 = 省掉一整轮模型规划与执行；换文件名/内容的同类任务也能命中参数化技能。</div>
+      {skills.length === 0 && <div className="tc-empty">还没有技能。配方真实成功 2 次以上会自动升级为零模型技能。</div>}
+      <ul className="tc-exp-list">
+        {skills.map((s) => (
+          <li key={s.recipe_id} className={`tc-skill-item ${s.disabled ? "tc-skill-off" : ""}`}>
+            <div className="tc-exp-item-head">
+              <span className="tc-exp-name" title={s.name}>{s.name}</span>
+              {s.parameterized && <span className="tc-skill-tag">参数化</span>}
+              {s.disabled && <span className="tc-skill-tag tc-skill-tag-off">已停用</span>}
+              <span className="tc-exp-stat" title="确定性命中次数">命中 {Number(s.skill_hits) || 0}</span>
+              <span className="tc-exp-stat" title="累计零模型重放工具数">重放 {Number(s.replay_calls) || 0}</span>
+            </div>
+            <div className="tc-skill-meta">
+              成功 {Number(s.successes) || 0} 次 · 复用 {Number(s.uses) || 0} 次 ·
+              失败 {Number(s.skill_failures) || 0} 次 · {s.steps && s.steps.length ? `${s.steps.length} 步` : "—"}
+            </div>
+            <div className="tc-skill-ctl">
+              <button onClick={() => act(s.recipe_id, "preview")}>预览轨迹</button>
+              <button onClick={() => act(s.recipe_id, s.disabled ? "enable" : "disable")}>
+                {s.disabled ? "启用" : "停用"}
+              </button>
+              <button className="tc-exp-del" title="删除技能" onClick={() => act(s.recipe_id, "delete")}>×</button>
+            </div>
+            {preview[s.recipe_id] && (
+              <div className="tc-skill-preview">
+                <div>{preview[s.recipe_id].note}</div>
+                <div>将执行 {Number(preview[s.recipe_id].call_count) || 0} 个工具调用</div>
+                {(preview[s.recipe_id].calls || []).map((c, i) => (
+                  <div key={i} className="tc-skill-call">· {c.name}：{JSON.stringify(c.args || {}).slice(0, 160)}</div>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function silentWarnApi(e) { try { console.warn("[TaskCenter]", e); } catch (_) {} }
 
 export default function TaskCenter({ open, onClose, plans = [], loading, queue = [], recoverable = 0, onRefresh, onControl, onResume, onSync, onRollback }) {
@@ -247,8 +323,11 @@ export default function TaskCenter({ open, onClose, plans = [], loading, queue =
         <div className="tc-tabs" role="group" aria-label="任务中心视图">
           <button className={tab === "tasks" ? "tc-tab-on" : ""} onClick={() => setTab("tasks")}>任务</button>
           <button className={tab === "exp" ? "tc-tab-on" : ""} onClick={() => setTab("exp")}>经验库</button>
+          <button className={tab === "skills" ? "tc-tab-on" : ""} onClick={() => setTab("skills")}>技能库</button>
         </div>
-        {tab === "tasks" ? (
+        {tab === "skills" ? (
+          <SkillPanel />
+        ) : tab === "tasks" ? (
           <>
             <div className="tc-filters" role="group" aria-label="任务筛选">
               {[["all", "全部"], ["active", "进行中"], ["problem", "失败/阻塞"], ["done", "已完成"]].map(([key, label]) => (

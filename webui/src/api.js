@@ -36,7 +36,7 @@ const REQUEST_TIMEOUT = 15000;
  * tool_duration→name+duration；usage→usage 对象；compressed→removed_turns 等；
  * ask/approval→id/kind/提示语；error→message。
  * @typedef {Object} SSEEvent
- * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"notice"|"ask_request"|"approval_request"|"plan_request"|"task_plan"|"needs_confirmation"|"session"|"done"|"error"} type 事件类型
+ * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"notice"|"ask_request"|"approval_request"|"plan_request"|"task_plan"|"task_recall"|"needs_confirmation"|"session"|"done"|"error"} type 事件类型
  * @property {string} [text] 增量文本
  * @property {string} [name] 工具名
  * @property {Object} [args] 工具参数
@@ -85,6 +85,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {(ev:SSEEvent)=>void} [onApprovalRequest] 审批请求
  * @property {(ev:SSEEvent)=>void} [onPlanRequest] 工具批计划确认（steps，可编辑参数后回传）
  * @property {(ev:SSEEvent)=>void} [onTaskPlan] 长任务计划进度（steps/status/done/total）
+ * @property {(ev:SSEEvent)=>void} [onTaskRecall] P6-2 产物直达卡片（历史任务结构化结果，零模型调用）
  * @property {(ev:SSEEvent)=>void} [onNeedsConfirmation] 任务级成本预检需用户确认（确认后带 cost_confirmed 重发）
  * @property {(ev:SSEEvent)=>void} [onSession] 后端分配的会话 id（{id,stream_id}）
  * @property {()=>void} [onDone] 正常结束（后端已自动落盘会话）
@@ -464,6 +465,7 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
     else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);
     else if (ev.type === "plan_request") handlers.onPlanRequest?.(ev);
     else if (ev.type === "task_plan") handlers.onTaskPlan?.(ev);
+    else if (ev.type === "task_recall") handlers.onTaskRecall?.(ev);
     else if (ev.type === "needs_confirmation") handlers.onNeedsConfirmation?.(ev);
     else if (ev.type === "session") handlers.onSession?.(ev);
     else if (ev.type === "done") handlers.onDone?.();
@@ -522,6 +524,7 @@ export async function replayStream(streamId, handlers, signal) {
     let ev;
     try { ev = JSON.parse(line.slice(6)); } catch { return; }
     if (ev.type === "task_plan") handlers.onTaskPlan?.(ev);
+    else if (ev.type === "task_recall") handlers.onTaskRecall?.(ev);
     else if (ev.type === "notice") handlers.onNotice?.(ev);
     else if (ev.type === "content") handlers.onContent?.(ev.text);
     else if (ev.type === "tool") handlers.onTool?.(ev);
@@ -806,6 +809,23 @@ export async function deleteTaskRecipe(recipeId) {
   return api("/v1/task_recipes/delete", {
     method: "POST",
     body: JSON.stringify({ recipe_id: String(recipeId || "") }),
+  });
+}
+
+/** P6-3：确定性技能库 + 累计省下模型轮次统计。 @param {number} [limit] */
+export async function listTaskSkills(limit = 50) {
+  return api(`/v1/task_skills?limit=${Number(limit) || 50}`);
+}
+
+/**
+ * P6-3：技能停用 / 启用 / 删除 / 轨迹预览（预览不写文件）。
+ * @param {string} recipeId
+ * @param {"disable"|"enable"|"delete"|"preview"} action
+ */
+export async function controlTaskSkill(recipeId, action) {
+  return api("/v1/task_skills/control", {
+    method: "POST",
+    body: JSON.stringify({ recipe_id: String(recipeId || ""), action }),
   });
 }
 

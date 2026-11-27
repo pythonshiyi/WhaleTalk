@@ -4185,6 +4185,41 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
 .tc-exp-avoid { color: var(--ok-text); }
 .tc-exp-hint { text-align: center; color: var(--text-3); font-size: var(--fs-xs); padding: 20px 4px; }
 
+/* P6-2：产物直达卡片 */
+.task-recall-block { border: 1px solid var(--border); border-left: 3px solid var(--brand); border-radius: var(--r-sm); background: var(--bg-2); padding: 8px 10px; margin: 6px 0 8px; }
+.task-recall-head { display: flex; align-items: center; gap: 7px; font-size: var(--fs-xs); color: var(--text-2); font-weight: 600; }
+.task-recall-zero { font-size: var(--fs-3xs); color: var(--ok-text); background: var(--ok-soft, var(--brand-soft)); border-radius: 4px; padding: 1px 6px; }
+.task-recall-time { margin-left: auto; font-size: var(--fs-3xs); color: var(--text-3); font-weight: 400; }
+.task-recall-goal { font-size: var(--fs-3xs); color: var(--text-2); margin-top: 6px; line-height: 1.5; }
+.task-recall-arts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.task-recall-art { font-size: var(--fs-3xs); color: var(--brand-strong); background: var(--brand-soft); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-recall-art:hover { border-color: var(--brand); }
+.task-recall-detail { margin-top: 7px; font-size: var(--fs-3xs); color: var(--text-3); }
+.task-recall-detail summary { cursor: pointer; }
+.task-recall-ev { margin-top: 4px; line-height: 1.5; word-break: break-word; }
+
+/* P6-4：开工前影响预览 */
+.task-plan-skill-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 0 0 7px; }
+.task-plv-skill { color: var(--ok-text); background: var(--brand-soft); }
+.task-plan-preview-text { font-size: var(--fs-3xs); color: var(--text-3); }
+
+/* P6-3：技能库 */
+.tc-skills { flex: 1; overflow: auto; padding: 12px 16px 24px; }
+.tc-skill-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: var(--fs-3xs); color: var(--text-3); background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 9px 10px; }
+.tc-skill-summary b { font-size: var(--fs-sm); color: var(--brand-strong); margin-right: 2px; }
+.tc-skill-note { margin: 8px 0 4px; }
+.tc-skill-item { border-left: 2px solid var(--brand); }
+.tc-skill-off { opacity: 0.62; border-left-color: var(--text-3); }
+.tc-skill-tag { font-size: var(--fs-3xs); color: var(--ok-text); background: var(--brand-soft); border-radius: 4px; padding: 1px 5px; white-space: nowrap; }
+.tc-skill-tag-off { color: var(--warn-text); background: var(--warn-soft); }
+.tc-skill-meta { font-size: var(--fs-3xs); color: var(--text-3); margin-top: 5px; }
+.tc-skill-ctl { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.tc-skill-ctl button { font-size: var(--fs-3xs); border: 1px solid var(--border); background: var(--bg-1); color: var(--text-2); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+.tc-skill-ctl button:hover { border-color: var(--brand); }
+.tc-skill-ctl .tc-exp-del { margin-left: auto; border: 0; background: transparent; }
+.tc-skill-preview { margin-top: 7px; padding: 7px 8px; background: var(--bg-3); border-radius: 4px; font-size: var(--fs-3xs); color: var(--text-3); line-height: 1.5; }
+.tc-skill-call { word-break: break-all; margin-top: 3px; }
+
 /* 过程带 */
 .rail { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; margin-bottom: var(--sp-3); }
 .rail-head { display: flex; align-items: center; gap: var(--sp-2); padding: 8px var(--sp-3); cursor: pointer; user-select: none; transition: background var(--dur-fast) var(--ease); }
