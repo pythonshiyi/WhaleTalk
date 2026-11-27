@@ -7484,17 +7484,51 @@ class _Handler(BaseHTTPRequestHandler):
                 # 声明体超限：请求体不读会残留在连接里，被 keep-alive 当成下一个请求
                 # 解析（请求走私/错路由）——显式关闭连接，让客户端另起连接重试。
                 self.close_connection = True
+                self._body_consumed = True  # 连接已标记关闭，出口不必再 drain
                 return None
             # 防挂起：恶意客户端声明 Content-Length 却不发完，30s 内放弃，
             # 避免连接被永久占用导致线程累积（SSE 长连接不经过这里，不受影响）
             self.connection.settimeout(30)
             try:
                 raw = self.rfile.read(length)
+                # 已消费标记：do_POST 出口的 _drain_unread_body 据此跳过重复读取
+                self._body_consumed = True
             finally:
                 self.connection.settimeout(None)
             return json.loads(raw.decode("utf-8", errors="replace"))
         except Exception:
             return None
+
+    def _drain_unread_body(self):
+        """POST 出口统一消费未读请求体。
+
+        keep-alive 复用连接时，若某个 POST 的 body（常见是 `{}`）没有被任何
+        handler 读取，残留字节会粘到下一个请求行，被解析成 `{}GET ...` →
+        501 Unsupported method。浏览器侧看到的请求 method 全是正常 GET，
+        而报错 URL 会在多轮间漂移，正是这个症状。
+        只在本连接确有未读 body 时读；已读过的（_body_consumed）直接跳过，
+        避免二次读取阻塞 30s。
+        """
+        if getattr(self, "_body_consumed", False):
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        if length <= 0:
+            return
+        # 异常大的声明体：直接关闭连接，不阻塞线程也不复用该连接
+        if length > 64 * 1024 * 1024:
+            self.close_connection = True
+            return
+        try:
+            self.connection.settimeout(30)
+            try:
+                self.rfile.read(length)
+            finally:
+                self.connection.settimeout(None)
+        except Exception:
+            self.close_connection = True
 
     # ── SSE 工具 ─────────────────────────────────
     def _sse_start(self):
@@ -10815,17 +10849,25 @@ class _Handler(BaseHTTPRequestHandler):
 
 
     def do_POST(self):
+        # P1：所有出口都保证请求体被消费，避免 keep-alive 残留字节粘到下一个请求行。
+        # 同一连接会复用本 handler 实例，标记必须按请求重置。
+        self._body_consumed = False
         if not self._auth():
+            self._drain_unread_body()
             self._json(401, {"error": "unauthorized"})
             return
         try:
             self.path = self._strip_api_prefix(self.path)
             handler = _match_post_route(self.path)
             if handler is None:
+                self._drain_unread_body()
                 self._json(404, {"error": "not found"})
                 return
             getattr(self, handler)()
+            # 有些 POST 端点不读 body（如带 `{}` 的动作类接口），这里兜底消费
+            self._drain_unread_body()
         except Exception as e:
+            self._drain_unread_body()
             logger.exception("POST %s 失败", self.path)
             self._fail(500, e, code=500)
 

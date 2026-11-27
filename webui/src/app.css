@@ -4308,6 +4308,26 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
 .task-recall-raw > summary { cursor: pointer; }
 .task-recall-raw .task-recall-goal { margin-top: 5px; line-height: 1.6; word-break: break-word; }
 
+/* ===== P2 窄屏：手机宽度下顶部工具区不再撑宽文档 =====
+   根因：.chat-header-right 默认 flex-shrink:0，390px 时仍占 371px，
+   把 documentElement.scrollWidth 撑到 491px（横向溢出）。只在 <=640px 生效。 */
+@media (max-width: 640px) {
+  .chat-header { padding: 6px 8px; row-gap: 5px; }
+  .chat-header-right {
+    flex-shrink: 1; min-width: 0; flex-wrap: wrap;
+    justify-content: flex-end; gap: 4px;
+  }
+  .chat-header-title { min-width: 56px; }
+  .chat-header-sub { font-size: var(--fs-3xs); }
+  .task-center-btn > span:not(.task-center-dot) { display: none; }
+  .task-center-btn { padding: 5px 7px; }
+  .persona-picker { display: none; }   /* 窄屏可从「创作 → 角色」进入 */
+  .ch-sep { display: none; }
+  .ch-actions { gap: 4px; }
+  .ch-opts > summary { padding: 3px 6px; }
+  .mode-btn { padding: 4px 8px; }
+}
+
 /* 过程带 */
 .rail { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; margin-bottom: var(--sp-3); }
 .rail-head { display: flex; align-items: center; gap: var(--sp-2); padding: 8px var(--sp-3); cursor: pointer; user-select: none; transition: background var(--dur-fast) var(--ease); }
