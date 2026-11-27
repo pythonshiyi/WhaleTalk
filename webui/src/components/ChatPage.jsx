@@ -2268,24 +2268,30 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                     任务
                   </button>
                 </div>
-                {!isTask && (
-                  <button
-                    className={`web-switch ${webSearch ? "web-on" : ""}`}
-                    onClick={toggleWebSearch}
-                    title="对话模式联网搜索：开启后 AI 可实时搜索最新信息（天气/新闻/行情/网页），大幅减弱幻觉"
-                  >
-                    <span className={`web-dot ${webSearch ? "web-dot-on" : ""}`} />
-                    <span className="web-label">联网</span>
-                  </button>
-                )}
-                <button
-                  className={`web-switch ${quietMode ? "web-on" : ""}`}
-                  onClick={onToggleQuiet}
-                  title="纯净对话：开启后不注入长期记忆/核心自我/大脑，AI 以全新姿态应答，也不会自动写入记忆（设置 → 高级 可同步配置）"
-                >
-                  <span className={`web-dot ${quietMode ? "web-dot-on" : ""}`} />
-                  <span className="web-label">纯净</span>
-                </button>
+                {/* 低频开关收进二级选项，顶部只留主操作 */}
+                <details className="ch-opts">
+                  <summary>选项 ▾</summary>
+                  <div className="ch-opts-body">
+                    {!isTask && (
+                      <button
+                        className={`web-switch ${webSearch ? "web-on" : ""}`}
+                        onClick={toggleWebSearch}
+                        title="对话模式联网搜索：开启后 AI 可实时搜索最新信息（天气/新闻/行情/网页），大幅减弱幻觉"
+                      >
+                        <span className={`web-dot ${webSearch ? "web-dot-on" : ""}`} />
+                        <span className="web-label">联网</span>
+                      </button>
+                    )}
+                    <button
+                      className={`web-switch ${quietMode ? "web-on" : ""}`}
+                      onClick={onToggleQuiet}
+                      title="纯净对话：开启后不注入长期记忆/核心自我/大脑，AI 以全新姿态应答，也不会自动写入记忆（设置 → 高级 可同步配置）"
+                    >
+                      <span className={`web-dot ${quietMode ? "web-dot-on" : ""}`} />
+                      <span className="web-label">纯净</span>
+                    </button>
+                  </div>
+                </details>
               </div>
 
               <span className="ch-sep" aria-hidden="true" />
@@ -2381,6 +2387,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                 <button className="msg-op" onClick={toggleMulti}><Icon name="x" size={13} /> 退出多选</button>
               </div>
             )}
+            {/* 短会话时吸收剩余空间，让消息贴近输入区；内容超出一屏时自动收缩为 0 */}
+            <div className="chat-spacer" aria-hidden="true" />
             {msgs.length === 0 && (
               <div className="chat-empty">
                 <div className="empty-whale" aria-hidden="true">

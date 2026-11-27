@@ -4238,6 +4238,76 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
 .tools-empty-hint { font-size: var(--fs-xs); color: var(--text-3); max-width: 420px; line-height: 1.6; }
 .tools-empty-action { margin-top: 6px; }
 
+/* ===== U1 对话密度自适应 ===== */
+/* 短会话：内容不足一屏时消息自然贴近输入区，不再让一句话悬在顶部配一大片空白。
+   仅当会话里确实有消息时才启用 flex（:has），空态欢迎区保持原有居中布局。
+   内容超过一屏时 margin-top:auto 自动归零，滚动行为不变。 */
+.chat-scroll:has(.msg) { display: flex; flex-direction: column; }
+.chat-scroll:has(.msg) > .msg { flex-shrink: 0; }
+/* spacer 吸收剩余空间把消息推到底部；内容超过一屏时自动收缩为 0，滚动不变 */
+.chat-spacer { flex: 1 1 auto; min-height: 0; }
+/* 密度三档此前只调消息 padding，这里补到工具/卡片，让长短任务都真正跟着档位走 */
+.chat-scroll[data-density="compact"] .rail-head,
+.chat-scroll[data-density="compact"] .task-plan-head,
+.chat-scroll[data-density="compact"] .task-recall-head { padding: 5px 9px; font-size: var(--fs-3xs); }
+.chat-scroll[data-density="loose"] .rail-head,
+.chat-scroll[data-density="loose"] .task-plan-head,
+.chat-scroll[data-density="loose"] .task-recall-head { padding: 11px 16px; font-size: var(--fs-sm); }
+.chat-scroll[data-density="compact"] .step,
+.chat-scroll[data-density="compact"] .task-plan-item,
+.chat-scroll[data-density="compact"] .task-recall-art { font-size: var(--fs-3xs); }
+.chat-scroll[data-density="loose"] .step,
+.chat-scroll[data-density="loose"] .task-plan-item { line-height: 1.7; }
+
+/* ===== U2 消息层级与视觉规范 ===== */
+/* 助手消息给一个轻锚点容器：与用户气泡对称但不等同，不做成双气泡 */
+.msg-assistant > .msg-body {
+  border-left: 2px solid var(--brand-soft);
+  background: linear-gradient(90deg, rgba(var(--brand-rgb), .045), transparent 60%);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  padding: 4px 0 4px 12px;
+}
+/* 用量/耗时收进「详情」，默认只占一行，不再常驻一串小字 */
+.msg-metrics-details { margin-top: 6px; font-size: var(--fs-3xs); color: var(--text-3); }
+.msg-metrics-details > summary { cursor: pointer; list-style: none; opacity: .8; }
+.msg-metrics-details > summary::-webkit-details-marker { display: none; }
+.msg-metrics-details > summary::before { content: "\25B8  "; }
+.msg-metrics-details[open] > summary::before { content: "\25BE  "; }
+.msg-metrics { opacity: .85; margin-top: 4px; }
+/* 顶部低频开关收进二级「选项」，主操作（模式/任务中心）保持常驻 */
+.ch-opts { position: relative; }
+.ch-opts > summary {
+  list-style: none; cursor: pointer; font-size: var(--fs-xs); color: var(--text-3);
+  padding: 4px 8px; border-radius: var(--r-sm); border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ch-opts > summary::-webkit-details-marker { display: none; }
+.ch-opts[open] > summary { color: var(--brand-strong); border-color: var(--brand-soft); }
+.ch-opts-body {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: var(--r-md); box-shadow: var(--shadow-3);
+}
+.ch-opts-body .web-switch { white-space: nowrap; }
+/* 底部状态栏降噪：统一字号层级、弱化非关键 chip、限制路径宽度 */
+.status-bar { font-size: var(--fs-3xs); }
+.st-chip-mute, .st-metric { opacity: .8; }
+.st-dir { max-width: 260px; }
+/* 三类卡片（计划 / 产物 / 执行过程）统一圆角、边框与标题层级 */
+.task-plan-block, .task-recall-block, .rail {
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+}
+.task-plan-head, .task-recall-head, .rail-head {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.task-recall-raw { margin-top: 6px; font-size: var(--fs-3xs); color: var(--text-3); }
+.task-recall-raw > summary { cursor: pointer; }
+.task-recall-raw .task-recall-goal { margin-top: 5px; line-height: 1.6; word-break: break-word; }
+
 /* 过程带 */
 .rail { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; margin-bottom: var(--sp-3); }
 .rail-head { display: flex; align-items: center; gap: var(--sp-2); padding: 8px var(--sp-3); cursor: pointer; user-select: none; transition: background var(--dur-fast) var(--ease); }

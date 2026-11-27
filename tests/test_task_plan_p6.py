@@ -187,7 +187,10 @@ def test_recall_direct_zero_model(tmp_path, monkeypatch):
     assert got is not None, "强命中的历史追问应直达"
     text, card = got
     assert card["zero_model"] is True and card["artifacts"]
-    assert "销售报告" in text
+    # U3：结构化详情由卡片承载，正文只给引导 + 产物名，不再复述整段原始任务
+    assert "销售报告" in card["goal"]
+    assert "任务：生成季度销售报告" not in text, "正文不应复述原始任务"
+    assert "sales_report.md" in text, "纯文本客户端仍要能看到产物名"
     # 执行指令不能直达，交回模型路径
     assert task_plan.recall_direct("请生成一份销售报告") is None
     # 无关问题不直达

@@ -2606,12 +2606,11 @@ def recall_direct(query: str) -> Optional[Tuple[str, Dict[str, Any]]]:
         "steps": [{"title": str(s.get("title") or ""),
                    "evidence": str(s.get("evidence") or "")[:300]} for s in evs[:8]],
     }
-    lines = ["已找到上次完成的任务（直接调取归档，本次未调用模型）：",
-             f"任务：{card['goal']}", f"完成时间：{card['completed_at']}"]
+    # U3：卡片已承载完整结构化信息，正文只给一句引导 + 产物名，
+    # 不再把整段原始任务、完成时间和结论复述一遍（同一信息只出现一次）。
+    lines = ["已找到上次完成的任务（直接调取归档，本次未调用模型），详情见下方卡片。"]
     if arts:
         lines.append("产物：" + "、".join(os.path.basename(p) for p in arts[:8]))
-    if evs:
-        lines.append("关键结论：" + str(evs[-1].get("evidence") or "")[:160])
     return "\n".join(lines), card
 
 

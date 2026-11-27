@@ -610,7 +610,7 @@ export default React.forwardRef(function Composer({ busy, onSend, onStop, isTask
         <textarea
           ref={taRef}
           className="composer-input"
-          placeholder={isTask ? "输入任务，Enter 发送，Shift+Enter 换行，/ 唤起命令" : "输入消息，Enter 发送（对话模式 · 纯问答）"}
+          placeholder={isTask ? "输入任务…" : "输入消息…"}
           value={text}
           onChange={(e) => {
             const v = e.target.value;

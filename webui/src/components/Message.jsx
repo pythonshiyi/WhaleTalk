@@ -206,7 +206,12 @@ function TaskRecallBlock({ card }) {
         {card.zero_model && <span className="task-recall-zero">零模型调用</span>}
         {card.completed_at && <span className="task-recall-time">{card.completed_at}</span>}
       </div>
-      {card.goal && <div className="task-recall-goal">{card.goal}</div>}
+      {card.goal && (
+        <details className="task-recall-raw">
+          <summary>查看原始任务</summary>
+          <div className="task-recall-goal">{card.goal}</div>
+        </details>
+      )}
       {arts.length > 0 && (
         <div className="task-recall-arts">
           {arts.map((a, i) => (
@@ -669,14 +674,17 @@ function Message({ msg, enter = false, onOpenTrace, onResend, onStar, onPin, onQ
           const u = (mt.prompt || mt.completion) ? mt : (msg.usage || {});
           const cachePct = u.prompt > 0 ? Math.round((u.cache_hit || 0) / u.prompt * 100) : 0;
           return (
-            <div className="msg-metrics" title="本轮用量与速率：输入/输出 tokens · 输出速率 · 首字延迟 · 总耗时">
-              {(u.prompt || u.completion) ? <span className="mm-item">↑{fmtTokens(u.prompt)} ↓{fmtTokens(u.completion)}</span> : null}
-              {cachePct > 0 && <span className="mm-item mm-cache">缓存 {cachePct}%</span>}
-              {mt.tps > 0 && <span className="mm-item mm-tps">⚡ {mt.tps} tok/s</span>}
-              {mt.ttft_ms != null && <span className="mm-item">首字 {fmtMs(mt.ttft_ms)}</span>}
-              {mt.total_ms > 0 && <span className="mm-item">耗时 {fmtMs(mt.total_ms)}</span>}
-              {mt.interrupted && <span className="mm-item mm-interrupted">已中断</span>}
-            </div>
+            <details className="msg-metrics-details">
+              <summary>用量与耗时</summary>
+              <div className="msg-metrics" title="本轮用量与速率：输入/输出 tokens · 输出速率 · 首字延迟 · 总耗时">
+                {(u.prompt || u.completion) ? <span className="mm-item">↑{fmtTokens(u.prompt)} ↓{fmtTokens(u.completion)}</span> : null}
+                {cachePct > 0 && <span className="mm-item mm-cache">缓存 {cachePct}%</span>}
+                {mt.tps > 0 && <span className="mm-item mm-tps">⚡ {mt.tps} tok/s</span>}
+                {mt.ttft_ms != null && <span className="mm-item">首字 {fmtMs(mt.ttft_ms)}</span>}
+                {mt.total_ms > 0 && <span className="mm-item">耗时 {fmtMs(mt.total_ms)}</span>}
+                {mt.interrupted && <span className="mm-item mm-interrupted">已中断</span>}
+              </div>
+            </details>
           );
         })()}
 
