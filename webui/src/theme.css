@@ -1,5 +1,6 @@
 /* ═══ Whale Wave 设计令牌 · 三主题 ═══════════════════
    星空黑 starfield（默认）/ 深海蓝 deepsea / 北极冰 arctic / 琥珀夜 ambernight
+   青瓷 celadon / 宣纸 xuanzhi
    品牌色（--brand/--ok/--ai/--danger/--warn）跨主题统一语义，
    仅明度微调以保证对比度。 */
 
@@ -345,6 +346,116 @@
   --glass: rgba(19, 22, 28, 0.74);
   --selection: rgba(215, 154, 78, 0.34);
   --grad-hero: radial-gradient(120% 140% at 85% -20%, rgba(var(--brand-rgb), .20), transparent 55%);
+}
+
+/* ── 青瓷：雨过天青 · 浅色（浅色位第二选，绿调克制、久看不涩）───────── */
+[data-theme="celadon"] {
+  color-scheme: light;
+  --bg-0: #eef3f0;
+  --bg-1: #f6faf8;
+  --bg-2: #fdfefd;
+  --bg-3: #dfe9e4;
+  --bg-hover: rgba(20, 70, 55, 0.06);
+  --bg-active: rgba(44, 110, 94, 0.11);
+  --border: rgba(30, 80, 65, 0.13);
+  --border-strong: rgba(30, 80, 65, 0.24);
+  --chat-glow: rgba(44, 110, 94, 0.06);
+
+  --text-1: #16241f;
+  --text-2: #46584f;
+  --text-3: #586a61;          /* bg-3 上 4.63，AA 通过 */
+  --text-link: #1f6b58;
+
+  --brand: #2c6e5e;
+  --brand-strong: #3d8f7a;
+  --brand-soft: rgba(44, 110, 94, 0.12);
+  --ai: #5a5aa8;
+  --brand-rgb: 44, 110, 94;
+  --ai-rgb: 90, 90, 168;
+
+  --text-on-brand: #ffffff;   /* 白字 on 青瓷绿 = 6.00 */
+  --text-on-ok: #ffffff;
+
+  --scroll-thumb: rgba(30, 80, 65, 0.18);
+  --scroll-thumb-hover: rgba(30, 80, 65, 0.32);
+  --header-bg: rgba(246, 250, 248, 0.88);
+  --bubble-bg: linear-gradient(135deg, rgba(44, 110, 94, 0.13), rgba(90, 90, 168, 0.10));
+  --composer-fade: linear-gradient(180deg, transparent, rgba(246, 250, 248, 0.72) 30%);
+  --code-inline-bg: rgba(44, 110, 94, 0.09);
+  --code-inline-border: rgba(44, 110, 94, 0.16);
+  --code-bg: #101a17;
+  --code-text: #cbd5e8;
+  --hl-kw: #7dd3fc;
+  --hl-str: #86efac;
+  --hl-com: #7f8c86;
+  --hl-num: #fbbf24;
+  --hl-fn: #c4b5fd;
+  --hl-ty: #5eead4;
+  --hl-at: #f9a8d4;
+  --hl-tag: #38bdf8;
+  --shadow-1: 0 1px 2px rgba(16, 40, 32, 0.07);
+  --shadow-2: 0 8px 24px rgba(16, 40, 32, 0.10);
+  --shadow-3: 0 20px 60px rgba(16, 40, 32, 0.14);
+  --mask: rgba(14, 34, 28, 0.34);
+  --mask-strong: rgba(10, 26, 21, 0.52);
+  --glass: rgba(253, 254, 253, 0.78);
+  --selection: rgba(44, 110, 94, 0.22);
+  --grad-hero: radial-gradient(120% 140% at 85% -20%, rgba(var(--brand-rgb), .16), transparent 55%);
+}
+
+/* ── 宣纸：米纸底 · 朱砂印（东方纸质观感，暖浅色位）────────────── */
+[data-theme="xuanzhi"] {
+  color-scheme: light;
+  --bg-0: #f2ece0;
+  --bg-1: #f9f5ec;
+  --bg-2: #fffdf7;
+  --bg-3: #e6dccb;
+  --bg-hover: rgba(90, 60, 30, 0.06);
+  --bg-active: rgba(168, 58, 40, 0.10);
+  --border: rgba(90, 60, 30, 0.14);
+  --border-strong: rgba(90, 60, 30, 0.26);
+  --chat-glow: rgba(168, 58, 40, 0.05);
+
+  --text-1: #221d18;
+  --text-2: #584b3e;
+  --text-3: #6b5c4c;          /* bg-3 上 4.74，AA 通过 */
+  --text-link: #8f2f1f;
+
+  --brand: #a83a28;
+  --brand-strong: #c14b34;
+  --brand-soft: rgba(168, 58, 40, 0.11);
+  --ai: #6b4a9e;
+  --brand-rgb: 168, 58, 40;
+  --ai-rgb: 107, 74, 158;
+
+  --text-on-brand: #ffffff;   /* 白字 on 朱砂 = 6.36 */
+  --text-on-ok: #ffffff;
+
+  --scroll-thumb: rgba(90, 60, 30, 0.18);
+  --scroll-thumb-hover: rgba(90, 60, 30, 0.32);
+  --header-bg: rgba(249, 245, 236, 0.88);
+  --bubble-bg: linear-gradient(135deg, rgba(168, 58, 40, 0.12), rgba(107, 74, 158, 0.10));
+  --composer-fade: linear-gradient(180deg, transparent, rgba(249, 245, 236, 0.74) 30%);
+  --code-inline-bg: rgba(168, 58, 40, 0.08);
+  --code-inline-border: rgba(168, 58, 40, 0.15);
+  --code-bg: #1a1512;
+  --code-text: #d6cec2;
+  --hl-kw: #7dd3fc;
+  --hl-str: #86efac;
+  --hl-com: #8b8078;
+  --hl-num: #fbbf24;
+  --hl-fn: #c4b5fd;
+  --hl-ty: #5eead4;
+  --hl-at: #f9a8d4;
+  --hl-tag: #38bdf8;
+  --shadow-1: 0 1px 2px rgba(50, 34, 20, 0.08);
+  --shadow-2: 0 8px 24px rgba(50, 34, 20, 0.11);
+  --shadow-3: 0 20px 60px rgba(50, 34, 20, 0.15);
+  --mask: rgba(40, 26, 16, 0.36);
+  --mask-strong: rgba(30, 20, 12, 0.54);
+  --glass: rgba(255, 253, 247, 0.80);
+  --selection: rgba(168, 58, 40, 0.20);
+  --grad-hero: radial-gradient(120% 140% at 85% -20%, rgba(var(--brand-rgb), .14), transparent 55%);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

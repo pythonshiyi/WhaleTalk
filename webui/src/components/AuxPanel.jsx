@@ -796,6 +796,8 @@ const THEME_CHOICES = [
   { id: "deepsea", name: "深海", desc: "深蓝底 · 湖蓝光" },
   { id: "arctic", name: "北极冰", desc: "冰白底 · 深海蓝字" },
   { id: "ambernight", name: "琥珀夜", desc: "暖褐墨底 · 琥珀光" },
+  { id: "celadon", name: "青瓷", desc: "雨过天青 · 浅绿" },
+  { id: "xuanzhi", name: "宣纸", desc: "米纸底 · 朱砂" },
 ];
 
 // 参数分组与「脏值」归属（用于折叠分组头的未保存标记）

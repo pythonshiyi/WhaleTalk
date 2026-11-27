@@ -2297,6 +2297,8 @@ button.st-alert:focus-visible { outline: none; box-shadow: var(--ring); }
 .px-theme-dot[data-t="deepsea"] { background: linear-gradient(135deg, #02101f, #082542 55%, #22c8ff); }
 .px-theme-dot[data-t="arctic"] { background: linear-gradient(135deg, #edf2f9, #ffffff 55%, var(--brand)); }
 .px-theme-dot[data-t="ambernight"] { background: linear-gradient(135deg, #0e1014, #232833 55%, #d79a4e); }
+.px-theme-dot[data-t="celadon"] { background: linear-gradient(135deg, #eef3f0, #dfe9e4 55%, #2c6e5e); }
+.px-theme-dot[data-t="xuanzhi"] { background: linear-gradient(135deg, #f2ece0, #e6dccb 55%, #a83a28); }
 
 /* 参数保存栏（草稿 + 保存锁定） */
 .px-savebar {

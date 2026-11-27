@@ -55,6 +55,8 @@ const THEMES = [
   { id: "deepsea", name: "深海蓝", desc: "深蓝底 · 亮湖蓝", preview: ["#02101f", "#082542", "#22c8ff"] },
   { id: "arctic", name: "北极冰", desc: "冰白底 · 深海蓝文字", preview: ["#edf2f9", "#ffffff", "#0284c7"] },
   { id: "ambernight", name: "琥珀夜", desc: "暖褐墨底 · 琥珀金光", preview: ["#0e1014", "#232833", "#d79a4e"] },
+  { id: "celadon", name: "青瓷", desc: "雨过天青 · 浅绿克制", preview: ["#eef3f0", "#fdfefd", "#2c6e5e"] },
+  { id: "xuanzhi", name: "宣纸", desc: "米纸底 · 朱砂印", preview: ["#f2ece0", "#fffdf7", "#a83a28"] },
 ];
 
 // ── 通用小组件 ──────────────────────────────────────
