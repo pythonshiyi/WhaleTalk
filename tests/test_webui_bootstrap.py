@@ -162,3 +162,32 @@ def test_hard_deps_missing_returns_2tuples(monkeypatch):
         pkg, label = item  # 若为 3 元组此处即 ValueError
         assert isinstance(pkg, str) and isinstance(label, str)
         assert pkg and label
+
+
+def test_deps_stale_detects_missing_dev_dep(tmp_path, monkeypatch):
+    """回归：dependencies 齐全但 devDependencies 缺失时也必须判为 stale。
+
+    场景：用户曾用 npm ci --omit=dev / npm install --production 安装，
+    node_modules 存在、react 齐全，但 vite（devDependencies，build 脚本
+    即 "vite build"）缺失。旧实现只遍历 dependencies → 返回 False →
+    _ensure_webui_build 跳过安装直接 npm run build → 必然构建失败。
+    """
+    wd = tmp_path / "webui"
+    (wd / "node_modules" / "react").mkdir(parents=True)
+    (wd / "node_modules" / "react-dom").mkdir(parents=True)
+    pkg = {
+        "name": "t",
+        "dependencies": {"react": "^19", "react-dom": "^19"},
+        "devDependencies": {"vite": "^5", "@vitejs/plugin-react": "^4"},
+    }
+    (wd / "package.json").write_text(json.dumps(pkg), encoding="utf-8")
+    monkeypatch.setattr(web_app, "WEBUI_DIR", str(wd))
+    # 关键：dependencies 已全齐（react/react-dom 都在），仅 devDependencies 缺失。
+    # 旧实现只遍历 dependencies → 返回 False → 误判无需安装 → npm run build 必失败。
+    assert web_app._webui_deps_stale() is True
+    # 补齐 devDependencies 后不再 stale（避免矫枉过正成"永远重装"）
+    (wd / "node_modules" / "vite").mkdir(parents=True)
+    (wd / "node_modules" / "@vitejs").mkdir(parents=True)
+    (wd / "node_modules" / "@vitejs" / "plugin-react").mkdir(parents=True)
+    assert web_app._webui_deps_stale() is False
+

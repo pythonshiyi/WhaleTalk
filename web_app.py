@@ -310,9 +310,13 @@ def _webui_deps_stale():
         import json as _json
         with open(pkg_path, encoding="utf-8") as f:
             pkg = _json.load(f)
+        # 同时检查 dependencies 与 devDependencies：构建工具（vite/typescript 等）都在
+        # devDependencies 里，若用户曾用 npm ci --omit=dev / --production 安装，dependencies
+        # 齐全但 vite 缺失，只查 dependencies 会误判「无需安装」→ 直接 npm run build 必失败。
         deps = dict(pkg.get("dependencies") or {})
+        dev = dict(pkg.get("devDependencies") or {})
         # 顶层依赖存在性：npm 会把装好的包放在 node_modules/<name>（scoped 在 node_modules/@scope/name）
-        for name in deps:
+        for name in list(deps) + list(dev):
             seg = name.split("/")
             if len(seg) == 2 and name.startswith("@"):
                 check = os.path.join(nm, seg[0], seg[1])
