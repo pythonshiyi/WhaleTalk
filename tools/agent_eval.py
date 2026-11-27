@@ -56,7 +56,7 @@ if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: silent-except: 控制台不支持 reconfigure 时保持默认编码
+    except Exception:  # silent-except: 控制台不支持 reconfigure 时保持默认编码
         pass
 
 # 评测环境统一约束：模型常按任务名/会话名自造子目录（实测踩过两次），
@@ -387,12 +387,12 @@ def _stop_local_http(httpd, th) -> None:
         try:
             httpd.shutdown()
             httpd.server_close()
-        except Exception:  # noqa: silent-except: 本地夹具服务关闭失败不影响评测结论
+        except Exception:  # silent-except: 本地夹具服务关闭失败不影响评测结论
             pass
     if th is not None:
         try:
             th.join(timeout=3)
-        except Exception:  # noqa: silent-except: 线程已退出/无法 join 时忽略
+        except Exception:  # silent-except: 线程已退出/无法 join 时忽略
             pass
 
 
@@ -472,7 +472,7 @@ def _stop_server(proc: subprocess.Popen) -> None:
         try:
             proc.kill()
             proc.wait(timeout=5)
-        except Exception:  # noqa: silent-except: 停止服务是尽力而为，进程可能已退出
+        except Exception:  # silent-except: 停止服务是尽力而为，进程可能已退出
             pass
 
 
@@ -486,7 +486,7 @@ def _redact_config(path: Path) -> None:
             if k.endswith("api_key") or k.endswith("secret") or k.endswith("token"):
                 data[k] = "***"
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:  # noqa: silent-except: 脱敏是收尾动作，失败不影响评测结论
+    except Exception:  # silent-except: 脱敏是收尾动作，失败不影响评测结论
         pass
 
 
@@ -498,7 +498,7 @@ def _accumulate_usage(total: Dict[str, int], usage: Dict[str, Any]) -> None:
     for k in ("prompt", "completion", "cache_hit", "cache_miss"):
         try:
             total[k] = int(total.get(k, 0)) + int(usage.get(k) or 0)
-        except (TypeError, ValueError):  # noqa: silent-except: 网关可能返回缺失/非数字用量字段
+        except (TypeError, ValueError):  # silent-except: 网关可能返回缺失/非数字用量字段
             pass
 
 
@@ -514,7 +514,7 @@ def _respond(srv: ServerHandle, kind: str, payload: Dict[str, Any]) -> None:
     try:
         _http_json(srv.base + "/v1/respond", method="POST", payload=body,
                    token=srv.token, timeout=5.0)
-    except Exception:  # noqa: silent-except: 交互回传失败时由服务端超时兜底，评测继续
+    except Exception:  # silent-except: 交互回传失败时由服务端超时兜底，评测继续
         pass
 
 
@@ -600,7 +600,7 @@ def chat_turn(srv: ServerHandle, session_id: str, stream_id: str,
                         _http_json(srv.base + "/v1/chat/stop", method="POST",
                                    payload={"stream_id": stream_id},
                                    token=srv.token, timeout=5.0)
-                    except Exception:  # noqa: silent-except: 超时后停止失败不改变「已超时」结论
+                    except Exception:  # silent-except: 超时后停止失败不改变「已超时」结论
                         pass
                     break
                 line = raw.decode("utf-8", "replace").rstrip("\r\n")
@@ -608,7 +608,7 @@ def chat_turn(srv: ServerHandle, session_id: str, stream_id: str,
                     if buf:
                         try:
                             handle(json.loads("\n".join(buf)))
-                        except Exception:  # noqa: silent-except: 单帧坏数据跳过，不中断整条流
+                        except Exception:  # silent-except: 单帧坏数据跳过，不中断整条流
                             pass
                         buf = []
                     continue
@@ -1089,7 +1089,7 @@ def write_report(results: List[TaskResult], run_root: Path, args: argparse.Names
     for name in ("scorecard.json", "scorecard.md"):
         try:
             shutil.copy2(run_root / name, DEFAULT_REPORT_DIR / f"latest-{name.split('.')[-1]}")
-        except Exception:  # noqa: silent-except: latest 快捷方式是便利项，失败不影响分数卡本体
+        except Exception:  # silent-except: latest 快捷方式是便利项，失败不影响分数卡本体
             pass
     return run_root
 
@@ -1147,7 +1147,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             raw = json.loads((REPO / "config.json").read_text(encoding="utf-8"))
             cfg_ok = bool(str(raw.get("api_key") or "").strip())
-        except Exception:  # noqa: silent-except: dry-run 只需报告配置是否可读
+        except Exception:  # silent-except: dry-run 只需报告配置是否可读
             pass
         print(f"\nconfig.json：{'存在且已配置 api_key' if cfg_ok else '缺失或未配置 api_key'}")
         print(f"解释器：{sys.executable}")

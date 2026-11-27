@@ -198,7 +198,6 @@ def simulate(hours=24, step_minutes=5, restarts=True, keep=False):
     boot_expected = 1 + (max(0, (total_min - 1) // 360) if restarts else 0)
     loop.start("soak")
     actions = {"reflections": 0, "sleeps": 0, "restarts": 0}
-    last_tick = None
 
     for minute in range(step, total_min + 1, step):
         clock["now"] = start + timedelta(minutes=minute)
@@ -216,7 +215,6 @@ def simulate(hours=24, step_minutes=5, restarts=True, keep=False):
                 actions["reflections"] += 1
             elif res.get("action") == "sleep_spawned":
                 actions["sleeps"] += 1
-        last_tick = res
 
     loop.stop("soak-end")
     life = state.load()

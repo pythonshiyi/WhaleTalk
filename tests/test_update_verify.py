@@ -1,7 +1,6 @@
 """更新清单验签：Ed25519 签名 + SHA-256 完整性。"""
 import json
 
-import pytest
 
 import update_verify
 

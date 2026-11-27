@@ -9,7 +9,7 @@
 所以本门禁采用的策略与 `self_evolve` 的 lint 闸门一致——**基线差分**：
 
 1. 存量按**指纹**固化到 `tools/silent_except_baseline.txt`（不按行号，避免改一行就全体失效）；
-2. 新增的静默吞异常 → 红灯（要么改成 `degrade()`，要么显式写 `# noqa: silent-except` 说明无害）；
+2. 新增的静默吞异常 → 红灯（要么改成 `degrade()`，要么显式写 `# silent-except` 说明无害）；
 3. 修掉的 → 只是提示，可 `--update-baseline` 收紧基线。
 
 指纹 = `文件 | 所在函数限定名 | except 类型 | try 首条语句摘要` 的 md5 前 12 位。
@@ -39,7 +39,10 @@ SKIP_DIRS = {"node_modules", ".git", "dist", "build", "__pycache__", "assets",
              "data", "workspace",             # 运行时产物，非源码
              "out",                           # 评测/e2e 运行目录（可能含临时 venv）
              ".venv", "venv", ".pytest_cache", ".ruff_cache"}
-NOQA_MARK = "noqa: silent-except"
+# 自建门禁的声明标记。刻意不加 noqa 前缀：ruff 会把 silent-except 当成
+# 非法规则码并报 Invalid noqa directive；项目规则集里本就没有 BLE，
+# 这个标记只服务于本脚本，用普通注释即可让两套检查互不干扰。
+NOQA_MARK = "silent-except"
 
 # ── 输出编码加固 ───────────────────────────────────────────────────
 # Windows 控制台与 CI 的默认码页（cp1252 / cp936）编不出中文：任何一句 print 都会
@@ -50,7 +53,7 @@ if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: silent-except: 极老解释器无 reconfigure，退化即可
+    except Exception:  # silent-except: 极老解释器无 reconfigure，退化即可
         pass
 
 # 报告用的启发式分类（只影响可读性，不影响门禁判定）
@@ -88,10 +91,7 @@ def _is_silent(handler: ast.ExceptHandler) -> bool:
 
 def _has_noqa(lines, lineno) -> bool:
     """同一行或上一行写了豁免注释的，视为已说明的无害跳过。"""
-    for i in (lineno - 1, lineno - 2):
-        if 0 <= i < len(lines) and NOQA_MARK in lines[i]:
-            return True
-    return False
+    return any(0 <= i < len(lines) and NOQA_MARK in lines[i] for i in (lineno - 1, lineno - 2))
 
 
 def _parent_map(tree):
@@ -233,7 +233,7 @@ def main(argv=None):
         for e in sorted(new, key=lambda x: (x["file"], x["line"]))[:40]:
             print(f"  {e['file']}:{e['line']}  在 {e['func']}  except {e['etype']}")
         print("\n处理方式二选一：① 改为 degrade(component, e, \"影响说明\", critical=?)；"
-              "② 确认无害则在 except 行上方加 `# noqa: silent-except: 原因`。")
+              "② 确认无害则在 except 行上方加 `# silent-except: 原因`。")
         return 1
     print(f"静默吞异常门禁通过：{len(entries)} 处，全部在基线内（无新增）")
     return 0

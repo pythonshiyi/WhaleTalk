@@ -72,7 +72,7 @@ def load() -> list:
         raw = json.loads(path().read_text(encoding="utf-8"))
         items = raw.get("questions") if isinstance(raw, dict) else raw
         return [q for q in (items or []) if isinstance(q, dict)]
-    # noqa: silent-except: 账本读取尽力而为，坏文件等同于空账本
+    # silent-except: 账本读取尽力而为，坏文件等同于空账本
     except Exception:
         return []
 

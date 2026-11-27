@@ -494,7 +494,8 @@ def main(argv=None):
         want = str(exp)
         as_str = isinstance(exp, str)
 
-        def _bad(m):
+        # 默认参数绑定循环内变量，避免闭包在后续迭代里读到别组声明
+        def _bad(m, want=want, as_str=as_str, exp=exp):
             got = m.group(1)
             return got != want if as_str else (not got.isdigit() or int(got) != exp)
 

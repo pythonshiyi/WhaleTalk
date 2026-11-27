@@ -4,11 +4,10 @@
 """
 import time
 
-import pytest
 
 import live_engine
 from live import attention, director as director_mod, safety, simulator, stage
-from live.events import EV_DANMAKU, EV_GIFT, EV_LIKE, LiveEvent
+from live.events import EV_DANMAKU, EV_LIKE, LiveEvent
 from live.room import Room
 
 

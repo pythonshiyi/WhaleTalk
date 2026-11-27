@@ -35,6 +35,6 @@ def write_json(path, obj, *, indent=2) -> Path:
     finally:
         try:
             tmp.unlink(missing_ok=True)
-        # noqa: silent-except: 临时文件清理失败不掩盖原始写入异常
+        # silent-except: 临时文件清理失败不掩盖原始写入异常
         except OSError:
             pass

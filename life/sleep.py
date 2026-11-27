@@ -123,7 +123,7 @@ def _narrative(digest, tl_text, cfg):
     try:
         import brainkit as bk
         active = sum(1 for g in bk.load_goals() if g.get("status") == "active")
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     parts = ["今天我把零散的记忆重新整理了一遍。"]
@@ -161,7 +161,7 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
         try:
             import degrade
             degrade.degrade("life.sleep.consolidate", e, "睡眠整理失败，记忆未归档/合并", critical=True)
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
 
@@ -184,7 +184,7 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
                 import degrade
                 degrade.degrade("life.sleep.consolidate_llm", e,
                                 "睡眠未使用 LLM 提炼记忆（保留本地整理结果）", critical=False)
-            # noqa: silent-except: 降级记账失败不影响睡眠主流程
+            # silent-except: 降级记账失败不影响睡眠主流程
             except Exception:
                 pass
 
@@ -207,7 +207,7 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
             body += followups + "\n"
         bk.append_line(bk.THINKING_DIR / f"{bk.today()}.md", body)
         bk._refresh_self_model()
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
 
@@ -222,7 +222,7 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
             note = (narrative if not (archived_n or merged_n) else
                     f"归档 {archived_n}，合并 {merged_n}。{narrative}")[:300]
             bk.record_evolution(proposal, kind="proposed", note=note)
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
 
@@ -230,7 +230,7 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
     try:
         import memory_facade
         memory_facade.sync_missing_to_brain(50)
-    # noqa: silent-except: 补同步失败不影响睡眠结果（下次继续）
+    # silent-except: 补同步失败不影响睡眠结果（下次继续）
     except Exception:
         pass
 
@@ -245,7 +245,7 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
         intentions.prune()
         scars.prune()
         metrics.prune(int(cfg.get("life_metrics_max", 5000) or 5000))
-    # noqa: silent-except: 睡眠清理失败不影响睡眠结果
+    # silent-except: 睡眠清理失败不影响睡眠结果
     except Exception:
         pass
 
@@ -266,7 +266,7 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
                 import degrade
                 degrade.degrade("life.sleep.archive", e, "睡眠自动归档失败，睡眠结果不受影响",
                                 critical=False)
-            # noqa: silent-except: 记录降级本身失败不应影响睡眠
+            # silent-except: 记录降级本身失败不应影响睡眠
             except Exception:
                 pass
             archived = {}
@@ -290,7 +290,7 @@ def run(now=None, reason="idle", force=False, use_llm=True) -> dict:
             from . import metrics
             metrics.record("sleep_ms", (time.time() - t0) * 1000.0,
                            proposal=bool(proposal), llm=bool(llm_consolidated))
-    # noqa: silent-except: 指标写入失败不影响睡眠结果
+    # silent-except: 指标写入失败不影响睡眠结果
     except Exception:
         pass
     return {

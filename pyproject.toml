@@ -29,7 +29,18 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+# 定位：ruff 在这里只守「正确性」（未定义 / 重复定义 / 闭包绑定 / 异常链 / 未使用变量等），
+# 不拿它做风格打分。项目另有自建门禁（check_silent_except / check_docs / validate_tools …）
+# 守静默异常、文档数字与工具清单等契约。
+# - UP：Python 3.11 类型注解与字符串现代化（List→list、%→f-string 等），全量改要动
+#   1000+ 处、横跨 70+ 文件，收益低而回归风险高，明确不强制。
+# - SIM：控制流化简、contextlib.suppress、with open；绝大多数落在测试与短生命周期
+#   读取上，CPython 引用计数随即释放，逐处改写 200+ 行不带来实际收益。
+# - I001 / E702 / E731 / B905 / B011：导入顺序在多个模块是运行时契约（见下方
+#   per-file-ignores）、历史同行多语句、lambda 赋值、zip(strict=)、测试里的 assert False。
+# 真缺陷不靠这些开关绕过：F811 重复测试定义、B023 循环变量闭包、B904 异常链、
+# B007/F841 未用变量、E741 易混淆变量名，均已在源码中修掉。
+ignore = ["E501", "UP", "SIM", "I001", "E702", "E731", "B905", "B011"]
 
 [tool.ruff.lint.per-file-ignores]
 # 工具域聚合用 `from .tool_* import *` 做 re-export，F401/F403/F405 是设计使然（`__all__` 才是契约）。
@@ -49,6 +60,8 @@ ignore = ["E501"]
 "tests/*" = ["E402"]
 "tools/*" = ["E402"]
 "agent_tools/tool_files.py" = ["E402"]
+# 接入适配器必须先 sys.path.insert(_BASE) 再 import 根目录的 brain_* 模块，顺序是契约。
+"brain_grant_adapter.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"

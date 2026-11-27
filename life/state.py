@@ -82,7 +82,7 @@ def load() -> dict:
             raw = json.loads(life_path().read_text(encoding="utf-8"))
             if isinstance(raw, dict):
                 data.update({k: v for k, v in raw.items() if k in DEFAULT_STATE or k.startswith("_")})
-        # noqa: silent-except: 状态文件损坏时回退默认值，由下一次 save 重写
+        # silent-except: 状态文件损坏时回退默认值，由下一次 save 重写
         except Exception:
             pass
     return data
@@ -111,7 +111,7 @@ def _pid_alive(pid) -> bool:
     try:
         import psutil
         return bool(psutil.pid_exists(pid))
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     if os.name == "nt":
@@ -192,7 +192,7 @@ def lease_acquire(reason="", stale_seconds=LEASE_STALE_SECONDS, force=False):
                 return False, cur
             try:
                 p.unlink()
-            # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+            # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
             except OSError:
                 pass
             time.sleep(0.01)
@@ -268,7 +268,7 @@ def bump_epoch(reason="", note="", parent_epoch=None) -> int:
             data={"from": old, "to": new, "reason": str(reason or ""), "note": str(note or "")[:300]},
             actor="system",
         )
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     return new

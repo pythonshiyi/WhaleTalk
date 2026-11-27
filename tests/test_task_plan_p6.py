@@ -1,6 +1,5 @@
 """P6：参数化技能 / 产物直达 / 技能管理台 / 开工前影响预览。"""
 import json
-import os
 from pathlib import Path
 
 import task_plan

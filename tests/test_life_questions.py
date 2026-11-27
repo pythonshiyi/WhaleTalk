@@ -75,7 +75,7 @@ def test_broken_ledger_does_not_raise(ledger):
 
 
 def test_due_prefers_oldest(ledger):
-    a = Q.add("新未知")
+    Q.add("新未知")
     b = Q.add("旧未知")
     items = Q.load()
     for q in items:

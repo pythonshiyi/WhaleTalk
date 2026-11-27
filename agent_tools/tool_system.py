@@ -28,7 +28,6 @@ from deepseek_client import (
     _proc_capture,
     _py_stats,
     _save_watch_state,
-    _to_tool_schema,
     _which_any,
     _win_installed_apps,
 )
@@ -801,21 +800,21 @@ def self_evolve(feature_name, files, project_dir=None, tier="branch"):
             f"分支：{branch}（已提交）" + "\n"
             f"补丁：{len(applied)} 个文件（{'、'.join(applied[:5])}）" + "\n"
             f"编译：{compile_r.splitlines()[0] if not compile_ok else '通过'}" + "\n"
-            f"lint：通过" + "\n"
+            "lint：通过" + "\n"
             f"导入：{smoke_r.splitlines()[0] if not smoke_ok else '通过'}" + "\n"
             f"测试：{tests_r.splitlines()[0] if not tests_r.startswith('（') else tests_r}")
         if tier == "auto":
             mout, mcode = _git(["merge", "--no-ff", branch, "-m", f"self-evolve(auto): {name}"])
             if mcode != 0:
                 _git(["merge", "--abort"])
-                return (f"进化验证通过，但自动合入失败（分支已保留，验证结果有效）：" + "\n"
+                return ("进化验证通过，但自动合入失败（分支已保留，验证结果有效）：" + "\n"
                         f"{mout[:300]}" + "\n"
                         f"改用手动合入：git merge {branch}")
             tip = (f"回滚点：git reset --hard {head_before[:12]}" if head_before
                    else "回滚点：未取到合入前 HEAD，请用分支名手动回退")
             return (f"进化完成并已自动合入 {cur}：{name}" + "\n"
                     f"补丁：{len(applied)} 个文件（{'、'.join(applied[:5])}）" + "\n"
-                    f"四层验证：编译 / lint / 导入 / 测试 全部通过" + "\n"
+                    "四层验证：编译 / lint / 导入 / 测试 全部通过" + "\n"
                     f"{tip}")
         return summary + f"已切回 {cur} 分支。合入权在你：git merge {branch}"
 

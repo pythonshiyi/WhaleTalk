@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 import urllib.request
@@ -32,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: silent-except: 控制台不支持 reconfigure 时保持默认编码
+    except Exception:  # silent-except: 控制台不支持 reconfigure 时保持默认编码
         pass
 
 try:
@@ -116,7 +115,7 @@ def _check_finalization(plan: Dict[str, Any], srv) -> Dict[str, Any]:
         if plan_file.exists():
             try:
                 data = json.loads(plan_file.read_text(encoding="utf-8"))
-            except Exception:  # noqa: silent-except: 收尾写入中间态可能读到半截 JSON，下轮重试
+            except Exception:  # silent-except: 收尾写入中间态可能读到半截 JSON，下轮重试
                 pass
         if data.get("finalized") and data.get("recipe_id"):
             break
@@ -240,7 +239,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if browser is not None:
             try:
                 browser.close()
-            except Exception:  # noqa: silent-except: 浏览器 best-effort 关闭，不影响已得出的验证结论
+            except Exception:  # silent-except: 浏览器 best-effort 关闭，不影响已得出的验证结论
                 pass
         ev._stop_server(srv.proc)
         ev._redact_config(srv.config_path)

@@ -104,28 +104,28 @@ def _signals():
             1 for g in goals if g.get("status") == "active" and not str(g.get("progress") or "").strip())
         out["goals_stale"] = sum(
             1 for g in goals if g.get("status") == "active" and _days_since(g.get("updated_at"), 0) >= 7)
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     try:
         decisions = bk.list_decisions(limit=500)
         out["decisions_open"] = sum(1 for d in decisions if d.get("status") == "open")
         out["decisions_reversed"] = sum(1 for d in decisions if d.get("status") == "reversed")
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     try:
         items = bk.load_memories(include_archived=True)
         out["memories"] = len(items)
         out["memories_archived"] = sum(1 for x in items if x.get("archived"))
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     try:
         sm = bk.load_json(bk.BRAIN_DIR / "self_model.json", {}) or {}
         out["unknowns"] = len(sm.get("unknowns") or [])
         out["self_model_source"] = str(sm.get("source") or "template")
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     try:
@@ -136,20 +136,20 @@ def _signals():
         out["questions_unverified"] = int(q.get("unverified") or 0)
         out["questions_refuted"] = int(q.get("refuted") or 0)
         out["questions_stale"] = int(q.get("stale") or 0)
-    # noqa: silent-except: 账本缺失时回落到 self_model 的未知计数，不影响其他信号
+    # silent-except: 账本缺失时回落到 self_model 的未知计数，不影响其他信号
     except Exception:
         pass
     try:
         conflicts = bk.load_json(bk.MERGE_CONFLICT_FILE, {}) or {}
         out["merge_conflicts"] = len(conflicts.get("conflicts") or [])
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     try:
         life = json.loads((_brain_dir() / "life.json").read_text(encoding="utf-8"))
         out["last_sleep"] = life.get("last_sleep")
         out["last_wake"] = life.get("last_wake")
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     try:
@@ -158,7 +158,7 @@ def _signals():
         out["recent_failures"] = sum(
             1 for e in recent
             if str(e.get("kind")) == "scar" or str(e.get("summary") or "").startswith("failed:"))
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     cfg = _cfg()
@@ -168,7 +168,7 @@ def _signals():
             from . import timeline
             ev = timeline.last("community")
             out["community_age_min"] = _days_since(ev.get("ts"), 30) * 1440 if ev else None
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
     return out
@@ -259,7 +259,7 @@ def latest() -> dict:
         raw = json.loads(path().read_text(encoding="utf-8"))
         if isinstance(raw, dict) and raw.get("drives"):
             return raw
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     return compute()

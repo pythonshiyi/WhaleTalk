@@ -52,7 +52,7 @@ def main(argv=None) -> int:
             ts = time.perf_counter()
             bk.search_memories(q, 5, record_hits=True)
             search_ms.append((time.perf_counter() - ts) * 1000.0)
-        for q in queries[:10]:
+        for _q in queries[:10]:
             ts = time.perf_counter()
             bk.load_memories()
             hit_ms.append((time.perf_counter() - ts) * 1000.0)

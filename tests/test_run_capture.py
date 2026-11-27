@@ -234,6 +234,6 @@ def test_parse_tool_args_lenient_json():
     # 纯非法仍抛 ValueError
     try:
         P("完全不是 json {{{")
-        assert False, "应抛 ValueError"
+        raise AssertionError("应抛 ValueError")
     except ValueError:
         pass

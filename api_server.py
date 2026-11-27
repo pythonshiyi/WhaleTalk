@@ -745,7 +745,7 @@ def _load_capabilities():
             "packages": (builtin.get("packages") or []) + (user.get("packages") or []),
             "skipped": (builtin.get("skipped") or []) + (user.get("skipped") or []),
         }
-    except Exception as e:
+    except Exception:
         logger.warning("能力包装载失败（可降级）：本次会话无运行时能力，内置工具不受影响",
                        exc_info=True)
         return {"ok": False, "loaded": 0, "tools": 0,
@@ -767,7 +767,7 @@ def _load_mcp_tools():
             import degrade
             degrade.degrade("mcp.load", e, "外部 MCP 工具未装载，模型看不到这些工具",
                             critical=False)
-        # noqa: silent-except: 记录降级本身失败不应影响启动
+        # silent-except: 记录降级本身失败不应影响启动
         except Exception:
             pass
         return
@@ -827,7 +827,7 @@ def _wechat_config_save(body):
             try:
                 with open(path, encoding="utf-8") as f:
                     current = json.load(f)
-            except Exception:  # noqa: silent-except: 旧文件损坏就当没有，随后整份重写
+            except Exception:  # silent-except: 旧文件损坏就当没有，随后整份重写
                 current = {}
         if not isinstance(current, dict):
             current = {}
@@ -869,7 +869,7 @@ def _capability_status():
             # 工具总数含运行时能力：这里必须读 dc 的实时表，不能用本地导入期快照
             "total_tools": len(_dc_call_map()),
         }
-    except Exception as e:
+    except Exception:
         return {"ok": False, "error": "能力状态读取失败（详情见日志）", "packages": [], "items": [],
                 "health": {"count": 0, "items": []}, "total_tools": 0}
 
@@ -3531,7 +3531,7 @@ def _record_success_pattern(name, args, result):
             import degrade
             degrade.degrade("api.success_pattern", e,
                             "成功模式未记录（工具链复用提示可能不全）", critical=False)
-        except Exception:  # noqa: silent-except: degrade 自身失败不能影响记账调用方
+        except Exception:  # silent-except: degrade 自身失败不能影响记账调用方
             pass
 
 
@@ -12280,7 +12280,7 @@ def stop_server():
     if th is not None and th.is_alive():
         try:
             th.join(timeout=5)
-        # noqa: silent-except: 关闭流程尽力而为，不影响主流程
+        # silent-except: 关闭流程尽力而为，不影响主流程
         except Exception:
             pass
     _SCHEDULER_THREAD = None

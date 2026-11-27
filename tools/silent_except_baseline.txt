@@ -1,6 +1,6 @@
 # 静默吞异常基线（tools/check_silent_except.py 维护）
 # 每行 = 一个「except 体只有 pass」位置的指纹；新增位置必须走 degrade() 或加豁免注释。
-# 生成时间见 git 提交历史；当前共 383 处。
+# 生成时间见 git 提交历史；当前共 379 处。
 003570ca48d4
 006d12ad0c41
 029b973e453a
@@ -42,7 +42,6 @@
 14b19815644f
 1564cbd5de30
 1631305353d7
-1809c6f8c631
 19c2f5ceb820
 1a17b8ae0494
 1a8af8b971c0
@@ -166,7 +165,6 @@
 65b4883a1791
 65c94e5db762
 676372a59b28
-6782bceae0de
 67e952934938
 689f1baf2eeb
 696df993aa99
@@ -223,6 +221,7 @@
 8a257c5ba5c9
 8b3774c4444f
 8be4bd4a9ae8
+8bf74a3765ff
 8c3ed99d95e5
 8c44f4148d74
 8ce5a4a1b01b
@@ -274,13 +273,11 @@ b1407f82a54f
 b15574bb71c3
 b1aa12999f3f
 b1bbfb2818bd
-b30c1caca82e
 b33b7a347e9f
 b3d56f8d52d3
 b41cf8edad5a
 b497002a42a4
 b7d1a62fee9f
-b85c561bbb0f
 b94d61c6899c
 ba62bc74910b
 ba9600f3d030
@@ -301,7 +298,6 @@ c09c9a0083d2
 c0de5c471b89
 c1260eae1052
 c158dea54135
-c382f6932f75
 c42ac0c194ce
 c5bf7012234a
 c72b24cde40a

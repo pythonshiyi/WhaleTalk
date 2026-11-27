@@ -442,7 +442,8 @@ def edit_file(path, old="", new="", regex=None, replacements=None, replace_all=F
                 try:
                     # lambda 返回 new 原样：re.sub 字符串替换会把 \1 /\g<1>/\\ 解释为分组引用，
                     # 模型生成的替换文本含反斜杠时会被静默改写
-                    content, k = re.subn(r_regex, lambda m: r_new, content)
+                    # 默认参数绑定循环变量：lambda 在循环内定义，避免闭包延后取值
+                    content, k = re.subn(r_regex, lambda m, _new=r_new: _new, content)
                 except re.error as e:
                     return f"错误：replacements[{i}] 正则无效: {e}"
                 n += k

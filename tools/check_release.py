@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: silent-except: 控制台不支持 reconfigure 时保持默认编码
+    except Exception:  # silent-except: 控制台不支持 reconfigure 时保持默认编码
         pass
 
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")

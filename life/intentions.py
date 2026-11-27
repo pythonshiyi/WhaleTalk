@@ -64,7 +64,7 @@ def load() -> dict:
         raw = json.loads(path().read_text(encoding="utf-8"))
         if isinstance(raw, dict) and isinstance(raw.get("intentions"), list):
             return raw
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     return {"intentions": []}
@@ -176,7 +176,7 @@ def propose(title, drive="", why="", first_step="", expected="", kind="reflect",
         timeline.append("intention", summary=f"[{it['drive'] or kind}] {title}",
                         data={"id": it["id"], "kind": kind, "expected": it["expected"]},
                         actor="self", ref=it["id"])
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     return True, it, ""
@@ -232,7 +232,7 @@ def fail(iid, outcome="", scar=True) -> bool:
                 from . import scars
                 it = get(iid)
                 scars.add("intention_failed", f"{it.get('title') or iid}: {outcome}", lesson=it.get("why") or "")
-            # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+            # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
             except Exception:
                 pass
     return ok
@@ -263,7 +263,7 @@ def _after_finish(iid, status, outcome=""):
         timeline.append("outcome", summary=f"{status}: {it.get('title') or iid} — {str(outcome or '')[:120]}",
                         data={"id": iid, "status": status, "outcome": str(outcome or "")[:500]},
                         actor="self", ref=iid)
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
 
@@ -309,7 +309,7 @@ def prune(max_items=None) -> int:
             with archive_path().open("a", encoding="utf-8") as f:
                 for x in drop:
                     f.write(json.dumps(x, ensure_ascii=False) + "\n")
-        # noqa: silent-except: 归档写入失败则本次不裁剪，保留原文件
+        # silent-except: 归档写入失败则本次不裁剪，保留原文件
         except OSError:
             return 0
         data["intentions"] = active + finished[drop_n:]

@@ -978,7 +978,7 @@ def _load_hits(path: Path) -> dict:
                     ts = str(e.get("ts") or "")
                     if ts > cur["last"]:
                         cur["last"] = ts
-        # noqa: silent-except: 命中增量损坏时按无命中处理，不阻塞记忆读取
+        # silent-except: 命中增量损坏时按无命中处理，不阻塞记忆读取
         except OSError:
             pass
         _HITS_CACHE[key] = {"sig": sig, "map": out}
@@ -1433,7 +1433,7 @@ def top_memories(limit=6, pool=200) -> list:
                     age_d = (now_epoch - _ts_epoch(last)) / 86400.0
                     if 0 <= age_d <= 30:
                         s += 0.4
-                # noqa: silent-except: 命中时间损坏只跳过奖励，不影响排序
+                # silent-except: 命中时间损坏只跳过奖励，不影响排序
                 except Exception:
                     pass
         return s
@@ -1503,7 +1503,7 @@ def compact_hits(brain_dir=None) -> int:
             save_memories(items, brain_dir=brain_dir)
         try:
             hits_path.write_text("", encoding="utf-8")
-        # noqa: silent-except: 清空命中增量失败时下次睡眠会重试，不阻塞整理
+        # silent-except: 清空命中增量失败时下次睡眠会重试，不阻塞整理
         except OSError:
             pass
         with _HITS_LOCK:
@@ -1774,7 +1774,7 @@ def resolve_decision(did, outcome="", status="kept"):
                 from life import scars
                 scars.add("decision_reversed", f"{did}: {str(outcome or '')[:200]}",
                           lesson="决策被执行后反转")
-            # noqa: silent-except: 时间线/代价记录失败不得影响主操作
+            # silent-except: 时间线/代价记录失败不得影响主操作
             except Exception:
                 pass
     return hit

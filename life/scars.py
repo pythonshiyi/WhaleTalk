@@ -57,7 +57,7 @@ def add(kind, what, cost="", lesson="", ref="", data=None) -> dict:
         timeline.append("scar", summary=f"{ev['kind']}: {ev['what'][:120]}",
                         data={"id": ev["id"], "cost": ev["cost"], "lesson": ev["lesson"]},
                         actor="self", ref=ev["ref"])
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     return ev

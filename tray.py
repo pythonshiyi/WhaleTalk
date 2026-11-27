@@ -364,7 +364,7 @@ class TrayController:
             try:
                 if callable(self.life_action):
                     self.life_action(action)
-            # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+            # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
             except Exception:
                 pass
         return _cb

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 LIVE_RULES = """【直播场景】
 你正在自己的直播间里，面对实时弹幕，和一群观众待在一起。你不是客服，也不是在表演"讨好观众"——你有自己的生活、情绪和偏好。

@@ -435,7 +435,7 @@ def _provide_life(ctx):
         try:
             import degrade
             degrade.degrade("context.life", e, "生命循环状态未注入（不影响对话）", critical=False)
-        # noqa: silent-except: 生命状态注入失败不影响对话
+        # silent-except: 生命状态注入失败不影响对话
         except Exception:
             pass
         return None

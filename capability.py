@@ -339,8 +339,8 @@ def _exec_cli(ex: dict, args: dict, timeout: float) -> str:
                               encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return _fail(f"命令不存在：{cmd}")
-    except subprocess.TimeoutExpired:
-        raise CapabilityTimeout(f"命令超时（>{timeout:.0f}s）：{cmd}")
+    except subprocess.TimeoutExpired as e:
+        raise CapabilityTimeout(f"命令超时（>{timeout:.0f}s）：{cmd}") from e
     out = (proc.stdout or "") + (("\n" + proc.stderr) if proc.stderr else "")
     if proc.returncode != 0 and not out.strip():
         return _fail(f"{cmd} 退出码 {proc.returncode}")
@@ -397,7 +397,7 @@ def _load_py_module(base_dir: str, module: str):
         if added:
             try:
                 sys.path.remove(base)
-            except ValueError:  # noqa: silent-except: 并发下已被其它线程移除，属正常竞态
+            except ValueError:  # silent-except: 并发下已被其它线程移除，属正常竞态
                 pass
     _PY_CACHE.clear()          # 只保留最新版本，防长期驻留旧代码
     _PY_CACHE[key] = mod
@@ -512,14 +512,14 @@ def _guard(name: str, spec: dict, epoch: int):
                 fut = _POOL.submit(_exec_mcp, spec["exec"], kwargs, timeout)
                 try:
                     out = fut.result(timeout=timeout)
-                except FutureTimeout:
-                    raise CapabilityTimeout(f"执行超时（>{timeout:.0f}s）")
+                except FutureTimeout as e:
+                    raise CapabilityTimeout(f"执行超时（>{timeout:.0f}s）") from e
             else:
                 fut = _POOL.submit(_exec_python, spec, kwargs, {"base_dir": st.get("base_dir")})
                 try:
                     out = fut.result(timeout=timeout)
-                except FutureTimeout:
-                    raise CapabilityTimeout(f"执行超时（>{timeout:.0f}s）")
+                except FutureTimeout as e:
+                    raise CapabilityTimeout(f"执行超时（>{timeout:.0f}s）") from e
             ok = not str(out).startswith(FAIL_PREFIX)
         except CapabilityTimeout as e:
             out = _fail(str(e))
@@ -648,7 +648,7 @@ def register_manifest(manifest: dict, *, base_dir: str = "", path: str = "",
         for name in registered:
             try:
                 toolkit.unregister(name)
-            except Exception:  # noqa: silent-except: 回滚尽力而为，失败不得掩盖原始错误
+            except Exception:  # silent-except: 回滚尽力而为，失败不得掩盖原始错误
                 pass
             with _lock:
                 _TOOLS.pop(name, None)
@@ -842,7 +842,7 @@ def load_dir(directory: str, *, bundled: bool = False) -> dict:
             if _meta.get("default_enabled") is False:
                 out["skipped"].append(os.path.basename(path))
                 continue
-        except Exception:  # noqa: silent-except: 解析失败不在这里报，交给 load_file 给具体错误
+        except Exception:  # silent-except: 解析失败不在这里报，交给 load_file 给具体错误
             pass
         res = load_file(path, bundled=bundled)
         base = os.path.basename(path)

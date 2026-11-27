@@ -582,7 +582,7 @@ def brain_action(action, payload=None):
             try:
                 from life import state as _life_state
                 _life_state.bump_epoch("restore", note=f"brain_v{version}")
-            # noqa: silent-except: 时间线/代价记录失败不得影响主操作
+            # silent-except: 时间线/代价记录失败不得影响主操作
             except Exception:
                 pass
         return {"ok": code == 0, "message": out}
@@ -604,7 +604,7 @@ def brain_action(action, payload=None):
             try:
                 bk.record_life_event("merge", f"merge -> {out_dir.name}", snap_a=str(a), snap_b=str(b),
                                      conflicts=len(_load_conflicts(out_dir)))
-            # noqa: silent-except: 时间线/代价记录失败不得影响主操作
+            # silent-except: 时间线/代价记录失败不得影响主操作
             except Exception:
                 pass
         return {
@@ -671,13 +671,13 @@ def brain_action(action, payload=None):
         bk.refresh_manifest_fingerprint()
         try:
             (bk.BRAIN_DIR / "life.lock").unlink(missing_ok=True)
-        # noqa: silent-except: 合并后清租约尽力而为，下次启动会按心跳接管
+        # silent-except: 合并后清租约尽力而为，下次启动会按心跳接管
         except OSError:
             pass
         try:
             from life import state as _life_state
             _life_state.bump_epoch("adopt-merge", note=src.name)
-        # noqa: silent-except: epoch 记录失败不影响采纳合并结果
+        # silent-except: epoch 记录失败不影响采纳合并结果
         except Exception:
             pass
         return {"ok": True, "message": f"已采纳合并结果作为当前大脑（旧大脑备份于 {backup.name}）"}
@@ -760,7 +760,7 @@ def brain_action(action, payload=None):
             import memory_store as _ms
             _ms.configure(brain_dir=str(Path(d)))
             _ms.invalidate_cache()
-        # noqa: silent-except: 统一读取层重绑失败不影响大脑切换本身
+        # silent-except: 统一读取层重绑失败不影响大脑切换本身
         except Exception:
             pass
         try:

@@ -24,7 +24,6 @@ import logging
 import os
 import re
 import threading
-import time
 from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
@@ -42,7 +41,6 @@ from channel_base import (
     clean_users,
     clamp_int,
     normalize_quiet_hours,
-    now_iso,
     split_reply,
 )
 from channel_registry import build_runtime, registry

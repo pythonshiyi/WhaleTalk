@@ -318,7 +318,7 @@ def assign_sections(lines, boundary_hint: dict = None) -> list:
     未给时按帧结构与关键词粗推（主歌/副歌交替）。
     """
     out = []
-    for i, ln in enumerate(lines or []):
+    for _i, ln in enumerate(lines or []):
         d = dict(ln)
         t0 = float(d.get("t0", 0.0))
         sec = ""

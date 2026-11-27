@@ -110,7 +110,7 @@ def sanitize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 if not pending_msg.get("content"):
                     try:
                         final.remove(pending_msg)
-                    except ValueError:  # noqa: silent-except: pending 已被前序分支移除时忽略
+                    except ValueError:  # silent-except: pending 已被前序分支移除时忽略
                         pass
         pending_msg = None
         pending_ids = set()

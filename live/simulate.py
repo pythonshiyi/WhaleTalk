@@ -87,7 +87,7 @@ def main() -> int:
             if not sim.running() and not d.running():
                 break
             time.sleep(0.3)
-    # noqa: silent-except: 用户 Ctrl+C 是正常退出方式，无需记录
+    # silent-except: 用户 Ctrl+C 是正常退出方式，无需记录
     except KeyboardInterrupt:
         pass
     finally:

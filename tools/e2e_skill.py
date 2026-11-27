@@ -29,7 +29,7 @@ if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: silent-except: 控制台不支持 reconfigure 时保持默认编码
+    except Exception:  # silent-except: 控制台不支持 reconfigure 时保持默认编码
         pass
 
 try:
@@ -60,7 +60,7 @@ def _has_real_key() -> bool:
         return False
     try:
         data = json.loads(cfg.read_text(encoding="utf-8"))
-    except Exception:  # noqa: silent-except: 配置缺失/损坏等同无 key，走 SKIP
+    except Exception:  # silent-except: 配置缺失/损坏等同无 key，走 SKIP
         return False
     key = str(data.get("api_key") or "").strip()
     return bool(key) and not key.startswith("eval-")
@@ -90,7 +90,7 @@ def _wait_finalized(plan_file: Path, timeout: float = 15.0) -> Dict[str, Any]:
         if plan_file.exists():
             try:
                 data = json.loads(plan_file.read_text(encoding="utf-8"))
-            except Exception:  # noqa: silent-except: 收尾写入中间态可能是半截 JSON，下轮重试
+            except Exception:  # silent-except: 收尾写入中间态可能是半截 JSON，下轮重试
                 pass
         if data.get("finalized") and data.get("recipe_id"):
             break
@@ -115,7 +115,7 @@ def _run_round(page, srv, run_dir: Path, prompt: str, before_ids: set,
             if mine and str(mine[-1].get("status") or "") == "completed":
                 new_plan = mine[-1]
                 break
-        except Exception as e:  # noqa: silent-except: 轮询期服务瞬时未就绪，继续等待
+        except Exception as e:  # silent-except: 轮询期服务瞬时未就绪，继续等待
             print(f"[e2e-skill] 轮询异常：{e}", flush=True)
         time.sleep(2.0)
     if not new_plan:
@@ -173,7 +173,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         with sync_playwright() as p:
             try:
                 browser = p.chromium.launch(headless=True, channel="msedge")
-            except Exception:  # noqa: silent-except: 无 Edge 时回退 Chromium
+            except Exception:  # silent-except: 无 Edge 时回退 Chromium
                 browser = p.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1280, "height": 900})
             page.set_default_timeout(30000)
@@ -191,7 +191,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             for round_no, prompt in enumerate(variants, 1):
                 try:
                     plans = _http_json(srv.base + "/v1/task_plans", srv.token).get("plans") or []
-                except Exception:  # noqa: silent-except: 首轮前服务列表可能为空
+                except Exception:  # silent-except: 首轮前服务列表可能为空
                     plans = []
                 before_ids = {p.get("plan_id") for p in plans}
                 row = _run_round(page, srv, run_dir, prompt, before_ids, args.timeout)
@@ -235,7 +235,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     rows = json.loads(recipes.read_text(encoding="utf-8"))
                     has_template = any(bool((r.get("template") or {}).get("goal_pattern"))
                                        for r in rows if isinstance(r, dict))
-                except Exception:  # noqa: silent-except: 配方文件损坏不影响已得出的结论
+                except Exception:  # silent-except: 配方文件损坏不影响已得出的结论
                     pass
             result["recipe_has_template"] = has_template
             result["page_errors"] = list(page_errors)
@@ -262,7 +262,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if browser is not None:
             try:
                 browser.close()
-            except Exception:  # noqa: silent-except: 浏览器 best-effort 关闭，不影响结论
+            except Exception:  # silent-except: 浏览器 best-effort 关闭，不影响结论
                 pass
         ev._stop_server(srv.proc)
         ev._redact_config(srv.config_path)

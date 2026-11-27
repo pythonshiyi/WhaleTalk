@@ -40,7 +40,7 @@ if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: silent-except: 极老解释器无 reconfigure，退化即可
+    except Exception:  # silent-except: 极老解释器无 reconfigure，退化即可
         pass
 
 

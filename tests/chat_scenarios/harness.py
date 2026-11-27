@@ -16,7 +16,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import httpx
 
 
 # ---------------------------------------------------------------------------

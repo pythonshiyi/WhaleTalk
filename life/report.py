@@ -44,7 +44,7 @@ def report(days=7) -> dict:
         mem_total = len(items)
         mem_archived = sum(1 for x in items if x.get("archived"))
         goals_active = sum(1 for g in bk.load_goals() if g.get("status") == "active") if bk else 0
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
 
@@ -56,7 +56,7 @@ def report(days=7) -> dict:
     try:
         self_done = sum(1 for x in (it.get("recent") or [])
                         if x.get("status") == "done" and x.get("source") == "agent")
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     autonomy = (self_done / done * 100.0) if done else 0.0

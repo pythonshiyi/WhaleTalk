@@ -18,13 +18,11 @@ from __future__ import annotations
 import json
 import logging
 import threading
-import time
 import urllib.parse
 import urllib.request
 from contextlib import suppress
 from typing import Any, Dict, Optional, Tuple
 
-import channel_base as cb
 from channel_base import (
     Capability,
     ChannelAdapter,

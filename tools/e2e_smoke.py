@@ -29,7 +29,7 @@ if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: silent-except: 控制台不支持 reconfigure 时保持默认编码
+    except Exception:  # silent-except: 控制台不支持 reconfigure 时保持默认编码
         pass
 
 try:
@@ -122,7 +122,7 @@ def run(args: argparse.Namespace) -> int:
                         """() => !document.querySelector('.msg.msg-assistant .turn-badge-run')""",
                         timeout=15000,
                     )
-                except Exception:  # noqa: silent-except: 徽标消失是附加断言，正文已确认
+                except Exception:  # silent-except: 徽标消失是附加断言，正文已确认
                     pass
                 assistant = page.locator(".msg.msg-assistant").all_inner_texts()
                 user = page.locator(".msg.msg-user").all_inner_texts()
@@ -139,7 +139,7 @@ def run(args: argparse.Namespace) -> int:
         if page is not None:
             try:
                 page.screenshot(path=str(run_dir / "failure.png"), full_page=True)
-            except Exception:  # noqa: silent-except: 失败现场截图是排障辅助，不能掩盖原异常
+            except Exception:  # silent-except: 失败现场截图是排障辅助，不能掩盖原异常
                 pass
         print(f"[e2e] 失败：{type(e).__name__}: {e}")
         return 1
@@ -147,7 +147,7 @@ def run(args: argparse.Namespace) -> int:
         try:
             if browser is not None:
                 browser.close()
-        except Exception:  # noqa: silent-except: 浏览器关闭失败不影响已得出的结论
+        except Exception:  # silent-except: 浏览器关闭失败不影响已得出的结论
             pass
         if srv is not None:
             ev._stop_server(srv.proc)

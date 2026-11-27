@@ -153,7 +153,7 @@ def _workspace() -> str:
         try:
             import permissions
             _WORKSPACE_DIR = str(getattr(permissions, "WORKSPACE_DIR", "") or _WORKSPACE_DIR)
-        # noqa: silent-except: 权限模块不可用时回退到进程工作目录，产物仍可正常登记
+        # silent-except: 权限模块不可用时回退到进程工作目录，产物仍可正常登记
         except Exception:
             pass
     return os.path.abspath(_WORKSPACE_DIR or os.getcwd())
@@ -223,12 +223,12 @@ def _norm_runtime(value: Any) -> Dict[str, Any]:
     }
     try:
         out["retries"] = max(0, int(src.get("retries") or 0))
-    # noqa: silent-except: 磁盘上的旧计划字段损坏时回退默认值，不阻断任务恢复
+    # silent-except: 磁盘上的旧计划字段损坏时回退默认值，不阻断任务恢复
     except (TypeError, ValueError):
         pass
     try:
         out["next_retry_at"] = float(src.get("next_retry_at") or 0)
-    # noqa: silent-except: 同上，退避时间戳损坏时按 0 处理
+    # silent-except: 同上，退避时间戳损坏时按 0 处理
     except (TypeError, ValueError):
         pass
     return out
@@ -644,7 +644,7 @@ def _baseline_entry(plan_id: str, rel: str) -> Optional[Dict[str, Any]]:
         for item in data.get("files") or []:
             if isinstance(item, dict) and item.get("relpath") == rel:
                 return item
-    # noqa: silent-except: 基线清单缺失/损坏时该产物按「新增」登记，仍可回滚删除
+    # silent-except: 基线清单缺失/损坏时该产物按「新增」登记，仍可回滚删除
     except Exception:
         pass
     return None
@@ -1282,7 +1282,7 @@ def _load_store(path: str) -> List[Dict[str, Any]]:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         return [x for x in (data or []) if isinstance(x, dict)] if isinstance(data, list) else []
-    # noqa: silent-except: 配方/经验库首次不存在或损坏时按空库处理，不阻断任务
+    # silent-except: 配方/经验库首次不存在或损坏时按空库处理，不阻断任务
     except Exception:
         return []
 
@@ -1667,7 +1667,7 @@ def _skill_trace_for_step(recipe: Dict[str, Any], step: int,
     key = None
     if 0 <= step - 1 < len(titles):
         title = str(titles[step - 1] or "").strip()
-        for k, v in traces.items():
+        for k, _v in traces.items():
             if str(k).strip() == title:
                 key = k
                 break
@@ -2265,7 +2265,8 @@ def _looks_like_continuation(goal: str, prev_goal: str) -> bool:
         return True
     if not text or not prev_goal:
         return False
-    tokens = lambda s: set(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", str(s).lower()))
+    def tokens(s):
+        return set(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", str(s).lower()))
     a, b = tokens(text), tokens(prev_goal)
     if not a or not b:
         return False

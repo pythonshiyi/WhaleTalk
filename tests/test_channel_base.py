@@ -7,14 +7,11 @@ import threading
 
 import pytest
 
-import channel_base as cb
 from channel_base import (
     Capability,
     ChannelAdapter,
-    ChannelRuntime,
     Deduper,
     InboundMessage,
-    OutboundMessage,
     PersonaContext,
     RateLimiter,
     in_quiet_hours,
@@ -266,9 +263,11 @@ def test_registry_skips_disabled():
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_real_channels_registered():
-    import channel_telegram
-    import qq_official
-    import qq_onebot
+    # 下面三行是副作用导入：模块加载时向 channel_registry 注册真实通道。
+    # 看似未使用，但删掉 registry 就是空的，故显式声明保留。
+    import channel_telegram  # noqa: F401
+    import qq_official  # noqa: F401
+    import qq_onebot  # noqa: F401
     from channel_registry import registry
 
     names = registry.names()

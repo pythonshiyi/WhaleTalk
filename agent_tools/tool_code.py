@@ -312,7 +312,9 @@ def run_lint(path=None, fix=False):
     写完 Python 代码后立即调用，快速发现语法/风格/未定义变量/未用 import 等低级错误，
     避免错误累积到测试/运行阶段才暴露。
     """
+    import importlib.util
     import shutil
+    import sys
 
     base = path or _dc.WORKING_DIR or permissions.WORKSPACE_DIR or os.getcwd()
     ok, reason = permissions.check_filesystem(base, write=bool(fix))
@@ -322,11 +324,20 @@ def run_lint(path=None, fix=False):
     if not os.path.isdir(base):
         return f"错误：目录不存在：{base}"
 
+    # ruff 常以用户级 Python 模块安装，Scripts 目录却不在 PATH（Windows 尤其常见）。
+    # 只查 shutil.which 会误报「未安装」，让 verify_project 的静态检查永远失败；
+    # 找不到可执行文件时退回 `python -m ruff`，模块也确实不存在才报缺失。
     ruff = shutil.which("ruff")
-    if not ruff:
-        return "错误：本机未安装 ruff（可 pip install ruff 后重试）"
-
-    cmd = [ruff, "check"]
+    if ruff:
+        cmd = [ruff]
+    else:
+        try:
+            if importlib.util.find_spec("ruff") is None:
+                return "错误：本机未安装 ruff（可 pip install ruff 后重试）"
+        except Exception:
+            return "错误：本机未安装 ruff（可 pip install ruff 后重试）"
+        cmd = [sys.executable, "-m", "ruff"]
+    cmd.append("check")
     if fix:
         cmd.append("--fix")
     cmd.append(base)

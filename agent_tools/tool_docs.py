@@ -106,7 +106,7 @@ def _readonly_query(kind, driver, connect, connection, sql, max_rows, setting_up
                 # statement_timeout 已提供兜底。
                 try:
                     setting_up(cur)
-                except Exception:  # noqa: silent-except: 会话级超时设置尽力而为，不支持也不影响查询（连接自带超时兜底）
+                except Exception:  # silent-except: 会话级超时设置尽力而为，不支持也不影响查询（连接自带超时兜底）
                     pass
             cur.execute(str(sql))
             cols = [d[0] for d in cur.description] if cur.description else []
@@ -115,7 +115,7 @@ def _readonly_query(kind, driver, connect, connection, sql, max_rows, setting_up
         finally:
             try:
                 conn.close()
-            except Exception:  # noqa: silent-except: 关闭连接失败无补救手段，且不影响已取回的结果
+            except Exception:  # silent-except: 关闭连接失败无补救手段，且不影响已取回的结果
                 pass
     except Exception as e:
         return f"错误：{kind} 查询失败: {e}"

@@ -29,7 +29,7 @@ def read_cfg_exempt(path):
     try:
         with open(path, encoding="utf-8") as f:
             return f.read()
-    except OSError:  # noqa: silent-except: 配置文件不存在是正常情况
+    except OSError:  # silent-except: 配置文件不存在是正常情况
         pass
 
 
@@ -57,7 +57,7 @@ def test_scan_finds_silent_handler(tmp_path):
 
 
 def test_scan_honours_noqa(tmp_path):
-    _write(tmp_path, SAMPLE.replace("# noqa: silent-except: 配置文件不存在是正常情况", ""))
+    _write(tmp_path, SAMPLE.replace("# silent-except: 配置文件不存在是正常情况", ""))
     names = {e["func"] for e in gate.scan(tmp_path)}
     assert names == {"read_cfg", "read_cfg_exempt"}
 

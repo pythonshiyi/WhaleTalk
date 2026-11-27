@@ -10,7 +10,6 @@ usage 与 golden 快照一致。拆分 chat 前先跑绿；拆分后任何差异
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest

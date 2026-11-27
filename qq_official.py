@@ -36,7 +36,6 @@ from channel_base import (
     clean_users,
     clamp_int,
     normalize_quiet_hours,
-    now_iso,
 )
 from channel_registry import build_runtime, registry
 from persistence import atomic_json_write
@@ -418,7 +417,7 @@ class QQOfficialAdapter(ChannelAdapter):
                             while not self._stop_event.is_set():
                                 try:
                                     msg = await ws.receive(timeout=1.0)
-                                except asyncio.TimeoutError:
+                                except TimeoutError:
                                     continue
                                 if msg.type == aiohttp.WSMsgType.TEXT:
                                     try:

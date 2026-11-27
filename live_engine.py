@@ -17,14 +17,13 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from typing import Any, Dict, List, Optional
 
 import live_state
 from live import actor as live_actor
 from live import director as live_director
 from live import safety, stage, voice
-from live.events import EV_DANMAKU, EV_GIFT, EV_SC, LiveEvent
+from live.events import EV_DANMAKU, EV_GIFT, LiveEvent
 from live.room import Room
 from live.simulator import Simulator
 

@@ -87,14 +87,14 @@ def load() -> dict:
         raw = json.loads(path().read_text(encoding="utf-8"))
         if isinstance(raw, dict):
             data.update({k: raw[k] for k in DEFAULT_METABOLISM if k in raw})
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     changed = _reset_if_new_day(data)
     if changed:
         try:
             save(data)
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
     try:
@@ -220,7 +220,7 @@ def charge(usage=None, model="", cfg=None, reflection=False) -> dict:
         stats_path = getattr(dc, "STATS_FILE", None)
         if stats_path and usage:
             stats.record_usage(stats_path, model, usage)
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     with _LOCK:
@@ -235,7 +235,7 @@ def charge(usage=None, model="", cfg=None, reflection=False) -> dict:
             data["tokens_charged"] = used
         try:
             data["cost_charged"] = round(float(data.get("cost_charged") or 0) + _usage_cost(usage, model), 4)
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except (TypeError, ValueError):
             pass
         data["actions"] = int(data.get("actions") or 0) + 1

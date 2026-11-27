@@ -43,7 +43,7 @@ if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: silent-except: 老解释器无 reconfigure，退化即可
+    except Exception:  # silent-except: 老解释器无 reconfigure，退化即可
         pass
 
 # ── 分级清单（只列名字，不递归猜测）────────────────────────────────────
@@ -151,12 +151,7 @@ def run(directory, level, *, yes=False, purge=False):
     failed = 0
     for act, name, path, _size_b in acts:
         try:
-            if act == "delete":
-                if os.path.isdir(path):
-                    shutil.rmtree(path, ignore_errors=False)
-                else:
-                    os.remove(path)
-            elif purge:
+            if act == "delete" or purge:
                 if os.path.isdir(path):
                     shutil.rmtree(path, ignore_errors=False)
                 else:

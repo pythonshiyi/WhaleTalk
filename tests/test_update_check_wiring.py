@@ -2,7 +2,6 @@
 import base64
 import json
 
-import pytest
 
 import api_server
 import config_utils

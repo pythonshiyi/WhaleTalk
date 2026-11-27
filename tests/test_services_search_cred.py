@@ -8,7 +8,6 @@
      抹掉），这让 Cookie 的「清空」在默认路径下静默无效，必须显式删除。
 """
 import json
-import os
 
 import pytest
 

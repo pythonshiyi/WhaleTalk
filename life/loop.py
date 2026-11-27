@@ -138,7 +138,7 @@ def _last_reflect_ts(st) -> float:
     if iso:
         try:
             ts = max(ts, datetime.fromisoformat(iso).timestamp())
-        # noqa: silent-except: 冷却时间戳损坏时以进程内时间为准
+        # silent-except: 冷却时间戳损坏时以进程内时间为准
         except Exception:
             pass
     return ts
@@ -169,7 +169,7 @@ def _refresh_drives(now=None, force=False) -> dict:
     if force or (ts - _LAST_DRIVES_SAVE) >= 300:
         try:
             drives.save(dr)
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
         _LAST_DRIVES_SAVE = ts
@@ -187,7 +187,7 @@ def _pulse(cfg, st, dr, met, now=None):
         timeline.append("pulse", summary=f"{st.get('state')} · 能量 {met.get('energy')} · 内驱 {dr.get('top')}",
                         data={"state": st.get("state"), "energy": met.get("energy"),
                               "top": dr.get("top"), "drives": dr.get("drives")}, actor="self")
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
 
@@ -198,14 +198,14 @@ def start(reason="server") -> dict:
     if not bool(cfg.get("life_enabled", True)):
         try:
             state.save({"state": "dormant", "enabled": False})
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
         return {"ok": True, "state": "dormant", "reason": "life_enabled=False"}
     if not _brain_ready():
         try:
             state.save({"state": "dormant", "reason": "brain not initialized"})
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
         return {"ok": False, "state": "dormant", "reason": "brain not initialized"}
@@ -215,7 +215,7 @@ def start(reason="server") -> dict:
             state.save({"state": "observer"})
             timeline.append("observer", summary="另一个实例持有租约，本实例只读",
                             data={"pid": lease.get("pid"), "host": lease.get("host")}, actor="system")
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
         return {"ok": False, "state": "observer", "lease": {k: v for k, v in lease.items() if k != "token"}}
@@ -242,7 +242,7 @@ def start(reason="server") -> dict:
         try:
             timeline.append("pause", summary="重启后保持暂停（用户显式暂停）",
                             data={"boot": boot}, actor="system")
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
         return {"ok": True, "state": "paused", "boot_count": boot, "paused": True}
@@ -253,14 +253,14 @@ def start(reason="server") -> dict:
     })
     try:
         timeline.append("wake", summary=f"醒来（{reason}）", data={"boot": boot}, actor="system")
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     try:
         import brain_api
         # 不覆盖上一次用户留下的断点；醒来只写时间线。
         brain_api.brain_action("heartbeat", {"thought": ""})
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     return {"ok": True, "state": "awake", "boot_count": boot}
@@ -272,14 +272,14 @@ def stop(reason="shutdown") -> dict:
     try:
         state.save({"state": "sleeping", "last_unmount": _now_iso()})
         timeline.append("shutdown", summary=f"停止（{reason}）", data={"reason": reason}, actor="system")
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     try:
         import brain_api
         # 停止也不覆盖断点；timeline 已记录 shutdown。
         brain_api.brain_action("heartbeat", {"thought": ""})
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     state.lease_release()
@@ -295,7 +295,7 @@ def note_activity(source="chat", at=None) -> dict:
         if was in ("sleeping", "dormant") and st.get("state") == "awake":
             try:
                 timeline.append("wake", summary=f"用户活动唤醒（{source}）", data={"source": source}, actor="user")
-            # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+            # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
             except Exception:
                 pass
         return st
@@ -355,7 +355,7 @@ def tick(now=None, force=False, synchronous=False) -> dict:
             try:
                 timeline.append("wake", summary="节律醒来", actor="system",
                                 data={"reason": "next_wake_at"})
-            # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+            # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
             except Exception:
                 pass
             state_name = "awake"
@@ -397,7 +397,7 @@ def tick(now=None, force=False, synchronous=False) -> dict:
         try:
             import degrade
             degrade.degrade("life.tick", e, "生命循环 tick 失败，本轮状态未推进", critical=False)
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -406,7 +406,7 @@ def tick(now=None, force=False, synchronous=False) -> dict:
             if bool(_cfg().get("life_metrics_enabled", True)):
                 from . import metrics as _metrics
                 _metrics.record("tick_ms", (time.time() - t0) * 1000.0)
-        # noqa: silent-except: 指标写入失败不影响生命周期
+        # silent-except: 指标写入失败不影响生命周期
         except Exception:
             pass
         _TICK_LOCK.release()
@@ -453,7 +453,7 @@ def _sleep_worker(cfg, reason="idle", now_dt=None):
         try:
             import degrade
             degrade.degrade("life.sleep", e, "睡眠巩固失败，保持清醒", critical=False)
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
         state.save({"state": "awake"})
@@ -613,12 +613,12 @@ def _reflect_worker(cfg, now_dt=None):
             import degrade
             degrade.degrade("life.reflect", e, "内省失败，保持清醒", critical=False)
             timeline.append("reflect_error", summary=f"{type(e).__name__}: {e}", actor="self")
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
         try:
             state.save({"state": "awake"})
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
     finally:
@@ -629,17 +629,17 @@ def _reflect_worker(cfg, now_dt=None):
                 from . import metrics as _metrics
                 _metrics.record("reflect_ms", (time.time() - t0) * 1000.0,
                                 proposed=bool(proposed))
-        # noqa: silent-except: 指标写入失败不影响生命周期
+        # silent-except: 指标写入失败不影响生命周期
         except Exception:
             pass
         try:
             state.save({"state": "awake", "last_reflect": _now_iso()})
-        # noqa: silent-except: 冷却持久化失败不应影响状态恢复
+        # silent-except: 冷却持久化失败不应影响状态恢复
         except Exception:
             pass
         try:
             state.save({"state": "awake"})
-        # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+        # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
         except Exception:
             pass
         _REFLECT_LOCK.release()
@@ -714,7 +714,7 @@ def _execute_tool_intent(it) -> tuple:
             if bool(cfg.get("life_metrics_enabled", True)):
                 from . import metrics as _metrics
                 _metrics.record("tool_ms", (time.time() - t0) * 1000.0, tool=tool)
-        # noqa: silent-except: 指标写入失败不影响工具执行结果
+        # silent-except: 指标写入失败不影响工具执行结果
         except Exception:
             pass
         return True, f"{tool}: {text}{suffix}"
@@ -755,7 +755,7 @@ def execute_intention(it) -> tuple:
                 import brain_api
                 if brain_api.refresh_self_model():
                     return True, "自我模型已用 LLM 校准"
-            # noqa: silent-except: LLM 校准不可用时回退模板刷新
+            # silent-except: LLM 校准不可用时回退模板刷新
             except Exception:
                 pass
             bk._refresh_self_model()
@@ -790,7 +790,7 @@ def execute_intention(it) -> tuple:
             try:
                 import memory_facade
                 synced = memory_facade.sync_missing_to_brain(50)
-            # noqa: silent-except: 补同步失败不影响本次整理
+            # silent-except: 补同步失败不影响本次整理
             except Exception:
                 pass
             return True, (f"整理完成：归档意图 {moved}，折叠命中 {folded}，"
@@ -800,7 +800,7 @@ def execute_intention(it) -> tuple:
                 import brain_api
                 if brain_api.refresh_self_model():
                     return True, "自我模型已用 LLM 校准"
-            # noqa: silent-except: LLM 不可用时回退模板刷新
+            # silent-except: LLM 不可用时回退模板刷新
             except Exception:
                 pass
             bk._refresh_self_model()
@@ -883,7 +883,7 @@ def pause(reason="manual") -> dict:
     st = state.save({"paused": True, "pause_reason": str(reason)[:120], "state": "paused"})
     try:
         timeline.append("pause", summary=f"生命循环暂停：{reason}", actor="user")
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     return {"ok": True, "state": st}
@@ -893,7 +893,7 @@ def resume(reason="manual") -> dict:
     st = state.save({"paused": False, "pause_reason": "", "state": "awake", "last_wake": _now_iso()})
     try:
         timeline.append("resume", summary=f"生命循环恢复：{reason}", actor="user")
-    # noqa: silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
+    # silent-except: 生命循环状态读取/记录尽力而为，不阻塞主流程
     except Exception:
         pass
     return {"ok": True, "state": st}

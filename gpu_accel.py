@@ -314,24 +314,24 @@ def bloom(img, threshold=0.7, sigma=8.0, intensity=0.5):
 def composite(base, layer, alpha=0.5):
     """按常量 alpha 混合：base*(1-a)+layer*a（GPU 可用）。"""
     b = _as_f32(base)
-    l = _as_f32(layer)
-    if b.shape != l.shape:
+    lay = _as_f32(layer)
+    if b.shape != lay.shape:
         return b
     a = float(alpha)
     if _STATE["ok"]:
         try:
-            return _composite_gpu(b, l, a)
+            return _composite_gpu(b, lay, a)
         except Exception:
             pass
-    return np.clip(b * (1.0 - a) + l * a, 0.0, 1.0).astype(np.float32)
+    return np.clip(b * (1.0 - a) + lay * a, 0.0, 1.0).astype(np.float32)
 
 
-def _composite_gpu(b, l, a):
+def _composite_gpu(b, lay, a):
     import pyopencl as cl
     q = _STATE["queue"]
     n = int(b.size)
     bb = _to_cl(q, np.ascontiguousarray(b))
-    lb = _to_cl(q, np.ascontiguousarray(l))
+    lb = _to_cl(q, np.ascontiguousarray(lay))
     _STATE["kernels"]["k_composite"](q, (n,), None, bb, lb, np.int32(n), np.float32(a))
     out = np.empty_like(b)
     cl.enqueue_copy(q, out, bb)
