@@ -481,6 +481,14 @@ function useBackendChat({
               if (isContinue) updateMsgs((m) => m.map((x, i) => (i === continueIdx ? { ...x, taskRecall: ev } : x)));
               else patchLast((x) => ({ ...x, taskRecall: ev }));
             },
+            onInterrupted: (ev) => {
+              // R1/R3：生成中断不再伪装完成，保留半截内容并给出显式继续入口
+              if (!alive || stopRef.current) return;
+              const text = String((ev && ev.text) || "本轮生成中断，已保留已输出内容，可点「继续」接着生成。");
+              patchLast((x) => ({ ...x, interrupted: true,
+                notices: [...(x.notices || []), text] }));
+              toast("⚠️ 本轮生成中断，已保留已输出内容");
+            },
             onNeedsConfirmation: (ev) => {
               // 成本预检拦截：标记本次为「待确认」，由 finish() 移除空占位并等待用户决定。
               if (alive && !stopRef.current) {
@@ -1533,7 +1541,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     // updater 保持纯函数：msgsRef 由 useMsgs 同步 effect 统一维护。
     // 关键：同时复位续写标记——续写被「停止」打断时不会走到 finish()，否则标记会永久残留。
     continueRef.current = { active: false, idx: -1 };
-    setMsgs((m) => m.map((x) => (x.streaming ? { ...x, streaming: false } : x)));
+    // R3：主动停止也标记中断，消息上会出现「继续」入口，而不是无声消失
+    setMsgs((m) => m.map((x) => (x.streaming
+      ? { ...x, streaming: false, interrupted: true } : x)));
     setBusy(false);
     setGenStateThrottled({ on: false, text: "" });
     setGenTps(0);
@@ -1628,6 +1638,39 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
       toast("⚠️ 恢复任务失败：" + ((e && e.message) || "后端未连接"));
     }
   };
+
+  // R1：浏览器刷新 / 崩溃后自动从断点接回上一次流式作业。
+  // 只回放已发生的事件（绝不新建生成），增量内容作为一条「恢复的内容」追加，
+  // 不与会话里已落盘的消息重复拼接。
+  React.useEffect(() => {
+    const a = api.getActiveStream();
+    if (!a || !a.stream_id || Date.now() - Number(a.ts || 0) > 15 * 60 * 1000) {
+      api.clearActiveStream();
+      return;
+    }
+    let alive = true;
+    const cursor = Number(a.seq) >= 0 ? Number(a.seq) + 1 : 0;
+    api.replayStream(a.stream_id, {
+      onContent: (t) => {
+        if (!alive) return;
+        updateMsgs((m) => {
+          const last = m[m.length - 1];
+          if (last && last.role === "assistant" && last.recovered) {
+            return [...m.slice(0, -1), { ...last, text: String(last.text || "") + t }];
+          }
+          return [...m, { role: "assistant", text: t, recovered: true, streaming: false, time: "" }];
+        });
+      },
+      onTaskPlan: (ev) => setTaskPlans((list) => list.map(
+        (x) => (x.plan_id === ev.plan_id ? { ...x, ...ev } : x))),
+      onNotice: (ev) => { if (alive && ev && ev.text) toast(ev.text); },
+      onInterrupted: () => { if (alive) toast("⚠️ 上次生成中断，已保留已输出内容，可点「继续」"); },
+      onReplayEnd: () => { if (alive) toast("已同步上次生成的最新进度；本轮可能未完成，可点「继续」"); },
+      onDone: () => api.clearActiveStream(),
+      onError: () => api.clearActiveStream(),
+    }, undefined, cursor).catch(() => api.clearActiveStream());
+    return () => { alive = false; };
+  }, []);
 
   const syncTaskPlan = async (plan) => {
     if (!plan || !plan.plan_id) return;

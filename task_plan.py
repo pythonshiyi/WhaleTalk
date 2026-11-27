@@ -2523,10 +2523,16 @@ def recall_tasks(query: str, limit: int = 3, min_score: float = 0.18) -> List[Di
             shared = _shared_han_phrase(query, goal)
             if shared >= 4:
                 score = max(score, min(0.92, 0.55 + 0.06 * shared))
-            # 产物路径命中（用户常按文件名追问）
+            # 产物路径命中（用户常按文件名追问）。
+            # 产物可能落在子目录（模型自行 mkdir），此时完整 relpath 不在问句里，
+            # 必须同时比 basename，否则「上次的 ux_step1.txt 在哪」会漏召回。
             paths = [str(a.get("relpath") or a.get("path") or "") for a in (plan.artifacts or [])]
             for p in paths:
-                if p and p.lower() in text:
+                if not p:
+                    continue
+                pl = p.lower().replace("\\", "/")
+                base = pl.rsplit("/", 1)[-1]
+                if pl in text or (len(base) >= 4 and base in text):
                     score = max(score, 0.75)
             if score < min_score:
                 continue
@@ -2636,7 +2642,11 @@ def archive_text(plan: TaskPlan) -> str:
 
 
 def resume_prompt(plan: TaskPlan) -> str:
-    """模型提前收尾时，自动续跑用的用户消息。"""
+    """模型提前收尾 / 中断恢复时的自动续跑消息。
+
+    R2：把已完成步骤及其产物作为**只读上下文**明确列出，而不是只笼统说
+    「不要重复」——恢复时最容易出现的问题就是模型把已落盘的文件重写一遍。
+    """
     left = plan.ready_steps() or plan.pending_steps()
     lines = [f"[长任务自动续跑] 计划 {plan.plan_id} 还有 {len(plan.pending_steps())} 步未验收："]
     for s in left[:8]:
@@ -2644,9 +2654,66 @@ def resume_prompt(plan: TaskPlan) -> str:
         dep = _norm_ids(s.get("depends_on") or [])
         dep_text = f"，前置 {','.join(str(d) for d in dep)}" if dep else ""
         lines.append(f"- 第 {s.get('id')} 步：{s.get('title')}{dep_text}{err}")
+    done = [s for s in plan.steps if s.get("status") in DONE_STATUSES]
+    if done:
+        lines += ["", "【已完成·只读，禁止重新执行或重写】"]
+        for s in done[:8]:
+            lines.append(f"  ✓ 第 {s.get('id')} 步：{str(s.get('title'))[:90]}")
+        arts = [str(a.get("relpath") or a.get("path") or "")
+                for a in (plan.artifacts or []) if isinstance(a, dict)]
+        arts = [x for x in arts if x]
+        if arts:
+            lines.append("  已落盘产物：" + "、".join(arts[:8]))
     lines += [
         "",
-        "请直接执行上述已就绪步骤，每步调用 task_step_done 提交证据；"
-        "waiting 步骤等前置完成后再执行，失败的步骤要换方法。不要重复已完成的步骤。",
+        "只执行上面列出的未验收步骤，每步调用 task_step_done 提交证据；"
+        "waiting 步骤等前置完成后再执行，失败的步骤要换方法。"
+        "已完成步骤及其产物已存在，任何情况下都不要重做或覆盖。",
     ]
     return "\n".join(lines)
+
+
+def recover_on_startup() -> Dict[str, Any]:
+    """R2：启动时修复上次进程遗留的未完成计划。
+
+    进程重启后作业线程 / 事件缓冲 / 队列全消失，而计划文件里 status 仍是
+    running/queued、runtime.stream_id 指向一个已经不存在的作业（点「同步进度」
+    必然 404）。这里统一置为 paused 并标记可继续、清掉失效断点，让任务中心
+    显示「可继续」，且已完成步骤保持 done 不重做。
+
+    **不自动重新调用模型**：启动即消耗额度、且用户没预期，恢复动作由用户点
+    「继续」触发。返回统计供启动日志核对。
+    """
+    out: Dict[str, Any] = {"scanned": 0, "recovered": 0, "ids": []}
+    try:
+        names = [n for n in os.listdir(_dir()) if n.endswith(".json")]
+    except Exception as e:
+        logger.warning("启动恢复：计划目录不可读：%s", e)
+        return out
+    with _WRITE_LOCK:
+        _QUEUE.clear()
+        _ACTIVE.clear()
+        for name in names:
+            try:
+                plan = load(name[:-5])
+            except Exception:
+                continue
+            if plan is None or plan.status not in ACTIVE_STATUSES:
+                continue
+            out["scanned"] += 1
+            done_n = sum(1 for s in plan.steps if s.get("status") in DONE_STATUSES)
+            plan.status = "paused"
+            plan.runtime = {
+                "state": "recoverable",
+                "kind": "restart_recovery",
+                "message": f"服务重启后保留；已完成 {done_n} 步不会重做，点「继续」接着执行。",
+                "retries": 0, "next_retry_at": 0.0, "stream_id": "",
+            }
+            plan.updated_at = _now()
+            save(plan)
+            out["recovered"] += 1
+            out["ids"].append(plan.plan_id)
+    if out["recovered"]:
+        logger.info("启动恢复：%d 个未完成计划已置为可继续（不自动消耗额度）: %s",
+                    out["recovered"], out["ids"][:5])
+    return out

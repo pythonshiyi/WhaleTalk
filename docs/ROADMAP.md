@@ -92,6 +92,19 @@
 > 溢出 208px → 0px，输入区未被顶出、浮层互斥与 Esc 仍生效。7 套断点各自对应不同组件且三档无冲突，
 > 未强行合并。真实巡检 **92/92 通过**；后端 1443 passed / 3 skipped，前端 35/35，全门禁通过。
 
+> **R1–R3 中断恢复强化（2026-11-27，已收口）**：把「可继续」从两条窄路径扩到跨刷新、跨重启。
+> R1：`_ChatJob.emit` 逐条落盘 `data/stream_jobs/*.jsonl` + 终态 `job_meta`；`/v1/chat/replay` 支持 `cursor`，
+> 内存作业与跨进程静态回放都能从断点续发；`streamChat` 内部按 seq 指数退避自动重连（不重入生成闭包、不重复拼接）；
+> `stream_id + seq` 写 localStorage，ChatPage mount 自动接续；回放与实时流共用完整事件派发，不再丢审批/用量类事件；
+> 生成失败不再伪装 `done`，改发 `interrupted` 并保留半截内容 +「继续」入口。
+> R2：`recover_on_startup()` 启动扫描把遗留 running/queued 计划修复为 `paused + recoverable`、清掉失效 stream_id
+> （原先点「同步进度」必 404），**不自动消耗额度**；`resume_prompt` 把已完成步骤及产物列为只读禁止重做。
+> R3：主动停止、额度拦截、成本确认统一 `suspended/interrupted/stopped` 终态，均可继续；作业崩溃事件不再随 GC 丢失。
+> 顺带修产物在子目录时按文件名追问召回不到的缺陷（召回同时比 basename）。
+> 故障注入专项 9/9（落盘 / cursor / 跨重启回放 / 启动恢复 / done 步骤保留），真实巡检 92/92 零错误，
+> 后端 1443 passed / 3 skipped，前端 35/35，全门禁通过。边界如实记录：模型无续写 token、重启不自动重跑任务、
+> 未验收工具副作用无事务级 checkpoint、成本确认仍需重发本轮、审批 `_PENDING` 仍在内存。
+
 ---
 
 ## 0. 结论先行

@@ -4328,6 +4328,15 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
   .mode-btn { padding: 4px 8px; }
 }
 
+/* R1/R3：生成中断不伪装完成，显式给出继续入口 */
+.msg-interrupted {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 8px 0 4px; padding: 7px 10px;
+  font-size: var(--fs-xs); color: var(--warn-text);
+  background: var(--warn-soft); border: 1px solid var(--border);
+  border-left: 3px solid var(--warn-text); border-radius: var(--r-sm);
+}
+
 /* 过程带 */
 .rail { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; margin-bottom: var(--sp-3); }
 .rail-head { display: flex; align-items: center; gap: var(--sp-2); padding: 8px var(--sp-3); cursor: pointer; user-select: none; transition: background var(--dur-fast) var(--ease); }

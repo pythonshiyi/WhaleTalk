@@ -36,7 +36,7 @@ const REQUEST_TIMEOUT = 15000;
  * tool_duration→name+duration；usage→usage 对象；compressed→removed_turns 等；
  * ask/approval→id/kind/提示语；error→message。
  * @typedef {Object} SSEEvent
- * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"notice"|"ask_request"|"approval_request"|"plan_request"|"task_plan"|"task_recall"|"needs_confirmation"|"session"|"done"|"error"} type 事件类型
+ * @property {"reasoning"|"content"|"tool_start"|"tool"|"tool_duration"|"usage"|"metrics"|"compressed"|"notice"|"ask_request"|"approval_request"|"plan_request"|"task_plan"|"task_recall"|"needs_confirmation"|"interrupted"|"replay_end"|"session"|"done"|"error"} type 事件类型
  * @property {string} [text] 增量文本
  * @property {string} [name] 工具名
  * @property {Object} [args] 工具参数
@@ -87,8 +87,10 @@ const REQUEST_TIMEOUT = 15000;
  * @property {(ev:SSEEvent)=>void} [onTaskPlan] 长任务计划进度（steps/status/done/total）
  * @property {(ev:SSEEvent)=>void} [onTaskRecall] P6-2 产物直达卡片（历史任务结构化结果，零模型调用）
  * @property {(ev:SSEEvent)=>void} [onNeedsConfirmation] 任务级成本预检需用户确认（确认后带 cost_confirmed 重发）
+ * @property {(ev:SSEEvent)=>void} [onInterrupted] R1/R3 本轮生成中断，已保留半截内容，可点「继续」
+ * @property {(ev:SSEEvent)=>void} [onReplayEnd] R1 跨重启静态回放结束（作业可能未完成，不伪装成 done）
  * @property {(ev:SSEEvent)=>void} [onSession] 后端分配的会话 id（{id,stream_id}）
- * @property {()=>void} [onDone] 正常结束（后端已自动落盘会话）
+ * @property {(ev?:SSEEvent)=>void} [onDone] 正常结束（后端已自动落盘会话）
  * @property {(message:string)=>void} [onError] 错误
  */
 
@@ -420,8 +422,188 @@ async function api(path, opts = {}) {
 
 // ── SSE 流式对话 ─────────────────────────────────────
 
+// ── R1：流式断点与自动重连 ────────────────────────────────────────────
+const ACTIVE_STREAM_KEY = "whaletalk.active.stream";
+
 /**
- * 流式对话（POST /v1/chat/stream）。
+ * 记录进行中的流；刷新后可凭 stream_id + seq 从断点接回来。
+ * @param {string} streamId
+ * @param {string} sessionId
+ */
+export function setActiveStream(streamId, sessionId) {
+  try {
+    _lsSet(ACTIVE_STREAM_KEY, JSON.stringify({
+      stream_id: String(streamId || ""), session_id: String(sessionId || ""),
+      seq: -1, ts: Date.now(),
+    }));
+  } catch (e) { silentWarn(e, "api"); }
+}
+
+/** @returns {{stream_id:string, session_id:string, seq:number, ts:number}|null} */
+export function getActiveStream() {
+  try {
+    const raw = _lsGet(ACTIVE_STREAM_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    return d && d.stream_id ? d : null;
+  } catch (e) { silentWarn(e, "api"); return null; }
+}
+
+export function clearActiveStream() {
+  try { _lsDel(ACTIVE_STREAM_KEY); } catch (e) { silentWarn(e, "api"); }
+}
+
+/**
+ * @param {string} streamId
+ * @param {number} seq
+ */
+function persistStreamSeq(streamId, seq) {
+  try {
+    const raw = _lsGet(ACTIVE_STREAM_KEY);
+    const d = raw ? JSON.parse(raw) : null;
+    if (!d || String(d.stream_id || "") !== String(streamId || "")) return;
+    d.seq = seq;
+    d.ts = Date.now();
+    _lsSet(ACTIVE_STREAM_KEY, JSON.stringify(d));
+  } catch (e) { silentWarn(e, "api"); }
+}
+
+/**
+ * 统一的 SSE 事件派发（streamChat 与 replayStream 共用，回放不再丢事件类型）。
+ * @param {StreamHandlers} handlers
+ * @param {any} ev
+ */
+function dispatchSSE(handlers, ev) {
+  if (!ev || !ev.type) return;
+  if (ev.type === "reasoning") handlers.onReasoning?.(ev.text);
+  else if (ev.type === "content") handlers.onContent?.(ev.text);
+  else if (ev.type === "tool_start") handlers.onToolStart?.(ev);
+  else if (ev.type === "tool") handlers.onTool?.(ev);
+  else if (ev.type === "tool_duration") handlers.onToolDuration?.(ev);
+  else if (ev.type === "usage") handlers.onUsage?.(ev);
+  else if (ev.type === "metrics") handlers.onMetrics?.(ev);
+  else if (ev.type === "compressed") handlers.onCompressed?.(ev);
+  else if (ev.type === "notice") handlers.onNotice?.(ev);
+  else if (ev.type === "ask_request") handlers.onAskRequest?.(ev);
+  else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);
+  else if (ev.type === "plan_request") handlers.onPlanRequest?.(ev);
+  else if (ev.type === "task_plan") handlers.onTaskPlan?.(ev);
+  else if (ev.type === "task_recall") handlers.onTaskRecall?.(ev);
+  else if (ev.type === "needs_confirmation") handlers.onNeedsConfirmation?.(ev);
+  else if (ev.type === "interrupted") handlers.onInterrupted?.(ev);
+  else if (ev.type === "replay_end") handlers.onReplayEnd?.(ev);
+  else if (ev.type === "session") handlers.onSession?.(ev);
+  else if (ev.type === "done") handlers.onDone?.(ev);
+  else if (ev.type === "error") handlers.onError?.(ev.message);
+}
+
+/**
+ * 构造带 seq 去重的行派发器。重连后服务端会按 cursor 续发，但边界帧可能重叠，
+ * seq 去重保证已显示内容不重复拼接。
+ * @param {StreamHandlers} handlers
+ * @param {{lastSeq:number}} state
+ * @param {string} [streamId] 传入时同步持久化进度
+ */
+function makeDispatcher(handlers, state, streamId) {
+  return (/** @type {string} */ line) => {
+    if (!line.startsWith("data: ")) return;
+    /** @type {any} */
+    let ev;
+    try { ev = JSON.parse(line.slice(6)); } catch { return; }
+    if (ev && ev.seq != null && Number.isFinite(Number(ev.seq))) {
+      const n = Number(ev.seq);
+      if (n <= state.lastSeq) return;
+      state.lastSeq = n;
+      if (streamId) persistStreamSeq(streamId, n);
+    }
+    // 正常收尾才清除断点；异常中断时保留，供刷新后接续
+    if (streamId && (ev.type === "done" || ev.type === "replay_end")) clearActiveStream();
+    dispatchSSE(handlers, ev);
+  };
+}
+
+/**
+ * 读取一段 SSE 流到结束；连接中途断开会抛错，由上层决定重连。
+ * @param {any} reader
+ * @param {(line:string)=>void} dispatch
+ */
+async function readSSE(reader, dispatch) {
+  const decoder = new TextDecoder();
+  let buf = "";
+  const drain = () => {
+    const re = /\r?\n\r?\n/;
+    let m;
+    while ((m = re.exec(buf)) !== null) {
+      const frame = buf.slice(0, m.index);
+      buf = buf.slice(m.index + m[0].length);
+      for (const line of frame.split(/\r?\n/)) dispatch(line);
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    drain();
+  }
+  buf += decoder.decode();
+  drain();
+  if (buf.trim()) for (const line of buf.split(/\r?\n/)) dispatch(line);
+}
+
+/**
+ * 从断点重连到已有作业（绝不新建生成）。
+ * @param {string} streamId
+ * @param {number} cursor
+ * @param {AbortSignal} [signal]
+ */
+async function replayFetch(streamId, cursor, signal) {
+  const payload = JSON.stringify({ stream_id: String(streamId || ""), cursor: Number(cursor) || 0 });
+  const attempt = (/** @type {string} */ token) => fetch(`${getBase()}/v1/chat/replay`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: payload,
+    signal,
+  });
+  let r = await attempt(getToken());
+  if (r.status === 401) {
+    try { _lsDel(TOKEN_KEY); } catch (e) { silentWarn(e, "api"); }
+    const token = await _selfFetchToken();
+    if (token) r = await attempt(token);
+  }
+  return r;
+}
+
+/**
+ * 断线后带指数退避的自动重连循环。
+ * @param {any} initialReader
+ * @param {(line:string)=>void} dispatch
+ * @param {{lastSeq:number}} state
+ * @param {string} streamId
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<boolean>}
+ */
+async function withReconnect(initialReader, dispatch, state, streamId, signal) {
+  let reader = initialReader;
+  let tries = 0;
+  for (;;) {
+    try {
+      await readSSE(reader, dispatch);
+      return true;
+    } catch (e) {
+      if (signal && signal.aborted) throw e;
+      if (tries >= 4) throw e;
+      tries += 1;
+      await new Promise((res) => setTimeout(res, Math.min(700 * (2 ** (tries - 1)), 5000)));
+      const r = await replayFetch(streamId, state.lastSeq + 1, signal);
+      if (r.status === 404) throw new Error("流式作业已过期，本轮内容已保留在会话中");
+      if (!r.ok || !r.body) throw new Error(await _errMessage(r, `chat/replay → ${r.status}`));
+      reader = r.body.getReader();
+    }
+  }
+}
+
+/**
+ * 流式对话（POST /v1/chat/stream）。断线时在内部按 seq 自动重连，不重新进入调用方闭包。
  * @param {StreamChatParams} params 请求参数（字段与后端请求体一一对应，改动必须同步 typedef）
  * @param {StreamHandlers} handlers 事件回调
  * @param {AbortSignal} [signal] 停止生成信号（前端 AbortController）
@@ -453,61 +635,12 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
     if (token) r = await attempt(token);
   }
   if (!r.ok || !r.body) throw new Error(await _errMessage(r, `chat/stream → ${r.status}`));
-  const reader = r.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  /** 处理单条 `data:` 行
-   * @param {string} line */
-  const dispatch = (line) => {
-    if (!line.startsWith("data: ")) return;
-    /** @type {SSEEvent|null} */
-    let ev;
-    try {
-      ev = JSON.parse(line.slice(6));
-    } catch {
-      return;
-    }
-    if (ev.type === "reasoning") handlers.onReasoning?.(ev.text);
-    else if (ev.type === "content") handlers.onContent?.(ev.text);
-    else if (ev.type === "tool_start") handlers.onToolStart?.(ev);
-    else if (ev.type === "tool") handlers.onTool?.(ev);
-    else if (ev.type === "tool_duration") handlers.onToolDuration?.(ev);
-    else if (ev.type === "usage") handlers.onUsage?.(ev);
-    else if (ev.type === "metrics") handlers.onMetrics?.(ev);
-    else if (ev.type === "compressed") handlers.onCompressed?.(ev);
-    else if (ev.type === "notice") handlers.onNotice?.(ev);
-    else if (ev.type === "ask_request") handlers.onAskRequest?.(ev);
-    else if (ev.type === "approval_request") handlers.onApprovalRequest?.(ev);
-    else if (ev.type === "plan_request") handlers.onPlanRequest?.(ev);
-    else if (ev.type === "task_plan") handlers.onTaskPlan?.(ev);
-    else if (ev.type === "task_recall") handlers.onTaskRecall?.(ev);
-    else if (ev.type === "needs_confirmation") handlers.onNeedsConfirmation?.(ev);
-    else if (ev.type === "session") handlers.onSession?.(ev);
-    else if (ev.type === "done") handlers.onDone?.();
-    else if (ev.type === "error") handlers.onError?.(ev.message);
-  };
-  // 兼顾 \n\n 与 \r\n\r\n 两种帧分隔；空行结束的一帧立即派发
-  const drain = () => {
-    const re = /\r?\n\r?\n/;
-    let m;
-    while ((m = re.exec(buf)) !== null) {
-      const frame = buf.slice(0, m.index);
-      buf = buf.slice(m.index + m[0].length);
-      for (const line of frame.split(/\r?\n/)) dispatch(line);
-    }
-  };
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    drain();
-  }
-  // 收尾：冲刷解码器残余，并派发「没有以空行结尾」的最后一帧（此前会被静默丢弃）
-  buf += decoder.decode();
-  drain();
-  if (buf.trim()) {
-    for (const line of buf.split(/\r?\n/)) dispatch(line);
-  }
+  // R1：记住进行中的流；断线时 streamChat 内部自动按 seq 从断点重连，
+  // 不重新进入 ChatPage 的生成闭包，因此 acc/patchLast 连续、已显示内容不重复。
+  if (stream_id) setActiveStream(stream_id, session_id);
+  const state = { lastSeq: -1 };
+  const dispatch = makeDispatcher(handlers, state, String(stream_id || ""));
+  await withReconnect(r.body.getReader(), dispatch, state, String(stream_id || ""), signal);
 }
 
 /**
@@ -515,56 +648,16 @@ export async function streamChat({ messages, model, thinking, toolsEnabled, mode
  * @param {string} streamId
  * @param {StreamHandlers} handlers
  * @param {AbortSignal} [signal]
+ * @param {number} [cursor] 从该 seq 之后开始回放（刷新后从断点接续）
  */
-export async function replayStream(streamId, handlers, signal) {
-  const payload = JSON.stringify({ stream_id: String(streamId || "") });
-  const attempt = (/** @type {string} */ token) => fetch(`${getBase()}/v1/chat/replay`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: payload,
-    signal,
-  });
-  let r = await attempt(getToken());
-  if (r.status === 401) {
-    try { _lsDel(TOKEN_KEY); } catch (e) { silentWarn(e, "api"); }
-    const token = await _selfFetchToken();
-    if (token) r = await attempt(token);
-  }
+export async function replayStream(streamId, handlers, signal, cursor = 0) {
+  const r = await replayFetch(streamId, cursor, signal);
+  if (r.status === 404) throw new Error("流式作业已过期，本轮内容已保留在会话中");
   if (!r.ok || !r.body) throw new Error(await _errMessage(r, `chat/replay → ${r.status}`));
-  const reader = r.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  const dispatch = (/** @type {string} */ line) => {
-    if (!line.startsWith("data: ")) return;
-    let ev;
-    try { ev = JSON.parse(line.slice(6)); } catch { return; }
-    if (ev.type === "task_plan") handlers.onTaskPlan?.(ev);
-    else if (ev.type === "task_recall") handlers.onTaskRecall?.(ev);
-    else if (ev.type === "notice") handlers.onNotice?.(ev);
-    else if (ev.type === "content") handlers.onContent?.(ev.text);
-    else if (ev.type === "tool") handlers.onTool?.(ev);
-    else if (ev.type === "tool_start") handlers.onToolStart?.(ev);
-    else if (ev.type === "done") handlers.onDone?.();
-    else if (ev.type === "error") handlers.onError?.(ev.message);
-  };
-  const drain = () => {
-    const re = /\r?\n\r?\n/;
-    let m;
-    while ((m = re.exec(buf)) !== null) {
-      const frame = buf.slice(0, m.index);
-      buf = buf.slice(m.index + m[0].length);
-      for (const line of frame.split(/\r?\n/)) dispatch(line);
-    }
-  };
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    drain();
-  }
-  buf += decoder.decode();
-  drain();
-  if (buf.trim()) for (const line of buf.split(/\r?\n/)) dispatch(line);
+  const state = { lastSeq: Number(cursor || 0) - 1 };
+  // R1：回放与实时流共用完整派发器，不再丢 reasoning/usage/审批/成本确认等事件
+  const dispatch = makeDispatcher(handlers, state, String(streamId || ""));
+  await withReconnect(r.body.getReader(), dispatch, state, String(streamId || ""), signal);
 }
 
 // ── 会话 ─────────────────────────────────────────────

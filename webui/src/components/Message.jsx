@@ -659,6 +659,13 @@ function Message({ msg, enter = false, onOpenTrace, onResend, onStar, onPin, onQ
           </div>
         )}
 
+        {msg.interrupted && (
+          <div className="msg-interrupted" role="status">
+            <span>⚠ 本轮生成中断，已保留已输出内容。</span>
+            {onRegenerate && <button className="msg-op" onClick={() => onRegenerate()}>继续 →</button>}
+          </div>
+        )}
+
         {(msg.notices || []).length > 0 && (
           <div className="msg-notices">
             {(msg.notices || []).map((t, i) => (

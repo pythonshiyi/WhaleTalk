@@ -71,6 +71,75 @@ _CHAT_JOB_TTL = 900.0   # 完成后保留 15 分钟，供刷新/新标签页重�
 _CHAT_JOBS = {}          # stream_id → _ChatJob
 _CHAT_JOBS_LOCK = threading.RLock()
 
+# R1：流式事件持久化。内存缓冲只能覆盖「同进程 + 15 分钟」，落盘后
+# 服务重启、作业被 GC 回收、标签页刷新都还能从断点接回来。
+_STREAM_JOB_TTL = 900.0
+
+
+def _stream_job_file(stream_id):
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(stream_id or ""))[:80]
+    if not safe:
+        return ""
+    return os.path.join(DATA_DIR, "stream_jobs", safe + ".jsonl")
+
+
+def _append_stream_event(stream_id, payload):
+    """每条 SSE 事件追加一行 jsonl；失败只记日志，不影响生成主链路。"""
+    path = _stream_job_file(stream_id)
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except Exception as e:
+        logger.warning("流式事件落盘失败（不影响生成）：%s", e)
+
+
+def _load_stream_events(stream_id, cursor=0):
+    """从落盘文件读 seq > cursor 的事件，供跨进程重启后的静态回放。"""
+    path = _stream_job_file(stream_id)
+    if not path or not os.path.exists(path):
+        return [], ""
+    out, status = [], ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if row.get("type") == "job_meta":
+                    status = str((row.get("data") or {}).get("status") or "")
+                    continue
+                seq = int(row.get("seq") or 0)
+                # 与内存回放 job.events[cursor:] 语义一致：cursor 是「下一个要发的 seq」
+                if seq >= cursor:
+                    out.append((seq, str(row.get("type") or ""), dict(row.get("data") or {})))
+    except Exception as e:
+        logger.warning("读取流式事件失败：%s", e)
+    return out, status
+
+
+def _cleanup_stream_job_files():
+    """启动时清掉超过 TTL 的旧事件文件，避免无限堆积。"""
+    try:
+        d = os.path.join(DATA_DIR, "stream_jobs")
+        if not os.path.isdir(d):
+            return
+        now = time.time()
+        for name in os.listdir(d):
+            if not name.endswith(".jsonl"):
+                continue
+            p = os.path.join(d, name)
+            try:
+                if now - os.path.getmtime(p) > _STREAM_JOB_TTL:
+                    os.remove(p)
+            except Exception as e:
+                logger.warning("清理旧流式事件失败：%s", e)
+    except Exception as e:
+        logger.warning("流式事件目录清理失败：%s", e)
+
 
 class _ChatJob:
     """一次流式生成的作业：事件缓冲 + 订阅通知 + 停止句柄。
@@ -97,15 +166,25 @@ class _ChatJob:
 
     def emit(self, event, data):
         with self.cond:
-            self.events.append((len(self.events), event, dict(data or {})))
+            seq = len(self.events)
+            payload = {"seq": seq, "type": event, "data": dict(data or {})}
+            self.events.append((seq, event, dict(data or {})))
             self.cond.notify_all()
+        # R1：事件逐条落盘，进程重启/作业被回收后仍可回放（IO 不持锁）
+        _append_stream_event(self.id, payload)
 
     def finish(self, status):
+        changed = False
         with self.cond:
             if self.status == "running":
                 self.status = status
+                changed = True
             self.finished = time.time()
             self.cond.notify_all()
+        # 终态只写一次：作业线程 finally 会兜底重复调用 finish
+        if changed:
+            _append_stream_event(self.id, {"seq": -1, "type": "job_meta",
+                                           "data": {"status": self.status}})
 
     def snapshot(self):
         with self.cond:
@@ -9161,12 +9240,22 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid json or body too large"})
             return
         stream_id = str(body.get("stream_id") or "").strip()
+        try:
+            cursor = max(0, int(body.get("cursor") or 0))
+        except (TypeError, ValueError):
+            cursor = 0
         with _CHAT_JOBS_LOCK:
             job = _CHAT_JOBS.get(stream_id)
-        if job is None:
+        if job is not None:
+            self._stream_job_to_client(job, cursor)
+            return
+        # R1：进程重启 / 作业被回收后内存缓冲已消失，从落盘事件静态回放。
+        # 只回放已发生的事件，绝不新建生成，也不会把中断伪装成完成。
+        events, status = _load_stream_events(stream_id, cursor)
+        if not events:
             self._json(404, {"error": "stream not found or expired"})
             return
-        self._stream_job_to_client(job)
+        self._stream_events_to_client(events, status)
 
 
     @_post_route("/v1/chat/stop")
@@ -11266,15 +11355,20 @@ class _Handler(BaseHTTPRequestHandler):
             client, cfg = self._client_from_cfg(body)
             kb = self._budget_block(cfg)
             if kb:
+                # R3：额度拦截是「挂起」而非「完成/失败」，终态保留可继续语义
                 send("error", {"message": kb})
-                send("done", {})
-                job.finish("error")
+                send("interrupted", {"session_id": job.sid, "stream_id": job.id,
+                                    "reason": "budget_blocked",
+                                    "text": "本月额度已用尽，本轮未开始生成；额度恢复后可继续。"})
+                send("done", {"interrupted": True})
+                job.finish("suspended")
                 return
             gate = self._cost_gate(body, cfg, messages)
             if gate:
+                # 成本确认属于用户决策挂起：不伪装成 done，也不清空作业上下文
                 send("needs_confirmation", gate)
-                send("done", {})
-                job.finish("done")
+                send("done", {"interrupted": True})
+                job.finish("suspended")
                 return
             kwargs = self._chat_kwargs(body, cfg)
             quiet_mode = self._quiet_mode(body, cfg)
@@ -11652,9 +11746,19 @@ class _Handler(BaseHTTPRequestHandler):
             # 写过自动断点时才清理，避免误删并发作业的断点。
             if not job.stop_event.is_set() and made_checkpoint:
                 _clear_auto_checkpoint()
-            _notify_completed(ok=not job.stop_event.is_set())
-            send("done", {"session_id": job.sid})
-            job.finish("stopped" if job.stop_event.is_set() else "done")
+            # R1/R3：生成未正常完成不再伪装成 done——发 interrupted 让前端
+            # 保留半截文本并给出「继续」入口；终态落到作业里供跨重启回放判定。
+            _interrupted = bool(not ok and not job.stop_event.is_set())
+            if _interrupted:
+                send("interrupted", {
+                    "session_id": job.sid, "stream_id": job.id,
+                    "reason": "generation_incomplete",
+                    "text": "本轮生成中断，已保留已输出内容，可点「继续」接着生成。",
+                })
+            _notify_completed(ok=not job.stop_event.is_set() and not _interrupted)
+            send("done", {"session_id": job.sid, "interrupted": _interrupted})
+            job.finish("stopped" if job.stop_event.is_set()
+                       else ("interrupted" if _interrupted else "done"))
         except Exception as e:
             logger.exception("API chat/stream 失败")
             _log_chat_error(e, "chat/stream")
@@ -11713,18 +11817,35 @@ class _Handler(BaseHTTPRequestHandler):
             # 调用安全；正常路径已 finish 时此调用只刷新 finished 时间戳无副作用。
             job.finish("error" if job.status == "running" else job.status)
 
-    def _stream_job_to_client(self, job):
+    def _stream_events_to_client(self, events, status=""):
+        """跨重启静态回放：只发落盘事件，末尾明确标注终态，绝不假装继续生成。"""
+        self._sse_start()
+        try:
+            for (seq, ev, data) in events:
+                # 落盘的原始终态帧一律跳过，由末尾按 job_meta 统一发一次，避免重复 done
+                if not ev or ev in ("job_meta", "done"):
+                    continue
+                if not self._sse_send(ev, {**data, "seq": seq}):
+                    return
+            if status and status != "running":
+                self._sse_send("done", {"session_id": "", "replayed": True})
+            else:
+                self._sse_send("replay_end", {"session_id": "", "status": status or "unknown"})
+        finally:
+            self._sse_end()
+
+    def _stream_job_to_client(self, job, cursor=0):
         """把作业事件流推送给当前 HTTP 订阅者。
 
         客户端掉线只解除订阅（返回），**绝不**停止作业——生成由作业线程负责到底，
         这是「切页 / 关标签 / 多开标签都不打断」的根基。空转时写 SSE 注释帧保活；
-        晚到的订阅者从缓冲起点回放，看到完整本轮输出。
+        cursor 由客户端按已收到的 seq 传入，避免重连后重复拼接。
         """
         self._sse_start()
         with job.cond:
             job.subscribers += 1
         try:
-            cursor = 0
+            cursor = max(0, int(cursor or 0))
             while True:
                 with job.cond:
                     if cursor >= len(job.events) and job.status == "running":
@@ -11907,6 +12028,12 @@ def start_server(port=8745, token=""):
     global _SERVER, _THREAD, _TOKEN, _PORT, _SCHEDULER_THREAD, _BRAIN_COMMUNITY_THREAD
     if _SERVER is not None:
         return _PORT, _TOKEN, None
+    # R1/R2 启动恢复：清掉过期的流式事件文件，并修复上次进程遗留的未完成计划状态。
+    _cleanup_stream_job_files()
+    try:
+        task_plan.recover_on_startup()
+    except Exception as e:
+        logger.warning("启动恢复扫描失败（不阻断启动）：%s", e)
     import secrets
     # ── 可降级：死系统代理自动绕过 ──
     # 系统代理（如 Clash 127.0.0.1:7890）残留为「已启用」但进程未运行时，httpx/OpenAI SDK
