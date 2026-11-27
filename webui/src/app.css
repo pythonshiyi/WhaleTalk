@@ -4220,6 +4220,24 @@ body.wt-popout { margin: 0; background: var(--bg-0); overflow: hidden; }
 .tc-skill-preview { margin-top: 7px; padding: 7px 8px; background: var(--bg-3); border-radius: 4px; font-size: var(--fs-3xs); color: var(--text-3); line-height: 1.5; }
 .tc-skill-call { word-break: break-all; margin-top: 3px; }
 
+/* 体验：浮层互斥后给背景更明确的反馈，避免「点了没反应」被当成卡死 */
+.cmdk-mask, .task-center-scrim, .drawer-scrim { backdrop-filter: blur(2px); }
+.task-center-scrim { background: rgba(0,0,0,.42); }
+.cmdk-mask { background: rgba(0,0,0,.55); }
+
+/* 体验：任务中心加宽，累计统计改成两列卡片，数字不再挤成一行 */
+.task-center-drawer { width: min(680px, 96vw); }
+.tc-skill-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
+.tc-skill-summary > span { padding: 7px 9px; background: var(--bg-1); border: 1px solid var(--border); border-radius: 6px; line-height: 1.5; }
+.tc-skill-summary b { display: block; font-size: var(--fs-lg, 18px); }
+.tc-skill-summary .tc-icon-btn { justify-self: end; align-self: center; }
+
+/* 体验：能力页空态补说明与下一步动作 */
+.tools-empty { text-align: center; padding: 30px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.tools-empty-title { font-size: var(--fs-sm); color: var(--text-2); font-weight: 600; }
+.tools-empty-hint { font-size: var(--fs-xs); color: var(--text-3); max-width: 420px; line-height: 1.6; }
+.tools-empty-action { margin-top: 6px; }
+
 /* 过程带 */
 .rail { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; margin-bottom: var(--sp-3); }
 .rail-head { display: flex; align-items: center; gap: var(--sp-2); padding: 8px var(--sp-3); cursor: pointer; user-select: none; transition: background var(--dur-fast) var(--ease); }

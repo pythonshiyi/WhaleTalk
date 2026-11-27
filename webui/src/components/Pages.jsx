@@ -131,7 +131,25 @@ export function AbilitiesPage({ initialQuery = "", onAskTool }) {
 
           {flatMode ? (
             <div className="tool-flat">
-              {filteredTools.length === 0 && <div className="empty-tip">没有匹配的工具</div>}
+              {filteredTools.length === 0 && (
+                <div className="empty-tip tools-empty">
+                  <div className="tools-empty-title">
+                    {q ? `没有匹配「${query.trim()}」的工具`
+                      : filter === "fav" ? "还没有收藏的工具"
+                        : filter === "failed" ? "最近没有失败的工具（这是好事）"
+                          : "没有匹配的工具"}
+                  </div>
+                  <div className="tools-empty-hint">
+                    {filter === "fav" ? "在工具库里点 ☆ 收藏常用工具，下次就能在这里快速找到。"
+                      : filter === "failed" ? "工具调用失败会记录在这里，方便排查。"
+                        : "换个关键词，或回到全部工具列表看看。"}
+                  </div>
+                  <button className="msg-op tools-empty-action"
+                    onClick={() => { setQuery(""); setFilter("all"); }}>
+                    查看全部 {allTools.length} 个工具
+                  </button>
+                </div>
+              )}
               {filteredTools.map((t) => (
                 <div className="tool-flat-row" key={t.name}>
                   <button className="tool-fav" title={t.fav ? "取消收藏" : "收藏"} onClick={() => toggleFav(t.name)}>{t.fav ? "★" : "☆"}</button>

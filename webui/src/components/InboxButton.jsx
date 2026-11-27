@@ -11,6 +11,7 @@ export default function InboxButton({ onNavigate }) {
   const [items, setItems] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState("");
+  const [loadErr, setLoadErr] = React.useState("");
 
   const load = React.useCallback(async () => {
     const [mem, evo, branches, failed, status, sched, channels] = await Promise.allSettled([
@@ -102,6 +103,10 @@ export default function InboxButton({ onNavigate }) {
       }
     }
     setItems(out);
+    // 体验：某些汇总接口失败时给出可见提示，不再静默吞掉（此前待办数字会莫名偏少）
+    const failedFetches = [mem, evo, branches, failed, status, sched, channels]
+      .filter((r) => r.status === "rejected").length;
+    setLoadErr(failedFetches ? `${failedFetches} 项数据加载失败，部分待办可能未显示` : "");
     setLoading(false);
   }, []);
 
@@ -135,6 +140,11 @@ export default function InboxButton({ onNavigate }) {
 
       {open && (
         <Overlay title={count ? `待处理 · ${count}` : "待处理"} onClose={() => setOpen(false)} wide>
+          {loadErr && (
+            <div className="empty-tip is-err">
+              {loadErr}　<button className="msg-op" onClick={load}>重试</button>
+            </div>
+          )}
           {loading ? (
             <div className="empty-tip is-loading">正在汇总待处理事项…</div>
           ) : items.length === 0 ? (

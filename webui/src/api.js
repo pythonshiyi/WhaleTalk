@@ -266,6 +266,19 @@ async function _selfFetchToken() {
   return "";
 }
 
+/** 启动期并发请求共享一次 token 预取：避免首屏一批 401 再各自重试。
+ * @returns {Promise<void>}
+ */
+/** @type {Promise<void>|null} */
+let _tokenReady = null;
+function ensureToken() {
+  if (getToken()) return Promise.resolve();
+  if (!_tokenReady) {
+    _tokenReady = _selfFetchToken().then(() => {}).finally(() => { _tokenReady = null; });
+  }
+  return _tokenReady;
+}
+
 /** @returns {Promise<boolean>} 后端是否可用（结果缓存，可用后自动失效重探） */
 export async function checkBackend() {
   if (backendOk !== null) return backendOk;
@@ -372,6 +385,8 @@ async function _errMessage(r, fallback) {
  * @returns {Promise<any>} 后端 JSON 响应体
  */
 async function api(path, opts = {}) {
+  // 先拿到 token 再发请求：启动时各组件并发初始化不再先吃一轮 401
+  await ensureToken();
   const attempt = async (/** @type {string} */ token) => {
     const r = await fetch(`${getBase()}${path}`, {
       ...opts,

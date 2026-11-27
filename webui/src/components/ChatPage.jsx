@@ -2,6 +2,7 @@ import React from "react";
 import { createPortal } from "react-dom";
 import Message from "./Message.jsx";
 import { capLiveWindow, findToolCard, makePatchLast, trimHistory } from "../msgUpdates.js";
+import { useOverlayExclusive } from "../overlayBus.js";
 import Composer from "./Composer.jsx";
 import SessionList from "./SessionList.jsx";
 import ContextPanel from "./ContextPanel.jsx";
@@ -840,7 +841,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     return () => clearTimeout(timer);
   }, [busy, toast]);  const [ctxOpen, setCtxOpen] = React.useState(false);
   const [listOpen, setListOpen] = React.useState(() => !mq("(max-width: 860px)"));
-  const [auxOpen, setAuxOpen] = React.useState(() => !mq("(max-width: 1000px)"));
+  // 体验：首屏默认收起右侧「过程/参数」面板，先让用户看到对话，而不是一堆配置。
+  // 点右上角控制台、正文锚点或活动提醒仍会按需打开。
+  const [auxOpen, setAuxOpen] = React.useState(false);
   // 记忆上次停留的控制台页签（程序化切到 activity 时不覆盖，仅用户点击时由 AuxPanel 写入）
   const [auxTab, setAuxTab] = React.useState(() => {
     try {
@@ -895,6 +898,18 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
   const [showJump, setShowJump] = React.useState(false);
   // 拖拽文件到对话区时的高亮遮罩状态（全局 dragenter/leave 计数维护）
   const [dropActive, setDropActive] = React.useState(false);
+  // 体验：浮层互斥——任一模态打开时自动收起其他浮层，避免遮罩叠加导致点击无响应。
+  useOverlayExclusive("task-center", taskCenterOpen, () => setTaskCenterOpen(false));
+  useOverlayExclusive("cmd-panel", cmdPanel, () => setCmdPanel(false));
+  useOverlayExclusive("batch", batchPanel, () => setBatchPanel(false));
+  useOverlayExclusive("star", starPanel, () => setStarPanel(false));
+  useOverlayExclusive("search", searchPanel, () => setSearchPanel(false));
+  useOverlayExclusive("fim", fimPanel, () => setFimPanel(false));
+  useOverlayExclusive("variant", variantPanel, () => setVariantPanel(false));
+  useOverlayExclusive("timeline", timelinePanel, () => setTimelinePanel(false));
+  useOverlayExclusive("ctx", ctxOpen, () => setCtxOpen(false));
+  useOverlayExclusive("more", moreOpen, () => setMoreOpen(false));
+
   // 输入区实测高度：供「回到最新」浮钮定位（避免硬编码 bottom 遮挡多行输入/附件）
   const [composerH, setComposerH] = React.useState(0);
   const composerDockRef = React.useRef(null);
@@ -924,14 +939,23 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // Esc 关闭已打开的抽屉（会话列表/控制台/上下文）——此前只能点遮罩或开关
+  // Esc 一键收起所有浮层/抽屉（此前只关 3 个，命令面板/任务中心/各面板会残留遮罩）
   React.useEffect(() => {
     if (!active) return;  // 常驻挂载（切页只隐藏）时，隐藏页不响应全局快捷键
     const onKey = (e) => {
       if (e.key !== "Escape") return;
+      setTaskCenterOpen(false);
+      setCmdPanel(false);
+      setBatchPanel(false);
+      setStarPanel(false);
+      setSearchPanel(false);
+      setFimPanel(false);
+      setVariantPanel(false);
+      setTimelinePanel(false);
+      setCtxOpen(false);
+      setMoreOpen(false);
       if (mq("(max-width: 860px)")) setListOpen(false);
       if (mq("(max-width: 1000px)")) setAuxOpen(false);
-      setCtxOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1096,18 +1120,8 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
     composerRef.current?.insertText(msg);
   };
 
-  React.useEffect(() => {
-    if (!active) return;  // 常驻挂载（切页只隐藏）时，隐藏页不响应全局快捷键
-    const onKey = (e) => {
-      if (e.ctrlKey && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setCmdPanel(true);
-        setCmdQuery("");
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [active]);
+  // Ctrl+K 统一由 App 层的全局命令面板处理（此前两处同时监听会各开一个面板，
+  // 互斥生效后互相关闭 → 反而打不开）。快捷命令面板改从「更多工具」进入。
   // 顶栏「更多」菜单：点击外部 / Esc 关闭
   React.useEffect(() => {
     if (!moreOpen) return undefined;
@@ -2306,6 +2320,9 @@ export default function ChatPage({ onGoWorkbench, onGoSettings, applyPrompt, onA
                 </button>
                 {moreOpen && (
                   <div className="ch-menu" role="menu">
+                    <button role="menuitem" className="ch-menu-item" onClick={() => { setMoreOpen(false); setCmdQuery(""); setCmdPanel(true); }}>
+                      <Icon name="zap" size={15} /><span className="ch-menu-label">快捷命令</span>
+                    </button>
                     <button role="menuitem" className="ch-menu-item" onClick={() => { setMoreOpen(false); setBatchPanel(true); }}>
                       <Icon name="layers" size={15} /><span className="ch-menu-label">批量任务</span>
                     </button>

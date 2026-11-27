@@ -2082,6 +2082,33 @@ def finalize(plan_id: str) -> Tuple[Optional[TaskPlan], bool]:
         return plan, False
 
 
+_EXPLICIT_STEP = re.compile(r"第[一二三四五六七八九十\d]+步[:：,，]?\s*")
+
+
+def _explicit_steps(goal: str) -> List[Dict[str, Any]]:
+    """用户写出「第一步/第二步/…」时按原文直接拆步，不再调用规划模型。
+
+    真实可用性测试里模型会把显式三步自由拆成四步，偶尔还规划出复杂工具；
+    按原文拆步既贴合用户预期，也省一次模型调用与一次 429 风险。
+    """
+    text = str(goal or "").strip()
+    if not text or any(h in text for h in SIMPLE_HINTS):
+        return []
+    marks = list(_EXPLICIT_STEP.finditer(text))
+    if len(marks) < 2:
+        return []
+    out: List[Dict[str, Any]] = []
+    for i, m in enumerate(marks[:8]):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        seg = text[m.end():end]
+        # 末尾的通用验收说明不属于某一步
+        seg = re.split(r"每完成一步|每一步都|注意[:：]|请立即用", seg)[0]
+        seg = seg.strip(" \t\r\n：:，,；;。！!、")
+        if len(seg) >= 4:
+            out.append({"id": len(out) + 1, "title": seg[:120]})
+    return out if len(out) >= 2 else []
+
+
 def _heuristic_steps(goal: str) -> List[Dict[str, Any]]:
     """模型不可用时的本地拆步：只认显式顺序词/编号列表。"""
     text = str(goal or "").strip()
@@ -2187,9 +2214,14 @@ def create(client, goal: str, session_id: str, priority: Optional[int] = None) -
     steps: List[Dict[str, Any]] = []
     strategy = ""
     source = skill or recipe
+    explicit = _explicit_steps(goal)
     if source is not None:
         steps = [dict(s) for s in (source.get("steps") or [])]
         strategy = str(source.get("strategy") or "general")
+    elif explicit:
+        # 用户已给出显式步骤：按原文拆，跳过规划模型（贴合预期 + 省一次调用）
+        steps = explicit
+        strategy = _guess_strategy(goal)
     elif not any(h in goal for h in SIMPLE_HINTS):
         try:
             client.chat(

@@ -19,6 +19,9 @@ const NAV_ITEMS = [
 export default function Sidebar({ page, onPage, onNavigate, runningCount = 0 }) {
   const [status, setStatus] = React.useState(null);
   const [statusErr, setStatusErr] = React.useState(false);
+  // 体验：首次启动尚未连上时显示「连接中」而不是「未连接」；
+  // 只有曾经连上过、之后断线才提示「未连接」。
+  const everConnected = React.useRef(false);
 
   // 侧栏状态 10s 轮询：页面不可见时暂停（usePoll 统一处理可见性与定时器清理）
   const loadStatus = React.useCallback(async () => {
@@ -26,8 +29,9 @@ export default function Sidebar({ page, onPage, onNavigate, runningCount = 0 }) 
       const s = await getStatus();
       setStatus(s);
       setStatusErr(false);
+      everConnected.current = true;
     } catch {
-      setStatusErr(true);
+      setStatusErr(everConnected.current);
     }
   }, []);
   usePoll(loadStatus, 10000);

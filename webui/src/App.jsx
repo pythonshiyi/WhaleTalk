@@ -5,6 +5,7 @@ import ChatPage, { BackendBanner } from "./components/ChatPage.jsx";
 import DepsBanner from "./components/DepsBanner.jsx";
 import InstallBanner from "./components/InstallBanner.jsx";
 import CommandPalette from "./components/CommandPalette.jsx";
+import { useOverlayExclusive } from "./overlayBus.js";
 import { usePoll } from "./usePoll.js";
 import { FlashProvider, ToastProvider } from "./components/FlashToast.jsx";
 import DialogHost from "./components/DialogHost.jsx";
@@ -127,6 +128,8 @@ export default function App() {
   const [abilitiesQuery, setAbilitiesQuery] = React.useState("");
   const [assetPath, setAssetPath] = React.useState("");
   const [cmdOpen, setCmdOpen] = React.useState(false);
+  // 体验：全局命令面板与会话页的浮层互斥，避免遮罩叠加后点击无响应
+  useOverlayExclusive("global-cmd", cmdOpen, () => setCmdOpen(false));
   const [runningJobs, setRunningJobs] = React.useState([]);
 
   React.useEffect(() => {

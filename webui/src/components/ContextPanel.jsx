@@ -11,10 +11,15 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
   const [injection, setInjection] = React.useState((data && data.injection) || null);
   const [tip, setTip] = React.useState("");
 
+  const [pendingErr, setPendingErr] = React.useState("");
   const loadPending = React.useCallback(() => {
+    setPendingErr("");
     api.listPendingMemory()
       .then((d) => setPending((d && d.items) || []))
-      .catch((e) => silentWarn(e, "ContextPanel"));
+      .catch((e) => {
+        silentWarn(e, "ContextPanel");
+        setPendingErr("待确认记忆加载失败");
+      });
   }, []);
 
   // 注入回执是「最近一次装配」的服务端快照：打开面板/切到注入页时拉一次，
@@ -62,6 +67,11 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
 
       <div className="ctx-body">
         {tip && <div className="empty-tip">{tip}</div>}
+        {pendingErr && (
+          <div className="empty-tip is-err">
+            {pendingErr}　<button className="msg-op" onClick={loadPending}>重试</button>
+          </div>
+        )}
         {loading ? (
           <div className="empty-tip is-loading">正在读取上下文…</div>
         ) : err ? (
