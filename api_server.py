@@ -8499,7 +8499,7 @@ class _Handler(BaseHTTPRequestHandler):
         })
 
 
-    @_get_route("/v1/task_recipes")
+    @_get_route(("qpath", "/v1/task_recipes"))
     def _g_v1_task_recipes(self):
         """P4-1：可复用任务配方列表（成功过的步骤模板）。"""
         from urllib.parse import parse_qs, urlparse
@@ -8512,7 +8512,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"recipes": recipes, "count": len(recipes)})
 
 
-    @_get_route("/v1/task_pitfalls")
+    @_get_route(("qpath", "/v1/task_pitfalls"))
     def _g_v1_task_pitfalls(self):
         """P4-3：历史失败经验库（避坑清单）。"""
         from urllib.parse import parse_qs, urlparse
@@ -8525,7 +8525,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"pitfalls": pitfalls, "count": len(pitfalls)})
 
 
-    @_get_route("/v1/task_skills")
+    @_get_route(("qpath", "/v1/task_skills"))
     def _g_v1_task_skills(self):
         """P6-3：确定性技能库 + 累计省下的模型轮次统计。"""
         from urllib.parse import parse_qs, urlparse
