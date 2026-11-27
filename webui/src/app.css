@@ -2296,6 +2296,7 @@ button.st-alert:focus-visible { outline: none; box-shadow: var(--ring); }
 .px-theme-dot[data-t="starfield"] { background: linear-gradient(135deg, #05070e, #1a2136 55%, #38bdf8); }
 .px-theme-dot[data-t="deepsea"] { background: linear-gradient(135deg, #02101f, #082542 55%, #22c8ff); }
 .px-theme-dot[data-t="arctic"] { background: linear-gradient(135deg, #edf2f9, #ffffff 55%, var(--brand)); }
+.px-theme-dot[data-t="ambernight"] { background: linear-gradient(135deg, #0e1014, #232833 55%, #d79a4e); }
 
 /* 参数保存栏（草稿 + 保存锁定） */
 .px-savebar {

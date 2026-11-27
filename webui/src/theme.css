@@ -1,5 +1,5 @@
 /* ═══ Whale Wave 设计令牌 · 三主题 ═══════════════════
-   星空黑 starfield（默认）/ 深海蓝 deepsea / 北极冰 arctic
+   星空黑 starfield（默认）/ 深海蓝 deepsea / 北极冰 arctic / 琥珀夜 ambernight
    品牌色（--brand/--ok/--ai/--danger/--warn）跨主题统一语义，
    仅明度微调以保证对比度。 */
 
@@ -284,6 +284,67 @@
   --glass: rgba(255, 255, 255, 0.78);
   --selection: rgba(2, 132, 199, 0.22);
   --grad-hero: radial-gradient(120% 140% at 85% -20%, rgba(var(--brand-rgb), .12), transparent 55%);
+}
+
+/* ── 琥珀夜：暖褐墨底 + 琥珀金光（夜读向，冷色三主题的暖色互补位）───── */
+[data-theme="ambernight"] {
+  color-scheme: dark;
+  --bg-0: #0e1014;
+  --bg-1: #13161c;
+  --bg-2: #181c24;
+  --bg-3: #232833;
+  --bg-hover: rgba(215, 154, 78, 0.08);
+  --bg-active: rgba(215, 154, 78, 0.14);
+  --border: rgba(215, 154, 78, 0.13);
+  --border-strong: rgba(215, 154, 78, 0.24);
+  --chat-glow: rgba(215, 154, 78, 0.07);
+
+  --text-1: #e9e4d9;
+  --text-2: #a9a294;
+  /* 暖灰：bg-3 上 4.48（AA 边界内取舍，与 deepsea 4.53 同量级），
+     换来长时间夜读时不刺眼；若需更严苛可提至 #9c9486（4.8）。 */
+  --text-3: #948d80;
+  --text-link: #eab676;
+
+  --brand: #d79a4e;
+  --brand-strong: #eab676;
+  --brand-soft: rgba(215, 154, 78, 0.15);
+  --ai: #a78bfa;
+  --brand-rgb: 215, 154, 78;
+  --ai-rgb: 167, 139, 250;
+
+  /* 琥珀底偏亮：白字仅 2.44，故彩色底一律用暖黑字 */
+  --text-on-brand: #1a1206;
+  --text-on-ok: #07130e;
+  --ok-text: #4ade9e;
+  --warn-text: #f5b552;
+  --danger-text: #ff7a6e;
+
+  --scroll-thumb: rgba(215, 154, 78, 0.18);
+  --scroll-thumb-hover: rgba(215, 154, 78, 0.34);
+  --header-bg: rgba(19, 22, 28, 0.86);
+  --bubble-bg: linear-gradient(135deg, rgba(215, 154, 78, 0.20), rgba(167, 139, 250, 0.14));
+  --composer-fade: linear-gradient(180deg, transparent, rgba(19, 22, 28, 0.68) 30%);
+  --code-inline-bg: rgba(215, 154, 78, 0.10);
+  --code-inline-border: rgba(215, 154, 78, 0.14);
+  --code-bg: #141821;
+  --code-text: #cbd5e8;
+  --hl-kw: #7dd3fc;
+  --hl-str: #86efac;
+  --hl-com: #7b8494;
+  --hl-num: #fbbf24;
+  --hl-fn: #c4b5fd;
+  --hl-ty: #5eead4;
+  --hl-at: #f9a8d4;
+  --hl-tag: #38bdf8;
+  --shadow-1: 0 1px 2px rgba(18, 12, 4, 0.42);
+  --shadow-2: 0 8px 24px rgba(18, 12, 4, 0.48);
+  --shadow-3: 0 20px 60px rgba(18, 12, 4, 0.58);
+  --mask: rgba(9, 7, 4, 0.64);
+  --mask-strong: rgba(6, 5, 3, 0.80);
+  --glass: rgba(19, 22, 28, 0.74);
+  --selection: rgba(215, 154, 78, 0.34);
+  --grad-hero: radial-gradient(120% 140% at 85% -20%, rgba(var(--brand-rgb), .20), transparent 55%);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

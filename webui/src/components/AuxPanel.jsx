@@ -795,6 +795,7 @@ const THEME_CHOICES = [
   { id: "starfield", name: "星空", desc: "极黑冷底 · 亮青点缀" },
   { id: "deepsea", name: "深海", desc: "深蓝底 · 湖蓝光" },
   { id: "arctic", name: "北极冰", desc: "冰白底 · 深海蓝字" },
+  { id: "ambernight", name: "琥珀夜", desc: "暖褐墨底 · 琥珀光" },
 ];
 
 // 参数分组与「脏值」归属（用于折叠分组头的未保存标记）
