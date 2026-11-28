@@ -313,6 +313,10 @@ function KnowledgeBaseBlock() {
   );
 }
 
+// 设置页已独立为 SettingsPage.jsx（分类 tabs + 简单/高级模式 + 外部服务）
+export { default as SettingsPage } from "./SettingsPage.jsx";
+
+// ── 定时任务（A2）──────────────────────────────────
 function SchedulesBlock() {
   const [schedules, setSchedules] = React.useState([]);
   const [loaded, setLoaded] = React.useState(false);

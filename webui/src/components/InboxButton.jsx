@@ -14,48 +14,12 @@ export default function InboxButton({ onNavigate }) {
   const [loadErr, setLoadErr] = React.useState("");
 
   const load = React.useCallback(async () => {
-    const [mem, evo, branches, failed, status, sched, channels] = await Promise.allSettled([
-      api.listPendingMemory(),
-      api.getEvolutions(),
-      api.getEvolveBranches(),
+    const [failed, sched, channels] = await Promise.allSettled([
       api.jobs({ status: "error", limit: 20 }),
-      api.getStatus(),
       api.getSchedules(),
       api.listChannels(),
     ]);
     const out = [];
-    if (mem.status === "fulfilled") {
-      for (const m of (mem.value?.items || []).slice(0, 8)) {
-        out.push({
-          id: `mem:${m.id}`, kind: "记忆待确认", icon: "brain",
-          title: String(m.text || m.content || "待确认记忆").slice(0, 110),
-          detail: m.source || m.reason || "AI 提炼出的新记忆，等待你决定是否写入",
-          memoryId: m.id,
-        });
-      }
-    }
-    if (evo.status === "fulfilled") {
-      const pending = (evo.value?.evolutions || []).filter((e) => !e.applied);
-      if (pending.length) {
-        out.push({
-          id: "evolutions", kind: "进化提案", icon: "sparkles", count: pending.length,
-          title: `${pending.length} 份进化提案待审阅`,
-          detail: pending.slice(0, 3).map((e) => e.name).join(" · "),
-          dest: { page: "agent", agentTab: "autonomy" },
-        });
-      }
-    }
-    if (branches.status === "fulfilled") {
-      const list = branches.value?.branches || [];
-      if (list.length) {
-        out.push({
-          id: "branches", kind: "进化分支", icon: "git-branch", count: list.length,
-          title: `${list.length} 个自我进化分支待合并`,
-          detail: list.slice(0, 3).map((b) => b.name).join(" · "),
-          dest: { page: "agent", agentTab: "autonomy" },
-        });
-      }
-    }
     if (failed.status === "fulfilled") {
       const jobs = failed.value?.jobs || [];
       for (const j of jobs.slice(0, 5)) {
@@ -64,17 +28,6 @@ export default function InboxButton({ onNavigate }) {
           title: String(j.user_text || "未命名任务").slice(0, 110),
           detail: `${j.started_at || ""} · ${j.failed_count || 0} 步失败 · ${j.duration_s || 0}s`,
           dest: { page: "workbench", workbenchTab: "tasks" },
-        });
-      }
-    }
-    if (status.status === "fulfilled") {
-      const trust = status.value?.trust;
-      if (trust && trust.state === "unconfirmed") {
-        out.push({
-          id: "trust", kind: "信任内核", icon: "shield",
-          title: "核心文件有未确认改动",
-          detail: (trust.files || []).slice(0, 3).join(" · ") || "请打开自主 → 自我状态核对",
-          dest: { page: "agent", agentTab: "autonomy" },
         });
       }
     }

@@ -9,7 +9,6 @@ const PAGES = [
   { label: "工作台", sub: "态势 / 任务记录 / 定时任务", page: "workbench", icon: "layout", keys: "workbench 首页 面板 任务" },
   { label: "创作", sub: "角色 / 指令库 / 直播 / 资产", page: "create", icon: "sparkles", keys: "create 创作 内容 角色 直播 资产" },
   { label: "能力", sub: "工具库 / 能力包 / 权限", page: "abilities", icon: "puzzle", keys: "abilities 工具 能力 权限" },
-  { label: "智能体", sub: "大脑 / 记忆 / 生命 / 自主", page: "agent", icon: "brain", keys: "agent 大脑 记忆 生命 自主" },
   { label: "设置", sub: "模型 / 服务 / 通道 / 外观", page: "settings", icon: "settings", keys: "settings 设置 配置" },
 ];
 
@@ -58,11 +57,10 @@ export default function CommandPalette({ open, onClose, onNavigate }) {
     const seq = ++seqRef.current;
     setBusy(true);
     const timer = setTimeout(async () => {
-      const [sess, prompts, personas, memories, abilities, files] = await Promise.allSettled([
+      const [sess, prompts, personas, abilities, files] = await Promise.allSettled([
         api.searchSessions(query, { type: "message" }),
         api.getPrompts(),
         api.listPersonas(),
-        api.searchUnifiedMemories(query, "all", LIMIT),
         api.listAbilities(),
         api.searchFiles(query, undefined, LIMIT),
       ]);
@@ -128,18 +126,6 @@ export default function CommandPalette({ open, onClose, onNavigate }) {
         }
       }
 
-      const memoryItems = [];
-      if (memories.status === "fulfilled") {
-        for (const m of (memories.value?.items || [])) {
-          const text = String(m.text || m.content || "").replace(/\s+/g, " ").slice(0, 90);
-          memoryItems.push({
-            group: "记忆", title: text || "记忆", sub: m.source || m.kind || "",
-            icon: "book", dest: { page: "agent", agentTab: "memory" },
-          });
-          if (memoryItems.length >= LIMIT) break;
-        }
-      }
-
       const fileItems = [];
       if (files.status === "fulfilled") {
         for (const f of (files.value?.entries || [])) {
@@ -151,7 +137,7 @@ export default function CommandPalette({ open, onClose, onNavigate }) {
         }
       }
 
-      setItems([...pages, ...sessions, ...toolItems, ...promptItems, ...personaItems, ...memoryItems, ...fileItems, ...settings]);
+      setItems([...pages, ...sessions, ...toolItems, ...promptItems, ...personaItems,  ...fileItems, ...settings]);
       setActive(0);
       setBusy(false);
     }, 220);
