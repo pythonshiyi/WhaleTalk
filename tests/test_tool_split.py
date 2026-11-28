@@ -141,8 +141,6 @@ ALL_SPLIT_TOOLS = [
     "clipboard_get", "clipboard_set", "delete_file", "archive_files",
     "extract_archive", "list_snapshots", "restore_snapshot", "batch_rename",
     "start_process", "stop_process", "list_processes", "environment_info",
-    "write_memory", "read_memory", "delete_memory", "update_memory",
-    "self_profile", "query_memory_graph", "knowledge_index", "knowledge_search",
     "schedule_task", "list_schedules", "cancel_schedule",
     "task_checkpoint_save", "task_checkpoint_load", "run_workflow",
     "send_email", "publish_draft", "send_webhook", "im_send",
@@ -155,15 +153,13 @@ ALL_SPLIT_TOOLS = [
     "rpa_scroll", "rpa_screenshot", "screen_find_click", "vision_loop",
     "tts_save", "tts_speak", "tts_stop", "speech_to_text",
     "voice_chat_loop", "image_generate", "qrcode", "media_ffmpeg", "team_run",
-    "community_post", "community_save", "community_status", "community_cycle",
 ]
 
-BATCH_SIZES = [19, 13, 15, 17, 14, 10, 11, 18, 4]
+BATCH_SIZES = [19, 13, 15, 17, 8, 10, 11, 18]
 BATCH_MODULES = [
     "agent_tools.tool_docs", "agent_tools.tool_web", "agent_tools.tool_code",
-    "agent_tools.tool_files", "agent_tools.tool_brain", "agent_tools.tool_msg",
+    "agent_tools.tool_files", "agent_tools.tool_task", "agent_tools.tool_msg",
     "agent_tools.tool_system", "agent_tools.tool_desktop",
-    "agent_tools.tool_community",
 ]
 BATCH_RANGES = []
 _b = 0
@@ -255,7 +251,6 @@ def test_all_split_tools_validation_branch_no_crash():
         ("fetch_url", ""),
         ("run_command", ""),
         ("read_file", ""),
-        ("write_memory", ""),
         ("send_email", "a@b.c", "", ""),
         ("project_info",),
         ("rpa_hotkey", ""),
@@ -285,9 +280,9 @@ def test_agent_tools_all_reexports_every_domain_impl():
 
 
 def test_failure_memory_reexported():
-    """failure_memory 属 agent_tools.tool_brain，必须在 dc 命名空间可达。"""
+    """failure_memory 属 agent_tools.tool_task，必须在 dc 命名空间可达。"""
     assert hasattr(dc, "failure_memory"), "deepseek_client.failure_memory 应经 agent_tools re-export"
-    assert dc.failure_memory.__module__ == "agent_tools.tool_brain"
+    assert dc.failure_memory.__module__ == "agent_tools.tool_task"
     assert dc.TOOL_CALL_MAP["failure_memory"] is dc.failure_memory
 
 

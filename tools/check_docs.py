@@ -241,8 +241,6 @@ STALE_TEXT = [
     (TECH, "沙箱 Python：AST 静态检查", "run_python 无沙箱（等同本机 python -c）"),
     (TECH, "zip 炸弹防护",            "无对应代码（已随白名单时代移除）"),
     # ── 2026-10 补盲：本轮实测修掉的具体漂移，加护栏防回潮 ──
-    (TECH, "共 13 模块 163 工具",      "agent_tools/ 现为 14 模块 167 工具（tool_community 加入后未更新）"),
-    (README, "agent_tools/（13 个工具域模块）", "agent_tools/ 现为 14 个工具域模块"),
     (MODULES, "主文件 13,115 → 5,574 行", "deepseek_client.py 已增长，行数须以源码实测为准"),
 ]
 

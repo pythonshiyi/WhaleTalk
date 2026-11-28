@@ -51,10 +51,8 @@ def test_session_index_save_failure_records_degrade(tmp_path, monkeypatch):
 # ── 3. stop_server 收敛后台作业 ────────────────────────────────────
 
 def test_stop_server_stops_chat_jobs(monkeypatch):
-    import brain_api
     import deepseek_client as dc
 
-    monkeypatch.setattr(brain_api, "brain_status", lambda **k: None)
     closed = []
     monkeypatch.setattr(dc, "close_browser", lambda: closed.append("browser"))
     monkeypatch.setattr(dc, "cleanup_all_processes", lambda: closed.append("procs"))

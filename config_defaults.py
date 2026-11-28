@@ -46,8 +46,6 @@ DIALOG_SYSTEM_PROMPT = (
 BUILTIN_TOOL_NAMES = [
     "get_date",
     "ask_user",
-    "write_memory",
-    "read_memory",
     "get_weather",
     "run_python",
     "run_command",
@@ -409,48 +407,6 @@ DEFAULT_CONFIG = {
     "active_dir": "",
     "evolution_reminder_days": 7,
     "suggestions_enabled": True,
-    "memory_enabled": True,  # 长期记忆总开关：关闭后停止记忆注入与自动写入（工具仍可手动调用）
-    "auto_memory": True,     # 对话回写：每次对话后自动提炼值得记住的信息（并同步大脑）
-    # 自动提炼的落地方式：pending=先入「待确认」队列由用户裁决（默认，防"推断污染"）；
-    # auto=旧行为（直接写入长期记忆）；off=不提炼。均受 auto_memory 总开关约束。
-    "memory_harvest_mode": "pending",
-    # 记忆注入：按与当前问题的相关度检索（而非"最近 N 条"）——
-    # inject_limit=最多注入条数；min_score=最低相关度（0=只要有词面命中即可，调高更保守）。
-    "memory_inject_limit": 6,
-    "memory_min_score": 0.0,
-    # 大脑上下文分层：persona=身份/前史/表达风格/信念（角色设定，最易盖过任务，默认关）；
-    # continuity=目标/自我认知/未决决策/复习/相关记忆（跨会话连续性，默认开）。
-    "brain_persona_enabled": False,
-    "brain_continuity_enabled": True,
-    # 生命循环（Life Loop）：连续时间 + 内驱 + 代谢 + 睡眠。
-    # 默认开启，但没有 brain/manifest 时保持 dormant；tick 本身不调用模型。
-    "life_enabled": True,
-    "life_tick_seconds": 30,
-    "life_pulse_minutes": 30,
-    "life_reflect_idle_minutes": 30,
-    "life_reflect_cooldown_minutes": 60,
-    "life_reflect_min_drive": 15,
-    "life_reflect_max_tokens": 700,
-    "life_sleep_idle_minutes": 180,
-    "life_quiet_hours": "02:00-07:00",
-    "life_auto_sleep": True,
-    "life_auto_wake": True,
-    "life_wake_time": "",                 # HH:MM；空=按 duration 计算醒来
-    "life_sleep_duration_minutes": 480,
-    "life_sleep_llm": True,
-    "life_sleep_consolidate_llm": True,   # 睡眠时用 LLM 提炼长期记忆（预算允许时）
-    "life_auto_archive": False,
-    "life_max_active_intentions": 3,
-    "life_intention_archive_max": 200,    # 超出后睡眠时归档最旧的已完成意图
-    "life_metrics_enabled": True,
-    "life_metrics_max": 5000,
-    "life_tool_timeout_seconds": 20,
-    "life_tool_max_output_chars": 2000,
-    "life_budget_scope": "self",  # self=只算生命循环自身消耗；total=当日全部对话+自主
-    "life_daily_token_budget": 1000000,
-    "life_daily_cost_budget": 5.0,
-    "life_fatigue_per_action": 8.0,
-    "life_off_peak_only": False,
     # 直播角色 v2（本地 P0）：角色卡 / 冷场自主开麦 / 台词限速
     "live_persona_id": "",              # 直播角色卡 id；空=用角色库第一个
     "live_idle_speak_seconds": 25,      # 冷场多少秒后自主开麦
@@ -479,17 +435,6 @@ DEFAULT_CONFIG = {
     "agent_mail_enabled": False,  # Agent Mail（agently-cli）集成开关；默认关闭，不配置不影响使用
     "agent_mail_cli": "agently-cli",  # agently-cli 可执行文件（或绝对路径）
     "process_max_idle_seconds": 3600,  # 后台子进程空闲清理阈值（无输出超过该秒数才清理；有持续输出的长任务不清理，默认 1 小时）
-    # 鲸群社区（**可选实验场，非鲸语功能**：实验本体在 .gitignore 的 experiments/ 下，不随仓库分发；默认全关）
-    "brain_community_enabled": False,       # 进社区总开关（默认关；未开不产生任何外发）
-    "brain_community_base": "http://127.0.0.1:8770",  # 社区站地址
-    "brain_community_brain_key": "",        # 大脑密钥（敏感：DPAPI 加密）
-    "brain_community_shared_secret": "",    # 部署级握手密钥（敏感：DPAPI 加密；空=自动读社区站 config.json）
-    "brain_community_interval_min": 30,     # 自主周期（分钟）
-    "brain_community_autostart": True,      # 检测不到社区站时自动拉起 server.py
-    "brain_community_server_dir": "",       # 社区站目录（空=自动探测 experiments/鲸群实验场；目录不存在则能力保持关闭）
-    "brain_community_brain_dir": "",        # 本地大脑目录（空=源码同级 brain/）
-    "brain_community_autopost": True,       # 自主循环是否把本机新记忆归档发帖（永久保存）
-    "brain_community_harvest": True,        # 是否把公海经历回灌本地大脑记忆
     # MCP 客户端（消费外部 MCP server 的工具；见 mcp_client.py）。
     # 默认空 = 不连接任何外部 server。形如：
     #   [{"name": "filesystem", "command": "npx",

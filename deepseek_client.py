@@ -1296,69 +1296,6 @@ BUILD_SITUATION = None  # 由 api_server 注入的态势快照函数（get_statu
 SESSIONS_DIR = None  # 由 api_server 注入（会话库目录，recall_session 回溯历史用）
 WATCH_STATE_PATH = None  # 由 api_server 注入（watch_files/track_web 状态持久化）
 
-# ===== 核心自我状态（跨会话连续自我：self_profile.json）=====
-# 与 memory（事实记录）不同：这里存「我」本身——身份/偏好/长期目标/演进历程/当前焦点/用户心智模型
-SELF_PROFILE_FILE = None  # 由 api_server 注入（DATA_DIR/self_profile.json）
-_SELF_PROFILE_EMPTY = {
-    "identity": {},          # 身份（name/nature/vibe）
-    "preferences": [],       # 偏好
-    "goals": [],             # 长期目标 [{text, done, created_at}]
-    "milestones": [],        # 里程碑 [{text, done, created_at}]
-    "user_model": [],        # 用户心智模型 [{insight, ts}]
-    "history": [],           # 演进历程 [{event, ts}]
-    "focus": "",             # 当前焦点
-    "wishes": [],            # 未完成心愿
-    "updated_at": "",
-}
-
-
-def _load_memory():
-    if not MEMORY_FILE or not os.path.exists(MEMORY_FILE):
-        return {"enabled": False, "facts": [], "notes": []}
-    try:
-        with open(MEMORY_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            return {"enabled": False, "facts": [], "notes": []}
-        data.setdefault("enabled", False)
-        data.setdefault("facts", [])
-        data.setdefault("notes", [])
-        return data
-    except Exception:
-        logging.exception("读取记忆失败")
-        return {"enabled": False, "facts": [], "notes": []}
-
-
-def _save_memory(data):
-    if not MEMORY_FILE:
-        return False
-    try:
-        from shared import file_lock
-    except Exception:
-        file_lock = None
-    try:
-        if file_lock is not None:
-            with file_lock(MEMORY_FILE, timeout=10):
-                return _save_memory_impl(data)
-        return _save_memory_impl(data)
-    except TimeoutError:
-        logging.warning("记忆保存等待文件锁超时")
-        return False
-
-
-def _save_memory_impl(data):
-    try:
-        os.makedirs(os.path.dirname(MEMORY_FILE) or ".", exist_ok=True)
-        tmp = MEMORY_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, MEMORY_FILE)  # 原子写：崩溃不损坏 memory.json
-        return True
-    except Exception:
-        logging.exception("保存记忆失败")
-        return False
-
-
 # ---------- 语义检索（纯标准库：字符 bigram + 词重叠 + IDF 权重） ----------
 _BIGRAM_RE = re.compile(r"[\w\u4e00-\u9fff]+")
 
@@ -1412,113 +1349,6 @@ def _mem_score(query_tokens, idf, text):
     cosine = w / (len(q_set) ** 0.5 * len(t_set) ** 0.5)
     recall = len(common) / len(q_set)
     return 0.55 * cosine + 0.45 * recall
-
-
-def _brain_sync_memory(text, key, type, entities, relations, origin=""):
-    """记忆同步进鲸语大脑（memories/memory.jsonl）；大脑未初始化时静默跳过。
-
-    写入为「同文本去重 + 原子追加」，brain 侧由 brainkit 保证 id 级一致性。
-    origin 一并携带，供大脑注入时标注血缘（否则网页提炼内容会以无标注事实注入）。
-    """
-    try:
-        import brainkit as bk
-        bk.remember_structured(
-            text,
-            type=str(type or key or "")[:20],
-            importance=4 if str(type or "") in ("偏好", "规则", "联系") else 3,
-            tags=[str(key)[:20]] if key else [],
-            entities=[e for e in (entities or []) if isinstance(e, str)],
-            relations=[r for r in (relations or []) if isinstance(r, dict)],
-            source="对话",
-            origin=str(origin or "")[:20],
-        )
-    except Exception as e:
-        import degrade
-        degrade.degrade("brain.sync.memory", e,
-                        "记忆未同步进鲸语大脑，跨会话可能检索不到", critical=True)
-
-
-def _find_brain_entry(bk, keyword):
-    """定位待更新的大脑记忆：精确全文匹配优先，找不到再退子串包含——
-    避免旧版纯子串首条命中在关键词宽泛时误更新无关记忆。返回 (entry, 命中方式)。"""
-    kw = str(keyword or "").strip().lower()
-    if not kw:
-        return None, None
-    items = bk.load_memories()
-    exact = next((e for e in items if str(e.get("text") or "").strip().lower() == kw), None)
-    if exact is not None:
-        return exact, "exact"
-    sub = next((e for e in items if kw in str(e.get("text") or "").lower()), None)
-    return (sub, "sub") if sub is not None else (None, None)
-
-
-def _brain_sync_delete(keyword):
-    """删除大脑中匹配的记忆条目。
-
-    与 memory.json 侧 delete_memory 语义对等：子串命中全部删除
-    （本地也是按关键词删全部匹配，两侧必须一致，不能只删一条）。"""
-    try:
-        import brainkit as bk
-        kw = str(keyword or "").strip().lower()
-        if not kw:
-            return
-        for e in bk.load_memories():
-            if kw in str(e.get("text") or "").lower():
-                bk.delete_memory(e["id"])
-    except Exception as e:
-        import degrade
-        degrade.degrade("brain.sync.delete", e,
-                        "大脑记忆未随删除同步，可能残留旧条目", critical=True)
-
-
-def _brain_sync_update(old, new):
-    """更新大脑中匹配的记忆条目（精确优先、子串兜底；与 memory.json 同步）。
-
-    memory.json 侧 update_memory 为「多个匹配只更新最新一条」，大脑侧同样只改一条：
-    精确全文命中优先，避免旧版纯子串首条在关键词宽泛时误更新无关记忆。"""
-    try:
-        import brainkit as bk
-        e, _how = _find_brain_entry(bk, old)
-        if e is not None:
-            bk.update_memory(e["id"], text=new)
-    except Exception as e:
-        import degrade
-        degrade.degrade("brain.sync.update", e,
-                        "大脑记忆未随修改同步，跨会话可能读到旧内容", critical=True)
-
-
-def _load_self_profile():
-    """读取核心自我状态，缺字段补默认；文件缺失/损坏返回空模板。"""
-    if not SELF_PROFILE_FILE or not os.path.exists(SELF_PROFILE_FILE):
-        return dict(_SELF_PROFILE_EMPTY)
-    try:
-        with open(SELF_PROFILE_FILE, encoding="utf-8") as f:
-            d = json.load(f)
-        out = dict(_SELF_PROFILE_EMPTY)
-        if isinstance(d, dict):
-            for k in out:
-                if k in d:
-                    out[k] = d[k]
-        return out
-    except Exception:
-        return dict(_SELF_PROFILE_EMPTY)
-
-
-def _save_self_profile(data):
-    """原子写回核心自我状态（D3：跨进程文件锁保护）。"""
-    if not SELF_PROFILE_FILE:
-        return False
-    try:
-        from shared import file_lock
-    except Exception:
-        file_lock = None
-    try:
-        if file_lock is not None:
-            with file_lock(SELF_PROFILE_FILE, timeout=10):
-                return _save_self_profile_impl(data)
-        return _save_self_profile_impl(data)
-    except TimeoutError:
-        return False
 
 
 def _save_self_profile_impl(data):
@@ -4506,8 +4336,8 @@ register_tool(
 from agent_tools import *  # noqa: F401,F403
 
 _TOOL_ORDER = [
-    'get_date', 'ask_user', 'request_permission', 'write_memory', 'self_profile', 'read_memory', 'delete_memory', 'update_memory',
-    'query_memory_graph', 'failure_memory', 'get_weather', 'run_python', 'read_file', 'fetch_url', 'fetch_blocked', 'search_web', 'search_github',
+    'get_date', 'ask_user', 'request_permission',
+    'failure_memory', 'get_weather', 'run_python', 'read_file', 'fetch_url', 'fetch_blocked', 'search_web', 'search_github',
     'search_realtime', 'call_api', 'get_status', 'git', 'project_map', 'find_symbol', 'run_lint', 'verify_project',
     'project_scaffold', 'dev_plan', 'database_query', 'send_email', 'pip_install', 'write_file', 'edit_file', 'list_dir', 'find_images', 'asset_import', 'asset_list', 'asset_organize',
     'watch_files', 'track_web', 'recall_session', 'run_command', 'search_local', 'code_lookup', 'create_doc', 'write_code_project',
@@ -4529,8 +4359,6 @@ _TOOL_ORDER = [
     'hardware_accel',
     # MV 增强（mvrender 底座补齐）：歌词真值对齐 + 片头片尾字幕卡
     'lyric_align', 'mv_credits_card',
-    # 鲸群社区：大脑主动进社区 / 永久保存资料
-    'community_post', 'community_save', 'community_status', 'community_cycle',
 ]
 
 _GROUP_ORDER = [
@@ -4548,8 +4376,8 @@ _HINT_ORDER = [
     ('恢复', '撤销', '还原', '回滚文件', '找回', '误删'), ('写', '保存', '创建', '生成'), ('修改', '编辑', '改动', '改一下', '改一次', '改成', '改为', '改下', '改改', '改掉', '更新', '替换', '重写', '覆盖', '重命名', '改名', '删掉', '删除'),
     ('图片', '图像', '截图', '看图', '图表', '视觉执行', '视觉闭环', '屏幕操作'), ('表格', 'excel', 'csv', '报表'), ('代码', '编程', 'python', 'bug', '脚本', '函数'),
     ('定时', '提醒', '计划', '日程'), ('数据库', 'sql', 'mysql', 'postgres'), ('网页', 'url', '抓取', '爬'),
-    ('搜索文件', '检索', '找文件'), ('在哪定义', '定义在哪', '谁在调用', '调用点', '引用关系', '代码结构', '符号定位', '看下源码'), ('记忆', '记住', '偏好', '忘记', '删除记忆', '修改记忆'),
-    ('自我', '我是谁', '自我状态', '身份', '长期目标', '我的进化', '成长'), ('自我进化', '改进自己', '升级自己', '自我改进', '修复自己', '自省'), ('收件箱', '邮件助手', 'agent邮箱', '邮件列表', '邮件搜索'),
+    ('搜索文件', '检索', '找文件'), ('在哪定义', '定义在哪', '谁在调用', '调用点', '引用关系', '代码结构', '符号定位', '看下源码'), 
+    ('自我进化', '改进自己', '升级自己', '自我改进', '修复自己', '自省'), ('收件箱', '邮件助手', 'agent邮箱', '邮件列表', '邮件搜索'),
     ('发微信', '发企微', '发telegram', '推送消息', '消息推送', '通知我'), ('telegram消息', 'tg更新', 'tg消息', '远程指令'), ('桌面通知', 'toast', '弹通知', '提醒通知'),
     ('公众号', '公众号文章', '自动写作', '写公众号'), ('草稿', '草稿箱', '存草稿'), ('pdf', '转pdf', 'pdf提取', 'pdf生成', '读pdf'),
     ('word', 'docx', '读word', '读取文档'), ('ppt', 'pptx', '演示文稿', '读ppt'), ('电子书', 'epub', 'mobi', 'kindle'),
@@ -4584,7 +4412,7 @@ _HINT_ORDER = [
     ('硬件', 'gpu', '显卡', '加速', '性能', 'benchmark', '显存', '利用率'),
     ('歌词对齐', '对轴', '字幕时间轴', 'lrc', '歌词匹配', '歌词卡点'),
     ('片头片尾', '制作人字幕', '片尾名单', '署名', '专辑信息', '角标'),
-    ('社区', '发帖到社区', '社区发帖', '发到社区', '社区动态', '进社区', '鲸群', '社区记忆'),
+    
 ]
 
 TOOLS = build_tool_list(_TOOL_ORDER)

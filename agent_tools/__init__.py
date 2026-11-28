@@ -25,12 +25,11 @@ from .tool_desktop import *  # noqa: F401,F403  # 🖱 桌面与视觉语音
 from .tool_mv import *  # noqa: F401,F403  # 🎬 微电影/MV 一键成片（依赖 tool_desktop）
 from .tool_system import *  # noqa: F401,F403  # 🔧 系统与项目
 from .tool_msg import *  # noqa: F401,F403  # 📧 邮件与消息
-from .tool_brain import *  # noqa: F401,F403  # 🧠 记忆与定时任务
+from .tool_task import *  # noqa: F401,F403  # 🧠 定时任务 / 检查点 / 知识索引
 from .tool_files import *  # noqa: F401,F403  # 📁 文件与进程
 from .tool_code import *  # noqa: F401,F403  # 💻 编程与执行
 from .tool_web import *  # noqa: F401,F403  # 🌐 浏览器与网页
 from .tool_codegen import *  # noqa: F401,F403  # 🎨 代码生图（image_codegen）
-from .tool_community import *  # noqa: F401,F403  # 🧠 鲸群社区（自主进社区 / 永久保存）
 
 __all__ = [
     "get_date",
@@ -99,12 +98,6 @@ __all__ = [
     'stop_process',
     'list_processes',
     'environment_info',
-    'write_memory',
-    'self_profile',
-    'delete_memory',
-    'update_memory',
-    'read_memory',
-    'query_memory_graph',
     'knowledge_index',
     'knowledge_search',
     'schedule_task',
@@ -199,8 +192,4 @@ __all__ = [
     'sprite_sheet',
     'make_gif',
     'image_hybrid',
-    'community_post',
-    'community_save',
-    'community_status',
-    'community_cycle',
 ]

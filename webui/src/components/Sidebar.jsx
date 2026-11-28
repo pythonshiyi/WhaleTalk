@@ -4,15 +4,14 @@ import { getStatus } from "../api.js";
 import { Icon } from "./icons.jsx";
 import InboxButton from "./InboxButton.jsx";
 
-// 一级入口只保留六个「用户任务」：会话 / 工作台 / 创作 / 能力 / 智能体 / 设置。
+// 一级入口只保留五个「用户任务」：会话 / 工作台 / 创作 / 能力 / 设置。
 // 配置类（接入通道、权限、可选能力）统一收进设置；任务记录收进工作台；
-// 角色、指令库、直播收进创作；大脑、记忆、生命、自主收进智能体。
+// 角色、指令库、直播收进创作。
 const NAV_ITEMS = [
   { id: "chat", label: "会话", icon: "message" },
   { id: "workbench", label: "工作台", icon: "layout" },
   { id: "create", label: "创作", icon: "sparkles" },
   { id: "abilities", label: "能力", icon: "puzzle" },
-  { id: "agent", label: "智能体", icon: "brain" },
   { id: "settings", label: "设置", icon: "settings" },
 ];
 

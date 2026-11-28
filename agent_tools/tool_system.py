@@ -1688,14 +1688,6 @@ def self_report(days=7, write=False):
     try:
         import stores
         decisions, goals, evolution, self_model = [], [], {}, {}
-        try:
-            import brainkit as bk
-            decisions = bk.list_decisions(limit=200)
-            goals = bk.load_goals()
-            evolution = bk.load_json(bk.BRAIN_DIR / "evolution.json", {}) or {}
-            self_model = bk.load_json(bk.BRAIN_DIR / "self_model.json", {}) or {}
-        except Exception:
-            pass
         usage = {}
         try:
             import stats as stats_mod

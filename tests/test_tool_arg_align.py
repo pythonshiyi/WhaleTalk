@@ -45,7 +45,7 @@ def test_alias_packages_to_package():
 
 
 def test_alias_query_to_keyword():
-    a, _ig, notes = dc._align_tool_args(_fn("read_memory"), {"query": "abc"})
+    a, _ig, notes = dc._align_tool_args(_fn("find_images"), {"query": "abc"})
     assert a == {"keyword": "abc"}
     assert "query→keyword" in notes
 

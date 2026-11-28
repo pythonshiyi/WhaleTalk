@@ -19,7 +19,6 @@ const LazyPages = {
   workbench: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.WorkbenchPage }))),
   abilities: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.AbilitiesPage }))),
   create: lazy(() => import("./components/CreatePage.jsx")),
-  agent: lazy(() => import("./components/BrainPage.jsx")),
   settings: lazy(() => import("./components/Pages.jsx").then((m) => ({ default: m.SettingsPage }))),
 };
 const PageFallback = () => (
@@ -124,7 +123,6 @@ export default function App() {
   const [createTab, setCreateTab] = React.useState("personas");
   const [settingsTab, setSettingsTab] = React.useState("model");
   const [workbenchTab, setWorkbenchTab] = React.useState("overview");
-  const [agentTab, setAgentTab] = React.useState("cockpit");
   const [abilitiesQuery, setAbilitiesQuery] = React.useState("");
   const [assetPath, setAssetPath] = React.useState("");
   const [cmdOpen, setCmdOpen] = React.useState(false);
@@ -203,7 +201,6 @@ export default function App() {
     if (dest.workbenchTab) setWorkbenchTab(dest.workbenchTab);
     if (dest.createTab) setCreateTab(dest.createTab);
     if (dest.settingsTab) setSettingsTab(dest.settingsTab);
-    if (dest.agentTab) setAgentTab(dest.agentTab);
     if (dest.toolQuery != null) setAbilitiesQuery(String(dest.toolQuery));
     if (dest.assetPath != null) setAssetPath(String(dest.assetPath));
     if (dest.sessionId != null) setOpenSessionId(dest.sessionId);
@@ -359,10 +356,6 @@ export default function App() {
                           assetPath={assetPath}
                         />
                       );
-                    })()}
-                    {page === "agent" && (() => {
-                      const P = LazyPages.agent;
-                      return <P tab={agentTab} onTab={setAgentTab} />;
                     })()}
                     {page === "settings" && (() => {
                       const P = LazyPages.settings;

@@ -682,13 +682,9 @@ _TOOL_DOMAIN = {
     "task_checkpoint_save": "定时与任务", "task_checkpoint_load": "定时与任务",
     "task_step_done": "定时与任务",
     "run_workflow": "定时与任务", "daily_brief": "定时与任务",
-    "write_memory": "记忆与知识", "read_memory": "记忆与知识",
-    "query_memory_graph": "记忆与知识", "knowledge_index": "记忆与知识",
-    "knowledge_search": "记忆与知识", "delete_memory": "记忆与知识",
-    "update_memory": "记忆与知识", "self_profile": "记忆与知识",
+    "knowledge_index": "记忆与知识",
+    "knowledge_search": "记忆与知识",
     "failure_memory": "记忆与知识",
-    "community_post": "记忆与知识", "community_save": "记忆与知识",
-    "community_status": "记忆与知识", "community_cycle": "记忆与知识",
     "ask_user": "AI 与智能", "request_permission": "AI 与智能",
     "run_wechat_writer": "AI 与智能", "publish_draft": "AI 与智能",
     "subagent_run": "AI 与智能", "team_run": "AI 与智能",
@@ -875,113 +871,9 @@ def _capability_status():
 
 
 
-# 记忆读路径：legacy=memory.json 单独注入（兼容/测试）；unified=memory_store 统一层。
-_MEMORY_BACKEND = "legacy"
-_MEMORY_BACKFILL_STARTED = False
-
-
-def _start_memory_backfill():
-    """后台把 memory.json 旧投影分批补进大脑（幂等游标；不阻塞启动）。"""
-    global _MEMORY_BACKFILL_STARTED
-    if _MEMORY_BACKFILL_STARTED or _MEMORY_BACKEND != "unified":
-        return
-    _MEMORY_BACKFILL_STARTED = True
-
-    def _run():
-        try:
-            import memory_facade as _mf
-            n = _mf.sync_missing_to_brain(0)
-            if n:
-                logger.info("长期记忆投影补同步完成：%s 条", n)
-        except Exception:
-            logger.debug("长期记忆投影补同步失败（下次睡眠重试）", exc_info=True)
-
-    try:
-        threading.Thread(target=_run, daemon=True, name="memory-backfill").start()
-    except Exception:
-        _MEMORY_BACKFILL_STARTED = False
-
-
-def _memory_all(query="", limit=6):
-    """统一记忆检索（memory.json + 大脑 jsonl，按文本去重）。未初始化返回 None。"""
-    try:
-        import memory_store as ms
-        if not getattr(ms, "MEMORY_JSON_PATH", None) or not getattr(ms, "BRAIN_DIR", None):
-            return None
-        return ms.search(str(query or ""), int(limit or 6))
-    except Exception as e:  # noqa: BLE001
-        import degrade as _dg
-        _dg.degrade("api.memory.unified", e, "统一记忆读取失败，回退旧注入路径", critical=True)
-        return None
-
-
-def _memory_full():
-    """长期记忆全量（**只含生效条目**，带血缘）。
-
-    P1-B 起统一走 memory_facade：被 superseded 的记录不再出现在这里（否则
-    注入给模型的是已被取代的旧事实），并带上 origin/confidence 供调用方标注。
-    兼容 `{text,...}` 与 `{key,value,...}` 两种历史结构。
-    """
-    import stores
-    d = stores.load_memory(MEMORY_PATH)
-    out = []
-    seen = set()
-    try:
-        import memory_facade as _mf
-        _mf.init(MEMORY_PATH)
-        for f in _mf.active_facts():
-            text = str(f.get("value") or f.get("text") or "")[:300]
-            if not text or text in seen:
-                continue
-            seen.add(text)
-            out.append({
-                "text": text,
-                "tags": str(f.get("tags") or f.get("key") or ""),
-                "type": str(f.get("type") or ""),
-                "ts": str(f.get("ts") or ""),
-                "origin": str(f.get("origin") or "unknown"),
-                "confidence": f.get("confidence", 0.5),
-                "id": str(f.get("id") or ""),
-            })
-        return {"enabled": bool(d.get("enabled")), "facts": out}
-    except Exception:
-        logger.exception("记忆门面读取失败，回落原始结构（不含血缘/作废语义）")
-    # 兜底：门面不可用时退回原结构，保证记忆注入不中断
-    for f in (d.get("facts") or [])[-200:]:
-        if isinstance(f, dict):
-            text = str(f.get("text") or f.get("value") or "")[:300]
-            if not text or text in seen:
-                continue
-            seen.add(text)
-            out.append({
-                "text": text,
-                "tags": str(f.get("tags") or ""),
-                "type": str(f.get("type") or ""),
-                "ts": str(f.get("ts") or f.get("time") or ""),
-                "origin": str(f.get("origin") or "unknown"),
-                "confidence": f.get("confidence", 0.5),
-                "id": str(f.get("id") or ""),
-            })
-        elif isinstance(f, str):
-            out.append({"text": f[:300], "tags": "", "type": "", "ts": "",
-                        "origin": "unknown", "confidence": 0.5, "id": ""})
-    return {"enabled": bool(d.get("enabled")), "facts": out}
-
-
 # ── 上下文装配依赖入口（P0-2）──────────────────────────────────────────
 # 刻意做成函数而非直接传对象：Provider 在调用时才解析模块属性，使测试可以用
 # 「桩 module 属性」的方式验证注入行为（tests/test_quiet_mode.py 就依赖这一点）。
-
-def _context_self_profile():
-    """核心自我状态（跨会话连续自我）。"""
-    import deepseek_client as dc
-    return dc.self_profile("get")
-
-
-def _context_brain_api():
-    """返回 brain_api 模块对象本身（供 Provider 调用 brain_context(…)）。"""
-    import brain_api
-    return brain_api
 
 
 def _context_trust_notice():
@@ -1176,7 +1068,6 @@ def _status():
         # 出网摘要（P1-A）：入网有 SSRF 底线，出网同样要看得见；明细走 GET /v1/context
         "egress": _egress_brief(),
         # 自主进社区摘要（鲸群）：开关 / 密钥 / 上次周期结果（零 IO）
-        "community": _community_brief(),
     }
 
 
@@ -1203,30 +1094,6 @@ def _degrade_brief():
         return {"count": s.get("count", 0), "critical": s.get("critical", 0)}
     except Exception:
         return {"count": 0, "critical": 0}
-
-
-def _community_brief():
-    """状态栏用的自主进社区摘要（零 IO：仅读配置缓存 + 内存态最近周期结果）。
-
-    刻意不在这里探测可达性/调用社区站——状态栏高频轮询，网络探测走 GET /v1/community。
-    """
-    try:
-        import community_client as cc
-        import config_utils
-        cfg = config_utils.load_config()
-        lc = cc.last_result()
-        res = lc.get("result") or {}
-        return {
-            "enabled": bool(cfg.get("brain_community_enabled")),
-            "has_key": bool(cc.resolve_key(cfg)),
-            "last_at": lc.get("at"),
-            "last_ok": res.get("ok"),
-            "last_error": res.get("error"),
-            "name": res.get("name") or "",
-        }
-    except Exception:
-        return {"enabled": False, "has_key": False, "last_at": None,
-                "last_ok": None, "last_error": None, "name": ""}
 
 
 def _trust_state():
@@ -3208,8 +3075,6 @@ def _dc_wiring_table():
     一类重构事故（否则 setattr 会静默新建属性、工具拿 None 静默失效）。
     """
     return (
-        ("MEMORY_FILE", MEMORY_PATH),
-        ("SELF_PROFILE_FILE", os.path.join(DATA_DIR, "self_profile.json")),
         ("SESSIONS_DIR", SESSIONS_DIR),
         ("WATCH_STATE_PATH", os.path.join(DATA_DIR, "watch_state.json")),
         ("WEBHOOK_CONFIG_FILE", os.path.join(DATA_DIR, "webhooks.json")),
@@ -3239,7 +3104,7 @@ def _init_dc_paths():
     """注入外部配置文件路径与全局（完整对齐旧 main.py 启动注入）。
 
     v3.0 重构删除 main.py 后，这里成为唯一的应用接线点。凡是漏接的全局，
-    对应工具都会静默失效（如 MEMORY_FILE 未接 → AI 任务中存不下长期记忆）。
+    对应工具都会静默失效（如 STATS_FILE 未接 → 用量统计为空）。
 
     P2 加固（必须失败/可降级显式区分）：
     - 装配符号缺失/核对不一致 = 必须失败（RuntimeError）：否则相关工具静默拿 None，
@@ -3298,24 +3163,6 @@ def _init_dc_paths():
             "_init_dc_paths 配置同步失败（可降级）：图像生成/视觉自审/静默启动/邮件等"
             "运行时开关保持默认值，对应能力可能不符合配置预期"
         )
-    # B1/B2：给 memory_store 注入统一读取层所需路径（memory.json / knowledge_index / 大脑目录）
-    try:
-        import memory_store as ms
-        try:
-            import brainkit as _bkit
-            _brain_dir = str(_bkit.BRAIN_DIR)
-        except Exception:
-            _brain_dir = None
-        ms.configure(memory_json=MEMORY_PATH,
-                     knowledge_index=os.path.join(DATA_DIR, "knowledge_index.json"),
-                     brain_dir=_brain_dir)
-        ms.invalidate_cache()
-        global _MEMORY_BACKEND
-        _MEMORY_BACKEND = "unified"
-    except Exception:
-        logger.exception("memory_store 路径注入失败（可降级）：记忆统一读取层不可用，工具将回退各自独立实现")
-
-
 def _msg_text(msg):
     """取消息的可读文本（兼容多模态 content 数组）。"""
     if not isinstance(msg, dict):
@@ -3692,14 +3539,6 @@ def _insight_report(days=7):
     """自我述职（决策/目标/进化/任务/成长/用量）。"""
     import insight
     decisions, goals, evolution, self_model = [], [], {}, {}
-    try:
-        import brainkit as bk
-        decisions = bk.list_decisions(limit=200)
-        goals = bk.load_goals()
-        evolution = bk.load_json(bk.BRAIN_DIR / "evolution.json", {}) or {}
-        self_model = bk.load_json(bk.BRAIN_DIR / "self_model.json", {}) or {}
-    except Exception:
-        pass
     usage = {}
     try:
         import stats as stats_mod
@@ -4822,144 +4661,6 @@ _SCHEDULER_THREAD = None
 _SCHEDULER_STOP = threading.Event()
 
 
-_BRAIN_SNAPSHOT_LAST_DATE = None
-_BRAIN_GUARD_LAST_BEAT = None  # 守护心跳上次时间戳（进程内，随调度循环维护）
-_BRAIN_GUARD_LAST_SNAP = None  # 自动快照上次时间戳（进程内）
-
-
-def _brain_daily_snapshot(now):
-    """鲸语大脑每日快照：每天指定时间自动归档 + 心跳（config 开关，默认开启）。
-
-    与调度循环内的大脑守护（_brain_guard_tick）共用一个时间轴，成功归档后
-    更新守护快照时间，避免同一天重复归档。产品级：随应用常驻、跨机器可用。
-    """
-    global _BRAIN_SNAPSHOT_LAST_DATE, _BRAIN_GUARD_LAST_SNAP
-    try:
-        cfg = config_utils.load_config()
-    except Exception:
-        return
-    if not bool(cfg.get("brain_auto_snapshot", True)):
-        return
-    t = str(cfg.get("brain_snapshot_time", "22:00")).strip()
-    today_str = now.strftime("%Y-%m-%d")
-    if today_str == _BRAIN_SNAPSHOT_LAST_DATE:
-        return
-    if now.strftime("%H:%M") != t:
-        return
-    try:
-        import brain_api
-        if brain_api.brain_status(with_context=False) is None:
-            return
-        brain_api.brain_action("heartbeat", {"thought": "每日自动快照"})
-        brain_api.brain_action("archive", {})
-        _BRAIN_SNAPSHOT_LAST_DATE = today_str
-        _BRAIN_GUARD_LAST_SNAP = now.timestamp()
-        logger.info("鲸语大脑每日快照已完成")
-    except Exception:
-        logger.exception("鲸语大脑每日快照失败")
-
-
-def _brain_guard_tick(now):
-    """大脑守护并入调度循环（单一调度源，替代原独立守护线程）：
-
-    - 每 ≥6h 心跳一次（断点续接）；
-    - 若距上次自动快照 >28h（错过每日 22:00，如进程跨日未运行）则兜底归档。
-    大脑未初始化/密钥未就绪时静默跳过；与 22:00 每日快照钩子共享时间轴防重复。
-    """
-    global _BRAIN_GUARD_LAST_BEAT, _BRAIN_GUARD_LAST_SNAP
-    try:
-        import brainkit as _bk
-        _bk.load_manifest()
-    except SystemExit:
-        return
-    except Exception:
-        return
-    ts = now.timestamp()
-    if _BRAIN_GUARD_LAST_BEAT is None:
-        _BRAIN_GUARD_LAST_BEAT = ts
-    if _BRAIN_GUARD_LAST_SNAP is None:
-        _BRAIN_GUARD_LAST_SNAP = ts
-    try:
-        if ts - _BRAIN_GUARD_LAST_BEAT >= 6 * 3600:
-            _bk.cmd_heartbeat(__import__("argparse").Namespace(thought="守护心跳：仍在运行"))
-            _BRAIN_GUARD_LAST_BEAT = ts
-        if ts - _BRAIN_GUARD_LAST_SNAP >= 28 * 3600 and _bk._keyring_ready():
-            try:
-                _cfg = config_utils.load_config()
-                auto_snap = bool(_cfg.get("brain_auto_snapshot", True))
-            except Exception:
-                auto_snap = True
-            if auto_snap:
-                _bk.cmd_archive(__import__("argparse").Namespace(passphrase="", keep=_bk.DEFAULT_KEEP))
-                _BRAIN_GUARD_LAST_SNAP = ts
-    except Exception:
-        logger.exception("大脑守护心跳/快照失败")
-
-_BRAIN_COMMUNITY_THREAD = None
-_BRAIN_COMMUNITY_LAST_RUN = None  # 上次周期时间戳（进程内）
-_BRAIN_COMMUNITY_FAILS = 0        # 连续失败次数（用于指数退避）
-
-
-def _brain_community_loop():
-    """鲸语大脑自主进社区：**独立工作线程**（不占用调度循环；失败指数退避）。
-
-    默认关闭（config.brain_community_enabled）。每 15s 醒来判断是否到期；周期内可能
-    含网络请求与动作间隔 sleep，放在独立线程避免拖慢定时任务/守护心跳/进程看门狗。
-    关闭时复位计时与退避，重新开启即立刻跑一次。
-    """
-    global _BRAIN_COMMUNITY_LAST_RUN, _BRAIN_COMMUNITY_FAILS
-    while True:
-        try:
-            import config_utils
-            cfg = config_utils.load_config()
-            if not bool(cfg.get("brain_community_enabled", False)):
-                _BRAIN_COMMUNITY_LAST_RUN = None
-                _BRAIN_COMMUNITY_FAILS = 0
-                time.sleep(15)
-                continue
-            try:
-                interval = max(1, int(cfg.get("brain_community_interval_min", 30) or 30))
-            except (TypeError, ValueError):
-                interval = 30
-            now = time.time()
-            if _BRAIN_COMMUNITY_LAST_RUN is not None:
-                backoff = min(2 ** _BRAIN_COMMUNITY_FAILS, 6)  # 1→2→4→6 倍间隔
-                if now - _BRAIN_COMMUNITY_LAST_RUN < interval * 60 * backoff:
-                    time.sleep(15)
-                    continue
-            _BRAIN_COMMUNITY_LAST_RUN = now  # 先占位：失败也等退避后的下一个周期
-            import community_client
-            result = community_client.run_cycle(cfg=cfg, log=lambda *a: None)
-            if result.get("ok"):
-                _BRAIN_COMMUNITY_FAILS = 0
-                logger.info("大脑自主进社区周期完成：%s", result)
-            else:
-                _BRAIN_COMMUNITY_FAILS = min(_BRAIN_COMMUNITY_FAILS + 1, 8)
-                logger.warning("大脑自主进社区周期跳过：%s", result.get("error"))
-        except Exception:
-            logger.exception("大脑自主进社区线程异常")
-        time.sleep(15)
-
-
-def _life_note_activity(source="chat"):
-    """用户活动唤醒生命循环；失败不影响对话。"""
-    try:
-        import life.loop as _life_loop
-        _life_loop.note_activity(source)
-    except Exception:
-        logger.debug("生命循环唤醒失败", exc_info=True)
-
-
-def _life_tick(now=None):
-    """把 30s 调度循环接到生命循环；tick 本身不调用模型。"""
-    try:
-        import life.loop as _life_loop
-        return _life_loop.tick(now)
-    except Exception:
-        logger.exception("生命循环 tick 失败，下一轮继续")
-        return None
-
-
 def _scheduler_loop():
     """定时任务调度线程（30s 轮询）。"""
     from datetime import datetime as _dt
@@ -4970,9 +4671,6 @@ def _scheduler_loop():
         try:
             items = stores.load_schedules(SCHEDULES_PATH)
             now = _dt.now()
-            _brain_daily_snapshot(now)
-            _brain_guard_tick(now)
-            _life_tick(now)
             for s in items:
                 if not s.get("enabled"):
                     continue
@@ -7259,135 +6957,6 @@ def _harvest_is_low_value(line: str) -> bool:
     return len(s) <= 10
 
 
-def _chat_harvest(reply: str, user_text: str, cfg: dict, messages=None, persona_id=""):
-    """后台线程：从本次对话提炼 0-3 条值得长期记住的信息。
-
-    开关与落地方式：
-    - config.auto_memory（默认开）总开关；无可用 LLM / 记忆关闭时静默跳过。
-    - config.memory_harvest_mode：`pending`（默认）→ 先入「待确认」队列由用户裁决，
-      防"推断污染"；`auto` → 直接写长期记忆（旧行为）；`off` → 不提炼。
-    - 角色对话（persona_id 非空）→ 只写角色自己的 `persona_memory`，**绝不写全局记忆**。
-      角色记忆物理隔离、可在「角色」页查看/清空，因此不再走全局待确认队列。
-    origin 判定（P1-B 血缘自动化）：本轮工具结果中出现「外部内容开始」标记
-    （即 AI 抓取了外部网页）时，提炼的记忆标 origin="web"（confidence=0.3），
-    否则标 "agent"——打断「外部网页→自动提炼→被当作用户前提」的注入链。
-    """
-    import threading
-
-    def _involved_external(messages):
-        """本轮对话是否引用了外部网页内容（只看最后一条 user 之后的工具结果）。
-
-        只看本轮：若扫描整段历史，一旦历史里抓过网页，之后每轮都会被误标 web。
-        """
-        try:
-            import deepseek_client as dc
-            prefix = str(getattr(dc, "EXTERNAL_CONTENT_START", "")).split("{source}")[0].strip()
-            if not prefix:
-                return False
-            msgs = list(messages or ())
-            last_user = -1
-            for idx, m in enumerate(msgs):
-                if isinstance(m, dict) and m.get("role") == "user":
-                    last_user = idx
-            for m in msgs[last_user + 1:]:
-                c = m.get("content") if isinstance(m, dict) else None
-                if isinstance(c, str) and prefix in c:
-                    return True
-                if isinstance(c, list):
-                    for part in c:
-                        if isinstance(part, dict) and prefix in str(part.get("text") or ""):
-                            return True
-        except Exception:
-            return False
-        return False
-
-    def _run():
-        try:
-            if not (cfg or {}).get("auto_memory", True):
-                return
-            if (cfg or {}).get("privacy_mode"):
-                return   # 隐私模式：不写任何记忆（含待确认队列）
-            if str((cfg or {}).get("memory_harvest_mode") or "pending").strip().lower() == "off":
-                return
-            import deepseek_client as dc
-            if not dc.MEMORY_ENABLED:
-                return
-            c = dc.get_active_client()
-            if c is None:
-                return
-            prompt = (
-                "从这段对话中提炼 0-3 条**关于用户**的、值得长期记住的信息（用户偏好、决定、重要事实、任务进展）。"
-                "只记录与用户本人相关且可长期复用的信息；不要记录 AI 自己的通用知识、百科常识、与用户无关的陈述。"
-                "不要记录结论标题/标签/空泛内容；没有可长期记住的内容就输出空数组。"
-                "严格输出 JSON 数组，每项一个字符串，例如：[\"用户偏好中文回复\"]。\n"
-                f"用户：{str(user_text)[:500]}\nAI：{str(reply)[:500]}"
-            )
-            out = c.chat([{"role": "user", "content": prompt}], thinking="low")
-            items = []
-            try:
-                import json as _json
-                text = str(out or "").strip()
-                m = text.find("[")
-                if m >= 0:
-                    arr = _json.loads(text[m:text.rfind("]") + 1])
-                    if isinstance(arr, list):
-                        items = [str(x) for x in arr]
-            except Exception:
-                items = []
-            if not items:
-                # JSON 解析失败：退回逐行解析（保持旧行为可用）
-                items = [ln.strip().strip("-•*").strip() for ln in str(out or "").splitlines()]
-            origin = "web" if _involved_external(messages) else "agent"
-            try:
-                from memory_facade import ORIGIN_CONFIDENCE as _OC
-                confidence = _OC.get(origin, 0.5)
-            except Exception:
-                confidence = 0.3 if origin == "web" else 0.5
-            cleaned = [s for s in items
-                       if len(s) >= 8 and "无" not in s[:6] and not _harvest_is_low_value(s)][:3]
-            if not cleaned:
-                return
-            pid = str(persona_id or "").strip()
-            if pid:
-                # 角色隔离：只写当前角色的记忆，不碰全局 memory.json / 大脑投影。
-                try:
-                    import personas as _personas_mod
-                    import persona_memory as _persona_mem
-                    if _personas_mod.get_persona(pid):
-                        for s in cleaned:
-                            _persona_mem.add(pid, s, origin=origin,
-                                             confidence=confidence, tags="自动", type_="对话")
-                except Exception as e:
-                    import degrade
-                    degrade.degrade("memory.harvest.persona", e,
-                                    "本轮对话未写入角色记忆（角色可能忘记这条信息）",
-                                    critical=False)
-                return
-            mode = str((cfg or {}).get("memory_harvest_mode") or "pending").strip().lower()
-            if mode == "auto":
-                # 旧行为：直接写长期记忆（来自外部网页标 web，否则 agent）。
-                for s in cleaned:
-                    dc.write_memory(s, tags="自动", type="对话",
-                                    origin=origin, confidence=confidence)
-            else:
-                # 默认 pending：先进「待确认」队列，由用户裁决后再写——打断
-                # 「AI 自己推断 → 立刻变持久记忆 → 下轮被当作用户前提」的污染链。
-                try:
-                    import memory_facade as _mf
-                    _mf.add_pending(cleaned, origin=origin,
-                                    source=str(user_text or "")[:200], limit=3)
-                except Exception as e:
-                    import degrade
-                    degrade.degrade("memory.harvest.pending", e,
-                                    "本轮候选记忆未入待确认队列", critical=False)
-        except Exception as e:
-            import degrade
-            degrade.degrade("memory.harvest", e,
-                            "本轮对话未提炼记忆（长期记忆可能漏记）", critical=True)
-
-    threading.Thread(target=_run, daemon=True).start()
-
-
 # P2-8：POST 端点路由表（装饰器注册，端点方法就近声明；路由表由 _post_route 动态生成）
 _POST_ROUTES = []  # (matcher, method_name)，顺序即匹配优先级（类定义时由 @_post_route 填充）
 
@@ -8352,15 +7921,6 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, _evolve_branches())
 
 
-    @_get_route("/v1/self_profile")
-    def _g_v1_self_profile(self):
-        try:
-            import deepseek_client as dc
-            self._json(200, {"text": dc.self_profile("get")})
-        except Exception as e:
-            self._json(200, {"text": f"（自我状态读取失败：{e}）"})
-
-
     @_get_route(("qpath", "/v1/failures"))
     def _g_v1_failures(self):
         """失败模式列表（含生命周期状态）。
@@ -8887,153 +8447,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._fail_soft(e, report=None)
 
 
-    @_get_route(("qpath", "/v1/brain"))
-    def _g_v1_brain(self):
-        try:
-            from urllib.parse import parse_qs, urlparse
-
-            import brain_api
-            qs = parse_qs(urlparse(self.path).query)
-            # ?context=1 才计算对话上下文预览（默认懒加载，避免每次取状态都做衰减排序）
-            with_context = (qs.get("context") or ["0"])[0] not in ("0", "false", "no", "")
-            self._json(200, {"ok": True, "brain": brain_api.brain_status(with_context=with_context)})
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e, brain=None)
-
-
-    # 生命循环：状态 / 时间线 / 意图 / 报告 / 代价。全部走独立模块，
-    # 页面每 5s 轮询只读接口；动作走 POST /v1/life。
-    @_get_route(("qpath", "/v1/life"))
-    def _g_v1_life(self):
-        try:
-            import life.api as life_api
-            self._json(200, life_api.status())
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e, life=None)
-
-    @_get_route(("qpath", "/v1/life/timeline"))
-    def _g_v1_life_timeline(self):
-        try:
-            from urllib.parse import parse_qs, urlparse
-            import life.api as life_api
-            qs = parse_qs(urlparse(self.path).query)
-            self._json(200, life_api.get_timeline(
-                (qs.get("limit") or ["80"])[0],
-                (qs.get("kind") or [""])[0] or None,
-            ))
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
-    @_get_route(("qpath", "/v1/life/intentions"))
-    def _g_v1_life_intentions(self):
-        try:
-            from urllib.parse import parse_qs, urlparse
-            import life.api as life_api
-            qs = parse_qs(urlparse(self.path).query)
-            self._json(200, life_api.get_intentions(
-                (qs.get("limit") or ["50"])[0],
-                (qs.get("status") or [""])[0] or None,
-            ))
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
-    @_get_route(("qpath", "/v1/life/report"))
-    def _g_v1_life_report(self):
-        try:
-            from urllib.parse import parse_qs, urlparse
-            import life.api as life_api
-            qs = parse_qs(urlparse(self.path).query)
-            self._json(200, life_api.get_report((qs.get("days") or ["7"])[0]))
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
-    @_get_route(("qpath", "/v1/life/scars"))
-    def _g_v1_life_scars(self):
-        try:
-            from urllib.parse import parse_qs, urlparse
-            import life.api as life_api
-            qs = parse_qs(urlparse(self.path).query)
-            self._json(200, life_api.get_scars((qs.get("limit") or ["20"])[0]))
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
-    @_post_route("/v1/life")
-    def _p_v1_life(self):
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        try:
-            import life.api as life_api
-            result = life_api.dispatch(str(body.get("action") or "status"), body)
-            self._json(200, result)
-        except Exception as e:  # noqa: BLE001
-            self._fail(500, e)
-
-
-    @_get_route(("qpath", "/v1/brain/memories"))
-    def _g_v1_brain_memories(self):
-        # 大脑记忆列表/搜索：?query=关键词&limit=N
-        try:
-            from urllib.parse import parse_qs, urlparse
-
-            import brainkit as bk
-            qs = parse_qs(urlparse(self.path).query)
-            q = (qs.get("query") or [""])[0]
-            try:
-                limit = int((qs.get("limit") or ["20"])[0])
-            except (TypeError, ValueError):
-                limit = 20
-            limit = max(1, min(200, limit))
-            items = bk.search_memories(q, limit) if q else bk.load_memories()
-            items.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
-            self._json(200, {"ok": True, "items": items[:limit], "total": len(bk.load_memories())})
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
-    @_get_route(("qpath", "/v1/brain/unified-memories"))
-    def _g_v1_brain_unified_memories(self):
-        """B1/B2 统一记忆检索：跨 memory.json + 大脑 jsonl + knowledge 文档。
-        ?query=关键词&limit=N&sources=all|memory.json|brain
-        """
-        try:
-            from urllib.parse import parse_qs, urlparse
-
-            import memory_store as ms
-            qs = parse_qs(urlparse(self.path).query)
-            q = (qs.get("query") or [""])[0]
-            try:
-                limit = int((qs.get("limit") or ["8"])[0])
-            except (TypeError, ValueError):
-                limit = 8
-            limit = max(1, min(100, limit))
-            src = (qs.get("sources") or ["all"])[0]
-            # B3：insights=1 时附上置信度排序 + 疑似冲突候选（复用本端点，不新增路由）
-            insights = (qs.get("insights") or ["0"])[0] not in ("0", "", "false", "no")
-            if insights:
-                if src == "memory.json":
-                    base = (ms.search(q, 100, sources=("memory.json",)) if q
-                            else [e for e in ms.unified_entries() if e.get("source") == "memory.json"])
-                elif src == "brain":
-                    base = (ms.search(q, 100, sources=("brain",)) if q
-                            else [e for e in ms.unified_entries() if e.get("source") == "brain"])
-                else:
-                    base = ms.search_all(q, 100) if q else ms.unified_entries()
-                items = ms.rank(base)[:limit]
-                self._json(200, {"ok": True, "query": q, "items": items, "count": len(items),
-                                 "conflicts": ms.conflicts(ms.unified_entries())[:20]})
-                return
-            if src == "memory.json":
-                items = ms.search(q, limit, sources=("memory.json",))
-            elif src == "brain":
-                items = ms.search(q, limit, sources=("brain",))
-            else:
-                items = ms.search_all(q, limit) if q else ms.unified_entries()[:limit]
-            self._json(200, {"ok": True, "query": q, "items": items, "count": len(items)})
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
-
     @_get_route("/v1/situation")
     def _g_v1_situation(self):
         self._json(200, build_situation("full"))
@@ -9047,31 +8460,6 @@ class _Handler(BaseHTTPRequestHandler):
     @_get_route("/v1/abilities")
     def _g_v1_abilities(self):
         self._json(200, _abilities())
-
-
-    @_get_route("/v1/memory")
-    def _g_v1_memory(self):
-        self._json(200, _memory_full())
-
-
-    @_get_route("/v1/memory/pending")
-    def _g_v1_memory_pending(self):
-        """待确认记忆队列（自动提炼的候选，等用户裁决）。"""
-        try:
-            import memory_facade as _mf
-            self._json(200, {"items": _mf.list_pending()})
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
-
-    @_get_route("/v1/community")
-    def _g_v1_community(self):
-        """大脑自主进社区状态：开关 / 可达性 / 身份 / 授权 / 上次周期结果。"""
-        try:
-            import community_client
-            self._json(200, community_client.status())
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
 
 
     @_get_route("/v1/context")
@@ -9168,13 +8556,6 @@ class _Handler(BaseHTTPRequestHandler):
             "suggestions_enabled": bool(cfg.get("suggestions_enabled")),
             "voice_config": _voice_cfg(),
             # 记忆/大脑分层开关（此前未回传，导致设置页「长期记忆」等开关无法回显/持久化）
-            "memory_enabled": bool(cfg.get("memory_enabled", True)),
-            "auto_memory": bool(cfg.get("auto_memory", True)),
-            "memory_harvest_mode": str(cfg.get("memory_harvest_mode") or "pending"),
-            "memory_inject_limit": int(cfg.get("memory_inject_limit") or 6),
-            "memory_min_score": float(cfg.get("memory_min_score") or 0.0),
-            "brain_persona_enabled": bool(cfg.get("brain_persona_enabled", False)),
-            "brain_continuity_enabled": bool(cfg.get("brain_continuity_enabled", True)),
             "quiet_mode": bool(cfg.get("quiet_mode", False)),
         })
 
@@ -9321,55 +8702,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": {"message": _friendly_error(e), "type": "server_error"}})
 
 
-    @_post_route("/v1/brain")
-    def _p_v1_brain(self):
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        try:
-            import brain_api
-            action = str(body.get("action") or "")
-            result = brain_api.brain_action(action, body)
-            self._json(200, result)
-        except Exception as e:  # noqa: BLE001
-            self._fail(500, e)
-
-
-    # ── 鲸群 L2：大脑身份与授权（新增；不改动任何现有分支）────────────
-    @_get_route(("qpath", "/v1/brain/grants"))
-    def _g_v1_brain_grants(self):
-        """查询某大脑的授权详情。?brain_id=brain_xxx"""
-        if not self._auth():
-            self._json(401, {"error": "unauthorized"})
-            return
-        try:
-            from urllib.parse import parse_qs, urlparse
-
-            import brain_grant_adapter as bga
-            qs = parse_qs(urlparse(self.path).query)
-            brain_id = (qs.get("brain_id") or [""])[0]
-            self._json(200, bga.grant_detail(brain_id))
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
-    @_post_route("/v1/brain/grant")
-    def _p_v1_brain_grant(self):
-        """大脑授权管理。body: {action: create_brain|set_grant|revoke|rotate|status|audit, ...}"""
-        if not self._auth():
-            self._json(401, {"error": "unauthorized"})
-            return
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        try:
-            import brain_grant_adapter as bga
-            result = bga.dispatch(str(body.get("action") or ""), body)
-            self._json(200 if result.get("ok") else 400, result)
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
     # ── 一键诊断包（v3.16.20）：把 degrade / 错误日志 / 环境事实收成一份可读报告 ──
     @_get_route(("qpath", "/v1/diagnostics"))
     def _g_v1_diagnostics(self):
@@ -9402,47 +8734,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200 if result.get("ok") else 500, result)
         except Exception as e:  # noqa: BLE001
             self._fail_soft(e)
-
-    @_post_route("/v1/brain/memory")
-    def _p_v1_brain_memory(self):
-        # 大脑记忆管理：action=add|update|delete
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        try:
-            import brainkit as bk
-            act = str(body.get("action") or "")
-            if act == "add":
-                e = bk.remember_structured(
-                    str(body.get("text") or ""),
-                    type=str(body.get("type") or ""),
-                    importance=int(body.get("importance") or 3),
-                    tags=body.get("tags") or [],
-                    entities=body.get("entities") or [],
-                    source="手动",
-                )
-                self._json(200, {"ok": bool(e), "item": e})
-            elif act == "update":
-                ok = bk.update_memory(
-                    str(body.get("id") or ""),
-                    text=body.get("text"),
-                    type=body.get("type"),
-                    importance=body.get("importance"),
-                    tags=body.get("tags"),
-                    entities=body.get("entities"),
-                    relations=body.get("relations"),
-                    sensitivity=body.get("sensitivity"),
-                )
-                self._json(200, {"ok": ok, "message": "已更新" if ok else "未找到该记忆"})
-            elif act == "delete":
-                ok = bk.delete_memory(str(body.get("id") or ""))
-                self._json(200, {"ok": ok, "message": "已删除" if ok else "未找到该记忆"})
-            else:
-                self._json(400, {"error": f"未知 action: {act}"})
-        except Exception as e:  # noqa: BLE001
-            self._fail(500, e)
-
 
     @_post_route("/v1/deps/install")
     def _p_v1_deps_install(self):
@@ -10173,53 +9464,6 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, _global_search(body.get("query") or "", body.get("filters") or {}))
 
 
-    @_post_route("/v1/community")
-    def _p_v1_community(self):
-        """大脑自主进社区管理。body: {action: onboard|run|test|stop_server, ...}
-
-        onboard：握手 → 建脑身份 → 授予默认 scope → **密钥 DPAPI 加密落配置并打开开关**；
-                 明文密钥绝不回传前端。
-        run：立即跑一个自主周期。test：探测连通性与身份。stop_server：停掉本进程拉起的社区站。
-        """
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        action = str(body.get("action") or "").strip()
-        try:
-            import community_client as cc
-            import config_utils
-            if action == "onboard":
-                result = cc.onboard(nickname=str(body.get("nickname") or "").strip(),
-                                    scopes=body.get("scopes"))
-                if result.get("ok") and result.get("brain_key"):
-                    cfg = config_utils.mutable_config()
-                    cfg["brain_community_brain_key"] = result["brain_key"]
-                    cfg["brain_community_enabled"] = True
-                    config_utils.save_config(cfg)
-                    self._json(200, {"ok": True, "brain_id": result.get("brain_id"),
-                                     "name": result.get("name"), "scopes": result.get("scopes"),
-                                     "note": "大脑密钥已加密保存，自主进社区已开启。"})
-                else:
-                    self._json(200 if result.get("ok") else 400, result)
-                return
-            if action == "run":
-                self._json(200, cc.run_cycle(cfg=config_utils.load_config(), log=lambda *a: None))
-                return
-            if action == "test":
-                st = cc.status()
-                self._json(200, {"ok": bool(st.get("reachable")), **st})
-                return
-            if action == "stop_server":
-                cc.stop_server()
-                self._json(200, {"ok": True})
-                return
-            self._json(400, {"ok": False,
-                             "error": f"未知动作：{action or '(空)'}；可用：onboard/run/test/stop_server"})
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
-
     @_post_route("/v1/profiles")
     def _p_v1_profiles(self):
         body = self._read_body()
@@ -10461,25 +9705,6 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200 if ok else 400, {"ok": ok, "data": data, "message": msg})
 
 
-    @_post_route("/v1/memory/pending")
-    def _p_v1_memory_pending(self):
-        """裁决待确认记忆：body {action: "accept"|"dismiss", ids: [...]}。"""
-        body = self._read_body()
-        if body is None:
-            self._json(400, {"error": "invalid json or body too large"})
-            return
-        try:
-            import memory_facade as _mf
-            ok, n, err = _mf.resolve_pending(body.get("ids") or [], body.get("action") or "accept",
-                                             sync=True)
-            if err:
-                self._json(400, {"error": err})
-            else:
-                self._json(200, {"ok": True, "resolved": n})
-        except Exception as e:  # noqa: BLE001
-            self._fail_soft(e)
-
-
     @_post_route("/v1/config")
     def _p_v1_config(self):
         body = self._read_body()
@@ -10508,10 +9733,7 @@ class _Handler(BaseHTTPRequestHandler):
                    ("peak_warning", bool), ("suggestions_enabled", bool),
                    ("monthly_budget", float), ("block_on_budget", bool),
                    ("autostart", bool), ("minimize_to_tray", bool),
-                   # 记忆/大脑分层开关（此前不在白名单 → 设置页改动无法持久化）
-                   ("memory_enabled", bool), ("auto_memory", bool), ("quiet_mode", bool),
-                   ("brain_persona_enabled", bool), ("brain_continuity_enabled", bool),
-                   ("memory_inject_limit", int), ("memory_min_score", float)):
+                   ("quiet_mode", bool)):
                 if k in body and body[k] is not None:
                     v = body[k]
                     if typ is bool:
@@ -11208,11 +10430,6 @@ class _Handler(BaseHTTPRequestHandler):
                 "active_dir": active_dir,
                 # 以下依赖刻意做成「调用时按名字解析」的入口函数：模块属性可被
                 # 测试打桩（见 tests/test_quiet_mode.py），提前缓存函数对象会让桩失效。
-                "memory_full": _memory_full,
-                "memory_backend": _MEMORY_BACKEND,
-                "memory_all": _memory_all,
-                "self_profile": _context_self_profile,
-                "brain_api": _context_brain_api,
                 "trust_notice": _context_trust_notice,
                 "degrade_notice": _context_degrade_notice,
                 "egress_notice": _context_egress_notice,
@@ -11234,7 +10451,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "invalid messages"})
             return
         _sync_request_full_auto(body)
-        _life_note_activity("chat")
         _begin_job_state()
         try:
             client, cfg = self._client_from_cfg(body)
@@ -11677,25 +10893,6 @@ class _Handler(BaseHTTPRequestHandler):
                                 send("notice", {"text": _rnote, "level": "info"})
                         except Exception as e:
                             logger.warning("任务配方沉淀失败（不影响结果）：%s", e)
-                        # 跨会话连续性：把验收证据归档到长期记忆，下次会话可直接召回
-                        try:
-                            import agent_tools.tool_brain as _brain
-                            _res = str(_brain.write_memory(
-                                task_plan.archive_text(final_plan),
-                                tags=f"task-archive-{final_plan.plan_id},任务归档",
-                                type="项目",
-                                origin="system",
-                                confidence=1.0,
-                            ))
-                            if _res.startswith(("已写入", "该内容已存在")):
-                                send("notice", {
-                                    "text": "任务已完成并归档到记忆；下次可直接问我这次任务的产物与证据。",
-                                    "level": "info",
-                                })
-                            else:
-                                logger.warning("任务归档未写入：%s", _res)
-                        except Exception as e:
-                            logger.warning("任务归档到记忆失败（不影响任务结果）：%s", e)
                     send("task_plan", final_plan.payload())
                     if not final_plan.all_done():
                         left = len(final_plan.steps) - final_plan.done_count()
@@ -11724,19 +10921,6 @@ class _Handler(BaseHTTPRequestHandler):
                 import degrade
                 degrade.degrade("tasklog.record", e,
                                 "任务链未写入 tasklog，热图/任务统计会缺本次记录", critical=False)
-            # 对话回写：自动提炼长期记忆（与非流式 _handle_chat 一致）。此前流式作业
-            # 从未调用，导致 auto_memory 默认开启却永不生效——记忆不会从对话增长。
-            # _chat_harvest 自身起后台线程，不阻塞作业收尾。
-            try:
-                reply = "".join(reply_parts)
-                last_user = next((m.get("content") for m in reversed(messages)
-                                  if isinstance(m, dict) and m.get("role") == "user"
-                                  and isinstance(m.get("content"), str)), "")
-                if reply and last_user and not quiet_mode and not job.stop_event.is_set():
-                    _chat_harvest(reply, last_user[:600], cfg, messages=messages,
-                                  persona_id=_persona_id)
-            except Exception:
-                logger.exception("自动记忆提炼启动失败")
             # 作业私有工具链随作业态回收（不再 clear 全局，避免清掉并发会话的链）
             st = _job_state()
             made_checkpoint = bool(st and st.checkpoint)
@@ -11875,7 +11059,6 @@ class _Handler(BaseHTTPRequestHandler):
         if messages is None:
             self._json(400, {"error": "invalid messages"})
             return
-        _life_note_activity("chat_stream")
         sid = str(body.get("session_id") or "").strip()
         stop_key = str(body.get("gw_session") or "").strip()
         # 一次生成的稳定标识：前端每次发送生成一个，同 id 的重复请求（重试/多标签页）
@@ -12046,20 +11229,7 @@ def start_server(port=8745, token=""):
             logger.warning("%s", _msg)
     except Exception:
         logger.warning("系统代理预检失败（可降级，不阻断启动）", exc_info=True)
-    # ── 可降级：大脑目录覆盖（评测/多实例）──
-    # 生命循环在 life_enabled=False 时仍会写 brain/life.json 表示 dormant；评测若共用
-    # 真实 brain/ 会污染用户大脑并抢单实例租约。此开关必须在 _init_dc_paths 之前生效，
-    # 否则 memory_store 会先绑定旧目录。
-    _env_brain_dir = os.environ.get("WHALETALK_BRAIN_DIR", "").strip()
-    if _env_brain_dir:
-        try:
-            import brainkit as _bk_env
-            os.makedirs(_env_brain_dir, exist_ok=True)
-            _bk_env.set_brain_dir(_env_brain_dir)
-            logger.info("大脑目录已由 WHALETALK_BRAIN_DIR 覆盖：%s", _env_brain_dir)
-        except Exception:
-            logger.exception("WHALETALK_BRAIN_DIR 应用失败（可降级）：大脑仍使用默认目录")
-    # ── 必须失败：dc 运行时装配（自检清单见 _init_dc_paths）──
+# ── 必须失败：dc 运行时装配（自检清单见 _init_dc_paths）──
     try:
         _init_dc_paths()
     except Exception as e:
@@ -12168,14 +11338,6 @@ def start_server(port=8745, token=""):
         _SCHEDULER_THREAD = threading.Thread(target=_scheduler_loop, daemon=True)
         _SCHEDULER_THREAD.start()
     try:
-        import life.loop as _life_loop
-        _life_loop.start("server")
-    except Exception:
-        logger.warning("生命循环启动失败，可稍后在「大脑/生命」里手动唤醒", exc_info=True)
-    if _BRAIN_COMMUNITY_THREAD is None:
-        _BRAIN_COMMUNITY_THREAD = threading.Thread(target=_brain_community_loop, daemon=True)
-        _BRAIN_COMMUNITY_THREAD.start()
-    try:
         _start_process_watchdog()
     except Exception:
         logger.warning("进程看门狗启动失败（可降级）：AI 启动的空闲进程将不被自动清理")
@@ -12235,15 +11397,6 @@ def start_server(port=8745, token=""):
         _egress_mod.init(os.path.join(DATA_DIR, "egress.jsonl"))
     except Exception:
         logger.warning("出网账本初始化失败（可降级）：出网记录只留在内存，重启后不可查")
-    # 记忆门面（P1-B）：统一 memory.json 的写入方，为记忆补血缘与作废语义。
-    try:
-        import memory_facade as _mf
-        _mf.init(MEMORY_PATH)
-        _mf.init_pending(os.path.join(DATA_DIR, "memory_pending.json"))
-        _mf.init_sync_state(os.path.join(DATA_DIR, "memory_sync_state.json"))
-        _start_memory_backfill()
-    except Exception:
-        logger.warning("记忆门面初始化失败（可降级）：记忆仍可读写，但无血缘/作废语义")
     # 信任内核启动核对：检出「未声明的自我修改」并留痕。
     # 刻意不阻断启动、不回滚文件（默认 report 模式）——能力一条不减，改由
     # 状态端点 + 系统提示注入 + STATUS.md 让改动可见；处置权始终在用户。
@@ -12298,27 +11451,6 @@ def stop_server():
     try:
         import permissions as _perms_flush
         _perms_flush.tool_trace_flush()
-    except Exception:
-        pass
-    # 生命循环先收尾（释放租约、写 shutdown），再写大脑断点。
-    try:
-        import life.loop as _life_loop
-        _life_loop.stop("shutdown")
-    except Exception:
-        logger.debug("生命循环关闭失败", exc_info=True)
-    # 大脑收尾钩子：服务停止前写一次心跳断点（会话生命周期与大脑对齐，
-    # 下次启动 brain_context 可带回「上次思考断点」）
-    try:
-        import brain_api
-        if brain_api.brain_status(with_context=False) is not None:
-            # 不覆盖用户最后一次留下的 resume_hint；停止事实已写入 timeline。
-            brain_api.brain_action("heartbeat", {"thought": ""})
-    except Exception:
-        pass
-    # 自主进社区：停止本进程自动拉起的社区站（不触碰用户自己启动的实例）
-    try:
-        import community_client
-        community_client.stop_server()
     except Exception:
         pass
     # 入站 webhook 接收端（独立端口）：随服务优雅关闭并复位句柄。否则端口在进程

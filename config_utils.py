@@ -236,21 +236,6 @@ def normalize_config(cfg):
     cfg["vision_self_review"] = as_bool(cfg.get("vision_self_review", False))
     cfg["autostart"] = as_bool(cfg.get("autostart", False))
     cfg["strict_tools"] = as_bool(cfg.get("strict_tools", False))
-    # 鲸语大脑自主进社区
-    cfg["brain_community_enabled"] = as_bool(cfg.get("brain_community_enabled", False))
-    cfg["brain_community_autostart"] = as_bool(cfg.get("brain_community_autostart", True), True)
-    cfg["brain_community_autopost"] = as_bool(cfg.get("brain_community_autopost", True), True)
-    cfg["brain_community_harvest"] = as_bool(cfg.get("brain_community_harvest", True), True)
-    cfg["brain_community_base"] = str(cfg.get("brain_community_base") or "http://127.0.0.1:8770").strip() \
-        or "http://127.0.0.1:8770"
-    cfg["brain_community_brain_key"] = str(cfg.get("brain_community_brain_key") or "").strip()
-    cfg["brain_community_shared_secret"] = str(cfg.get("brain_community_shared_secret") or "").strip()
-    cfg["brain_community_server_dir"] = str(cfg.get("brain_community_server_dir") or "").strip()
-    cfg["brain_community_brain_dir"] = str(cfg.get("brain_community_brain_dir") or "").strip()
-    try:
-        cfg["brain_community_interval_min"] = max(1, min(1440, int(cfg.get("brain_community_interval_min", 30))))
-    except (TypeError, ValueError):
-        cfg["brain_community_interval_min"] = 30
     cfg["update_url"] = str(cfg.get("update_url", "") or "").strip()
     cfg["update_public_key"] = str(cfg.get("update_public_key", "") or "").strip()
     # 语音引擎配置规范化：engine 限 auto/sapi/edge/piper；piper_voice 限长度
