@@ -87,3 +87,6 @@ webui/tests/_*.mjs
 
 # 能力裁剪归档（含用户记忆/大脑数据，绝不入库）
 _removed_backup/
+
+# 本地配置备份（含 DPAPI 密文，绝不入库）
+config.json.bak*

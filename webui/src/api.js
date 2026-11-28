@@ -104,7 +104,7 @@ const REQUEST_TIMEOUT = 15000;
  * @property {string} [mode] task / dialog（对话模式）
  * @property {string} [persona_id] 角色卡 id（仅对话模式生效；空 = 普通对话）
  * @property {boolean} [web_search] 联网搜索开关（v3.8.1 起对话模式可用）
- * @property {boolean} [quiet_mode] 纯净对话总开关（关闭记忆/自我/大脑注入）
+ * @property {boolean} [quiet_mode] 纯净对话总开关（停用角色卡与个性提示）
  * @property {string} [continue_prefix] 续写前缀（从该文本继续）
  * @property {string} [session_id] 已有会话 id（携带则后端生成后自动落盘）
  * @property {string} [stream_id] 本次生成的稳定标识（后端据此把生成交给独立作业，
@@ -988,34 +988,6 @@ export async function capabilityAction(body) {
   return api("/v1/capabilities", { method: "POST", body: JSON.stringify(body) });
 }
 
-// ── 大脑自主进社区（鲸群）────────────────────────────
-
-/** @returns {Promise<Object>} 自主进社区状态（开关/可达/身份/授权/上次周期） */
-export async function getCommunity() {
-  return api("/v1/community");
-}
-
-/** 自主进社区动作。
- * @param {"onboard"|"run"|"test"|"stop_server"} action
- * @param {{nickname?:string, scopes?:Object}} [payload]
- * @returns {Promise<Object>} */
-export async function communityAction(action, payload = {}) {
-  return api("/v1/community", { method: "POST", body: JSON.stringify({ action, ...payload }) });
-}
-
-// ── 大脑授权（L2 身份 + 细粒度授权）────────────────────
-
-/** @param {string} brainId @returns {Promise<Object>} 某大脑的授权详情 */
-export async function getBrainGrants(brainId) {
-  return api(`/v1/brain/grants?brain_id=${encodeURIComponent(brainId)}`);
-}
-
-/** 大脑授权管理。 @param {Object} body {action, ...}
- * @returns {Promise<Object>} */
-export async function brainGrantAction(body) {
-  return api("/v1/brain/grant", { method: "POST", body: JSON.stringify(body) });
-}
-
 // ── 诊断包 ───────────────────────────────────────────
 
 /** 诊断摘要（degrade 计数 / 工具与路由规模 / 错误日志行数），高频轮询用。
@@ -1139,9 +1111,6 @@ export async function deleteEvolveBranch(name) {
   return api("/v1/evolve_branches/delete", { method: "POST", body: JSON.stringify({ name }) });
 }
 /** @returns {Promise<Object>} 核心自我状态 */
-export async function getSelfProfile() {
-  return api("/v1/self_profile");
-}
 /** @returns {Promise<Object>} 失败模式库 */
 export async function getFailures() {
   return api("/v1/failures");
@@ -1195,116 +1164,6 @@ export async function getSelfReport(days = 7) {
  */
 export async function getTrustTimeline() {
   return api("/v1/trust?timeline=1");
-}
-
-// ── 鲸语大脑 ─────────────────────────────────────────
-
-/** @param {boolean} [withContext] 是否一并计算对话上下文预览（默认否，预览按需经 brainAction context-preview 取）
- * @returns {Promise<Object>} 大脑状态（brain_status 30+ 字段） */
-export async function getBrain(withContext = false) {
-  return api(`/v1/brain${withContext ? "?context=1" : ""}`);
-}
-/**
- * 大脑操作（mount/unmount/archive/restore/merge/export-key/import-key 等 24 个 action）。
- * @param {{action:string, [k:string]:any}} payload
- * @returns {Promise<{ok:boolean, message:string, data?:any}>}
- */
-export async function brainAction(payload) {
-  return api("/v1/brain", { method: "POST", body: JSON.stringify(payload) });
-}
-
-// ── 生命循环 ────────────────────────────────────────────────────────────────
-
-/** @returns {Promise<{ok:boolean, life:Object}>} 状态 / 内驱 / 代谢 / 意图 / 最近时间线 */
-export async function getLife() {
-  return api("/v1/life");
-}
-
-/** @param {{action:string, [k:string]:any}} payload pause/resume/wake/sleep/reflect/tick/intention… */
-export async function lifeAction(payload) {
-  return api("/v1/life", { method: "POST", body: JSON.stringify(payload) });
-}
-
-/** @param {number} [limit] @param {string} [kind] @returns {Promise<{items:Array<any>}>} */
-export async function getLifeTimeline(limit = 80, kind = "") {
-  const p = new URLSearchParams({ limit: String(limit) });
-  if (kind) p.set("kind", kind);
-  return api(`/v1/life/timeline?${p.toString()}`);
-}
-
-/** @param {string} [status] @param {number} [limit] @returns {Promise<{items:Array<any>, counts:Object}>} */
-export async function getLifeIntentions(status = "", limit = 50) {
-  const p = new URLSearchParams({ limit: String(limit) });
-  if (status) p.set("status", status);
-  return api(`/v1/life/intentions?${p.toString()}`);
-}
-
-/** @param {number} [days] @returns {Promise<{ok:boolean, report:Object, markdown:string}>} */
-export async function getLifeReport(days = 7) {
-  return api(`/v1/life/report?days=${days}`);
-}
-
-/** @param {number} [limit] @returns {Promise<{items:Array<any>, summary:Object}>} */
-export async function getLifeScars(limit = 20) {
-  return api(`/v1/life/scars?limit=${limit}`);
-}
-
-/** @param {string} [query] @param {number} [limit] @returns {Promise<{items:Array<any>}>} 大脑记忆列表（支持本地检索） */
-export async function listBrainMemories(query = "", limit = 100) {
-  const q = query ? `&query=${encodeURIComponent(query)}` : "";
-  return api(`/v1/brain/memories?limit=${limit}${q}`);
-}
-
-/** 大脑记忆增删改（action: add/update/delete）。
- * @param {{action:"add"|"update"|"delete", id?:string, [k:string]:any}} payload
- * @returns {Promise<{ok?:boolean}>} */
-export async function brainMemoryAction(payload) {
-  return api("/v1/brain/memory", { method: "POST", body: JSON.stringify(payload) });
-}
-
-/** @returns {Promise<{facts?:Array<any>}>} 通用长期记忆（大脑未初始化时的回退源） */
-export async function getMemory() {
-  return api("/v1/memory");
-}
-
-/** @returns {Promise<{items:Array<{id:string,text:string,origin?:string,ts?:string}>}>} 待确认记忆队列 */
-export async function listPendingMemory() {
-  return api("/v1/memory/pending");
-}
-
-/**
- * 裁决待确认记忆。
- * @param {{action:"accept"|"dismiss", ids:string[]}} payload
- * @returns {Promise<{ok:boolean, resolved:number}>}
- */
-export async function resolvePendingMemory(payload) {
-  return api("/v1/memory/pending", { method: "POST", body: JSON.stringify(payload) });
-}
-
-/**
- * 统一记忆检索（B1/B2）：跨 memory.json + 大脑 jsonl + knowledge 文档。
- * @param {string} [query] 关键词
- * @param {"all"|"memory.json"|"brain"} [sources] 来源过滤，默认 all
- * @param {number} [limit]
- * @returns {Promise<{ok?:boolean, query?:string, items?:Array<any>, count?:number}>}
- */
-export async function searchUnifiedMemories(query = "", sources = "all", limit = 8) {
-  const p = new URLSearchParams({ limit: String(limit) });
-  if (query) p.set("query", query);
-  if (sources !== "all") p.set("sources", sources);
-  return api(`/v1/brain/unified-memories?${p.toString()}`);
-}
-
-/**
- * B3 记忆洞察：置信度排序 + 疑似冲突候选（复用 unified-memories 端点，insights=1）。
- * @param {string} [query] 关键词（空则按置信度列出全部）
- * @param {number} [limit]
- * @returns {Promise<{ok?:boolean, query?:string, items?:Array<any>, conflicts?:Array<any>, count?:number}>}
- */
-export async function memoryInsights(query = "", limit = 20) {
-  const p = new URLSearchParams({ limit: String(limit), insights: "1" });
-  if (query) p.set("query", query);
-  return api(`/v1/brain/unified-memories?${p.toString()}`);
 }
 
 // ── 权限 / 任务 / 态势 ───────────────────────────────

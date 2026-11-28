@@ -7,20 +7,8 @@ import { silentWarn } from "../quiet.js";
 
 export default function ContextPanel({ data, onClose, loading = false, err = "" }) {
   const [tab, setTab] = React.useState("工具");
-  const [pending, setPending] = React.useState([]);
   const [injection, setInjection] = React.useState((data && data.injection) || null);
   const [tip, setTip] = React.useState("");
-
-  const [pendingErr, setPendingErr] = React.useState("");
-  const loadPending = React.useCallback(() => {
-    setPendingErr("");
-    api.listPendingMemory()
-      .then((d) => setPending((d && d.items) || []))
-      .catch((e) => {
-        silentWarn(e, "ContextPanel");
-        setPendingErr("待确认记忆加载失败");
-      });
-  }, []);
 
   // 注入回执是「最近一次装配」的服务端快照：打开面板/切到注入页时拉一次，
   // 否则只会停留在页面加载时的旧值（对话后不刷新 → 一直显示"暂无记录"）。
@@ -30,22 +18,8 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
       .catch((e) => silentWarn(e, "ContextPanel"));
   }, []);
 
-  React.useEffect(() => { loadPending(); loadInjection(); }, [loadPending, loadInjection]);
-  React.useEffect(() => { if (tab === "记忆") loadPending(); }, [tab, loadPending]);
+  React.useEffect(() => { loadInjection(); }, [loadInjection]);
   React.useEffect(() => { if (tab === "注入") loadInjection(); }, [tab, loadInjection]);
-
-  const resolve = async (ids, action) => {
-    try {
-      const d = await api.resolvePendingMemory({ action, ids });
-      // 后端失败走 _fail_soft（HTTP 200 + ok:false），必须显式判 ok，否则误报成功
-      if (d && d.ok === false) throw new Error(d.error || "操作失败");
-      setPending((prev) => prev.filter((x) => !ids.includes(x.id)));
-      setTip(action === "accept" ? "已写入长期记忆" : "已忽略");
-    } catch {
-      setTip("操作失败：后端未响应");
-    }
-    setTimeout(() => setTip(""), 2500);
-  };
 
   return (
     <aside className="ctx-panel">
@@ -58,7 +32,7 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
         </button>
       </div>
       <div className="ctx-tabs" role="tablist">
-        {[{ id: "工具", icon: "grid" }, { id: "记忆", icon: "book" }, { id: "注入", icon: "layers" }, { id: "用量", icon: "chart" }].map((t) => (
+        {[{ id: "工具", icon: "grid" }, { id: "注入", icon: "layers" }, { id: "用量", icon: "chart" }].map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} className={`ctx-tab ${tab === t.id ? "ctx-tab-on" : ""}`} onClick={() => setTab(t.id)}>
             <Icon name={t.icon} size={14} /> {t.id}
           </button>
@@ -67,11 +41,6 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
 
       <div className="ctx-body">
         {tip && <div className="empty-tip">{tip}</div>}
-        {pendingErr && (
-          <div className="empty-tip is-err">
-            {pendingErr}　<button className="msg-op" onClick={loadPending}>重试</button>
-          </div>
-        )}
         {loading ? (
           <div className="empty-tip is-loading">正在读取上下文…</div>
         ) : err ? (
@@ -103,46 +72,6 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
                   <span className="ctx-desc">{t.desc}</span>
                 </div>
               ))}
-            </>
-          );
-        })()}
-        {tab === "记忆" && (() => {
-          const mem = (data && data.memory) || [];
-          return (
-            <>
-              {pending.length > 0 && (
-                <>
-                  <div className="ctx-group-title">待确认（{pending.length}）· 自动提炼，确认后才写入</div>
-                  {pending.map((p) => (
-                    <div className="mem-card mem-pending" key={p.id}>
-                      <div className="mem-card-head">
-                        <span className="mem-tag">{p.origin === "web" ? "来自外部" : "推断"}</span>
-                        <span className="mem-id">{p.ts}</span>
-                      </div>
-                      <div className="mem-text">{p.text}</div>
-                      <div className="mem-pending-ops">
-                        <button className="ctx-action" onClick={() => resolve([p.id], "accept")}><Icon name="check" size={12} /> 记住</button>
-                        <button className="ctx-action" onClick={() => resolve([p.id], "dismiss")}><Icon name="x" size={12} /> 忽略</button>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              )}
-              <div className="ctx-group-title">长期记忆（{mem.length}）</div>
-              {mem.length > 0 ? (
-                mem.map((m) => (
-                  <div className="mem-card" key={m.id}>
-                    <div className="mem-card-head">
-                      <span className="mem-id">{m.id}</span>
-                      <span className="mem-tag">{m.tag}</span>
-                    </div>
-                    <div className="mem-text">{m.text}</div>
-                  </div>
-                ))
-              ) : (
-                <EmptyState compact icon="brain" title="还没有长期记忆"
-                  hint="对话中要求记住的关键信息会沉淀到这里" />
-              )}
             </>
           );
         })()}
@@ -178,7 +107,7 @@ export default function ContextPanel({ data, onClose, loading = false, err = "" 
                   <span className="ctx-desc">{f.error}</span>
                 </div>
               ))}
-              {inj.quiet_mode && <div className="empty-tip">本轮为纯净对话：个性上下文（记忆/自我/大脑）已全部停注入。</div>}
+              {inj.quiet_mode && <div className="empty-tip">本轮为纯净对话：角色卡与个性提示已停用。</div>}
             </>
           );
         })()}

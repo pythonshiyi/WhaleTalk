@@ -6,7 +6,7 @@
 
 `schedule_task`（agent 内定时）到点会唤醒一次 LLM 推理，每次都是：
 
-- 一次完整上下文组装（system prompt + 记忆 + 工具表，实测 prompt 缓存命中 99.4% 时仍计费）
+- 一次完整上下文组装（system prompt + 上下文 + 工具表，实测 prompt 缓存命中 99.4% 时仍计费）
 - 一个常驻会话的内存峰值
 
 用 LLM 定时做「每天备份一次」是拿推理能力干 cron 的活。换 Windows 计划任务，同样的效果，
@@ -16,10 +16,9 @@
 
 | 任务 | 频率 | 做什么 | 峰值内存 | 时长 | LLM 成本 |
 |---|---|---|---|---|---|
-| `WhaleTalk_BrainArchive` | 每日 03:30 | `brainkit.py archive`（快照 + 镜像到 `manifest.archive_mirror`） | ~40 MB | ~2 s | 0 |
 | `WhaleTalk_ProjectBackup` | 每周日 04:00 | `backup.py --prune 8` | ~35 MB | ~5 s | 0 |
 
-脚本在 `tools/scheduled/*.bat`，日志在 `data/logs/{brain_archive,project_backup}.log`。
+脚本在 `tools/scheduled/*.bat`，日志在 `data/logs/project_backup.log`。
 两条都不常驻、不轮询、不留后台进程；任务计划本身就是 OS 的最小调度单元，开销可忽略。
 
 **内存纪律**：任何自主行为都必须是「起进程 → 干活 → 退出」的短生命周期形态。

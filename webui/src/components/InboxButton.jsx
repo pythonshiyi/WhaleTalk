@@ -57,24 +57,13 @@ export default function InboxButton({ onNavigate }) {
     }
     setItems(out);
     // 体验：某些汇总接口失败时给出可见提示，不再静默吞掉（此前待办数字会莫名偏少）
-    const failedFetches = [mem, evo, branches, failed, status, sched, channels]
+    const failedFetches = [failed, sched, channels]
       .filter((r) => r.status === "rejected").length;
     setLoadErr(failedFetches ? `${failedFetches} 项数据加载失败，部分待办可能未显示` : "");
     setLoading(false);
   }, []);
 
   usePoll(load, 20000);
-
-  const resolveMemory = async (id, action) => {
-    setBusy(id);
-    try {
-      const r = await api.resolvePendingMemory({ action, ids: [id] });
-      if (r && r.ok !== false) await load();
-    } catch {
-      /* 失败保持列表，不误报成功 */
-    }
-    setBusy("");
-  };
 
   const count = items.length;
   return (

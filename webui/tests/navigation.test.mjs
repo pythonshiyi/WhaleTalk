@@ -19,12 +19,12 @@ describe("一级导航信息架构", () => {
   const css = read("app.css");
   const app = read("App.jsx");
 
-  it("只保留六个一级入口，且每个入口标签唯一", () => {
+  it("只保留五个一级入口，且每个入口标签唯一", () => {
     const ids = [...sidebar.matchAll(/\{ id: "([a-z]+)", label: "([^"]+)", icon: "([^"]+)" \}/g)];
-    assert.deepEqual(ids.map((m) => m[1]), ["chat", "workbench", "create", "abilities", "agent", "settings"]);
+    assert.deepEqual(ids.map((m) => m[1]), ["chat", "workbench", "create", "abilities", "settings"]);
     const labels = ids.map((m) => m[2]);
-    assert.deepEqual(labels, ["会话", "工作台", "创作", "能力", "智能体", "设置"]);
-    assert.equal(new Set(ids.map((m) => m[3])).size, ids.length, "六个入口必须使用不同图标");
+    assert.deepEqual(labels, ["会话", "工作台", "创作", "能力", "设置"]);
+    assert.equal(new Set(ids.map((m) => m[3])).size, ids.length, "五个入口必须使用不同图标");
   });
 
   it("不再把能力包 / 任务 / 通道 / 生命 / 自主作为一级入口", () => {
@@ -44,12 +44,9 @@ describe("一级导航信息架构", () => {
     assert.ok(sidebar.includes("aria-current"), "当前页应有 aria-current 标记");
   });
 
-  it("创作 / 智能体 / 工作台的二级页签接回一级容器", () => {
+  it("创作 / 工作台的二级页签接回一级容器", () => {
     assert.ok(app.includes('page === "create"') && app.includes("LazyPages.create"), "创作页应接入");
-    assert.ok(app.includes('page === "agent"') && app.includes("LazyPages.agent"), "智能体页应接入");
     assert.ok(read("components/CreatePage.jsx").includes("PersonasPage embedded"), "创作页应嵌入角色页");
-    assert.ok(read("components/BrainPage.jsx").includes("LifePage embedded"), "智能体应嵌入生命页");
-    assert.ok(read("components/BrainPage.jsx").includes("AutonomyPage embedded"), "智能体应嵌入自主页");
     assert.ok(read("components/Pages.jsx").includes("<TasksPage embedded"), "工作台应嵌入任务记录");
   });
 });

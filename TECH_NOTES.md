@@ -31,7 +31,7 @@ DeepSeek 已把全部模型升级为**单一原生多模态模型**，本产品�
 
 ## 1. 项目概览
 
-Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、160 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、鲸语大脑（跨会话灵魂）、插件体系（.wtplugin v2）、公众号自动写作。
+Windows 本地 AI 桌面智能体，深度适配 DeepSeek V4 API。核心能力：thinking 思考模式、160 项 Agent 工具（smart_tools 按需调取）、多模态视觉、百万 token 长上下文自动压缩、自我进化（提案分支 + git 分支实施）、能力包体系、插件体系（.wtplugin v2）、公众号自动写作。
 
 - 运行时：Python 3.11+（开发 3.12/3.15），核心依赖仅 `openai` / `httpx`，其余全部可选（缺失自动降级提示）
 - API 层：标准库 `http.server.ThreadingHTTPServer`（**无 Flask/无框架**）
@@ -44,7 +44,7 @@ WhaleTalk/
 ├── web_app.py              # 唯一入口：API + 浏览器 + 托盘 + 快捷方式 + 依赖自检
 ├── api_server.py           # 本地 HTTP API（REST + SSE，122+ /v1 端点）
 ├── deepseek_client.py      # 能力引擎：DeepSeekClient + 160 工具 + smart_tools（P0-1 巨石拆分收官——共享基建 + 六层注册表 + 薄 facade，工具定义已全部迁出）
-├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/brain/msg/system/desktop/mv/codegen/community 共 14 模块 167 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
+├── agent_tools/            # 工具域模块包（P0-1 拆分完成）：tool_basic/data/media/docs/web/code/files/task/msg/system/desktop/mv/codegen 共 13 模块 158 工具，@tool() 注册 + __all__ re-export；运行时注入配置经 `import deepseek_client as _dc` 动态访问
 ├── permissions.py          # 权限模型 v2（blacklist 默认放行 / whitelist 回退 / FULL_AUTO）
 ├── security.py             # SSRF 防护（云元数据永远拦截）
 ├── crypto.py               # API Key DPAPI 加密（fail-closed）
@@ -53,7 +53,6 @@ WhaleTalk/
 ├── config_defaults.py / config_utils.py / profiles.py  # 配置体系
 ├── roles.py / templates.py / themes.py / deps.py        # 角色/模板/主题/依赖
 ├── plugins.py / user_tools.py                           # 插件体系 / 自定义工具
-├── brainkit.py / brain_api.py                           # 鲸语大脑 CLI + API 适配
 ├── net_utils.py / search_utils.py / db_utils.py / pdf_utils.py / mdparse.py  # 工具底座
 ├── fetch_blocked.py        # 被墙站点抓取（独立模块，按需启用，可剔除）
 ├── proc_utils.py / app_utils.py / backup.py            # 进程/应用工具/备份
@@ -79,7 +78,7 @@ WhaleTalk/
 
 认证：`Authorization: Bearer <token>`（HMAC 常量时间比较；token 来自 config.json 的 `inbound_token`，缺失则启动自动生成）。CORS 仅回显白名单 Origin（`_CORS_ALLOWED_ORIGINS`：127.0.0.1/localhost 的 8745/5173/5174）。请求体上限 1MB（`/v1/upload` 64MB）。
 
-**GET**：health / v1/token / v1/sessions / v1/models / v1/deps / v1/update/check / v1/backup / v1/workflows / v1/checkpoint / v1/tasklog / v1/knowledge / v1/profiles / v1/audit / v1/approvals / v1/evolve_branches / v1/self_profile / v1/failures / v1/schedules / v1/services / v1/permissions / v1/prompts(+export) / v1/plugin_skills / v1/dir / v1/roles / v1/tools/<name> / v1/processes / v1/files / v1/tasks / v1/evolutions(+/<name>) / v1/status / v1/brain / v1/situation / v1/mode / v1/abilities / v1/memory / v1/plugins(+/<name>) / v1/context / v1/config(+reset) / v1/tts/audio/<fn> / v1/tts/voices / v1/sessions/<id>/messages
+**GET**：health / v1/token / v1/sessions / v1/models / v1/deps / v1/update/check / v1/backup / v1/workflows / v1/checkpoint / v1/tasklog / v1/knowledge / v1/profiles / v1/audit / v1/approvals / v1/evolve_branches / v1/failures / v1/schedules / v1/services / v1/permissions / v1/prompts(+export) / v1/plugin_skills / v1/dir / v1/roles / v1/tools/<name> / v1/processes / v1/files / v1/tasks / v1/evolutions(+/<name>) / v1/status / v1/situation / v1/mode / v1/abilities / v1/plugins(+/<name>) / v1/context / v1/config(+reset) / v1/tts/audio/<fn> / v1/tts/voices / v1/sessions/<id>/messages
 
 **POST**：v1/chat / v1/chat/stream（SSE）/ v1/brain / v1/deps/install（NDJSON 流式进度）/ v1/tools/<name>/invoke / v1/fim / v1/cleanup / v1/backup / v1/workflows / v1/checkpoint / v1/knowledge/search / v1/roles / v1/schedules / v1/services / v1/evolutions/apply|ignore / v1/evolve_branches/detail|merge|delete / v1/search / v1/plugin_studio/generate|install / v1/plugins / v1/plugin_market/install（P2：市场下载+校验安装）/ v1/profiles / v1/tts/synthesize / v1/mode / v1/respond / v1/config / v1/prompts(save/delete/reorder/import/use/restore_builtin) / v1/sessions(delete_batch/delete/pin/rename/tags) / v1/permissions / v1/dir / v1/files(open/opendir/read/preview) / v1/processes(stop/start) / v1/upload
 
@@ -153,12 +152,9 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 
 1. 系统提示词（`system_prompt`，pure_chat 用 `DIALOG_SYSTEM_PROMPT`）
 2. 任务质量指南（`TASK_QUALITY_GUIDE`：计划先行/自检闭环/产物核验/态势感知/元认知/进化工具约束）
-3. 长期记忆（`memory_enabled` 开启时，facts 最近 6 条）
-4. 核心自我状态（`self_profile`，有实质内容才注入）
-5. 鲸语大脑上下文（`brain_context`：身份 + 断点 + 近期记忆）
-6. 当前工作目录（active_dir）
-7. 失败模式（最近 3 条）+ 成功模式（最近 3 条）
-8. 已装插件提示 + 项目任务记录（最近 3 条）
+3. 当前工作目录（active_dir）
+4. 失败模式（最近 3 条）+ 成功模式（最近 3 条）
+5. 已装能力提示 + 项目任务记录（最近 3 条）
 
 **缓存友好原则**：恒定内容（提示词/指南）在前，易变内容（记忆）在尾——官方硬盘缓存按前缀完整匹配命中。
 
@@ -223,16 +219,6 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：
 - 会话索引：`sessions_index.json` 持元数据 + 文件指纹（mtime_ns/size），列表接口毫秒级返回；写入路径钩子 `_index_session_locked` 同步更新
 - 会话后端兜底落盘：`_handle_chat_stream` 结束后 `_sanitize_messages` 清洗再保存（防坏状态落盘）
 - **会话用量/速率**：assistant 消息可选携带 `usage`（输入/输出/缓存）+ `metrics`（TTFT/gen/total/tps）；`_save_session` 按白名单保留二者，并对全部消息汇总 `usage_total` + `metrics_total`（append 场景整体重算，天然累计）；`_load_session_messages` 原样回传，前端每条回复底部小条 + 「上下文→用量」本会话段展示。旧会话缺字段时自动跳过（向后兼容）
-
-## 13. 鲸语大脑（brainkit.py / brain_api.py）
-
-- 数据：`brain/`（manifest 指纹 / identity / memories/ / self_model / thinking_log/ / evolution / heartbeat / archive/ / .keys/ / lineage / merge_log）
-- 指纹防篡改：manifest 除 fingerprint 外 canonical JSON SHA-256；内容变化重算、brain_id 不变
-- 免密密钥：MK 加密内容，MK 三重包裹（DPAPI 本地 / 口令 fallback / RSA-OAEP 跨躯体）；`export-key`/`import-key` 迁移仪式
-- 分支合并：快照带血缘，`merge` 找 LCA 三路合并（记忆 jsonl 行级智能合并——按 id 三方比对，并集+字段融合、text 冲突取 ts 新者，永不整文件冲突；日志行级并集、JSON 字段级、冲突逐条裁决）；合并结果 `.lineage` 保留双亲/祖先续链；`merge-resolve --keep ours|theirs|both|custom`（拒绝旧版 jsonl 整文件冲突，防截断样本毁库）
-- 守护并入调度循环（单一调度源）：每 ≥6h 心跳 + 每日 22:00 自动快照 + 28h 兜底快照；`stop_server` 收尾自动心跳留断点；滚动 prune 自动豁免血缘引用快照（LCA 祖先不丢）
-- AI 对话自动注入大脑上下文（身份 + 断点 + 进行中目标 + 自我认知[知道/不确定/局限] + 待回执决策 + 记忆）；记忆按当前话题语义检索（用户消息尾部作 query），无 query 时按重要度×时间衰减 Top-N（`_ts_epoch` 混时区统一口径）；记忆写入原子 append
-- 前端 API（brain_action）：管理动作（mount/unmount/heartbeat/archive/restore/merge/migrate/share/doctor…）之外，另有一组**只读观察**动作供大脑页消费——`thinking-list`（思考日志）/ `self-model` / `evolution-list` / `review-due`（F4）/ `brain-search`（记忆·决策·快照·思考全局检索）/ `lineage`（快照血缘图，只读元数据不解包）/ `diff-current`（暂存当前大脑与快照对比）/ `context-preview`（对话上下文预览，懒加载）。`brain_status(with_context=False)` 默认不算预览
 
 ## 14. 插件体系（.wtplugin v2）
 
@@ -321,7 +307,7 @@ text → longTextUtil.unwrapLongText（解除 @long-text 包装）
 
 ## 19. 演进建议
 
-1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**已完成（v3.8.3 起步，v3.16.17 现 14 域模块 167 工具）**：tool_basic 2 / tool_data 2 / tool_media 10 / tool_docs 30 / tool_web 14 / tool_code 15 / tool_files 21 / tool_brain 15 / tool_msg 10 / tool_system 16 / tool_desktop 18 / tool_mv 4 / tool_codegen 6 / tool_community 4，另主模块 `register_tool()` 注册 ask_user / request_permission 2 个特殊工具（合计 169），主文件 13,115 → **5,927 行**，工具定义清零（AST 断言）；关键经验：① 域模块对运行时注入配置（WORKING_DIR/KV_CACHE_DIR/MEMORY_FILE/EVOLUTIONS_DIR 等 36 个）不可值绑定 import，须 `import deepseek_client as _dc` 动态访问，否则 main/测试注入失效；② `fetch_blocked` 因保留字冲突实现名 `_run_fetch_blocked`，audit/migrate 门禁内置别名映射；③ 每批迁移后跑 pytest + 四门禁 + 前端套件，`test_tool_split.py` 覆盖全量 re-export/归属/六层
+1. `deepseek_client.py` 按领域拆 `agent_tools/` 包（薄 facade re-export 兼容）——**已完成（v3.8.3 起步；当前 13 域模块 158 工具）**：tool_basic 2 / tool_data 2 / tool_media 10 / tool_docs 30 / tool_web 14 / tool_code 15 / tool_files 21 / tool_task 10 / tool_msg 10 / tool_system 16 / tool_desktop 18 / tool_mv 4 / tool_codegen 6，另主模块 `register_tool()` 注册 ask_user / request_permission 2 个特殊工具（合计 160），主文件 13,115 → **5,927 行**，工具定义清零（AST 断言）；关键经验：① 域模块对运行时注入配置（WORKING_DIR/KV_CACHE_DIR/MEMORY_FILE/EVOLUTIONS_DIR 等 36 个）不可值绑定 import，须 `import deepseek_client as _dc` 动态访问，否则 main/测试注入失效；② `fetch_blocked` 因保留字冲突实现名 `_run_fetch_blocked`，audit/migrate 门禁内置别名映射；③ 每批迁移后跑 pytest + 四门禁 + 前端套件，`test_tool_split.py` 覆盖全量 re-export/归属/六层
 2. `@tool()` 装饰器统一六层声明（消除手工漂移）
 3. ~~补齐 pytest 测试资产并接入 CI~~ 已完成（v3.8.3 起 CI 跑 `pytest tests/`，现 1032 用例 + 前端 24 套件 + 四道门禁）；下一步是**按领域扩充分子级 pytest 用例**（工具/权限/存储执行路径，当前覆盖集中在注册表与进化闸）
 4. 进化闭环补门禁：`self_evolve` 合并前强制跑 audit/validate/测试；进化账本（效果回流）；评审 AI 前置

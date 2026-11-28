@@ -551,19 +551,9 @@ _SEARCH_EXTS = (
 _SEARCH_SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "build"}
 
 
-# ============================ 工具域阈值与锁（记忆与定时任务域） ============================
+# ============================ 工具域阈值与锁（任务域） ============================
 # P1-3 下沉：原 deepseek_client 顶部常量/锁，统一归口 shared（dc 顶部 re-export 兼容旧路径）。
 # 新增工具域阈值常量请添加在此处，勿回写主文件。
-
-MEMORY_MAX_ITEMS = _env_int("MEMORY_MAX_ITEMS", 2000)  # v2.16.2 起扩容：伙伴需要记住的更多
-
-MEMORY_MAX_TEXT = _env_int("MEMORY_MAX_TEXT", 2000)
-
-_MEMORY_LOCK = threading.Lock()  # 并行 write_memory 读-改-写串行化，防丢失更新
-
-SELF_PROFILE_LOCK = threading.Lock()
-
-_SELF_PROFILE_LIST_FIELDS = ("preferences", "goals", "milestones", "user_model", "history", "wishes")
 
 SCHEDULES_LOCK = threading.Lock()  # 与 main 的定时任务面板共享（防并发覆盖）
 

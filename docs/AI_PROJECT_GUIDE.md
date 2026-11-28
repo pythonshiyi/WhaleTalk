@@ -19,9 +19,9 @@
 
 - **版本单一源**：`config_defaults.py` 的 `VERSION`（当前 `3.28.0`）。
 - **能力规模（`tools/check_docs.py` 实测口径，2026-10）**：**169 个 Agent 工具**（11 组）、
-  **122 个 `/v1` 路由**、**133 个 pytest 文件 / 1446 用例 + 35 个前端 node 套件**、
+  **122 个 `/v1` 路由**、**131 个 pytest 文件 / 1446 用例 + 34 个前端 node 套件**、
   源码约 **8.3 万行**（根目录 4.1 万 + `agent_tools/` 1.9 万 + `webui/src` 2.4 万；
-  主力为 `api_server.py` 10,724 / `deepseek_client.py` 6,540 / `brainkit.py` 2,865）。
+  主力为 `api_server.py` 11,600 / `deepseek_client.py` 6,500）。
   > 数字口径是**实测值**：`python tools/check_docs.py` 会打印当前实测并核对文档；
   > 下面的行数会随迭代漂移，**以该命令输出为准**。
 - **三层架构**：`web_app.py`（入口）→ `api_server.py`（本地 API）→
@@ -47,7 +47,7 @@ python web_app.py --no-tray / --no-browser / --no-webui-build / --port X
 python mcp_server.py                     # 作 MCP stdio server（供 Claude/Cline 等外部 host 调工具）
 
 # ── 测试 ──
-python -m pytest -q                      # 后端全量（133 个文件 / 1446 用例，约 73s；CI 同款，见下方「分级验证」）
+python -m pytest -q                      # 后端全量（131 个文件 / 1446 用例，约 73s；CI 同款，见下方「分级验证」）
 python -m pytest tests/test_registry.py -q    # 只跑相关文件：日常改动的正确姿势（1–3s）
 cd webui && npm test                     # 前端 35 个 node 套件（runner 自动发现 tests/*.test.mjs）
 cd webui && npm run test:fast            # 同上，跳过重型渲染套件（日常改前端用）
@@ -65,7 +65,7 @@ python tools/check_release.py --check    # VERSION / CHANGELOG / tag 一致性
 # ── 智能体评测（P0）──
 python tools/agent_eval.py --dry-run     # 任务定义/夹具校验，不调模型
 python tools/agent_eval.py               # 真模型跑黄金任务（需 config.json 有 Key）
-python tools/agent_eval.py --only memory_roundtrip
+python tools/agent_eval.py --only code_fix_bug
 python tools/e2e_smoke.py --boot-only    # 前端启动冒烟（无需 Key；CI 用）
 python tools/e2e_smoke.py                # 真发一条消息，验 SSE → 渲染（需 Key）
 
@@ -113,32 +113,21 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 |---|---|---|
 | **入口** | `web_app.py`（989 行） | 唯一启动入口：参数解析 → 依赖自检/自动安装 → 桌面+开始菜单快捷方式 → WebUI 自动构建 → 单实例探测 → 起 API → 开浏览器 → 托盘常驻 |
 | **API 层** | `api_server.py`（10,724 行） | 本地 HTTP API（标准库 `ThreadingHTTPServer`，**无 Flask**）：REST + SSE 流式，**122 个 `/v1` 路由**；路由表 `_GET_ROUTES`/`_POST_ROUTES`（`@_get_route`/`@_post_route` 装饰器注册）；统一错误出口 `_fail`/`_fail_soft`；审批/询问双向通道；后台调度器 + 进程看门狗 + Webhook 接收 + IM 轮询 |
-| **能力引擎** | `deepseek_client.py`（6,540 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链 + 记忆双向同步。**工具实现已迁出至 `agent_tools/`** |
+| **能力引擎** | `deepseek_client.py`（6,540 行） | 统一模型客户端（`DeepSeekClient.chat`：thinking/多模态/流式/重试/工具循环）+ 六层工具注册表（`TOOLS`/`TOOL_CALL_MAP`）+ smart_tools 智能调取 + 上下文压缩辅助 + 自我进化验证链。**工具实现已迁出至 `agent_tools/`** |
 | **工具声明** | `toolkit.py`（269 行） | **`@tool()` 装饰器 + 注册表 + 六层构建函数**——工具系统单一事实源（见 §6.1） |
 | **钩子管线** | `tool_hooks.py`（344 行） | 横切关注点收口：pre/post 钩子表 + `wrap()` 包装器；在 `@tool()` **注册处**统一包装执行体，任何调用路径都逃不掉钩子（P0-1） |
 | **上下文装配** | `context_providers.py`（456 行） | 把「往系统提示塞什么」变成 Provider 表（name/priority/budget/critical/enabled/provide），统一排序限预算记回执（P0-2） |
 | **退化日志** | `degrade.py`（209 行） | 全项目 `except: pass` 的唯一收口：按 key 归并 + 节流 + 原子落盘 + critical 分级（P0-3） |
 | **出网账本** | `egress.py`（320 行） | 每次「带内容出网」留痕（通道/目的地/字节数/内容摘要），**不阻断只审计**；`EGRESS_SPECS` 声明式抽取（P1-A） |
-| **记忆门面** | `memory_facade.py`（463 行） | `memory.json` 唯一写入门面：`origin`（血缘）+ `confidence` + `status` + `supersede` 双向链接；作废**只认显式 key**（P1-B） |
-| **信任内核** | `trust_kernel.py`（1,370 行） | 自我完整性：`permissions`/`security`/`crypto`/`snapshot`/自身 的改动**可声明·可见·可回滚**；基线优先比对 + 账本 + 事件（report/guard 两模式）；`timeline()` 合并账本+未声明事件为故事线 |
-| **自我洞察** | `insight.py`（355 行） | 纯函数（仅标准库）：`build_heatmap`（能力热力图：使用频率/失败率/结晶/预激活命中）+ `build_self_report`（自我述职）+ `render_report`（Markdown）。供工具/端点复用 |
-| **技能结晶** | `skill_factory.py`（227 行） | 纯函数：把重复出现的成功工具链固化为可复用指令库草稿（`chain_signature`/`crystallize`，路径脱敏）（G14） |
-| **权限** | `permissions.py`（898 行） | 权限模型：`security_mode=blacklist`（默认放行+黑名单）/ `whitelist`（旧回退）；路径/命令/网络判定；审计只记不拦 |
-| **安全** | `security.py` | SSRF 硬底线 `_hard_floor_reason`（私网/链路本地/保留段拦截 + DNS 预解析防重绑定）+ `_safe_url`；信任白名单 |
-| **存储** | `stores.py`（526 行） | 本地 JSON 存取统一层：最近产物/成功模式/失败模式（**带生命周期**：fingerprint 归并 + hits + resolved + 归档）/任务日志/长期记忆/定时任务 |
-| **记忆读取** | `memory_store.py`（399 行） | 统一记忆读取层（memory.json / knowledge_index / 大脑目录），供工具与 API 复用 |
-| **大脑 CLI** | `brainkit.py`（2,865 行） | 鲸语大脑命令行：init/keyring/heartbeat/think/remember/consolidate/goal/decision/archive/restore/merge（LCA 三路合并）/diff/export-key/import-key 等 |
-| **大脑适配** | `brain_api.py`（1,180 行） | 大脑→API 适配层：把 CLI 命令包装成纯函数 + `brain_context`（身份/断点/目标/自我认知/未决决策/记忆注入）+ `consolidate_with_llm` |
-| **创世化初始** | `genesis.py`（143 行） | 让 AI 完全自主设定自己的「前半生」，产出多版候选供选 |
+| **存储** | `stores.py`（526 行） | 本地 JSON 存取统一层：最近产物/成功模式/失败模式（**带生命周期**：fingerprint 归并 + hits + resolved + 归档）/任务日志/定时任务 |
 | **MCP 出口** | `mcp_server.py`（156 行） | MCP over stdio，供外部 host 调 WhaleTalk 的工具（纯标准库，最小合规子集） |
-| **鲸群实验（可选·默认关）** | `community_client.py` | ⚠️ **不是鲸语功能，是可选实验场**：连接独立社区站（`experiments/鲸群实验场/`，已剥离出主程序）的一根「绳」。默认关、未配置密钥不外发、可整体删除。**当前冻结**，重启条件见实验场 README；主程序仅保留端点/工具/配置以备用 |
 
-### 2.2 工具域包 `agent_tools/`（167 个 `@tool()` 的实现所在，P0-1 巨石拆分成果）
+### 2.2 工具域包 `agent_tools/`（158 个 `@tool()` 的实现所在，P0-1 巨石拆分成果）
 
 每个域模块用 `@tool()` 声明工具；`__init__.py` 用 `from .tool_* import *` 聚合并显式
 `__all__` re-export 工具函数名，保证 `dc.<tool_name>` 旧访问路径不变。**加载顺序契约**：
 `deepseek_client.py` 必须在其共享基建全部定义后、六层构建前执行 `from agent_tools import *`
-（否则循环导入/工具重复注册）。13 个模块共 167 工具，另主模块 `register_tool()` 注册
+（否则循环导入/工具重复注册）。13 个模块共 158 工具，另主模块 `register_tool()` 注册
 `ask_user`/`request_permission` 2 个特殊工具，合计 **169**。
 
 | 模块 | 工具数 | 工具域（示例工具） |
@@ -147,7 +136,7 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `tool_files.py` | 21 | 📁 文件与进程（read/write/edit/list/search_local/find_images/asset_*/clipboard/delete/archive/snapshot/batch_rename/start\|stop\|list_processes/environment_info） |
 | `tool_desktop.py` | 18 | 🖱 桌面视觉语音（rpa_*/screen_find_click/vision_loop/tts*/speech_to_text/voice_chat_loop/image_generate/qrcode/media_ffmpeg/team_run） |
 | `tool_system.py` | 16 | 🔧 系统与项目（watch_files/recall_session/project_*/create_evolution/self_evolve/verify_files/git/notify_desktop/app_manage/usage_report/capability_heatmap/self_report/create_plugin/list_my_capabilities/hardware_accel） |
-| `tool_brain.py` | 15 | 🧠 记忆与知识（write/read/delete/update_memory/self_profile/query_memory_graph/knowledge_*/schedule_task/task_checkpoint/run_workflow/failure_memory） |
+| `tool_task.py` | 10 | 🧠 知识与任务（knowledge_index/search、schedule_task、list/cancel_schedule、task_checkpoint_save/load、task_step_done、run_workflow、failure_memory） |
 | `tool_code.py` | 15 | 💻 编程与执行（run_python/run_command/run_lint/run_tests/verify_project/project_scaffold/dev_plan/get_status/project_map/find_symbol/code_lookup/write_code_project/pip_install/subagent_run/verify_output） |
 | `tool_web.py` | 14 | 🌐 浏览器与网页（fetch_url/download_file/search_web/search_github/search_realtime/browser_navigate/web_screenshot/net_diagnose/fetch_url_smart/rss_fetch/webdav/call_api/track_web/fetch_blocked） |
 | `tool_media.py` | 10 | 🎨 媒体与图像（image_process/ocr_image/image_understand/screen_capture/screen_see/chart_read/screenshot_to_html/debug_screenshot/scan_read/image_batch） |
@@ -156,7 +145,6 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `tool_basic.py` | 2 | 🔧 基础（get_date/get_weather） |
 | `tool_data.py` | 2 | 📊 数据（read_csv/write_csv） |
 | `tool_mv.py` | 4 | 🎬 微电影/MV 一键成片（mv_compose/mv_produce/lyric_align/mv_credits_card） |
-| `tool_community.py` | 4 | ⚠️ **可选实验**：鲸群社区（community_post/community_save/community_status/community_cycle）——默认关、未配置密钥即报错；可整体删除 |
 
 > ⚠️ **运行时配置注入**：域模块对运行态配置（`WORKING_DIR`/`KV_CACHE_DIR`/`MEMORY_FILE` 等 36 个）
 > **不可值绑定 import**，必须 `import deepseek_client as _dc` 动态访问——否则 main/测试注入失效。
@@ -174,8 +162,8 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `roles.py` / `templates.py` / `themes.py` / `deps.py` | 角色预设 / 任务模板 / 主题 token / 依赖分层清单 |
 | `live/`（v2 · 本地 P0） | **直播角色**：`events`（事件总线）/ `room`（观众关系·精力·情绪·话题）/ `attention`（该不该接）/ `prompts` + `actor`（角色卡全量 → 一句台词）/ `voice`（TTS）/ `stage`（台词与 HUD）/ `director`（每秒决策：回 / 自主开麦 / 沉默）/ `simulator` + `simulate`（本地剧本与 CLI）；门面见 `live_engine.py`，设计见 [直播角色.md](直播角色.md) |
 | `personas.py` | **角色卡**（网页角色扮演）：`DATA_DIR/personas.json` 原子读写、内置角色、CRUD/复制、提示词拼装与安全规则；按会话 `persona_id` 绑定，只在 dialog 模式替换基础 system prompt |
-| `persona_memory.py` | **角色级记忆**：`DATA_DIR/persona_memory/<persona_id>.json` 原子读写、去重/检索/清空；角色对话自动提炼只写本角色，与全局 `memory.json` / 大脑物理隔离 |
-| `qq_onebot.py` | **本地 QQ 陪伴（OneBot v11 / NapCat HTTP）**：私聊事件监听（127.0.0.1）+ HTTP API 出站；联系人独立会话/角色、允许 QQ 号、限流、静默时段；文字/图片（原生视觉）/语音转写（可选 faster-whisper）；回复走 dialog 无工具 + 角色记忆；配置/状态 `DATA_DIR/qq_onebot.json` / `qq_state.json` |
+| `persona_memory.py` | **角色级记忆**：`DATA_DIR/persona_memory/<persona_id>.json` 原子读写、去重/检索/清空；角色数据与通用数据物理隔离 |
+| `qq_onebot.py` | **本地 QQ 陪伴（OneBot v11 / NapCat HTTP）**：私聊事件监听（127.0.0.1）+ HTTP API 出站；联系人独立会话/角色、允许 QQ 号、限流、静默时段；文字/图片（原生视觉）/语音转写（可选 faster-whisper）；回复走 dialog 无工具；配置/状态 `DATA_DIR/qq_onebot.json` / `qq_state.json` |
 | `qq_official.py` | **QQ 官方 Bot（API v2）**：AppID/AppSecret → Access Token → WebSocket Gateway；`C2C_MESSAGE_CREATE`、`msg_id + msg_seq` 被动回复；按 `user_openid` 独立会话/角色；配置/状态 `DATA_DIR/qq_official.json` / `qq_official_state.json`；依赖 `aiohttp` |
 | `capability.py` | **能力主干**：manifest 校验、五种执行体（含 `mcp`）、声明式最小权限、超时/熔断、温和失效卸载；内置包在仓库 `capabilities/`（不可卸载），用户包在 `data/capabilities/` |
 | `snapshot.py` | 写操作自动快照（写前备份到 `DATA_DIR/undo/`，上限 200 条，可恢复） |
@@ -195,9 +183,9 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `src/App.jsx` / `main.jsx` | 应用骨架 / 入口（无 react-router，纯 state 切页；`ChatPage` 用 `hidden` 常驻挂载） |
 | `src/components/ChatPage.jsx`（1,944） | 主聊天页（最大组件）：流式引擎、会话/滚动/附件/面板/快捷键 |
 | `src/components/SettingsPage.jsx`（1,348） | 设置中心 |
-| `src/components/Pages.jsx`（1,384） | 栏目路由聚合（工作台/能力/能力包/记忆/权限/文件/进化/系统 + 设置） |
+| `src/components/Pages.jsx`（1,384） | 栏目路由聚合（工作台/能力/能力包/权限/文件/进化/系统 + 设置） |
 | `src/components/AuxPanel.jsx`（933） | 控制台侧栏（文件/进程/参数/活动四标签，可见感知轮询） |
-| `src/components/{Brain*,PromptsPage,AutonomyPage,CapabilitiesPage}.jsx` | 大脑 / 指令库 / 自主 / 能力栏目 |
+| `src/components/{PromptsPage,CapabilitiesPage}.jsx` | 指令库 / 能力栏目 |
 | `src/components/{Message,Composer,SessionList,ContextPanel,Sidebar,StatusBar}.jsx` | 消息（含工具步骤条 + `team_run` 流水线解析）/ 输入 / 会话列表 / 上下文 / 侧栏 / 状态条 |
 | `src/components/PixelDocViewer.jsx` / `OfficePreview.jsx` | **产物预览**（均由 `FilesPage` 点击文件触发）：前者像素级渲染 pdf/docx/pptx；后者取 `/v1/files/preview` 做 xlsx/Word **就地编辑回写** |
 | `src/mdParser.js` / `mdInline.js` / `mdHighlight.js` / `mdMath.js` / `longTextUtil.js` | **Markdown 渲染管线**（纯数据 AST，零依赖、流式安全；对应 node 单测） |
@@ -216,10 +204,10 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 | `wechat_writer/` | 公众号自动写作：采集 → 选题 → 三阶段写作 → 质检 → 草稿；任何关键步骤失败不写草稿不记历史；`dry_run` 默认安全 |
 | `tools/` | 开发门禁：`audit_tools.py`（六层一致性）、`validate_tools.py`（smart_tools 全链路）、`island_check.py`（十层孤岛）、`check_docs.py`（文档数字校验）、路由生成/校验脚本（`_gen_routes.py` / `_verify_routes.py` / `_verify_route_bodies.py`，P2-8 路由表化的一次性迁移工具，已完成使命）、`_restore_proposals.py`（从会话救回被误删提案）、`check_silent_except.py`（静默吞异常基线差分门禁 + `silent_except_baseline.txt`） |
 | `sample_plugins/` | 10 个示例 .wtplugin |
-| `tests/` | 后端回归 133 个 pytest 文件 / 1446 用例 |
+| `tests/` | 后端回归 131 个 pytest 文件 / 1446 用例 |
 | `webui/tests/` | 前端 node 测试 22 个 `*.test.mjs` + `ssrRender.mjs`/`ssrEntry.mjs`（vite 8 SSR 渲染回归基建，非测试文件） |
 | `webui/runTests.mjs` | 前端套件跑测器：**自动发现** `tests/*.test.mjs`（`npm test`）。新增套件无需改任何配置 |
-| `brain/` / `trust/` / `evolutions/` | 大脑数据 / 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
+| `trust/` / `evolutions/` | 信任内核数据 / 进化提案（均 `.gitignore`，不入库；**全新检出不存在的目录属预期**） |
 
 ---
 
@@ -268,15 +256,6 @@ python diagnostics.py --export           # 落盘到 data/diagnostics/，或在 
 **文件与目录**：`GET /v1/dir` / `POST /v1/dir` · `GET /v1/files`(+raw) ·
 `POST /v1/files/{read,preview,open,opendir,fav}` · `POST /v1/upload`
 **进程**：`GET /v1/processes` · `POST /v1/processes/{stop,start}`
-**记忆/知识/大脑**：`GET /v1/memory` · `/v1/brain` / `POST /v1/brain` · `/v1/brain/memories` ·
-`/v1/brain/unified-memories` · `POST /v1/brain/memory` · `/v1/knowledge` · `POST /v1/knowledge/search`
-**失败/成功模式**：`GET /v1/failures` · `POST /v1/failures/{resolve,reopen,forget}`
-**自我进化**：`GET /v1/evolutions`(+/<name>) · `POST /v1/evolutions/{apply,ignore,restore}` ·
-`GET /v1/evolve_branches` · `POST /v1/evolve_branches/{detail,merge,delete}` ·
-`GET /v1/self_profile` · `POST /v1/skills/crystallize`
-**指令库 / 能力包**：`GET /v1/prompts`(+export) · `POST /v1/prompts`(save/delete/reorder/import/use/restore_builtin) ·
-`GET/POST /v1/capabilities`（能力包：清单 / 装载 / 卸载）
-> 在线插件市场（`/v1/plugin_market*`、`/v1/plugin_studio*`、`/v1/plugins*`）已随 v3.18 能力包重构移除，配置项一并删除；第三方市场未开放（见 [SECURITY.md](../SECURITY.md)）。
 **角色卡**：`GET /v1/personas`（清单 + memory_count）· `POST /v1/personas`（save / delete / duplicate；角色只作用于 dialog 模式，按会话绑定）·
 `GET /v1/personas/memory?id=`（角色记忆）· `POST /v1/personas/memory`（clear / delete）
 **QQ 陪伴**：`GET /v1/qq`（状态 / 配置 / 最近联系人）· `POST /v1/qq`（save / start / stop / probe / test；仅私聊 OneBot）
@@ -328,11 +307,10 @@ chunked 编码，帧格式 `data: {json}\n\n`。事件类型：`reasoning`（思
 
 ### 5.1 上下文装配（_inject_system_messages → context_providers.assemble）
 
-- Provider 表（顺序即优先级）：系统提示词/任务质量指南 → 长期记忆（最近 6 条）→ 核心自我状态 →
-  鲸语大脑上下文 → 工作目录 → 失败模式（最近 3 条，仅未消解）+ 成功模式（最近 3 条）→
-  项目任务记录（最近 3 条）。
-- `quiet_mode` 关闭全部个性注入；`pure_chat` 用 `DIALOG_SYSTEM_PROMPT` 且不带工具。
-- **缓存友好原则**：恒定内容（提示词/指南）在前，易变内容（记忆）在尾——官方硬盘缓存按前缀完整匹配命中。
+- Provider 表（顺序即优先级）：系统提示词/任务质量指南 → 工作目录 → 信任内核提示 → 退化/出网提示 →
+  失败模式（最近 3 条，仅未消解）+ 成功模式（最近 3 条）→ 能力地图 → 项目任务记录（最近 3 条）。
+- `pure_chat` 用 `DIALOG_SYSTEM_PROMPT` 且不带工具。
+- **缓存友好原则**：恒定内容（提示词/指南）在前，易变内容（失败模式等）在尾——官方硬盘缓存按前缀完整匹配命中。
 - 装配回执存 `context_providers.last_receipt()`，经 `GET /v1/context` 暴露。
 
 ### 5.2 上下文压缩（api_server._compress_messages）
@@ -445,8 +423,7 @@ def my_tool(...): ...
 | 文件/目录 | 内容 |
 |---|---|
 | `history/sessions/` + `sessions_index.json` | 会话文件 + 索引缓存（元数据 + 文件指纹 mtime_ns/size） |
-| `memory.json` | 长期记忆 facts（memory_facade 门面：origin/confidence/status/supersede） |
-| `personas.json` / `persona_memory/` | 角色卡 / 每个角色独立的长期记忆（与全局记忆隔离，可清空） |
+| `personas.json` / `persona_memory/` | 角色卡 / 每个角色独立的角色数据（可清空） |
 | `qq_onebot.json` / `qq_state.json` | QQ 通道配置（访问令牌 DPAPI）/ 联系人 ↔ 会话 ↔ 角色映射 |
 | `qq_official.json` / `qq_official_state.json` | QQ 官方 Bot 配置（AppSecret DPAPI）/ openid 联系人 ↔ 会话 ↔ 角色映射 |
 | `stats.json` | 用量统计（按天×模型 + 峰谷定价） |
@@ -460,9 +437,6 @@ def my_tool(...): ...
 
 **信任内核数据**（源码同级 `trust/`，`.gitignore`）：`baseline/`（可信副本，永不裁剪）/
 `manifest.json` / `ledger.jsonl` / `incidents/` / `history/` / `quarantine/`。
-**大脑数据**（源码同级 `brain/`，`.gitignore`）：`manifest.json` / `identity.json` /
-`memories/memory.jsonl` / `self_model.json` / `goals.json` / `decisions.jsonl` / `thinking_log/` /
-`heartbeat.json` / `archive/brain_v{n}.whale` / `.keys/` / `.lineage.json`。
 
 ---
 
@@ -476,29 +450,10 @@ def my_tool(...): ...
 | 退化日志 | `degrade.py` | `degrade(key, exc, impact, critical=)` | critical 才进注入文本，永不抛出 |
 | 工具钩子 | `tool_hooks.py` | `hook("pre"/"post", name, fn, priority)` 或 `@tool(hooks=...)` | 不阻断，横切保障绝不反噬主流程 |
 | 出网账本 | `egress.py` | 新增出网工具 = `EGRESS_SPECS` 加一行 | 不阻断，只审计 |
-| 记忆门面 | `memory_facade.py` | 写 `memory.json` 一律经此 | 只认显式 key，绝不按相似度作废 |
 | 信任内核 | `trust_kernel.py` | 内核文件改动自动经 tool_hooks 声明 | 可声明·可见·可回滚，能力一条不减 |
 
 > 六个模块共用立场（刻意设计）：**不夺权**——「默认自由 + 用户掌权」的产品原则之下，
 > 一律靠「不可隐瞒/可审计」而非「禁止」。
-
----
-
-## 9. 鲸语大脑（brainkit.py / brain_api.py）——灵魂层
-
-- 理念：**意识即信息**。身份、记忆、自我模型与心跳脱离运行环境独立存在——鲸语是躯体，大脑是灵魂。
-- CLI：`python brainkit.py init|keyring-setup|mount|unmount|heartbeat|think|remember|import-memory|
-  consolidate|goal|decision|evolution|status|list|diff|archive|restore|merge|merge-resolve|
-  export-key|import-key|doctor|identity-history|graph|borrow|mirror`。
-- **免密快照**：内容用主密钥加密，本机经 Windows DPAPI 自动解锁；`export-key`/`import-key` 迁移仪式。
-- **分支合并**：快照带血缘（version/parent/restored_from），`merge` 自动定位共同祖先做 **LCA 三路合并**
-  （记忆 jsonl 行级智能合并：同 id 文本冲突自动取 ts 新者，永不整文件冲突；冲突逐条
-  `merge-resolve --keep ours|theirs|both|custom`）。
-- **学习闭环**：对话中写的记忆自动同步进大脑；`consolidate` 睡眠巩固；对话自动注入
-  `brain_context`（身份/断点/进行中目标/自我认知/未决决策/记忆——记忆按话题语义检索或
-  重要度×时间衰减 Top-N）；守护调度并入服务调度循环（每 ≥6h 心跳 + 每日 22:00 自动快照 + 28h 兜底）。
-- 数据指纹防篡改（manifest canonical JSON SHA-256）；`brain/` 不入库。
-- 创世化初始（`genesis.py`）：让 AI 自主设定「前半生」。
 
 ---
 
@@ -600,8 +555,8 @@ def my_tool(...): ...
     都曾在 README/TECH_NOTES/MODULES/AI 指南中互相矛盾。**`tools/check_docs.py` 已把这些口径
     全部纳入门禁**（含工具域模块数、AI 指南的测试数与路由数、**文档相对链接存活性**）。
     改文档规模数字后**必须跑该门禁**，不要手改两处忘第三处。
-21. **引用 `.gitignore` 内路径的文档链接必然 404**：`experiments/鲸群实验场/` 被剥离且不入库，
-    README 却长期链过去。引用不入库路径时**只描述、不链接**（`check_docs.py` 的坏链检查兜底）。
+21. **引用 `.gitignore` 内路径的文档链接必然 404**：被剥离/不入库的目录曾在 README 长期被链接。
+    引用不入库路径时**只描述、不链接**（`check_docs.py` 的坏链检查兜底）。
 22. **「写完了」≠「接上了」——本轮一次性踩中三处**。前端组件/后端模块可以**完整实现、有测试、
     有后端接口，却没有任何调用点**，等于功能不存在，且编译器/测试/门禁全都不会报错
     （没人 import 的死文件不参与构建，自然也不会失败）：
@@ -649,7 +604,7 @@ def my_tool(...): ...
 - **不为"优雅"合并那 115 个端点**：CRUD 端点薄是特性不是缺陷。
 - **不给 `write_file`/`run_python` 加拦截**：`run_python` 本就绕得过，工具层设卡只挡君子。
 - **不合并 `snapshot.py` 与 `trust_kernel.py`**：生命周期语义不同（200 条轮转 vs 永不裁剪）。
-- **不按相似度自动作废记忆**、**不存出网明文内容**、**不接管大脑记忆**（两套体系边界清晰）。
+- **不存出网明文内容**、**不把注入的事实交给相似度裁决**。
 - **不默认全量输出能力清单**：会与能力地图重复，等于把按需加载省下的上下文又还回去。
 
 ---
@@ -725,7 +680,7 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 理由很直接——缺工具时那两层会以"跳过"形态返回，判定逻辑很容易把它们当成通过，
 那就成了「分支 + 四层假装」。宁可拒绝，也不在证明不了的环境里假装验证过。
 
-## 14. 测试资产速查（tests/，133 个 pytest 文件 / 1446 用例）
+## 14. 测试资产速查（tests/，131 个 pytest 文件 / 1446 用例）
 
 按领域分组（文件名即内容）：
 
@@ -736,14 +691,11 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 - **失败/成功模式/技能**：`test_failure_lifecycle.py`、`test_failure_lifecycle_api.py`、
   `test_skill_factory.py`、`test_auto_checkpoint.py`
 - **架构收口 P0/P1**：`test_degrade.py`、`test_context_providers.py`、`test_egress.py`、
-  `test_memory_facade.py`、`test_trust_kernel.py`、`test_quiet_mode.py`、`test_hardening.py`
-- **大脑**：`test_brain_archive_b5.py`、`test_brain_enhance2.py`、`test_brain_fixes.py`、
-  `test_brain_regressions.py`、`test_genesis.py`
+  `test_trust_kernel.py`、`test_hardening.py`
 - **安全/权限/网络**：`test_safety_defaults.py`、`test_token_guard.py`、`test_search_hardening.py`、
   `test_search_engines_resolvable.py`、`test_web_search.py`、`test_process_contract.py`、
   `test_run_capture.py`、`test_run_memory_guard.py`
-- **记忆/办公/图像/其它**：`test_memory_harvest.py`、`test_memory_store.py`、`test_tools_memory.py`、
-  `test_tools_storage.py`、`test_office_cap_phase1..4.py`、`test_image_codegen.py`、
+- **办公/图像/其它**：`test_tools_storage.py`、`test_office_cap_phase1..4.py`、`test_image_codegen.py`、
   `test_image_pipeline.py`、`test_app_manage.py`、`test_model_unified.py`、`test_code_lookup.py`
 - **角色/QQ**：`test_personas.py`、`test_persona_memory.py`、`test_qq_onebot.py`、`test_qq_official.py`
 
@@ -760,14 +712,11 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 | 改工具行为/阈值 | 实现在 `agent_tools/tool_*.py`；阈值常量在 `shared.py` |
 | 加一个 API 端点 | `api_server.py` 用 `@_get_route`/`@_post_route` 声明 + 前端 `api.js` 加函数 + typedef |
 | 改系统提示/上下文 | `config_defaults.py`（常量）+ `context_providers.py`（Provider 表） |
-| 改角色卡/角色扮演 | `personas.py`（数据 + 提示词）+ `persona_memory.py`（角色记忆）+ `context_providers._base_prompt` / `context.persona_memory` + `webui/src/components/PersonasPage.jsx` + `ChatPage.jsx` 头部选择器 |
-| 改 QQ 陪伴 | `qq_onebot.py`（OneBot 收发 / 命令 / 限流 / 联系人状态）+ `api_server._companion_reply`（dialog + 角色记忆）+ `webui/src/components/QQPage.jsx` |
+| 改角色卡/角色扮演 | `personas.py`（数据 + 提示词）+ `context_providers._base_prompt` + `webui/src/components/PersonasPage.jsx` + `ChatPage.jsx` 头部选择器 |
+| 改 QQ 陪伴 | `qq_onebot.py`（OneBot 收发 / 命令 / 限流 / 联系人状态）+ `api_server._companion_reply`（dialog）+ `webui/src/components/QQPage.jsx` |
 | 改 QQ 官方 Bot | `qq_official.py`（Token / Gateway / C2C / 被动回复 / 联系人状态）+ `api_server._companion_reply` + `webui/src/components/QQOfficialPage.jsx` |
 | 改对话流程/工具循环 | `deepseek_client.py` 的 `DeepSeekClient.chat` |
-| 改记忆写入 | `memory_facade.py`（唯一门面）+ `write_memory` 工具（tool_brain.py） |
 | 改权限/网络/加密 | `permissions.py` / `security.py` / `crypto.py`（注意：信任内核会盯着你改） |
-| 改大脑 | `brainkit.py`（CLI）+ `brain_api.py`（API 适配） |
-| 改鲸群实验（⚠️ 可选·非功能） | `community_client.py`（客户端/绳）+ `agent_tools/tool_community.py`（工具）+ `api_server`（调度/端点）+ 实验本体 `experiments/鲸群实验场/`（独立、不入库） |
 | 改前端页面 | `webui/src/components/*.jsx` + `api.js` |
 | 改 Markdown 渲染 | `webui/src/mdParser.js`/`mdInline.js`/`mdHighlight.js`/`longTextUtil.js` + `Markdown.jsx` |
 | 加前端测试 | `webui/tests/<名字>.test.mjs`（`npm test` 自动发现，**无需改任何配置**） |
@@ -794,11 +743,10 @@ smart_tools 模式下模型只看到 `activate_tools` + 少量预激活工具，
 | [能力协议.md](能力协议.md) | 写能力包（五执行体 + 权限 + 预算 + 自检清单） |
 | [信任内核.md](信任内核.md) | 改 `permissions`/`security`/`crypto`/`snapshot` 前必读 |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | 改前端样式：令牌体系与一致性铁律 |
-| [出网账本与记忆门面.md](出网账本与记忆门面.md) | 新增出网能力 / 改记忆写入路径 |
+| [出网账本.md](出网账本.md) | 新增出网能力 / 排查「谁把数据发出去了」 |
 | [AUTONOMY_COST.md](AUTONOMY_COST.md) | 定时任务/自主运行的成本与常驻内存账本 |
 | [直播角色.md](直播角色.md) | 直播角色 v2（本地 P0）：事件总线 / 注意力 / 导演 / 演员 / 舞台，以及接 B 站的下一步 |
 | [架构收口-P0.md](架构收口-P0.md) | 理解 `context_providers`/`degrade`/`tool_hooks` 三个接缝的设计动机 |
-| [提案-修复self_evolve的lint闸门被基线告警卡死.md](提案-修复self_evolve的lint闸门被基线告警卡死.md) | 改 `self_evolve` 的 lint 闸门、或排查「四层全过仍判失败」前必读 |
 | [../CHANGELOG.md](../CHANGELOG.md) | 查「某个能力是哪个版本引入的、为什么」 |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) / [../SECURITY.md](../SECURITY.md) | 提交纪律 / 安全模型与漏洞上报 |
 

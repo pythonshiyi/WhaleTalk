@@ -8,7 +8,7 @@
 
 > Windows 本地优先的 AI 桌面智能体 · 本地 API + React 界面 + 系统托盘常驻 · 只接入统一模型 **DeepSeek V4.1 Flash（`deepseek-flash`，原生多模态）**
 
-**鲸语 WhaleTalk** 不止是聊天窗口：它能**看屏幕、听语音、动键鼠**，调用 **160 项 Agent 工具**完成真实任务，并把每次经验沉淀为长期记忆——越用越懂你。数据只在本机流转，浏览器即界面，开箱即用。
+**鲸语 WhaleTalk** 不止是聊天窗口：它能**看屏幕、听语音、动键鼠**，调用 **160 项 Agent 工具**完成真实任务，并把每次执行沉淀为可复用的失败/成功模式。数据只在本机流转，浏览器即界面，开箱即用。
 
 > 🌐 官网：<https://whaletalk.top/>　·　📦 更新记录：[CHANGELOG.md](CHANGELOG.md)
 
@@ -17,9 +17,8 @@
 ## 📑 目录
 
 - [它是什么](#-它是什么)
-- [能力总览](#-能力总览169-工具)
+- [能力总览](#-能力总览160-工具)
 - [界面与体验](#-界面与体验)
-- [鲸语大脑](#-鲸语大脑)
 - [系统架构](#-系统架构)
 - [快速开始](#-快速开始)
 - [安全与隐私](#-安全与隐私)
@@ -38,13 +37,9 @@
 |---|---|
 | 🖼 **看得见** | 原生多模态视觉——图片理解、图表阅读、OCR、扫码、屏幕截图自查；聊天模型直接看图，无需切换模式 |
 | 💬 **说得出** | 对话 / 深度思考 / 语音合成（Piper 本地离线 · Edge 在线 · SAPI，可逐句流式跟读）/ 语音转文字 |
-| ⚡ **做得了** | 文件 / 代码 / 数据库 / 浏览器 / 邮件 / 媒体 / 桌面 RPA / 应用管理 / 快照恢复，共 169 项工具 |
+| ⚡ **做得了** | 文件 / 代码 / 数据库 / 浏览器 / 邮件 / 媒体 / 桌面 RPA / 应用管理 / 快照恢复，共 160 项工具 |
 | 🧬 **会进化** | 提案分支审阅、失败模式库消解、成功模式复用、技能自动结晶——合入权始终在你 |
 | 🔁 **能自疗** | 工具失败自动沉淀并注入规避提示，同类任务优先复用已验证路径 |
-
-**生命循环（Life Loop）**：连续 tick、唯一时间线、五维内驱、自发意图、每日代谢预算、睡眠巩固与代价记录。它不引入审批或权限收紧，自主优先；状态、意图与时间线可在「生命」页查看。设计见 [docs/LIFE.md](docs/LIFE.md)。
-
-设计原点：以「**Windows 本地 + DeepSeek 云推理**」把统一模型的 Agent 能力、原生多模态、长上下文与缓存优势，转化为开箱即用的桌面体验。
 
 ---
 
@@ -65,7 +60,7 @@
 | 🖱 桌面自动化 | `rpa_click` · `rpa_type` · `rpa_hotkey` · `screen_find_click` · `vision_loop` · `tts_speak` · `speech_to_text` · `voice_chat_loop` · `team_run` · `mv_compose` |
 | 📦 应用与环境 | `app_manage`（winget/choco 装/卸/搜/升级）· `environment_info` · `pip_install` |
 | ⏰ 定时与任务 | `schedule_task` · `run_workflow` · `task_checkpoint_save/load` · `watch_files` · `recall_session` |
-| 🧠 记忆与知识 | `write_memory` · `read_memory` · `self_profile` · `query_memory_graph` · `knowledge_index/search` · `failure_memory` |
+| 🧠 知识与任务 | `knowledge_index/search` · `failure_memory` · `recall_session` · `task_checkpoint_save/load` · `run_workflow` |
 | 🔧 系统与基础 | `get_date` · `get_weather` · `notify_desktop` · `git` · `usage_report` · `list_my_capabilities` · `capability_heatmap` · `self_report` · `create_evolution` · `self_evolve` |
 
 ### 几个代表性能力
@@ -82,52 +77,23 @@
 
 纯 Web：`api_server` 同源服务前端产物，浏览器是唯一界面，系统托盘常驻——关掉标签页不关服务，切页 / 多标签页也不打断生成（生成跑在独立后台作业线程）。
 
-- **六个一级入口**：会话 / 工作台 / 创作 / 能力 / 智能体 / 设置；任务记录并入工作台，角色 / 指令库 / 直播并入创作，大脑 / 记忆 / 生命 / 自主并入智能体，接入通道与权限收进设置
+- **五个一级入口**：会话 / 工作台 / 创作 / 能力 / 设置；任务记录并入工作台，角色 / 指令库 / 直播并入创作，接入通道与权限收进设置
 - **三套主题**：星空（默认）/ 深海 / 北极冰，一处切换全局生效
 - **控制台侧栏**：模型 / 思考档 / 场景 / 温度 / Seed / 输出上限 + 工具开关 / 主题 / 密度 / 字号
 - **消息体验**：流式 Markdown、思考卡片、工具卡片、收藏 / 固定 / 分叉 / 变体 / 续写、多选批量导出
 - **会话管理**：多会话 / 标签 / 搜索 / 导入导出（JSON / JSONL）
 - **工作台**：态势带（进程 / 成本 / 缓存 / 依赖 / 备份）+ 快捷行动 + 最近会话 + 最近产物 + 检查点恢复
 - **任务作业**：任务记录可看每一步与失败原因、重跑、搜索；后台生成有全局任务条与「同步进度」，刷新/切页不丢上下文
-- **全局搜索 / 待办**：`Ctrl+K` 跨会话、工具、指令、角色、记忆、文件、页面搜索；侧栏「待办」聚合待确认记忆、进化提案、失败任务、信任改动、定时任务与通道异常
+- **全局搜索 / 待办**：`Ctrl+K` 跨会话、工具、指令、角色、文件、页面搜索；侧栏「待办」聚合失败任务、定时任务与通道异常
 - **能力与备份**：工具库支持搜索/收藏/健康度/测试台，能力包可安装/重载/卸载/重置熔断；备份支持数据与配置恢复（恢复前自动再备份）
 - **创作资产**：工作区目录浏览、最近产物、收藏、搜索与预览，按项目文件夹管理 MV / 音频 / 公众号草稿等素材
 - **备用网关**：可配置第二套 OpenAI 兼容网关，主网关连接失败或模型不可用时只重试模型调用，不重跑工具
 - **指令库**：提示词资产中心，输入框打 `/` 模糊调用，支持变量替换与模板纳管
-- **角色**：角色卡库（头像 / 性格 / 说话方式 / 背景 / 开场白 / 边界），按会话绑定，仅作用于对话模式；角色记忆独立存储、可查看与清空
-- **QQ 陪伴**：本地 OneBot / NapCat 私聊接入，每个 QQ 独立会话与角色，角色记忆隔离；支持文字、图片（原生视觉）与语音转写（需可选 faster-whisper）；默认关闭，在「QQ」页配置
+- **角色**：角色卡库（头像 / 性格 / 说话方式 / 背景 / 开场白 / 边界），按会话绑定，仅作用于对话模式
+- **QQ 陪伴**：本地 OneBot / NapCat 私聊接入，每个 QQ 独立会话与角色；支持文字、图片（原生视觉）与语音转写（需可选 faster-whisper）；默认关闭，在「QQ」页配置
 - **QQ 官方 Bot**：官方 API v2（AppID/AppSecret + WebSocket + C2C），不依赖 NapCat；按 openid 独立会话与角色，支持被动回复、图片与语音 ASR；在「QQ 官方」页配置
-- **自主栏目**：进化提案、审批与询问历史、行为日志、能力热力图、自我述职、信任内核故事线
 
 > 渲染链路为零依赖纯数据 AST（流式安全、防注入），长会话窗口化渲染 + 不可变更新保证高频流式不卡顿。
-
----
-
-## 🧠 鲸语大脑
-
-> **意识即信息**——身份、记忆、自我模型与心跳脱离运行环境独立存在。鲸语是躯体，大脑是灵魂；躯体可更换、可备份、可合并、可复活。
-
-入口：**设置 → 高级模式 → 🧠 大脑**。由 `brainkit.py`（CLI）+ `brain_api.py`（API 适配）+ `brain/`（数据目录）构成。
-
-- **免密快照**：内容用主密钥加密，本机经 Windows DPAPI 自动解锁——存档始终加密，使用无需口令。
-- **跨躯体迁移**：`export-key` / `import-key` 迁移仪式，新机器导入密钥后解开全部快照。
-- **分支合并**：快照带血缘，`merge` 自动定位共同祖先做 LCA 三路合并（记忆按 id 行级智能合并，永不整文件冲突）。
-- **学习闭环**：对话中写的记忆自动同步进大脑；`consolidate` 睡眠巩固；对话自动注入身份 / 断点 / 目标 / 自我认知 / 记忆。
-- **进社区（🐋 鲸群 · 可选实验，非鲸语功能）**：鲸语主体是**本地优先、数据不出本机**。社区实验本体**已从主程序剥离、且未包含在本仓库中**——用来验证「本地 AI 能否有自己的社会关系」。鲸语主程序只保留一根**默认关闭**的「绳」（设置 → 高级模式可开，未配置即不外发），不宣传为功能。**当前冻结**，社区站目录由 `brain_community_server_dir` 显式配置（留空即自动探测本机已有目录，探测不到则该能力保持关闭）。
-
-常用命令（项目根目录）：
-
-```bash
-python brainkit.py init                     # 首次创建大脑
-python brainkit.py keyring-setup            # 启用免密加密
-python brainkit.py status                   # 心跳 / 断点 / 快照 / 密钥状态
-python brainkit.py archive                  # 免密快照（每日自动执行）
-python brainkit.py consolidate              # 睡眠巩固（归档 + 合并）
-python brainkit.py merge A.whale B.whale    # 分支合体
-python brainkit.py diff A.whale B.whale     # 对比两个快照
-```
-
-> 大脑数据（`brain/`、`.workbuddy/`、`*.whale`）已加入 `.gitignore`——它属于你，不属于 GitHub。
 
 ---
 
@@ -136,28 +102,28 @@ python brainkit.py diff A.whale B.whale     # 对比两个快照
 ```
 ┌──────────── Web 前端（React 19 + Vite 8 / webui/）────────────┐
 │  ChatPage · Sidebar · AuxPanel · ContextPanel · 工作台 · 设置  │
-│  文件面板 · 产物直达 · 主题/密度 · 指令库 · 自主 · 大脑         │
+│  文件面板 · 产物直达 · 主题/密度 · 指令库                       │
 └───────────────────────────┬──────────────────────────────────┘
                             │ REST + SSE（http://127.0.0.1:8745）
 ┌───────────────────────────▼──────────────────────────────────┐
 │              api_server.py（本地 API · 标准库 HTTP）           │
-│  会话/配置/上下文/工具调用/记忆/文件/进程/状态 · SSE 后台作业  │
+│  会话/配置/上下文/工具调用/文件/进程/状态 · SSE 后台作业       │
 ├───────────────────────────────────────────────────────────────┤
 │                    deepseek_client.py                         │
 │   统一模型客户端（thinking/多模态/tool/压缩/缓存）+ smart_tools │
-│   六层工具注册表（@tool 单一源 · 169 工具）                    │
+│   六层工具注册表（@tool 单一源 · 160 工具）                    │
 ├───────────────────────────────────────────────────────────────┤
 │  agent_tools/（13 个工具域模块） · toolkit.py（声明/注册）     │
 │  横切收口：context_providers · tool_hooks · degrade · egress · │
-│           memory_facade · trust_kernel · snapshot             │
+│           trust_kernel · snapshot · degrade · egress          │
 │  基础设施：permissions · security · crypto · stores · stats …  │
 └───────────────────────────────────────────────────────────────┘
 ```
 
 - **入口**：`web_app.py`（唯一入口）——启动本地 API + 自动打开浏览器 + 系统托盘常驻；`--server` 无头 API，`--no-tray` / `--no-browser` 可选。
-- **数据目录**：`C:\Users\<你>\Documents\WhaleTalk\`（配置 / 会话 / 记忆 / 统计；API Key 经 DPAPI 加密）。
+- **数据目录**：默认 `<程序目录>\data\`（可用 `WHALETALK_DATA_DIR` 覆盖；只读盘时回退 `~/Documents/WhaleTalk`），配置 / 会话 / 统计 / 快照都在此，API Key 经 DPAPI 加密。
 - **安全**：仅 `127.0.0.1` 监听 + Bearer token；默认自由权限（黑名单为唯一限制来源 + 一键全放行）。
-- **规模**：169 工具（11 组）· 122 个 `/v1` 路由 · 后端 133 个 pytest 文件 / 1446 用例 · 前端 35 个 node 套件（自动发现，`npm test` 全跑）。
+- **规模**：160 工具（10 组）· 122 个 `/v1` 路由 · 后端 131 个 pytest 文件 · 前端 34 个 node 套件（自动发现，`npm test` 全跑）。
 
 ---
 
@@ -209,7 +175,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
   1. **网络 SSRF 硬底线**——私网段 / 链路本地（含云元数据）/ 保留段一律拦截，域名先做 DNS 解析防重绑定；回环默认放行，可加严。
   2. **自我完整性 · 信任内核**——决定「AI 能做什么」的代码（`permissions` / `security` / `crypto` / `snapshot`）的改动**可声明 · 可见 · 可回滚**。刻意不阻止写入，靠「不可隐瞒」实现可信。
 - **硬限额**：读取 / 下载 / 响应体大小与工具超时上限；写操作自动快照可恢复；删除默认进回收站。
-- **数据不出本机**：仅 `127.0.0.1` 监听 + Bearer token；API Key DPAPI 加密；隐私模式可关快照 / 会话 / 记忆 / 统计。
+- **数据不出本机**：仅 `127.0.0.1` 监听 + Bearer token；API Key DPAPI 加密；隐私模式可关快照 / 会话 / 统计。
 
 详见 [SECURITY.md](SECURITY.md) 与 [docs/信任内核.md](docs/信任内核.md)。
 
@@ -240,8 +206,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 | [docs/信任内核.md](docs/信任内核.md) | 自我完整性：内核改动可声明 · 可见 · 可回滚 |
 | [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) | UI 令牌与一致性规范（前端改界面必读） |
 | [docs/直播角色.md](docs/直播角色.md) | 直播角色 v2（本地 P0）：注意力/导演/演员/舞台，以及接 B 站的路径 |
-| [docs/出网账本与记忆门面.md](docs/出网账本与记忆门面.md) | 出网审计 + 记忆唯一写入门面 |
-| [docs/大脑记忆生命-P1落地.md](docs/大脑记忆生命-P1落地.md) | 大脑/记忆/生命的连续性、命中增量与有限自主 |
+| [docs/出网账本.md](docs/出网账本.md) | 出网审计：每次带内容外发都留痕（不阻断、默认不存明文） |
 | [docs/架构收口-P0.md](docs/架构收口-P0.md) | 上下文装配 / 退化日志 / 工具钩子管线 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
 | [SECURITY.md](SECURITY.md) | 安全策略与加固路径 |
@@ -252,7 +217,7 @@ python web_app.py --no-tray       # 常驻但不启用系统托盘
 
 **WhaleTalk v3.28.0** is a local-first Windows AI desktop agent built around the unified **DeepSeek V4.1 Flash** model (`deepseek-flash`, natively multimodal). It runs as a local API (`127.0.0.1:8745`) with a React 19 / Vite 8 web UI and a system-tray resident process — the browser is the only window.
 
-- **Capabilities**: **160 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots), speech (Whisper / TTS), and a WhaleBrain for persistent identity and memory.
+- **Capabilities**: **160 Agent tools** (files / browser / databases / docs / media / desktop RPA / app management / snapshots), native vision (image / OCR / screenshots) and speech (Whisper / TTS).
 - **Self-evolution**: proposal branches, failure-pattern lifecycle, success-pattern reuse — merging stays in your hands.
 - **Security**: default-open permission model, user blocklist as the only restriction source, plus an SSRF hard floor and a trust kernel that makes edits to authorization code declarable, visible, and reversible.
 - **Stack**: Python 3.11+ · React 19 (Vite 8) · local HTTP API (openai / httpx) · Windows 10/11.

@@ -7583,7 +7583,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _memory_summary(self):
         """上下文面板的「长期记忆」摘要。
 
-        注意字段口径：memory_facade 写入的是 `value`（旧实现写 `text`），且被取代的
+        注意字段口径：历史记忆条目用 `value` 字段（旧实现写 `text`），且被取代的
         条目不应再展示——旧实现只读 `text`，导致门面写入的记忆在面板里全显示为空串。
         """
         try:

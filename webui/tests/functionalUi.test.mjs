@@ -42,7 +42,7 @@ describe("功能入口接通", () => {
     const app = fs.readFileSync(path.join(SRC, "App.jsx"), "utf8");
     assert.ok(app.includes("CommandPalette") && app.includes('key === "k"'), "App 应绑定 Ctrl+K");
     assert.ok(app.includes("runningJobs") && app.includes("bg-jobs-bar"), "App 应显示后台任务条");
-    assert.ok(read("InboxButton.jsx").includes("listPendingMemory"), "待办应收拢待确认记忆");
+    assert.ok(read("InboxButton.jsx").includes("getSchedules"), "待办应收拢定时任务异常");
     assert.ok(read("CreatePage.jsx").includes("AssetsPanel"), "创作应包含资产页");
     assert.ok(read("AssetsPanel.jsx").includes("listFiles"), "资产页应接入文件列表");
   });
