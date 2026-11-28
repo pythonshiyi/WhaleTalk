@@ -4888,12 +4888,6 @@ def _companion_reply(text, session_id="", persona_id="", images=None):
         })
     except Exception:
         logger.exception("QQ 陪伴会话落盘失败")
-    if persona:
-        try:
-            _chat_harvest(reply, txt[:600], cfg, messages=messages,
-                          persona_id=str(persona.get("id") or ""))
-        except Exception:
-            logger.exception("QQ 角色记忆提炼启动失败")
     return reply
 
 
@@ -10494,18 +10488,6 @@ class _Handler(BaseHTTPRequestHandler):
             client.chat(messages, **kwargs)
             text = "".join(p[1] for p in out if p[0] == "c")
             usage = next((p[1] for p in out if p[0] == "u"), None)
-            # 对话回写：提炼本次对话值得记住的 → 长期记忆（自动同步大脑），后台执行不阻塞响应
-            try:
-                last_user = next((m.get("content") for m in reversed(messages)
-                                  if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
-                if text and last_user and not quiet_mode:
-                    _chat_harvest(text, last_user[:600], cfg, messages=messages,
-                                  persona_id=_persona_id)
-            except Exception as e:  # noqa: BLE001
-                import degrade
-                degrade.degrade("memory.harvest", e,
-                                "本次对话未提炼进长期记忆（这轮内容不会被自动记住）",
-                                critical=True)
             self._json(200, {"content": text or "", "usage": usage})
         except Exception as e:
             logger.exception("API chat 失败")
